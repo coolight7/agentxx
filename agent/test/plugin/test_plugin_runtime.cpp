@@ -202,18 +202,45 @@ struct CallbackState {
     int             status                  = -1;
     bool            protectedDuringCallback = false;
     bool            onIo                    = false;
+    /// 结果正文
+    std::string     result;
+    /// 结果元数据 JSON (无元数据为空)
     std::string     payload;
     RuntimeFixture* fixture = nullptr;
 
-    static void PLUGINXX_CALL done(void* ud, int32_t status, const PluginxxStringView* payload) {
-        auto& state = *static_cast<CallbackState*>(ud);
+    static void PLUGINXX_CALL done(
+        void*                     ud,
+        int32_t                   status,
+        const PluginxxStringView* result,
+        const PluginxxStringView* payload
+    ) {
+        auto& state   = *static_cast<CallbackState*>(ud);
         ++state.calls;
         state.status  = status;
+        state.result  = svToStr(result);
         state.payload = svToStr(payload);
-        if (state.fixture) {
-            state.onIo                    = state.fixture->manager->isIoThread();
-            state.protectedDuringCallback = state.fixture->provider->lifetime->leaseCount() != 0
-                                            && state.fixture->caller->lifetime->leaseCount() != 0;
+        state.noteCallbackContext();
+    }
+
+    /// 框架层的单段完成回调 (直接驱动 OpCore 的用例用): 结果只有一段
+    static void PLUGINXX_CALL onOpDone(
+        void*                     ud,
+        int32_t                   status,
+        const PluginxxStringView* payload
+    ) {
+        auto& state  = *static_cast<CallbackState*>(ud);
+        ++state.calls;
+        state.status = status;
+        state.result = svToStr(payload);
+        state.noteCallbackContext();
+    }
+
+    /// 记下回调现场 (是否在 io 线程 / 双方 lease 是否仍在)
+    void noteCallbackContext() {
+        if (fixture) {
+            onIo                    = fixture->manager->isIoThread();
+            protectedDuringCallback = fixture->provider->lifetime->leaseCount() != 0
+                                      && fixture->caller->lifetime->leaseCount() != 0;
         }
     }
 };
@@ -273,20 +300,21 @@ AgentxxPluginToolSpec fakeTool(void* ud, bool reject) {
                                  const PluginxxStringView*,
                                  const PluginxxStringView*,
                                  const PluginxxStringView*,
-                                 const PluginxxOperatorNotify*,
+                                 const AgentxxPluginToolNotify*,
                                  PluginxxString* error) -> void* {
             hostMemorySetString(error, "rejected by fake provider");
             return nullptr;
         };
     } else {
-        spec.execute_start = +[](void*                     ud,
-                                 const PluginxxStringView* args,
+        spec.execute_start = +[](void*                          ud,
+                                 const PluginxxStringView*      args,
                                  const PluginxxStringView*,
                                  const PluginxxStringView*,
-                                 const PluginxxOperatorNotify* notify,
+                                 const AgentxxPluginToolNotify* notify,
                                  PluginxxString*) -> void* {
             *static_cast<bool*>(ud) = true;
-            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, args);
+            auto emptySv            = agentxx::plugin::PluginStringView::from(nullptr, 0);
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, args, &emptySv);
             return nullptr;
         };
     }
@@ -450,7 +478,7 @@ TestResult testPluginRuntime() {
         f.drain();
         XX_TEST_EXPECT_EQ(cb.calls, 1);
         XX_TEST_EXPECT_TRUE(cb.protectedDuringCallback && cb.onIo);
-        XX_TEST_EXPECT_TRUE(cb.payload.find("world") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(cb.result.find("world") != std::string::npos);
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
         /// callback 可选，不允许因未提供 callback 将已接受请求改为拒绝。
         accepted = f.mount->callToolAsync(
@@ -477,7 +505,7 @@ TestResult testPluginRuntime() {
         op->accept([&] {
             ++cancels;
         });
-        op->setCallback(CallbackState::done, &cb);
+        op->setCallback(CallbackState::onOpDone, &cb);
         const auto        notify = op->notify();
         const std::string expected(65536, 'x');
         std::thread       worker([notify, expected] {
@@ -499,7 +527,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(op->completed());
         XX_TEST_EXPECT_EQ(cb.calls, 1);
         XX_TEST_EXPECT_EQ(cb.status, PLUGINXX_OPERATOR_OK);
-        XX_TEST_EXPECT_EQ(cb.payload, expected);
+        XX_TEST_EXPECT_EQ(cb.result, expected);
         XX_TEST_EXPECT_TRUE(cb.protectedDuringCallback);
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
         XX_TEST_EXPECT_EQ(f.caller->lifetime->leaseCount(), size_t{0});
@@ -617,7 +645,7 @@ TestResult testPluginRuntime() {
         for (auto& cb : callbacks) {
             auto op = f.operation();
             op->accept();
-            op->setCallback(CallbackState::done, &cb);
+            op->setCallback(CallbackState::onOpDone, &cb);
             ops.push_back(std::move(op));
         }
         std::barrier             ready(5);
@@ -642,7 +670,7 @@ TestResult testPluginRuntime() {
         for (size_t i = 0; i < callbacks.size(); ++i) {
             correct = correct && callbacks[i].calls == 1
                       && callbacks[i].status == PLUGINXX_OPERATOR_OK
-                      && callbacks[i].payload == std::to_string(i) + std::string(128, 'p');
+                      && callbacks[i].result == std::to_string(i) + std::string(128, 'p');
         }
         XX_TEST_EXPECT_TRUE(correct);
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
@@ -663,7 +691,7 @@ TestResult testPluginRuntime() {
             op->accept([&, i] {
                 ++cancels[i];
             });
-            op->setCallback(CallbackState::done, &callbacks[i]);
+            op->setCallback(CallbackState::onOpDone, &callbacks[i]);
             ops.push_back(std::move(op));
         }
         auto         keepIo = asio::make_work_guard(f.io);
@@ -894,7 +922,7 @@ TestResult testPluginRuntime() {
         CallbackState  cb{.fixture = &f};
         auto           op = f.operation();
         op->accept();
-        op->setCallback(CallbackState::done, &cb);
+        op->setCallback(CallbackState::onOpDone, &cb);
         auto notify = op->notify();
 
         f.io.stop();
@@ -930,7 +958,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_FALSE(op->completionPending());
         XX_TEST_EXPECT_EQ(cb.calls, 1);
         XX_TEST_EXPECT_EQ(cb.status, PLUGINXX_OPERATOR_OK);
-        XX_TEST_EXPECT_EQ(cb.payload, "completion after restart");
+        XX_TEST_EXPECT_EQ(cb.result, "completion after restart");
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->pendingOperationSummary().empty());
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
@@ -949,7 +977,7 @@ TestResult testPluginRuntime() {
             op->accept([&] {
                 ++cancels;
             });
-            op->setCallback(CallbackState::done, &cb);
+            op->setCallback(CallbackState::onOpDone, &cb);
 
             std::barrier start{3};
             std::thread  doneThread([&] {
@@ -992,7 +1020,7 @@ TestResult testPluginRuntime() {
             ++cancels;
             notify.done(notify.host_ud, PLUGINXX_OPERATOR_CANCELED, nullptr);
         });
-        op->setCallback(CallbackState::done, &cb);
+        op->setCallback(CallbackState::onOpDone, &cb);
 
         f.io.stop();
         cancelPluginOperation(op->handle());
@@ -1780,7 +1808,7 @@ TestResult testPluginRuntime() {
 
         auto op = f.operation();
         op->accept();
-        op->setCallback(CallbackState::done, &cb);
+        op->setCallback(CallbackState::onOpDone, &cb);
         XX_TEST_EXPECT_FALSE(op->completed());
         XX_TEST_EXPECT_EQ(f.caller->lifetime->leaseCount(), size_t{1});
 

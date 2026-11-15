@@ -316,6 +316,29 @@ if (SIDE === "client") {
     execute: () => ({ kind: typeof agentxx.callTool("js_hello", {}, "") }),
   });
 
+  // ---- 工具 6b: 多模态附件 (返回对象里的 attachments 作为第二段元数据上报) ----
+  // `text` 是给模型读的正文, `attachments` 不经过正文 (否则图片信息会和正文混在一起)
+  agentxx.registerTool({
+    name: "js_media_demo",
+    description: "JS plugin demo: return text plus a media attachment.",
+    parameters: {
+      path: { type: "string", description: "place the attachment should point at" },
+    },
+    execute: (args) => ({
+      status: "ok",
+      text: `attached ${args.path || "chart.png"}`,
+      attachments: [
+        {
+          type: "image",
+          display_name: "chart.png",
+          mime_type: "image/png",
+          path_or_url: args.path || "/tmp/chart.png",
+          size_bytes: 2048,
+        },
+      ],
+    }),
+  });
+
   // ---- 工具 7: SDK 查询面自查 ----
   // 与 C++ 插件 SDK 同名的查询接口: 提示词 / 会话 / 上下文 / 执行图 / 挂载 / 网络。
   // 返回值只描述"形状" (类型/是否数组), 测试用它确认这些桥方法都能调通。

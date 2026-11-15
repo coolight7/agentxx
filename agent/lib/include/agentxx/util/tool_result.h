@@ -17,6 +17,12 @@
 ///
 /// 本头只依赖标准库的字符串, 主程序与插件都能包含 (插件构建已包含
 /// `agent/lib/include`, 见各插件 `CMakeLists.txt` 的 `AGENTXX_LIB_INCLUDE_DIR`)。
+///
+/// 跨 C ABI 传输: 正文与元数据**分两段**传 (见 `plugin_api.h` 的
+/// `AgentxxPluginToolNotify`), 本头提供两段的拆装:
+/// - [ToolResult::metadataPayloadJson]: 附件等元数据 → JSON 串 (无元数据为空串);
+/// - [ToolResult::fromParts]: (正文, 状态, 元数据 JSON) → 完整结果。
+/// 正文绝不进 JSON —— 它可能是本地代码页的原始字节。
 #pragma once
 
 #include "agentxx/agent/media_attachment.h"
@@ -28,9 +34,6 @@
 
 namespace agentxx {
 namespace util {
-
-/// 跨 C ABI 传输多模态附件时的信封标记键
-inline constexpr std::string_view kToolMediaEnvelopeKey = "__agentxx_tool_media__";
 
 /// 一次工具调用的终态
 enum class ToolStatus {
@@ -125,15 +128,18 @@ struct ToolResult {
         return !attachments.empty();
     }
 
-    /// 将带有附件的结果打包为跨 C ABI 的信封 JSON 字符串 (无附件时返回原始文本)
-    std::string packEnvelope() const {
+    /// 把附件等元数据序列化成 JSON 对象串 (正文不进去)
+    /// - 无附件时返回**空串**: 普通文本工具不带任何解析开销
+    /// - 形态: `{"attachments":[{"type":"image","path_or_url":…}]}`
+    /// - 用途: 插件把 `ToolResult` 交给主程序时填第二个参数
+    ///   (`AgentxxPluginToolNotify.done` 的 `payload`)
+    /// - 相关: 反向恢复见 [loadMetadataPayloadJson]
+    std::string metadataPayloadJson() const {
         if (attachments.empty()) {
-            return text;
+            return {};
         }
-        utilxx_base::Json j                  = utilxx_base::Json::object();
-        j[std::string(kToolMediaEnvelopeKey)] = true;
-        j["text"]                            = text;
-        auto arr                             = utilxx_base::Json::array();
+        utilxx_base::Json j = utilxx_base::Json::object();
+        auto              arr = utilxx_base::Json::array();
         for (const auto& att : attachments) {
             arr.push_back(att.toJson());
         }
@@ -141,27 +147,45 @@ struct ToolResult {
         return j.dump();
     }
 
-    /// 从 C ABI 接收到的 payload 拆包 (若为信封 JSON 则还原附件; 否则原样返回文本)
-    static ToolResult unpackEnvelope(std::string payload) {
-        if (payload.empty() || payload.front() != '{'
-            || payload.find(kToolMediaEnvelopeKey) == std::string::npos) {
-            return ToolResult::ok(std::move(payload));
+    /// 从元数据 JSON 恢复 `attachments` (只覆盖元数据, 不动 `text` / `status`)
+    /// - 空串、非对象、字段缺失、JSON 非法都当作"没有元数据":
+    ///   正文已经在 `text` 里, 不能因为元数据坏了就把工具结果整份丢掉
+    /// - 已在对象里的附件先清空, 避免重复调用时叠加
+    void loadMetadataPayloadJson(std::string_view payloadJson) {
+        if (payloadJson.empty()) {
+            return;
         }
         try {
-            auto j = utilxx_base::Json::parse(payload);
-            if (j.is_object() && j.value(std::string(kToolMediaEnvelopeKey), false)) {
-                std::string                                  t = j.value("text", std::string{});
-                std::vector<agentxx::agent::MediaAttachment> atts;
-                if (j.contains("attachments") && j["attachments"].is_array()) {
-                    for (const auto& item : j["attachments"]) {
-                        atts.push_back(agentxx::agent::MediaAttachment::fromJson(item));
-                    }
-                }
-                return ToolResult::ok(std::move(t), std::move(atts));
+            auto j = utilxx_base::Json::parse(payloadJson);
+            if (!j.is_object() || !j.contains("attachments") || !j["attachments"].is_array()) {
+                return;
             }
+            std::vector<agentxx::agent::MediaAttachment> atts;
+            for (const auto& item : j["attachments"]) {
+                atts.push_back(agentxx::agent::MediaAttachment::fromJson(item));
+            }
+            attachments = std::move(atts);
         } catch (...) {
+            // 元数据坏了不影响正文: 保持当前附件为空
         }
-        return ToolResult::ok(std::move(payload));
+    }
+
+    /// 由 \(正文, 终态, 元数据 JSON\) 三段组装完整结果 (跨 C ABI 收端的唯一入口)
+    /// - `args`:
+    ///     - [resultText] 工具正文 (原样字节, 不做编码假设)
+    ///     - [st] 终态
+    ///     - [payloadJson] 元数据 JSON (可空)
+    /// - `return` 组装好的结果
+    static ToolResult fromParts(
+        std::string      resultText,
+        ToolStatus       st          = ToolStatus::Ok,
+        std::string_view payloadJson = {}
+    ) {
+        ToolResult out;
+        out.text   = std::move(resultText);
+        out.status = st;
+        out.loadMetadataPayloadJson(payloadJson);
+        return out;
     }
 };
 

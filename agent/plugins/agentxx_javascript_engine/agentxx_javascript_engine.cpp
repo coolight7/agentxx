@@ -385,7 +385,11 @@ struct JsToolOp {
 /// 工具执行请求/结果 (execute 桥跨线程传递)
 struct ToolExecReq {
     std::string args, tid, tcid;
-    std::string result, error;
+    /// 结果正文 (原样字节; 不经过 JSON)
+    std::string result;
+    /// 结果元数据 JSON (脚本返回 `attachments` 时才有, 否则空)
+    std::string payload;
+    std::string error;
     /// Promise 被拒绝或超时: 工具调用必须映射为 FAILED (不再当成成功文本)
     bool failed = false;
     /// 引擎停止/取消: 工具调用映射为 Canceled
@@ -1176,8 +1180,12 @@ public:
     /// - 完成回调由主程序在调用方 IO 线程派发, 调用期间 caller/provider lease
     ///   均被持有, 因此 engine 与其 JS 线程必然存活。
     /// - 引擎已停止时 post 失败: 不触碰 JSValue, 只释放桥 (JSContext 即将整体释放)。
-    static void PLUGINXX_CALL
-        onCallToolDone(void* ud, int32_t status, const PluginxxStringView* payload) noexcept {
+    static void PLUGINXX_CALL onCallToolDone(
+        void*                     ud,
+        int32_t                   status,
+        const PluginxxStringView* result,
+        const PluginxxStringView* metadata
+    ) noexcept {
         auto* bridge = static_cast<JsCallBridge*>(ud);
         if (!bridge || !bridge->engine) {
             return;
@@ -1187,14 +1195,18 @@ public:
             return;
         }
         std::string text;
+        std::string meta;
         try {
-            if (payload && payload->data) {
-                text.assign(payload->data, static_cast<size_t>(payload->size));
+            if (result && result->data) {
+                text.assign(result->data, static_cast<size_t>(result->size));
+            }
+            if (metadata && metadata->data) {
+                meta.assign(metadata->data, static_cast<size_t>(metadata->size));
             }
         } catch (...) {
         }
-        if (!bridge->engine->post([bridge, status, text = std::move(text)]() mutable {
-                bridge->engine->settleCall(bridge, status, std::move(text));
+        if (!bridge->engine->post([bridge, status, text = std::move(text), meta = std::move(meta)]() mutable {
+                bridge->engine->settleCall(bridge, status, std::move(text), std::move(meta));
             })) {
             delete bridge;
         }
@@ -1202,16 +1214,53 @@ public:
 
     /// 【JS 线程】settle callTool Promise: OK → resolve(JSON/字符串),
     /// Canceled/FAILED → reject(Error(message))
-    void settleCall(JsCallBridge* bridge, int32_t status, std::string text) {
+    ///
+    /// OK 的 resolve 形态:
+    /// - 没有元数据: 正文能解析成 JSON 就给值, 否则给字符串 (老行为);
+    /// - 有元数据 (工具报了附件等): 给对象 = 元数据 + `text` (正文);
+    ///   元数据里已有 `text` 时不覆盖。脚本可直接读 `resp.attachments`。
+    void settleCall(JsCallBridge* bridge, int32_t status, std::string text, std::string meta) {
         if (!bridge) {
             return;
         }
         JSContext* ctx = bridge->ctx;
         if (status == PLUGINXX_OPERATOR_OK) {
-            JSValue out = JS_ParseJSON(ctx, text.c_str(), text.size(), "<call_tool>");
-            if (JS_IsException(out)) {
-                JS_FreeValue(ctx, out);
-                out = JS_NewStringLen(ctx, text.data(), text.size());
+            JSValue out     = JS_UNDEFINED;
+            JSValue metaVal = JS_UNDEFINED;
+            if (!meta.empty()) {
+                metaVal = JS_ParseJSON(ctx, meta.c_str(), meta.size(), "<call_tool_meta>");
+                if (JS_IsException(metaVal)) {
+                    JS_FreeValue(ctx, metaVal);
+                    metaVal = JS_UNDEFINED;
+                }
+            }
+            if (JS_IsObject(metaVal)) {
+                JSValue hasText = JS_GetPropertyStr(ctx, metaVal, "text");
+                const bool missing = JS_IsUndefined(hasText);
+                JS_FreeValue(ctx, hasText);
+                if (missing) {
+                    JSValue textVal
+                        = JS_ParseJSON(ctx, text.c_str(), text.size(), "<call_tool_text>");
+                    if (JS_IsException(textVal)) {
+                        JS_FreeValue(ctx, textVal);
+                        textVal = JS_NewStringLen(ctx, text.data(), text.size());
+                    }
+                    // JS_SetPropertyStr 是 move 语义: 不再 Free textVal
+                    JS_SetPropertyStr(ctx, metaVal, "text", textVal);
+                }
+                out     = metaVal;
+                metaVal = JS_UNDEFINED;
+            } else if (!JS_IsUndefined(metaVal)) {
+                // 元数据不是对象 (插件违约): 丢掉元数据, 保持"正文"形态
+                JS_FreeValue(ctx, metaVal);
+                metaVal = JS_UNDEFINED;
+            }
+            if (JS_IsUndefined(out)) {
+                out = JS_ParseJSON(ctx, text.c_str(), text.size(), "<call_tool>");
+                if (JS_IsException(out)) {
+                    JS_FreeValue(ctx, out);
+                    out = JS_NewStringLen(ctx, text.data(), text.size());
+                }
             }
             JSValue argv[1] = {out};
             JSValue rc      = JS_Call(ctx, bridge->resolve, JS_UNDEFINED, 1, argv);
@@ -1559,12 +1608,12 @@ public:
     /// 【主程序 io 线程】调用; 任务入队 JS 线程后立即返回句柄,
     /// 完成结果由 JS 线程经 notifier 上报 (线程安全), io 线程零阻塞
     static void* PLUGINXX_CALL toolExecuteStart(
-        void*                         ud,
-        const PluginxxStringView*     args_json,
-        const PluginxxStringView*     thread_id,
-        const PluginxxStringView*     tool_call_id,
-        const PluginxxOperatorNotify* notify,
-        PluginxxString*               error_out
+        void*                          ud,
+        const PluginxxStringView*      args_json,
+        const PluginxxStringView*      thread_id,
+        const PluginxxStringView*      tool_call_id,
+        const AgentxxPluginToolNotify* notify,
+        PluginxxString*                error_out
     );
 
     /// 事件回调桥: io 线程调用; post 到 JS 线程 (fire-and-forget) (类外定义)
@@ -2930,20 +2979,23 @@ private:
         }
     }
 
-    /// 工具 execute 的正常返回 -> 结果正文与终态
+    /// 工具 execute 的正常返回 -> 结果正文 / 元数据 / 终态
     ///
-    /// 两种写法都支持:
+    /// 三种写法都支持:
     /// - 普通值 / 字符串: 状态 `ok`, 正文按 [valueToJsonString] 转换 (与旧行为一致);
     /// - 对象且带 `status` 字符串字段: 按工具结果处理 —— `text` 字段作正文
     ///   (缺省用整份 JSON), `status` 取 `ok`/`failed`/`interrupted`/`canceled`
-    ///   (未知取值按 `ok`; 插件面没有中断态, `interrupted` 记失败)
+    ///   (未知取值按 `ok`; 插件面没有中断态, `interrupted` 记失败);
+    /// - 对象带 `attachments` 数组: 附件作为第二段元数据上报 (正文不动),
+    ///   因此脚本要同时给 `text` 说明读到了什么, 附件才不会在正文里重复出现
     ///
     /// - `args`:
     ///     - [ctx] JS 上下文
     ///     - [v]   execute 的返回值
-    ///     - [req] 写入 result / status
+    ///     - [req] 写入 result / payload / status
     void applyValueOutcome(JSContext* ctx, JSValueConst v, ToolExecReq& req) {
         if (JS_IsObject(v)) {
+            applyAttachmentsPayload(ctx, v, req);
             JSValue statusVal = JS_GetPropertyStr(ctx, v, "status");
             if (JS_IsString(statusVal)) {
                 const auto status  = jsToCppString(ctx, statusVal);
@@ -2969,6 +3021,33 @@ private:
         }
         req.result = valueToJsonString(ctx, v);
         req.status = PLUGINXX_OPERATOR_OK;
+    }
+
+    /// 把返回值上的 `attachments` 数组转成元数据 JSON (`{"attachments":[…]}`)
+    /// - 只认数组; 缺失/不是数组/序列化失败都当作没有元数据 (清空)
+    /// - `args`:
+    ///     - [ctx] JS 上下文
+    ///     - [v]   execute 的返回值 (非对象直接忽略)
+    ///     - [req] 写入 payload
+    static void applyAttachmentsPayload(JSContext* ctx, JSValueConst v, ToolExecReq& req) {
+        req.payload.clear();
+        if (!JS_IsObject(v)) {
+            return;
+        }
+        JSValue atts = JS_GetPropertyStr(ctx, v, "attachments");
+        if (!JS_IsArray(atts)) {
+            JS_FreeValue(ctx, atts);
+            return;
+        }
+        JSValue json = JS_JSONStringify(ctx, atts, JS_UNDEFINED, JS_UNDEFINED);
+        JS_FreeValue(ctx, atts);
+        if (!JS_IsString(json)) {
+            JS_FreeValue(ctx, json);
+            return;
+        }
+        // 元数据形态与 `ToolResult::metadataPayloadJson` 一致: {"attachments":[…]}
+        req.payload = "{\"attachments\":" + jsToCppString(ctx, json) + "}";
+        JS_FreeValue(ctx, json);
     }
 
     // ==================== 桥注入 ====================
@@ -3431,12 +3510,12 @@ private:
 ///   (execute_poll 留 NULL, 主程序只等完成通知)
 /// - JS 线程执行完毕后经 notifier 上报结果 (线程安全; payload host->alloc)
 void* JsEngine::toolExecuteStart(
-    void*                         ud,
-    const PluginxxStringView*     args_json,
-    const PluginxxStringView*     thread_id,
-    const PluginxxStringView*     tool_call_id,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
+    void*                          ud,
+    const PluginxxStringView*      args_json,
+    const PluginxxStringView*      thread_id,
+    const PluginxxStringView*      tool_call_id,
+    const AgentxxPluginToolNotify* notify,
+    PluginxxString*                error_out
 ) {
     // C ABI 回调异常守卫: start 由主程序 io 线程调用 (请求打包/入队含分配),
     // 异常经通知器上报 OP_FAILED, 不外泄
@@ -3474,7 +3553,7 @@ void* JsEngine::toolExecuteStart(
         req->opId = opId;
         void* rawOp = reinterpret_cast<void*>(static_cast<intptr_t>(opId));
 
-        PluginxxOperatorNotify ntfCopy = *notify;
+        AgentxxPluginToolNotify ntfCopy = *notify;
         if (!engine->post([engine, binding, req, ntfCopy, opId]() {
                 // ---- JS 线程: 执行并上报 (离开作用域时从在飞表摘除) ----
                 struct OpReleaser {
@@ -3486,12 +3565,29 @@ void* JsEngine::toolExecuteStart(
                         engine->toolOps_.erase(id);
                     }
                 } releaser{engine, opId};
+                // 上报两段 (正文 + 元数据): 空结果也要给非空指针的视图
+                auto report = [&ntfCopy, &req](int32_t status) {
+                    auto resSv = agentxx::plugin::PluginStringView::from(
+                        req->result.data(),
+                        req->result.size()
+                    );
+                    auto metaSv = agentxx::plugin::PluginStringView::from(
+                        req->payload.data(),
+                        req->payload.size()
+                    );
+                    ntfCopy.done(ntfCopy.host_ud, status, &resSv, &metaSv);
+                };
                 if (engine->stopping()) {
                     // 停止中: 不再执行插件 JS 代码, 但已接受的 op 必须终结
-                    auto errSv = agentxx::plugin::PluginStringView::fromCstr(
-                        "interpreter.js engine stopped"
+                    req->result.clear();
+                    req->payload.clear();
+                    req->error = "interpreter.js engine stopped";
+                    auto errSv = agentxx::plugin::PluginStringView::from(
+                        req->error.data(),
+                        req->error.size()
                     );
-                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_CANCELED, &errSv);
+                    auto emptySv = agentxx::plugin::PluginStringView::from(nullptr, 0);
+                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_CANCELED, &errSv, &emptySv);
                     return;
                 }
                 engine->doToolExecute(binding, *req);
@@ -3500,30 +3596,18 @@ void* JsEngine::toolExecuteStart(
                         && req->op->canceled.load(std::memory_order_acquire));
                 if (canceled) {
                     // 引擎停止/主程序取消: 终态为 Canceled, 不是普通失败
-                    auto errSv = agentxx::plugin::PluginStringView::from(
-                        req->error.data(),
-                        req->error.size()
-                    );
-                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_CANCELED, &errSv);
+                    req->payload.clear();
+                    req->result = req->error;
+                    report(PLUGINXX_OPERATOR_CANCELED);
                 } else if (!req->error.empty()) {
-                    auto errSv = agentxx::plugin::PluginStringView::from(
-                        req->error.data(),
-                        req->error.size()
-                    );
-                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
+                    req->payload.clear();
+                    req->result = req->error;
+                    report(PLUGINXX_OPERATOR_FAILED);
                 } else if (req->status != PLUGINXX_OPERATOR_OK) {
                     // 插件返回 `{status, text}`: 终态照搬, 正文就是给主程序读的结果
-                    auto resSv = agentxx::plugin::PluginStringView::from(
-                        req->result.data(),
-                        req->result.size()
-                    );
-                    ntfCopy.done(ntfCopy.host_ud, req->status, &resSv);
+                    report(req->status);
                 } else {
-                    auto resSv = agentxx::plugin::PluginStringView::from(
-                        req->result.data(),
-                        req->result.size()
-                    );
-                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_OK, &resSv);
+                    report(PLUGINXX_OPERATOR_OK);
                 }
             })) {
             // 引擎已停止: 启动失败 (未入队 → 在飞表里的登记要退回)
@@ -3551,7 +3635,8 @@ void* JsEngine::toolExecuteStart(
         }
         if (notify && notify->done) {
             auto errSv = agentxx::plugin::PluginStringView::from(nullptr, 0);
-            notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
+            auto emptySv = agentxx::plugin::PluginStringView::from(nullptr, 0);
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv, &emptySv);
         }
         return nullptr;
     }

@@ -1,6 +1,8 @@
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/plugin/tool_result_frame.h"
 #include "agentxx/util/cancel_adapter.h"
 #include "agentxx/util/neograph_json_bridge.h"
+#include "agentxx/util/tool_result.h"
 
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
@@ -14,6 +16,7 @@
 #include "pluginxx/runtime/op_driver.h"
 #include "utilxx/async_offload.h"
 #include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 
 #include <algorithm>
 
@@ -22,19 +25,55 @@ namespace plugin {
 
 namespace {
 
+/// 插件给的正文需不需要做一次编码校正
+///
+/// - 全 ASCII (最常见的命令行输出) 直接放行, 不做编码探测;
+/// - 含非 ASCII 且不是合法 UTF-8 时才走 `autoConvertToUtf8`。
+///   插件自己已经转过的文本在这里是合法 UTF-8, 不会被再转一次。
+bool needsUtf8Conversion(std::string_view text) {
+    if (text.empty()) {
+        return false;
+    }
+    bool hasNonAscii = false;
+    for (char ch : text) {
+        if (static_cast<unsigned char>(ch) >= 0x80) {
+            hasNonAscii = true;
+            break;
+        }
+    }
+    // allowBackstop = true: 含 U+FFFD 的文本也当成"已经是 UTF-8", 不再探测
+    return hasNonAscii && !utilxx_base::utf8IsAvail(text, true);
+}
+
 /// 插件 Operation 终态 -> 工具结果
 /// - `OK` / `FAILED` / `CANCELED` 分别对应 `Ok` / `Failed` / `Canceled`
-/// - `FAILED` 的 payload 就是插件给的**错误内容**, 不加任何方括号前缀
+/// - 结果的两段来自完成包里的帧 (见 `tool_result_frame.h`): 正文是插件给的**原样字节**,
+///   元数据是 JSON; `FAILED` 的正文就是插件给的**错误内容**, 不加任何方括号前缀
 ///   (给模型看的 `[Error: ...]` 由执行层统一加)
+/// - 正文在这里做一次无损编码校正: 插件交上来的文本可能仍是本地代码页,
+///   而这一步之前它没有进过 JSON, 字节没被破坏 (见 `plugin_api.h` 的两段说明)
 agentxx::util::ToolResult mapPluginOpResult(pluginxx::PluginOpResult result) {
+    const auto parts = agentxx::plugin::decodeToolResultFrame(result.payload);
+
+    auto toolResult = agentxx::util::ToolResult::fromParts(
+        std::string{parts.result},
+        ToolStatus::Ok,
+        parts.metadata
+    );
     switch (result.status) {
         case PLUGINXX_OPERATOR_OK:
-            return agentxx::util::ToolResult::unpackEnvelope(std::move(result.payload));
+            break;
         case PLUGINXX_OPERATOR_CANCELED:
-            return agentxx::util::ToolResult::canceled(std::move(result.payload));
+            toolResult.status = ToolStatus::Canceled;
+            break;
         default:
-            return agentxx::util::ToolResult::fail(std::move(result.payload));
+            toolResult.status = ToolStatus::Failed;
+            break;
     }
+    if (needsUtf8Conversion(toolResult.text)) {
+        utilxx_base::autoConvertToUtf8(toolResult.text);
+    }
+    return toolResult;
 }
 
 } // namespace
@@ -126,10 +165,13 @@ asio::awaitable<agentxx::util::ToolResult> PluginTool::execute_async(const utilx
                       const PluginxxOperatorNotify* notify,
                       PluginxxString*               err
                   ) -> void* {
+        auto toolNotify = agentxx::plugin::makeToolNotify(
+            notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr}
+        );
         auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
         auto sidSv  = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
         auto tcidSv = agentxx::plugin::PluginStringView::from(toolCallId.data(), toolCallId.size());
-        return spec.execute_start(spec.user_data, &argsSv, &sidSv, &tcidSv, notify, err);
+        return spec.execute_start(spec.user_data, &argsSv, &sidSv, &tcidSv, &toolNotify, err);
     };
     drive.cancel = [spec, instKeep](void* op) {
         if (spec.execute_cancel) {

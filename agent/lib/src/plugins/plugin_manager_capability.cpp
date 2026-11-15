@@ -4,6 +4,7 @@
 /// 下沉到 cxx_pluginxx (见 pluginxx/host/host_core.h 与 tables_impl.h); 本文件只保留
 /// 业务部分: 工具调用与工具注册表/实例状态的耦合 (工具表是 agent 业务表)。
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/plugin/tool_result_frame.h"
 
 #include "asio/post.hpp"
 #include "fmt/format.h"
@@ -40,13 +41,13 @@ void setErrOut(PluginInstance* caller, PluginxxString* error_out, const std::str
 } // namespace
 
 PluginxxOperatorHandle* PluginMount::callToolAsync(
-    PluginInstance*          caller,
-    PluginxxStringView       name,
-    PluginxxStringView       args_json,
-    PluginxxStringView       thread_id,
-    PluginxxOperatorCallback cb,
-    void*                    ud,
-    PluginxxString*          error_out
+    PluginInstance*           caller,
+    PluginxxStringView        name,
+    PluginxxStringView        args_json,
+    PluginxxStringView        thread_id,
+    AgentxxPluginToolCallback cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
     // 入参在当前调用内复制；查询、登记和完整 start 都在所属 IO 线程执行。
     auto host = host_.lock();
@@ -104,10 +105,13 @@ PluginxxOperatorHandle* PluginMount::callToolAsync(
         drive.start = [spec,
                        args = parsed.dump(),
                        session,
-                       callId](const auto* notify, auto* error) -> void* {
+                       callId](const PluginxxOperatorNotify* notify, auto* error) -> void* {
+            // 互调也走两段协议: 主程序把框架的单段通知器换成工具的两段通知器
+            auto toolNotify
+                = makeToolNotify(notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr});
             const auto a = PluginStringView::from(args), s = PluginStringView::from(session),
                        id = PluginStringView::from(callId);
-            return spec.execute_start(spec.user_data, &a, &s, &id, notify, error);
+            return spec.execute_start(spec.user_data, &a, &s, &id, &toolNotify, error);
         };
         drive.cancel = [spec](void* op) {
             if (spec.execute_cancel) {
@@ -119,7 +123,18 @@ PluginxxOperatorHandle* PluginMount::callToolAsync(
             setErrOut(caller, error_out, error);
             return nullptr; // 真正拒绝：不调用 cb。
         }
-        core->setCallback(cb, ud);
+        // 完成包里的两段帧在这里拆开再交给调用方: 调用方拿到的是它自己的两段
+        // (正文原样字节 + 元数据 JSON), 不需要知道帧格式。
+        // 处理器由 OpCore 拥有: 终结时被调一次, 之后清空; 迟到/重复 done 由框架丢弃。
+        core->setCompletionHandler([cb, ud](int32_t status, std::string_view frame) {
+            if (!cb) {
+                return;
+            }
+            const auto parts    = agentxx::plugin::decodeToolResultFrame(frame);
+            auto       resultSv = PluginStringView::from(parts.result.data(), parts.result.size());
+            auto       metaSv = PluginStringView::from(parts.metadata.data(), parts.metadata.size());
+            cb(ud, status, &resultSv, &metaSv);
+        });
         return core->handle(); // 同步 done 也返回受管句柄，callback 恒经 IO 发布。
     } catch (const std::exception& e) {
         if (core && !core->submitted()) {

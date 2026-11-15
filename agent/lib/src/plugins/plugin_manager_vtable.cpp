@@ -419,14 +419,14 @@ static const AgentxxPluginMountIface g_ifaceMount = {
 };
 
 static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool_async(
-    const PluginxxHost*       host,
-    const PluginxxScopeRef*   agent,
-    const PluginxxStringView* name,
-    const PluginxxStringView* args_json,
-    const PluginxxStringView* session_id,
-    PluginxxOperatorCallback  cb,
-    void*                     ud,
-    PluginxxString*           error_out
+    const PluginxxHost*        host,
+    const PluginxxScopeRef*    agent,
+    const PluginxxStringView*  name,
+    const PluginxxStringView*  args_json,
+    const PluginxxStringView*  session_id,
+    AgentxxPluginToolCallback  cb,
+    void*                      ud,
+    PluginxxString*            error_out
 ) {
     return guardVtableCall<::PluginxxOperatorHandle*>(nullptr, [&]() {
         auto  call = enterHost(host);

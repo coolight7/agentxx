@@ -706,6 +706,27 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
         }
 
+        // ---- 16a2. 脚本返回 {text, attachments}: 正文在 text, 附件在第二段 ----
+        {
+            auto tool = ctx->toolRegistry->find("js_media_demo");
+            XX_TEST_EXPECT_TRUE(tool != nullptr);
+            if (tool) {
+                const auto result = co_await tool->execute_async(utilxx_base::Json{
+                    {"path", "/tmp/from-js.png"}
+                });
+                XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Ok);
+                XX_TEST_EXPECT_EQ(result.text, std::string{"attached /tmp/from-js.png"});
+                XX_TEST_EXPECT_EQ(result.attachments.size(), size_t{1});
+                if (!result.attachments.empty()) {
+                    XX_TEST_EXPECT_EQ(result.attachments[0].mimeType, std::string{"image/png"});
+                    XX_TEST_EXPECT_EQ(
+                        result.attachments[0].pathOrUrl,
+                        std::string{"/tmp/from-js.png"}
+                    );
+                }
+            }
+        }
+
         // ---- 16b. JS SDK 查询面 (提示词 / 会话 / 上下文 / 执行图 / 挂载 / 网络 / 后台任务) ----
         // 这些桥方法与 C++ 插件 SDK 同名同义; 脚本只能看到返回值的形状
         // (空会话 / 未配置这类"没有数据"的情况都应是 null 或空串, 不能是 undefined)
@@ -1624,11 +1645,11 @@ throw new Error("top-level rollback probe");
                 "example_echo",
                 R"({"k":"v"})",
                 "t31",
-                [](void* ud, int32_t st, const PluginxxStringView* pl) {
+                [](void* ud, int32_t st, const PluginxxStringView* res, const PluginxxStringView*) {
                     auto* s          = static_cast<StateTuple*>(ud);
                     *std::get<0>(*s) = st;
-                    if (pl && pl->data && pl->size > 0) {
-                        std::get<1>(*s)->assign(pl->data, pl->size);
+                    if (res && res->data && res->size > 0) {
+                        std::get<1>(*s)->assign(res->data, res->size);
                     }
                     *std::get<2>(*s) = true;
                 },
@@ -1652,7 +1673,7 @@ throw new Error("top-level rollback probe");
                 "not_registered_tool",
                 "{}",
                 "t31",
-                [](void*, int32_t, const PluginxxStringView*) {},
+                [](void*, int32_t, const PluginxxStringView*, const PluginxxStringView*) {},
                 nullptr,
                 &e2
             );
@@ -1674,10 +1695,11 @@ throw new Error("top-level rollback probe");
                                           const PluginxxStringView*,
                                           const PluginxxStringView*,
                                           const PluginxxStringView*,
-                                          const PluginxxOperatorNotify* notify,
+                                          const AgentxxPluginToolNotify* notify,
                                           PluginxxString*) -> void* {
-                auto emptySv = agentxx::plugin::PluginStringView::fromCstr("{}");
-                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &emptySv);
+                auto resultSv = agentxx::plugin::PluginStringView::fromCstr("{}");
+                auto emptySv  = agentxx::plugin::PluginStringView::from(nullptr, 0);
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &resultSv, &emptySv);
                 return nullptr;
             };
             XX_TEST_EXPECT_EQ(ctx->pluginMount->registerTool(inst31.get(), &asyncSpec), 0);
@@ -1696,7 +1718,7 @@ throw new Error("top-level rollback probe");
         //      插件上报 Canceled → 工具协程收到 CanceledException
         {
             struct CancelOp {
-                PluginxxOperatorNotify notify;
+                AgentxxPluginToolNotify notify;
             };
 
             static bool s_cancelCalled              = false;
@@ -1712,17 +1734,23 @@ throw new Error("top-level rollback probe");
                                       const PluginxxStringView*,
                                       const PluginxxStringView*,
                                       const PluginxxStringView*,
-                                      const PluginxxOperatorNotify* notify,
+                                      const AgentxxPluginToolNotify* notify,
                                       PluginxxString*) -> void* {
-                s_activeOp = new CancelOp{notify ? *notify : PluginxxOperatorNotify{}};
+                s_activeOp = new CancelOp{notify ? *notify : AgentxxPluginToolNotify{}};
                 return s_activeOp;
             };
             cSpec.execute_cancel = +[](void*, void* op) {
                 s_cancelCalled = true;
                 auto* o        = static_cast<CancelOp*>(op);
                 if (o && o->notify.done) {
-                    auto nullSv = agentxx::plugin::PluginStringView::from(nullptr, 0);
-                    o->notify.done(o->notify.host_ud, PLUGINXX_OPERATOR_CANCELED, &nullSv);
+                    auto nullSv  = agentxx::plugin::PluginStringView::from(nullptr, 0);
+                    auto emptySv = agentxx::plugin::PluginStringView::from(nullptr, 0);
+                    o->notify.done(
+                        o->notify.host_ud,
+                        PLUGINXX_OPERATOR_CANCELED,
+                        &nullSv,
+                        &emptySv
+                    );
                 }
                 delete o;
                 s_activeOp = nullptr;
@@ -1782,7 +1810,7 @@ throw new Error("top-level rollback probe");
                                           const PluginxxStringView*,
                                           const PluginxxStringView*,
                                           const PluginxxStringView*,
-                                          const PluginxxOperatorNotify*,
+                                          const AgentxxPluginToolNotify*,
                                           PluginxxString*) -> void* {
                 throw std::runtime_error("boom from plugin start");
             };
@@ -1818,7 +1846,7 @@ throw new Error("top-level rollback probe");
                                          const PluginxxStringView*,
                                          const PluginxxStringView*,
                                          const PluginxxStringView*,
-                                         const PluginxxOperatorNotify*,
+                                         const AgentxxPluginToolNotify*,
                                          PluginxxString*) -> void* {
                 return nullptr; ///< 违约: 未 call notify->done 且未设 error_out
             };
@@ -2010,11 +2038,11 @@ throw new Error("top-level rollback probe");
                     cmdToolName,
                     R"({"command":"echo repro_check"})",
                     "t_exec_no_token",
-                    [](void* ud, int32_t st, const PluginxxStringView* pl) {
+                    [](void* ud, int32_t st, const PluginxxStringView* res, const PluginxxStringView*) {
                         auto* r   = static_cast<AsyncRes*>(ud);
                         r->status = st;
-                        if (pl && pl->data && pl->size > 0) {
-                            r->payload.assign(pl->data, pl->size);
+                        if (res && res->data && res->size > 0) {
+                            r->payload.assign(res->data, res->size);
                         }
                         r->done = true;
                     },
@@ -2051,11 +2079,11 @@ throw new Error("top-level rollback probe");
                     cmdToolName,
                     R"({"command":"echo token_case"})",
                     "t_exec_with_token",
-                    [](void* ud, int32_t st, const PluginxxStringView* pl) {
+                    [](void* ud, int32_t st, const PluginxxStringView* res, const PluginxxStringView*) {
                         auto* r   = static_cast<AsyncRes*>(ud);
                         r->status = st;
-                        if (pl && pl->data && pl->size > 0) {
-                            r->payload.assign(pl->data, pl->size);
+                        if (res && res->data && res->size > 0) {
+                            r->payload.assign(res->data, res->size);
                         }
                         r->done = true;
                     },
@@ -2094,11 +2122,11 @@ throw new Error("top-level rollback probe");
                     cmdToolName,
                     timeoutCmd,
                     "t_exec_no_token",
-                    [](void* ud, int32_t st, const PluginxxStringView* pl) {
+                    [](void* ud, int32_t st, const PluginxxStringView* res, const PluginxxStringView*) {
                         auto* r   = static_cast<AsyncRes*>(ud);
                         r->status = st;
-                        if (pl && pl->data && pl->size > 0) {
-                            r->payload.assign(pl->data, pl->size);
+                        if (res && res->data && res->size > 0) {
+                            r->payload.assign(res->data, res->size);
                         }
                         r->done = true;
                     },
@@ -2167,11 +2195,11 @@ throw new Error("top-level rollback probe");
                 "example_sleep",
                 R"({"durationMs":60000})",
                 "t_unload_cancel",
-                [](void* ud, int32_t st, const PluginxxStringView* pl) {
+                [](void* ud, int32_t st, const PluginxxStringView* res, const PluginxxStringView*) {
                     auto* r   = static_cast<CancelRes*>(ud);
                     r->status = st;
-                    if (pl && pl->data && pl->size > 0) {
-                        r->payload.assign(pl->data, pl->size);
+                    if (res && res->data && res->size > 0) {
+                        r->payload.assign(res->data, res->size);
                     }
                     r->done = true;
                 },
@@ -3614,7 +3642,7 @@ throw new Error("top-level rollback probe");
                     {"timeout", 20         }
             }.dump(),
                 "t_polled_unload",
-                [](void* ud, int32_t st, const PluginxxStringView*) {
+                [](void* ud, int32_t st, const PluginxxStringView*, const PluginxxStringView*) {
                     auto* r   = static_cast<UnloadRes*>(ud);
                     r->status = st;
                     r->done.store(true, std::memory_order_release);

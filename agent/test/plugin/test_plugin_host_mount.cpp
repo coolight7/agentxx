@@ -164,12 +164,13 @@ void* PLUGINXX_CALL probeToolStart(
     const PluginxxStringView*,
     const PluginxxStringView*,
     const PluginxxStringView*,
-    const PluginxxOperatorNotify* notify,
+    const AgentxxPluginToolNotify* notify,
     PluginxxString*
 ) {
     if (notify && notify->done) {
-        const auto payload = agentxx::plugin::PluginStringView::fromCstr(R"({"ok":true})");
-        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &payload);
+        const auto result  = agentxx::plugin::PluginStringView::fromCstr(R"({"ok":true})");
+        const auto emptySv = agentxx::plugin::PluginStringView::from(nullptr, 0);
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &result, &emptySv);
     }
     return nullptr;
 }

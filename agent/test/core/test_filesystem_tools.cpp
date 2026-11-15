@@ -10,6 +10,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/plugin/tool_result_frame.h"
 #include "agentxx_filesystem/agentxx_fs_plugin.h" // 渲染摘要 helper (diffStatTextOfSegments)
 #include "agentxx_filesystem/filesystem_impl.h"
 #include "utilxx_base/string_util.h"
@@ -3516,17 +3517,28 @@ asio::awaitable<void> test_plugin_real_link() {
     }
 
     // read_media (blocking): 读取测试图片并验证返回结果包含正确信息
+    // 同时验证多模态附件经插件 ABI 的两段通道完整到达: 正文在 `text`,
+    // 附件在 `attachments` (不再是 JSON 信封)
     {
         auto imgPath = testDir + "/media_smoke.png";
         writeTextFileQuiet(imgPath, "fake png content\n");
-        auto out = co_await callTool(
-            "agentxx_filesystem_read_media",
-            utilxx_base::Json{
-                {"path", "media_smoke.png"}
+        auto mediaTool = linkCtx->toolRegistry->find("agentxx_filesystem_read_media");
+        XX_TEST_EXPECT_TRUE(mediaTool != nullptr);
+        if (mediaTool) {
+            auto merged         = utilxx_base::Json{{"path", "media_smoke.png"}};
+            merged["sessionId"] = "t_fs_link";
+            auto res            = co_await mediaTool->execute_async(merged);
+            XX_TEST_EXPECT_TRUE(res.isOk());
+            XX_TEST_EXPECT_TRUE(res.text.find("Loaded image media file") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(res.text.find("media_smoke.png") != std::string::npos);
+            XX_TEST_EXPECT_EQ(res.attachments.size(), size_t{1});
+            if (!res.attachments.empty()) {
+                XX_TEST_EXPECT_EQ(res.attachments[0].mimeType, std::string{"image/png"});
+                XX_TEST_EXPECT_TRUE(
+                    res.attachments[0].pathOrUrl.find("media_smoke.png") != std::string::npos
+                );
             }
-        );
-        XX_TEST_EXPECT_TRUE(out.find("Loaded image media file") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(out.find("media_smoke.png") != std::string::npos);
+        }
         removeQuiet(imgPath);
     }
 
@@ -4626,11 +4638,11 @@ asio::awaitable<void>
     co_return;
 }
 
-/// ToolResult 多模态信封打包与解包往返测试
+/// ToolResult 两段 (正文 + 元数据) 的拆分与组装, 以及帧编解码往返测试
 asio::awaitable<void>
-    test_tool_result_envelope_pack_unpack(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    test_tool_result_metadata_payload(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     (void)agentContext;
-    // 1) 带有附件的结果打包与解包
+    // 1) 带有附件的结果: 正文与元数据分两段
     agentxx::agent::MediaAttachment att;
     att.type        = agentxx::agent::MediaType::Image;
     att.displayName = "photo.png";
@@ -4645,28 +4657,58 @@ asio::awaitable<void>
     XX_TEST_EXPECT_TRUE(original.hasAttachments());
     XX_TEST_EXPECT_EQ(original.attachments.size(), 1);
 
-    auto packed = original.packEnvelope();
-    XX_TEST_EXPECT_TRUE(packed.find(agentxx::util::kToolMediaEnvelopeKey) != std::string::npos);
+    const auto metadata = original.metadataPayloadJson();
+    XX_TEST_EXPECT_TRUE(metadata.find("attachments") != std::string::npos);
+    // 正文不进元数据: 否则非 UTF-8 的正文会被 JSON 转义/替换
+    XX_TEST_EXPECT_TRUE(metadata.find("Loaded image") == std::string::npos);
 
-    auto unpacked = agentxx::util::ToolResult::unpackEnvelope(packed);
-    XX_TEST_EXPECT_TRUE(unpacked.hasAttachments());
-    XX_TEST_EXPECT_EQ(unpacked.attachments.size(), 1);
-    XX_TEST_EXPECT_EQ(unpacked.text, "Loaded image successfully.");
-    XX_TEST_EXPECT_EQ(unpacked.attachments[0].displayName, "photo.png");
-    XX_TEST_EXPECT_EQ(unpacked.attachments[0].mimeType, "image/png");
-    XX_TEST_EXPECT_EQ(unpacked.attachments[0].pathOrUrl, "/tmp/photo.png");
-    XX_TEST_EXPECT_EQ(unpacked.attachments[0].sizeBytes, 12345);
+    auto restored = agentxx::util::ToolResult::fromParts(
+        original.text,
+        agentxx::util::ToolStatus::Ok,
+        metadata
+    );
+    XX_TEST_EXPECT_TRUE(restored.hasAttachments());
+    XX_TEST_EXPECT_EQ(restored.attachments.size(), 1);
+    XX_TEST_EXPECT_EQ(restored.text, "Loaded image successfully.");
+    XX_TEST_EXPECT_EQ(restored.attachments[0].displayName, "photo.png");
+    XX_TEST_EXPECT_EQ(restored.attachments[0].mimeType, "image/png");
+    XX_TEST_EXPECT_EQ(restored.attachments[0].pathOrUrl, "/tmp/photo.png");
+    XX_TEST_EXPECT_EQ(restored.attachments[0].sizeBytes, 12345);
 
-    // 2) 普通纯文本不产生多模态信封
+    // 2) 普通纯文本工具: 元数据为空串 (零开销), 组装后仍无附件
     auto plain = agentxx::util::ToolResult::ok("Plain text result");
     XX_TEST_EXPECT_FALSE(plain.hasAttachments());
-    XX_TEST_EXPECT_EQ(plain.packEnvelope(), "Plain text result");
-    auto unpackedPlain = agentxx::util::ToolResult::unpackEnvelope("Plain text result");
-    XX_TEST_EXPECT_FALSE(unpackedPlain.hasAttachments());
-    XX_TEST_EXPECT_EQ(unpackedPlain.text, "Plain text result");
+    XX_TEST_EXPECT_TRUE(plain.metadataPayloadJson().empty());
+    auto restoredPlain = agentxx::util::ToolResult::fromParts("Plain text result");
+    XX_TEST_EXPECT_FALSE(restoredPlain.hasAttachments());
+    XX_TEST_EXPECT_EQ(restoredPlain.text, "Plain text result");
+
+    // 3) 元数据损坏不影响正文
+    {
+        auto broken = agentxx::util::ToolResult::fromParts("body", agentxx::util::ToolStatus::Ok, "{oops");
+        XX_TEST_EXPECT_EQ(broken.text, "body");
+        XX_TEST_EXPECT_FALSE(broken.hasAttachments());
+    }
+
+    // 4) 两段帧: 含非 UTF-8 字节的正文原样往返
+    {
+        std::string dirty = "latin1: ";
+        dirty.push_back(static_cast<char>(0xC4));
+        dirty.push_back(static_cast<char>(0xE3));
+        dirty.push_back('\n');
+        const auto frame = agentxx::plugin::encodeToolResultFrame(dirty, metadata);
+        const auto parts = agentxx::plugin::decodeToolResultFrame(frame);
+        XX_TEST_EXPECT_EQ(std::string{parts.result}, dirty);
+        XX_TEST_EXPECT_EQ(std::string{parts.metadata}, metadata);
+
+        // 非帧输入 (长度对不上) 整段当正文, 不丢结果
+        const auto fallback = agentxx::plugin::decodeToolResultFrame("raw text");
+        XX_TEST_EXPECT_EQ(std::string{fallback.result}, "raw text");
+        XX_TEST_EXPECT_TRUE(fallback.metadata.empty());
+    }
 
     g_fs_passed++;
-    TEST_PASS << "ToolResult envelope pack and unpack works correctly" << std::endl;
+    TEST_PASS << "ToolResult two-part (result + metadata) round trip works" << std::endl;
     co_return;
 }
 
@@ -4943,8 +4985,8 @@ asio::awaitable<TestResult>
     co_await run(test_glob_type_array);
     co_await run(test_write_overwrite_omitted);
 
-    // 多模态信封与 read_media 工具测试
-    co_await run(test_tool_result_envelope_pack_unpack);
+    // 两段结果 (正文 + 元数据) 与 read_media 工具测试
+    co_await run(test_tool_result_metadata_payload);
     co_await run(test_read_media_tool_basic);
     co_await run(test_read_media_tool_errors);
     co_await run(test_read_media_relative_workdir);

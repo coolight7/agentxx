@@ -379,7 +379,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
    - 支持 `registerCallback(key, cb)` 注册基于会话标识的取消回调，支持 RAII `ScopedRegistration` 守卫，提供排他互斥与防悬挂锁保护，避免回调访问已析构的局部资源
    - 适用于长时间运行的外部进程或底层阻塞 IO（如 `agentxx_execute_command`），一旦主程序发起取消即可毫秒级即时终止子进程组，无需等待轮询间隔
 5. **统一异步操作模型 (操作 start/cancel)**：
-   - 工具/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 操作，终结经 `PluginxxOperatorNotify.done(status,payload)` 恰好一次上报
+   - 工具/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 操作，终结经完成通知器恰好一次上报: 能力/图节点/lifecycle 用 `PluginxxOperatorNotify.done(status,payload)`; 工具用 `AgentxxPluginToolNotify` 的三个入口 (`done` 两段 / `done_text` 只有正文 / `done_frame` 整帧, 见 §8.4)
    - `Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调
    - `polled_tool`（受控轮询）与 `blocking_tool`/`fast_tool` 并列：业务体是 `asio::awaitable`，
      等待插件本地 reactor 上的 I/O 就绪通知，由桥按声明式受控轮询推进（§16.5）
@@ -434,7 +434,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 | IID | 版本 | 能力 |
 |-----|------|------|
-| `agentxx.agent.tools` | 3 | `register_tool/unregister_tool`, `call_tool_async` (插件互调, cb 保证 IO 线程 post; 取消统一用 `agentxx.cancel.op_cancel`); v3 = 工具成败只由最终通知的状态位表达，结果文本不带 `[Error]` 前缀 |
+| `agentxx.agent.tools` | 4 | `register_tool/unregister_tool`, `call_tool_async` (插件互调, cb 保证 IO 线程 post; 取消统一用 `agentxx.cancel.op_cancel`); v3 = 工具成败只由最终通知的状态位表达，结果文本不带 `[Error]` 前缀; v4 = 工具结果改成**两段上报** (正文原样字节 + 元数据 JSON), 完成通知器换成 `AgentxxPluginToolNotify`, 互调回调换成 `AgentxxPluginToolCallback` (见 §8.4) |
 | `agentxx.agent.permission` | 2 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 见下方说明) |
 | `agentxx.agent.session` | 3 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) + `get_session_work_dir(agent, session_id)` (会话生效工作目录: worktree 绑定优先, session_id 为空返回默认工作目录) + `is_canceled(agent, thread_id)` (advisory 查询, 权威通知仍是取消回调)。后两项 v3 从插件框架通用表迁入 |
 | `agentxx.agent.context` | 2 | 会话 LLM 上下文查询: `get_messages/messages_count` (IO 线程)。上下文由会话持有 (图状态不含 `messages` 通道), 插件需要上下文内容时经此按需查询; 只要数量用 `messages_count`, 避免拉取整段上下文 |
@@ -471,11 +471,13 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 > `X_BASELINE_SIZE` (基线字节数); 需要按 agent 区分的业务表为 v2 起 (v1 只在本进程单 agent
 > 下成立, 已不再兼容), 其余表为 v1 (基线 = 完整表长)。
 >
-> **代次 (全局 API 版本) 与当前状态**: 现在是 **v5** (2026-11 迁到 `cxx_pluginxx` 0.3.0) ——
-> 旧通知表与事件表删除, 通知面统一成广播频道 (`agentxx.broadcasts`), 功能埋点的实现行统一成
-> 能力行 (`agentxx.capabilities`); client 侧的 `agentxx.client.events` / `.json` / `.log`
-> 三张表删除 (后两者改用通用表 `agentxx.json` / `agentxx.log`)。
-> 更早的档位: v3 把通用表里的业务成员 (`get_tool_prompt` / `get_session_work_dir` /
+> **代次 (全局 API 版本) 与当前状态**: 现在是 **v6** (2026-11 工具结果两段上报) ——
+> `agentxx.agent.tools` 表抬到 4: 工具结果拆成"正文 (原样字节) + 元数据 JSON"两段,
+> 完成通知器换成 `AgentxxPluginToolNotify`, 插件互调回调换成 `AgentxxPluginToolCallback`
+> (见 §8.4)。client 侧表布局未变, 但两端需同一代头文件重编。
+> 更早的档位: v5 (2026-11 迁到 `cxx_pluginxx` 0.3.0) 删旧通知表与事件表, 通知面统一成广播频道,
+> 功能埋点实现行统一成能力行, client 侧删 `events` / `json` / `log` 三张表;
+> v3 把通用表里的业务成员 (`get_tool_prompt` / `get_session_work_dir` /
 > `is_canceled`) 迁回 `agentxx.agent.prompt` / `agentxx.agent.session`, 并把 "agent" 用词
 > 泛化为 "作用域" (`PluginxxScopeRef` 参数名 `scope`, 通用根请求的 `sessionId` → `scopeKey`、
 > 图节点专用字段改为主程序自定义 `extraFields`); v4 = 工具结果换代 (成败改由状态位表达)。
@@ -665,6 +667,41 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 - **框架生命周期入口** (`create` / `start` / `stop` / 挂载事务) 仍是 "0 = 成功, 非 0 = 失败",
   主程序只判非 0 并记日志, 具体码不参与分支;
 - 新增码只在业务表的语义确实不重合时加, 优先复用上表。
+
+### 8.4 工具结果的两段上报 (`AgentxxPluginToolNotify`)
+
+工具结果拆成两段传 (`agentxx.agent.tools` v4):
+
+| 段 | 内容 | 约定 |
+|----|------|------|
+| `result` | 给模型/用户读的正文 (`ToolResult.text`) | **原样字节**, 允许非 UTF-8 (本地代码页的命令行输出等) |
+| `payload` | 正文以外的结构化元数据 (JSON 对象) | 目前是多模态附件 `{"attachments":[…]}`; 没有元数据就传空, 不产生解析开销 |
+
+为什么不用一个 `{text, attachments}` 信封: 正文进 JSON 就必须是合法 UTF-8 —— 本地代码页
+的字节会被换成 U+FFFD, 主程序再也做不了编码探测与无损转码; 而且几百 KB 的正文每次转义/反转义
+都是整份内存与 CPU。现在主程序收到 `result` 后按需做一次 `autoConvertToUtf8`
+(只在"含非 ASCII 且不是合法 UTF-8"时执行)。
+
+完成通知器有三个入口 (三选一, 恰好调一次; 后两个是给 SDK 在"只有一段可用"的位置用的,
+普通插件只用 `done`):
+
+| 入口 | 签名 | 用途 |
+|------|------|------|
+| `done` | `(host_ud, status, result, payload)` | 常规用法 |
+| `done_text` | `(host_ud, status, result)` | Task 型工具 (`tool`): 业务体只能给正文 |
+| `done_frame` | `(host_ud, status, frame)` | 受控轮询工具 (`polled_tool`): SDK 在插件侧把两段拼成帧 |
+
+后两个的签名与 `PluginxxOperatorNotify.done` 完全一致, 所以能整接插给插件框架的协程根
+(那里只传一段字符串)。**插件不引用主程序符号** (插件不链接 libagentxx), 三个入口的
+函数指针都由主程序写进通知器里。
+
+帧是 `agentxx/plugin/tool_result_frame.h` 的两段长度前缀裸字节
+(`[uint32 正文长][uint32 元数据长][正文][元数据]`), **不是 JSON**: 只在本进程内
+(SDK ↔ 主程序) 流转, 对插件作者透明。
+
+SDK 侧对应关系: 工具实现体返回 `agentxx::util::ToolResult` 时,
+`metadataPayloadJson()` 产出元数据、`text` 就是正文; 插件互调要拿完整结果 (含附件)
+用 `co_await call_tool_result(...)` 返回 `ToolResult`, 只要正文继续用 `call_tool`。
 
 ---
 
@@ -1169,7 +1206,8 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 - **一插件多 agent 挂载 (= C++ 插件同一套生命周期)**：引擎在自己的 `mount` 里登记作用域 (`agent_id` + `mount_seq`)、对该 agent 补建全部脚本实例；`unmount` 时销毁该作用域的实例。因此脚本顶层代码就是“该 agent 的插件实例初始化”，脚本里的全局变量天然按 agent 隔离；进程级状态请放在 C++ 壳的 `start` 里。同一脚本在 N 个 agent 上注册同名工具互不冲突 (各自属于自己的挂载)
 - **引擎线程属于 start 事务**：`agentxx_javascript_engine` 的 `create` 只构造，`start` 才创建 JSRuntime 与专用 JS 线程并注册 `interpreter.js` 能力，`stop` 停止线程并释放 runtime (同时清空脚本登记与挂载作用域)；`disable → enable` 往返即一次 `stop + start`，引擎线程与脚本实例按事务重建 (壳插件在自身 start 中重新加载脚本)
 - **stop 不阻塞 IO 线程**：JS 线程可能在主程序 vtable 调用中等待 IO 线程，因此 `stop` 由独立收尾线程完成 `join` 与 runtime 释放，完成通知从该线程上报；JS 线程空闲时走调用线程直接收尾的快路径，使紧邻的 stop→start 顺序确定。停止后不再执行插件 JS：新任务被拒绝，队列任务按 `CANCELLED`/`FAILED` 终结，事件投递丢弃
-- **`agentxx.callTool` 始终返回 Promise**：命中本引擎工具时同线程执行并把结果/内部 Promise 链到外层 Promise；命中主程序插件工具时经 `call_tool_async` 异步互调，完成/失败/取消事件投递回 JS 线程 settle。JS 线程不会同步等待主程序，A/B 脚本互调不存在线程自锁
+- **`agentxx.callTool` 始终返回 Promise**：命中本引擎工具时同线程执行并把结果/内部 Promise 链到外层 Promise；命中主程序插件工具时经 `call_tool_async` 异步互调，完成/失败/取消事件投递回 JS 线程 settle。JS 线程不会同步等待主程序，A/B 脚本互调不存在线程自锁。resolve 形态：目标工具报了元数据（附件等）时给对象 `{...元数据, text: 正文}`（元数据里已有 `text` 则不覆盖），否则保持原行为（正文能解析成 JSON 就给值，否则给字符串）
+- **工具返回值可以是 `{status, text, attachments}`**：`text` 是给模型读的正文，`attachments`（数组，元素形如 `{type, display_name, mime_type, path_or_url, size_bytes}`）作为第二段元数据上报，主程序侧直接得到 `ToolResult.attachments`（多模态附件的传递流程）；不写 `text` 时整份返回值就是正文（此时附件也会出现在正文里，所以带附件就请同时给 `text`）
 - **脚本初始化是注册事务**：脚本顶层注册的工具/订阅/资源/定时器在顶层异常或脚本卸载时统一回滚（先撤销主程序注册，再释放 JSContext），不留悬垂 user_data；订阅登记与能力 `unload` 的完成通知在 JS 执行真正结束后发出。agent 卸载时**不再**执行 JS 侧注销动作 (主程序已按挂载记录撤销全部注册，再照着回滚会碰到已释放的句柄)
 - **JS SDK 与 C++ 插件 SDK 同名同义**：`registerTool` / `unregisterTool` / `callTool`、`subscribe` / `unsubscribe` / `publish`、`addSkillDir` / `addMemoryFile` / `addMcpServer` (含 remove)、`registerToolPermission` / `registerReadPathPermission` / `registerWritePathPermission` / `unregisterToolPermission`、`getConfig` / `getPluginArgs` / `getLanguage` / `setLanguage`、`log`、`scope()` (返回 `{agentId, mountSeq}`，等同 C++ 侧的 `PluginxxScopeRef`)、`setTimeout` / `clearTimeout`、`jsonEscape(text)` / `jsonGetString(jsonText, key)` (对应 `pluginxx.json` 的两个成员；`jsonEscape` 与 C++ kit 一样返回**带引号**的 JSON 字符串字面量)。注册工具时与 `kit::fast_tool` 同一组可选项：`timeoutMs`（次调用的默认超时，0 = 不限）、`autoSummary` / `parallelSafe` / `repeatCallCheck`（对应 `AGENTXX_PLUGIN_TOOL_FLAG_*`）。工具回调的 `ctx` 是 `{sessionId, toolCallId, isCanceled()}`：**协作式取消**与 C++ SDK 同语义，主程序取消（会话取消 / 超时 / 后台任务取消）只置标记，脚本在回调里轮询 `ctx.isCanceled()` 才看得到，不看就一直跑到结束（那次的终态是 `canceled`，结果不再被采用）。
 - **网络 (`agentxx.net`) 已对齐**：`netCall(op, args)` / `netCallAsync(op, args)` / `netFetch(urlOrOptions)` / `netDownload(urlOrOptions, fileName)` / `netWsConnect(urlOrOptions)` / `netWsSend(id, text)` / `netWsClose(id, code, reason)` / `netHttpServe(options)` / `netHttpRespond(options)` / `netInfo()` / `netCancel(requestId)`。返回的始终是**结果对象**，业务结论看 `ok`（连不上、超时都是 `ok:false` + `error`，不是异常）；同步入口会阻塞 JS 线程直到网络侧给出结果，慢操作 (`http.fetch` / `http.download`) 用 Promise 形态。同一引擎里的脚本共享一份网络资源（归属是引擎这个插件实例，见 §22），连接 id 请自己带脚本名前缀

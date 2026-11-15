@@ -591,6 +591,15 @@ path/to/agentxx_test --log-level warn string_util regex
   字符串数组; `web_fetch` 与 `web_fetch_markdown` 合并为 `web_fetch` (`format` = markdown|raw);
   `execute_command` 的 `all_output` 改名 `full_output`; `rag_search` 的 `top_k` 改名 `limit`;
   `string_regexp` 增加 `ignore_case`; `web_fetch` 的 `header` 声明为 object
+- 多模态工具结果 (2026-11): `ToolResult` 可带 `attachments` (`MediaAttachment`:
+  `type` / `display_name` / `mime_type` / `path_or_url` / `size_bytes`); 文件系统插件新增
+  `agentxx_filesystem_read_media` (入参 `path`, 声明读路径权限; 配额 图片 10MB / 音频 25MB /
+  视频 50MB); 只在模型条目声明了 `image_input` / `audio_input` / `video_input` 时才投递 ——
+  执行完按模型能力过滤, 再经线程池把本地文件转成 Data URL, 以紧随 tool 结果的一条观察型
+  `user` 消息 (带 `AutoInserted`) 注入上下文 (避开上游对 `role:"tool"` 多模态内容的 400);
+  展示层另行把附件挂在 Tool 行上 (`ViewMessage::attachments`), 两层互不依赖; 跨边界的
+  两段上报见 [plugins.md](docs/zh-cn/design/plugins.md) §8.4, 类型与配额见
+  `agent/lib/include/agentxx/agent/media_attachment.h`
 - 搜索结果的"无匹配"不是错误 (2026-11): `agentxx_filesystem_grep` 的两种空结果
   —— `file_patterns` 没展开出任何文件、或文件扫了但没有内容命中 —— 都返回 `Ok`,
   正文写明"扫了多少文件 / 用了什么模式" (与 grep 退出码 1 同语义); 只有参数错
@@ -607,9 +616,24 @@ path/to/agentxx_test --log-level warn string_util regex
   - 失败标记只写在展示消息上 (`ViewMessage::ToolData::status`, 随 `update_message` 的整条工具行下发),
     **客户端只看该字段**, 不再解析结果文本; 出现在文本里的 `[Error: ...]` 只是给模型看的排版,
     不代表状态 (工具可能正常返回一段含该字样的内容)
-  - 插件边界: `agentxx.agent.tools` 表 v3 (布局不变), 插件工具的成败由最终通知的状态位表达
-    (`PLUGINXX_OPERATOR_OK`/`FAILED`/`CANCELED`); SDK 的 `fast_tool`/`blocking_tool`/`polled_tool`
-    业务体可以直接返回 `ToolResult`
+  - 插件边界: `agentxx.agent.tools` 表 v4, 工具结果**分两段**上报 ——
+    `AgentxxPluginToolNotify.done(host_ud, status, result, payload)`:
+    `result` = `ToolResult.text` (**原样字节**, 插件不猜编码; 主程序按 `needsUtf8Conversion`
+    判定后才 `autoConvertToUtf8`), `payload` = 除正文外的元数据 JSON
+    (如 `{"attachments":[…]}`; 无元数据传空串, 零开销); 另有 `done_text` (只有正文)
+    与 `done_frame` (整帧) 两个便捷入口, 主程序侧统一由 `makeToolNotify` 填
+    (`agent/lib/include/agentxx/plugin/tool_result_frame.h`)
+  - **正文绝不进 JSON**: 阶段一曾用 `__agentxx_tool_media__` 信封把元数据塞进正文串,
+    正文被迫参与 JSON 转义/转码 (`packEnvelope`/`unpackEnvelope` 已删); 现在两段经
+    `[uint32 正文长][uint32 元数据长][正文][元数据]` 裸帧过 `PluginxxOpCore`
+    (它只有一个字符串完成包, 库不可改), 帧只在进程内 SDK ↔ 主程序之间流动
+  - **通知器入口必须由 host 侧提供, 插件侧 Job 只存值**: `destroyFrame()`
+    (→ cleanup → delete Job) 先于 `notifyHost()` 执行, 通知器引用 Job 内存就是
+    use-after-free (ASan 实测); 取消时连元数据一起清
+  - 插件工具成败仍由状态位表达 (`PLUGINXX_OPERATOR_OK`/`FAILED`/`CANCELED`);
+    SDK 的 `fast_tool`/`blocking_tool`/`polled_tool` 业务体可以直接返回 `ToolResult`;
+    插件互调用 `call_tool` (返回正文) 或 `call_tool_result` (返回完整 `ToolResult`,
+    工具失败不抛、看 `status`, 取消抛 `CanceledException`)
 - 输入分页 (2026-10): 单条输入达到 `AgentConfig::userInputSummaryLimitLength` (默认 8K utf8 字符,
   0=关闭) 即把原文经 share store 卸载, 上下文/请求只留开头片段 + `agentxx_share_store` 取回提示
   (模型按行取回); 覆盖两处入口 —— 队列里的用户消息进入轮次时 (`BaseAgent::runTurnAsync`)
@@ -805,17 +829,18 @@ path/to/agentxx_test --log-level warn string_util regex
   4 个网络插件已全部迁完 (`websearch` / `rag_search` / `text_selection_monitor` / `chatbot`),
   插件里不再出现 `utilxx/http_client.h` / `ws_client.h`; 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §22
-- 接口表版本与基线 (**当前代次 5**, 全局 API 版本 = 5: v2 是多 agent 挂载换代;
+- 接口表版本与基线 (**当前代次 6**, 全局 API 版本 = 6: v2 是多 agent 挂载换代;
   v3 把通用表里的业务成员 (会话工作目录 / 取消查询 / 工具提示词) 迁回 agentxx 业务表
   并把 "agent" 用词泛化为 "作用域"; v4 = 工具结果换代 (成败改由状态位表达);
   v5 = 迁移到 `cxx_pluginxx` 0.3.0 (旧通知表与事件表删除 → 广播频道 + 能力实现行,
   client 侧 `events`/`json`/`log` 三张表删除, 能力行带 scope);
-  业务表 `version` = `MIN_VERSION` = 2 或 3, 通用表见 `pluginxx/api/tables.h`,
+  v6 = 工具结果两段上报 (`AgentxxPluginToolNotify`, `agentxx.agent.tools` 抬到 4);
+  业务表 `version` = `MIN_VERSION` = 2 ~ 4, 通用表见 `pluginxx/api/tables.h`,
   基线 = 重置时的完整布局):
   - **库里的默认值不改**: cxx_pluginxx 的 `abi.h` 中 `PLUGINXX_API_VERSION` /
     `PLUGINXX_MIN_API_VERSION` 恒保持 1 (多主程序共用); agentxx 在 `agent/CMakeLists.txt`
-    用 `AGENTXX_PLUGIN_API_VERSION` 选项向全局 FLAGS 追 `-D...=5` 覆盖, 并随 `CMAKE_ARGS`
-    传给 cxx_pluginxx 的嵌套构建 (installed targets 的 INTERFACE 定义随之变成 5)
+    用 `AGENTXX_PLUGIN_API_VERSION` 选项向全局 FLAGS 追 `-D...=6` 覆盖, 并随 `CMAKE_ARGS`
+    传给 cxx_pluginxx 的嵌套构建 (installed targets 的 INTERFACE 定义随之变成 6)
   - 改代次时注意构建缓存: 覆盖时必须**先剔旧值再追加** (否则嵌套 ExternalProject
     会一直用缓存里的上一代值编译)
   - `agentxx.config` 现有 `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language`,

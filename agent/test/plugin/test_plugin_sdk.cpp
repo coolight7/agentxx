@@ -344,6 +344,54 @@ struct NotifyProbe {
     }
 };
 
+/// 工具完成通知探针 (工具结果分两段: 正文 + 元数据)
+struct ToolNotifyProbe {
+    int         calls  = 0;
+    int32_t     status = -1;
+    std::string result;  ///< 正文
+    std::string payload; ///< 元数据 JSON
+
+    static void PLUGINXX_CALL done(
+        void*                     ud,
+        int32_t                   status,
+        const PluginxxStringView* result,
+        const PluginxxStringView* payload
+    ) {
+        auto& probe  = *static_cast<ToolNotifyProbe*>(ud);
+        ++probe.calls;
+        probe.status = status;
+        if (result && result->data && result->size > 0) {
+            probe.result.assign(result->data, static_cast<size_t>(result->size));
+        }
+        if (payload && payload->data && payload->size > 0) {
+            probe.payload.assign(payload->data, static_cast<size_t>(payload->size));
+        }
+    }
+
+    static void PLUGINXX_CALL doneText(
+        void*                     ud,
+        int32_t                   status,
+        const PluginxxStringView* text
+    ) {
+        auto& probe  = *static_cast<ToolNotifyProbe*>(ud);
+        ++probe.calls;
+        probe.status = status;
+        if (text && text->data && text->size > 0) {
+            probe.result.assign(text->data, static_cast<size_t>(text->size));
+        }
+    }
+
+    AgentxxPluginToolNotify notify() {
+        // Task 型工具只走 done_text; done / done_frame 不参与
+        return AgentxxPluginToolNotify{
+            &ToolNotifyProbe::done,
+            &ToolNotifyProbe::doneText,
+            nullptr,
+            this
+        };
+    }
+};
+
 /// 手动放行的挂起点：测试先让 start 返回，再改变外部状态并 resume。
 struct Gate {
     bool*                    released = nullptr;
@@ -424,8 +472,8 @@ TestResult testPluginSdk() {
         auto        sidSv        = PluginStringView::from(borrowedSid.data(), borrowedSid.size());
         auto        cidSv        = PluginStringView::fromCstr("call-42");
 
-        NotifyProbe probe;
-        auto        notify = probe.notify();
+        ToolNotifyProbe probe;
+        auto             notify = probe.notify();
         void* op = spec.execute_start(spec.user_data, &argsSv, &sidSv, &cidSv, &notify, nullptr);
         XX_TEST_EXPECT_TRUE(op != nullptr);
         XX_TEST_EXPECT_EQ(probe.calls, 0);
@@ -444,7 +492,9 @@ TestResult testPluginSdk() {
         finishRoot<Task<std::string>::promise_type>(handle);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
-        XX_TEST_EXPECT_EQ(probe.payload, std::string{R"({"n":42})"});
+        XX_TEST_EXPECT_EQ(probe.result, std::string{R"({"n":42})"});
+        // Task 型工具只能给正文, 元数据为空
+        XX_TEST_EXPECT_TRUE(probe.payload.empty());
     }
 
     /// providePoint: 功能埋点实现行 = 能力行, 两种业务体形态都能登记

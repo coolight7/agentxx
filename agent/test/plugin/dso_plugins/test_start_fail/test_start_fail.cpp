@@ -102,10 +102,11 @@ const char* failStep(const PluginxxHost* host, const char* step) {
 }
 
 void* PLUGINXX_CALL
-    probeToolStart(void*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    probeToolStart(void*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxStringView*, const AgentxxPluginToolNotify* notify, PluginxxString*) {
     if (notify && notify->done) {
-        const auto payload = sv(R"({"ok":true})");
-        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &payload);
+        const auto result  = sv(R"({"ok":true})");
+        const auto emptySv = sv("");
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &result, &emptySv);
     }
     return nullptr;
 }

@@ -385,23 +385,67 @@ int32_t PLUGINXX_CALL fakeRegisterTool(
     return 0;
 }
 
-/// 完成通知探针。
+/// 完成通知探针 (工具结果分两段: 正文 + 元数据)。
 struct NotifyProbe {
     int         calls  = 0;
     int32_t     status = -1;
-    std::string payload;
+    std::string result;  ///< 正文
+    std::string payload; ///< 元数据 JSON (无元数据为空)
 
-    static void PLUGINXX_CALL done(void* ud, int32_t status, const PluginxxStringView* payload) {
-        auto& probe = *static_cast<NotifyProbe*>(ud);
+    static void PLUGINXX_CALL done(
+        void*                     ud,
+        int32_t                   status,
+        const PluginxxStringView* result,
+        const PluginxxStringView* payload
+    ) {
+        auto& probe  = *static_cast<NotifyProbe*>(ud);
         ++probe.calls;
         probe.status = status;
+        if (result && result->data && result->size > 0) {
+            probe.result.assign(result->data, static_cast<size_t>(result->size));
+        }
         if (payload && payload->data && payload->size > 0) {
             probe.payload.assign(payload->data, static_cast<size_t>(payload->size));
         }
     }
 
-    PluginxxOperatorNotify notify() {
-        return PluginxxOperatorNotify{&NotifyProbe::done, this};
+    static void PLUGINXX_CALL doneText(
+        void*                     ud,
+        int32_t                   status,
+        const PluginxxStringView* text
+    ) {
+        auto& probe  = *static_cast<NotifyProbe*>(ud);
+        ++probe.calls;
+        probe.status = status;
+        if (text && text->data && text->size > 0) {
+            probe.result.assign(text->data, static_cast<size_t>(text->size));
+        }
+    }
+
+    static void PLUGINXX_CALL doneFrame(
+        void*                     ud,
+        int32_t                   status,
+        const PluginxxStringView* frame
+    ) {
+        auto& probe  = *static_cast<NotifyProbe*>(ud);
+        ++probe.calls;
+        probe.status = status;
+        if (frame && frame->data) {
+            const auto parts = agentxx::plugin::decodeToolResultFrame(
+                std::string_view{frame->data, static_cast<size_t>(frame->size)}
+            );
+            probe.result.assign(parts.result);
+            probe.payload.assign(parts.metadata);
+        }
+    }
+
+    AgentxxPluginToolNotify notify() {
+        return AgentxxPluginToolNotify{
+            &NotifyProbe::done,
+            &NotifyProbe::doneText,
+            &NotifyProbe::doneFrame,
+            this
+        };
     }
 };
 
@@ -502,7 +546,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(steps, 1);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
-        XX_TEST_EXPECT_EQ(probe.payload, std::string{"ok"});
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"ok"});
         XX_TEST_EXPECT_EQ(bridge->driverSteps(), uint64_t{1});
         XX_TEST_EXPECT_FALSE(bridge->isDriverQueued()); // 请求已处理, 无新工作
         XX_TEST_EXPECT_EQ(bridge->readySteps(), uint64_t{0});
@@ -558,7 +602,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(harness.runOne());
         XX_TEST_EXPECT_TRUE(resumed);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.payload, std::string{"woke"});
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"woke"});
         XX_TEST_EXPECT_EQ(harness.runPending(), 0); // 完成后无新工作
     }
 
@@ -644,7 +688,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(harness.runOne());
         XX_TEST_EXPECT_EQ(steps, 1);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.payload, std::string{"before"});
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"before"});
         XX_TEST_EXPECT_EQ(bridge->ticketsIssued(), uint64_t{2});
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{1});
 
@@ -696,7 +740,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(harness.runOne());
         XX_TEST_EXPECT_TRUE(resumed);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.payload, std::string{"slept"});
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"slept"});
         XX_TEST_EXPECT_EQ(harness.runPending(), 0);
     }
 
@@ -775,7 +819,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_FALSE(bodyRan);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_FAILED);
-        XX_TEST_EXPECT_FALSE(probe.payload.empty());
+        XX_TEST_EXPECT_FALSE(probe.result.empty());
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{0});
     }
 
@@ -924,7 +968,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(harness.runOne());
         XX_TEST_EXPECT_EQ(probeA.calls, 1);
         XX_TEST_EXPECT_EQ(probeB.calls, 1);
-        XX_TEST_EXPECT_TRUE(probeA.payload == "a" && probeB.payload == "b");
+        XX_TEST_EXPECT_TRUE(probeA.result == "a" && probeB.result == "b");
 
         ctxA.stopBridge();
         XX_TEST_EXPECT_TRUE(bridgeA->isStopping());
@@ -1021,7 +1065,7 @@ TestResult testPluginBridge() {
         }
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
-        XX_TEST_EXPECT_EQ(probe.payload, std::string{"polled-ok"});
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"polled-ok"});
         XX_TEST_EXPECT_EQ(bodyRuns, 1);
 
         // 根结束 -> 停止轮询: 计数归零、尚未触发的退避被取消、请求不再增长
@@ -1113,7 +1157,7 @@ TestResult testPluginBridge() {
         }
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_CANCELED);
-        XX_TEST_EXPECT_EQ(probe.payload, std::string{"polled cancel"});
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"polled cancel"});
         XX_TEST_EXPECT_EQ(bridge->polledRootCount(), uint64_t{0});
         // 终态唯一: 再驱动不产生第二个终态
         XX_TEST_EXPECT_EQ(harness.runPending(), 0);
@@ -1228,7 +1272,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(sawBurstYield);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
-        XX_TEST_EXPECT_EQ(probe.payload, fmt::format("burst-{}", kSteps));
+        XX_TEST_EXPECT_EQ(probe.result, fmt::format("burst-{}", kSteps));
         XX_TEST_EXPECT_EQ(bridge->polledRootCount(), uint64_t{0});
         XX_TEST_EXPECT_GE(bridge->idlePollCount(), uint64_t{1});
         XX_TEST_EXPECT_EQ(rounds < 4000, true); // 未超轮次上限 (无自旋)

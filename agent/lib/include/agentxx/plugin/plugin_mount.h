@@ -304,23 +304,23 @@ public:
 
     /// 调用本挂载上的一个工具 (插件互调)
     PluginxxOperatorHandle* callToolAsync(
-        PluginInstance*          caller,
-        PluginxxStringView       name,
-        PluginxxStringView       args_json,
-        PluginxxStringView       session_id,
-        PluginxxOperatorCallback cb,
-        void*                    ud,
-        PluginxxString*          error_out
+        PluginInstance*           caller,
+        PluginxxStringView        name,
+        PluginxxStringView        args_json,
+        PluginxxStringView        session_id,
+        AgentxxPluginToolCallback cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 
     PluginxxOperatorHandle* callToolAsync(
-        PluginInstance*          caller,
-        std::string_view         name,
-        std::string_view         args_json,
-        std::string_view         session_id,
-        PluginxxOperatorCallback cb,
-        void*                    ud,
-        PluginxxString*          error_out
+        PluginInstance*           caller,
+        std::string_view          name,
+        std::string_view          args_json,
+        std::string_view          session_id,
+        AgentxxPluginToolCallback cb,
+        void*                     ud,
+        PluginxxString*           error_out
     ) {
         return callToolAsync(
             caller,

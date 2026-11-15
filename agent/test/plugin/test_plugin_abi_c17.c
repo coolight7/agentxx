@@ -18,15 +18,15 @@
 
 /* ==================== 全局版本 ==================== */
 
-/* v5: 两侧 API 与最低兼容版本一起抬到 5 (旧插件被拒, 必须重编);
-   本代通知 / 功能埋点 / 事件三张业务表删除 (功能埋点拆成
-   能力行 + 同名广播频道), 插件面的发布/订阅全部走广播表 */
-_Static_assert(PLUGINXX_API_VERSION == 5, "agent 侧 ABI 版本必须为 5");
-_Static_assert(PLUGINXX_MIN_API_VERSION == 5, "agent 侧最低兼容 ABI 版本必须为 5");
-_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 5, "client 侧 ABI 版本必须为 5");
+/* v6: 工具结果改成两段上报 (正文原样字节 + 元数据 JSON), 完成通知器与
+   互调回调都换成两参数形态 —— 两侧 API 与最低兼容版本一起抬到 6
+   (旧插件被拒, 必须重编) */
+_Static_assert(PLUGINXX_API_VERSION == 6, "agent 侧 ABI 版本必须为 6");
+_Static_assert(PLUGINXX_MIN_API_VERSION == 6, "agent 侧最低兼容 ABI 版本必须为 6");
+_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 6, "client 侧 ABI 版本必须为 6");
 _Static_assert(
-    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 5,
-    "client 侧最低兼容 ABI 版本必须为 5"
+    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 6,
+    "client 侧最低兼容 ABI 版本必须为 6"
 );
 
 /* ==================== 8 字节对齐（全部跨边界结构体） ==================== */
@@ -36,6 +36,27 @@ _Static_assert(sizeof(PluginxxString) % 8 == 0, "String 必须 8 字节对齐");
 _Static_assert(sizeof(PluginxxHost) % 8 == 0, "PluginHost 必须 8 字节对齐");
 _Static_assert(sizeof(PluginxxHostVtable) % 8 == 0, "HostVtable 必须 8 字节对齐");
 _Static_assert(sizeof(PluginxxOperatorNotify) % 8 == 0, "Notify 必须 8 字节对齐");
+_Static_assert(sizeof(AgentxxPluginToolNotify) % 8 == 0, "ToolNotify 必须 8 字节对齐");
+_Static_assert(
+    sizeof(AgentxxPluginToolNotify) == 32,
+    "ToolNotify = done(8) + done_text(8) + done_frame(8) + host_ud(8)"
+);
+_Static_assert(
+    offsetof(AgentxxPluginToolNotify, done) == 0,
+    "ToolNotify.done 必须是首字段"
+);
+_Static_assert(
+    offsetof(AgentxxPluginToolNotify, done_text) == 8,
+    "ToolNotify.done_text 紧随 done"
+);
+_Static_assert(
+    offsetof(AgentxxPluginToolNotify, done_frame) == 16,
+    "ToolNotify.done_frame 第三项"
+);
+_Static_assert(
+    offsetof(AgentxxPluginToolNotify, host_ud) == 24,
+    "ToolNotify.host_ud 最后一项"
+);
 _Static_assert(sizeof(AgentxxPluginToolSpec) % 8 == 0, "ToolSpec 必须 8 字节对齐");
 _Static_assert(sizeof(PluginxxCapabilitySpec) % 8 == 0, "CapabilitySpec 必须 8 字节对齐");
 _Static_assert(sizeof(AgentxxPluginToolsIface) % 8 == 0, "ToolsIface 必须 8 字节对齐");

@@ -15,6 +15,7 @@
 #include "agentxx/plugin/api/agentxx_ui_kit.g.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
+#include "agentxx/plugin/tool_result_frame.h"
 #include "pluginxx/api/net.h"
 #include "pluginxx/net/ops.h"
 #include "agentxx/util/tool_result.h"
@@ -2418,12 +2419,19 @@ struct CallToolState {
     std::string               sessionId;
     PluginxxOperatorHandle*   opHandle = nullptr;
     int32_t                   status   = PLUGINXX_OPERATOR_OK;
-    std::string               payload;
+    /// 结果正文 (原样字节)
+    std::string               result;
+    /// 结果元数据 JSON (无元数据为空)
+    std::string               metadata;
     std::string               startError;
     std::atomic<AwaiterState> state{AwaiterState::INIT};
     void*                     coroAddr = nullptr;
 };
 
+/// 插件互调等待器
+/// - `WithResult` = false: 只取正文 (`call_tool`, 保持既有调用点源代码兼容)
+/// - `WithResult` = true: 取完整 `ToolResult` (`call_tool_result`, 含多模态附件)
+template<bool WithResult>
 struct CallToolAwaiter {
     std::shared_ptr<CallToolState> st;
 
@@ -2469,14 +2477,17 @@ struct CallToolAwaiter {
             &nameSv,
             &argsSv,
             &tidSv,
-            [](void* ud, int32_t cbSt, const PluginxxStringView* pl) {
+            [](void* ud, int32_t cbSt, const PluginxxStringView* res, const PluginxxStringView* meta) {
                 auto* hp = static_cast<std::shared_ptr<CallToolState>*>(ud);
                 auto  s  = *hp;
                 delete hp;
 
                 s->status = cbSt;
-                if (pl && pl->data && pl->size > 0) {
-                    s->payload.assign(pl->data, static_cast<size_t>(pl->size));
+                if (res && res->data && res->size > 0) {
+                    s->result.assign(res->data, static_cast<size_t>(res->size));
+                }
+                if (meta && meta->data && meta->size > 0) {
+                    s->metadata.assign(meta->data, static_cast<size_t>(meta->size));
                 }
 
                 auto expected = AwaiterState::CALLING;
@@ -2524,29 +2535,69 @@ struct CallToolAwaiter {
         return false;
     }
 
-    std::string await_resume() {
+    /// 取正文 (`from_result` = false) 或完整结果 (`from_result` = true)
+    /// - 取消: 抛 `CanceledException` (取消是控制流, 不是工具结果)
+    /// - 启动被拒: 抛 `std::runtime_error` (没拿到操作句柄)
+    /// - 失败: `call_tool` 抛 `std::runtime_error`; `call_tool_result` 返回
+    ///   `ToolStatus::Failed` 的结果 (调用方自己看状态)
+    using ResultType = std::conditional_t<WithResult, ToolResult, std::string>;
+
+    ResultType await_resume() {
         if (!st->startError.empty()) {
             throw std::runtime_error("call_tool start failed: " + st->startError);
         }
         if (st->status == PLUGINXX_OPERATOR_CANCELED) {
-            throw CanceledException(st->payload.empty() ? "call_tool Canceled" : st->payload);
+            throw CanceledException(st->result.empty() ? "call_tool Canceled" : st->result);
         }
         if (st->status != PLUGINXX_OPERATOR_OK) {
-            throw std::runtime_error(st->payload.empty() ? "call_tool failed" : st->payload);
+            if constexpr (WithResult) {
+                return ToolResult::fromParts(std::move(st->result), ToolStatus::Failed, {});
+            } else {
+                throw std::runtime_error(st->result.empty() ? "call_tool failed" : st->result);
+            }
         }
-        return std::move(st->payload);
+        if constexpr (WithResult) {
+            return ToolResult::fromParts(std::move(st->result), ToolStatus::Ok, st->metadata);
+        } else {
+            return std::move(st->result);
+        }
     }
 };
 } // namespace detail
 
-inline detail::CallToolAwaiter call_tool(
-    const PluginBase&  ctx,
-    const ScopeRef&    agent,
-    std::string_view   name,
-    std::string_view   argsJson,
-    std::string_view   sessionId = {}
+/// 插件互调: 调用本 agent 工具表里的一个工具, 只取结果正文
+/// - 失败/取消抛异常 (与旧用法一致); 需要附件或
+///   自己处理失败时用 [call_tool_result]
+inline detail::CallToolAwaiter<false> call_tool(
+    const PluginBase& ctx,
+    const ScopeRef&   agent,
+    std::string_view  name,
+    std::string_view  argsJson,
+    std::string_view  sessionId = {}
 ) {
-    return detail::CallToolAwaiter{
+    return detail::CallToolAwaiter<false>{
+        ctx.host,
+        ctx.iface.tools,
+        name,
+        argsJson,
+        sessionId,
+        &ctx.bridge(),
+        agent,
+        ctx.iface.cancel
+    };
+}
+
+/// 插件互调: 取完整 `ToolResult` (状态位 + 正文 + 多模态附件)
+/// - 附件就在返回值的 `attachments` 里, 可以直接转交给自己的工具结果
+/// - 取消仍抛 `CanceledException`; 工具失败**不抛**, 看 `status`
+inline detail::CallToolAwaiter<true> call_tool_result(
+    const PluginBase& ctx,
+    const ScopeRef&   agent,
+    std::string_view  name,
+    std::string_view  argsJson,
+    std::string_view  sessionId = {}
+) {
+    return detail::CallToolAwaiter<true>{
         ctx.host,
         ctx.iface.tools,
         name,
@@ -2668,28 +2719,34 @@ inline int32_t providePoint(
 
 namespace detail {
 
-/// 工具实现体的返回值 -> 结果正文 + 终态
-/// - `std::string` / `std::string_view` / 字符串字面量: 成功, 文本照搬
-/// - `agentxx::util::ToolResult`: 用它的状态与正文
+/// 工具实现体的返回值 -> 结果正文 + 元数据 + 终态
+/// - `std::string` / `std::string_view` / 字符串字面量: 成功, 文本照搬, 无元数据
+/// - `agentxx::util::ToolResult`: 状态与正文照搬; 附件进 `outMetadata` (JSON 串)
+///
+/// 两段分开是为了不让正文进 JSON: 正文可能是本地代码页的原始字节,
+/// JSON 序列化会把非法 UTF-8 换成 U+FFFD (见 `plugin_api.h` 的说明)。
 ///
 /// - `args`:
-///     - [value]  实现体返回的值
-///     - [outText] 写入的结果正文
+///     - [value] 实现体返回的值
+///     - [outResult] 写入的结果正文 (原样)
+///     - [outMetadata] 写入的元数据 JSON (无元数据为空串)
 ///     - [outStatus] 写入的终态
-/// - `return` 无
 /// - 相关: 上报映射见 [toolStatusOfOperator]
 template<typename T>
-inline void toolBodyResultTo(T&& value, std::string& outText, ToolStatus& outStatus) {
+inline void toolBodyResultTo(
+    T&&          value,
+    std::string& outResult,
+    std::string& outMetadata,
+    ToolStatus&  outStatus
+) {
     if constexpr (std::is_same_v<std::decay_t<T>, ToolResult>) {
-        outStatus = value.status;
-        if (value.hasAttachments()) {
-            outText = value.packEnvelope();
-        } else {
-            outText = std::move(value.text);
-        }
+        outStatus   = value.status;
+        outMetadata = value.metadataPayloadJson();
+        outResult   = std::move(value.text);
     } else {
         outStatus = ToolStatus::Ok;
-        outText   = std::string(std::forward<T>(value));
+        outResult = std::string(std::forward<T>(value));
+        outMetadata.clear();
     }
 }
 
@@ -2706,6 +2763,20 @@ inline int32_t toolStatusOfOperator(ToolStatus status) noexcept {
         default:
             return PLUGINXX_OPERATOR_FAILED;
     }
+}
+
+/// 只有正文的单段通知器 (插件框架的根只能传一段)
+///
+/// 用到它的地方: Task 型工具 (`tool`) —— 业务体只能给正文, 元数据恒空。
+/// 这里只用主程序写进通知器里的函数指针与 `host_ud`, 不引用主程序符号
+/// (插件不链接 libagentxx)。
+inline PluginxxOperatorNotify textOnlyNotify(const AgentxxPluginToolNotify& tool) noexcept {
+    return PluginxxOperatorNotify{tool.done_text, tool.host_ud};
+}
+
+/// 整帧通知器: 两段由插件侧拼成帧后经单一字符串通道上报 (受控轮询工具用)
+inline PluginxxOperatorNotify frameNotify(const AgentxxPluginToolNotify& tool) noexcept {
+    return PluginxxOperatorNotify{tool.done_frame, tool.host_ud};
 }
 
 } // namespace detail
@@ -2753,6 +2824,8 @@ inline void tool(
         /// OpCtl 同样必须由 Job 拥有：业务协程以引用接收它，挂起后仍会读取
         /// （例如 ctl.throw_if_canceled()），放在 start 栈上会悬垂。
         OpCtl ctl;
+        /// 两段结果: Task 型工具只能给正文, 元数据对主程序恒为空
+        AgentxxPluginToolNotify notify{nullptr, nullptr};
     };
 
     AgentxxPluginToolSpec spec{};
@@ -2768,12 +2841,12 @@ inline void tool(
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
 
-    spec.execute_start = [](void*                         user_data,
-                            const PluginxxStringView*     args_json,
-                            const PluginxxStringView*     thread_id,
-                            const PluginxxStringView*     tool_call_id,
-                            const PluginxxOperatorNotify* notify,
-                            PluginxxString*               error_out) -> void* {
+    spec.execute_start = [](void*                          user_data,
+                            const PluginxxStringView*      args_json,
+                            const PluginxxStringView*      thread_id,
+                            const PluginxxStringView*      tool_call_id,
+                            const AgentxxPluginToolNotify* notify,
+                            PluginxxString*                error_out) -> void* {
         auto* shim = static_cast<ToolShim*>(user_data);
         (void)error_out;
         // 先建立拥有型 Request，再把视图交给业务代码：协程挂起期间 args/
@@ -2807,7 +2880,8 @@ inline void tool(
         auto h        = task.handle_;
         task.handle_  = nullptr;
         auto& p       = h.promise();
-        p.notify_     = notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr};
+        job->notify      = notify ? *notify : AgentxxPluginToolNotify{nullptr, nullptr};
+        p.notify_        = detail::textOnlyNotify(job->notify);
         p.host_       = shim->ctx->host;
         p.cancelFlag_ = cancelFlag;
 
@@ -2885,12 +2959,12 @@ inline void fast_tool(
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
 
-    spec.execute_start = [](void*                         user_data,
-                            const PluginxxStringView*     args_json,
-                            const PluginxxStringView*     thread_id,
-                            const PluginxxStringView*     tool_call_id,
-                            const PluginxxOperatorNotify* notify,
-                            PluginxxString*               error_out) -> void* {
+    spec.execute_start = [](void*                          user_data,
+                            const PluginxxStringView*      args_json,
+                            const PluginxxStringView*      thread_id,
+                            const PluginxxStringView*      tool_call_id,
+                            const AgentxxPluginToolNotify* notify,
+                            PluginxxString*                error_out) -> void* {
         auto* shim = static_cast<FastShim*>(user_data);
         (void)tool_call_id;
         try {
@@ -2902,35 +2976,44 @@ inline void fast_tool(
                 thread_id && thread_id->data ? thread_id->data : "",
                 thread_id ? static_cast<size_t>(thread_id->size) : 0
             );
-            // 实现体返回 `std::string` (成功) 或 `ToolResult` (带状态), 两者都接受
-            std::string text;
+            // 实现体返回 `std::string` (成功) 或 `ToolResult` (带状态/附件), 两者都接受
+            std::string result;
+            std::string metadata;
             ToolStatus  status = ToolStatus::Ok;
             if constexpr (std::is_invocable_v<SyncFn, Ctx&, std::string_view, std::string_view>) {
                 detail::toolBodyResultTo(
-                    shim->fn(*shim->ctx, args, tid), text, status
+                    shim->fn(*shim->ctx, args, tid), result, metadata, status
                 );
             } else if constexpr (std::is_invocable_v<SyncFn, Ctx&, std::string_view>) {
-                detail::toolBodyResultTo(shim->fn(*shim->ctx, args), text, status);
+                detail::toolBodyResultTo(shim->fn(*shim->ctx, args), result, metadata, status);
             } else {
-                detail::toolBodyResultTo(shim->fn(args), text, status);
+                detail::toolBodyResultTo(shim->fn(args), result, metadata, status);
             }
 
             if (notify && notify->done) {
-                auto resSv = PluginStringView::from(text.data(), text.size());
-                notify->done(notify->host_ud, detail::toolStatusOfOperator(status), &resSv);
+                auto resultSv  = PluginStringView::from(result.data(), result.size());
+                auto metadSv   = PluginStringView::from(metadata.data(), metadata.size());
+                notify->done(
+                    notify->host_ud,
+                    detail::toolStatusOfOperator(status),
+                    &resultSv,
+                    &metadSv
+                );
             }
         } catch (const std::exception& e) {
             if (notify && notify->done) {
-                std::string what  = e.what();
-                auto        errSv = PluginStringView::from(what.data(), what.size());
-                notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
+                std::string what    = e.what();
+                auto        errSv   = PluginStringView::from(what.data(), what.size());
+                auto        emptySv = PluginStringView::from(nullptr, 0);
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv, &emptySv);
             } else if (error_out) {
                 *error_out = PluginString::fromCstr(shim->ctx->host, e.what());
             }
         } catch (...) {
             if (notify && notify->done) {
-                auto errSv = PluginStringView::fromCstr("unknown error");
-                notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
+                auto errSv   = PluginStringView::fromCstr("unknown error");
+                auto emptySv = PluginStringView::from(nullptr, 0);
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv, &emptySv);
             } else if (error_out) {
                 *error_out = PluginString::fromCstr(shim->ctx->host, "unknown error in fast_tool");
             }
@@ -2976,19 +3059,22 @@ inline void blocking_tool(
     );
 
     struct Job {
-        BlockShim*              shim = nullptr;
-        PluginxxOperatorNotify  notify{};
-        std::string             args;
-        std::string             tid;
-        std::string             tcid;
-        std::string             workDir;
-        std::string             argsJson;
-        std::string             resultPayload;
+        BlockShim*                 shim = nullptr;
+        AgentxxPluginToolNotify   notify{};
+        std::string                args;
+        std::string                tid;
+        std::string                tcid;
+        std::string                workDir;
+        std::string                argsJson;
+        /// 实现体返回的正文
+        std::string                resultText;
+        /// 实现体返回的元数据 JSON (无元数据为空)
+        std::string                resultMetadata;
         /// 实现体返回的终态 (返回 `std::string` 时为 `Ok`)
-        ToolStatus              resultStatus = ToolStatus::Ok;
-        std::string             errorPayload;
-        bool                    isCanceled   = false;
-        PluginxxOperatorHandle* offloadHandle = nullptr;
+        ToolStatus                 resultStatus = ToolStatus::Ok;
+        std::string                errorPayload;
+        bool                       isCanceled   = false;
+        PluginxxOperatorHandle*    offloadHandle = nullptr;
     };
 
     AgentxxPluginToolSpec spec{};
@@ -3004,12 +3090,12 @@ inline void blocking_tool(
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
 
-    spec.execute_start = [](void*                         user_data,
-                            const PluginxxStringView*     args_json,
-                            const PluginxxStringView*     thread_id,
-                            const PluginxxStringView*     tool_call_id,
-                            const PluginxxOperatorNotify* notify,
-                            PluginxxString*               error_out) -> void* {
+    spec.execute_start = [](void*                          user_data,
+                            const PluginxxStringView*      args_json,
+                            const PluginxxStringView*      thread_id,
+                            const PluginxxStringView*      tool_call_id,
+                            const AgentxxPluginToolNotify* notify,
+                            PluginxxString*                error_out) -> void* {
         auto* shim = static_cast<BlockShim*>(user_data);
         (void)error_out;
         std::string tidStr(
@@ -3030,7 +3116,7 @@ inline void blocking_tool(
         }
         auto* job = new Job{
             .shim   = shim,
-            .notify = notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr},
+            .notify = notify ? *notify : AgentxxPluginToolNotify{nullptr, nullptr},
             .args   = std::string(
                 args_json && args_json->data ? args_json->data : "{}",
                 args_json ? static_cast<size_t>(args_json->size) : 0
@@ -3042,9 +3128,8 @@ inline void blocking_tool(
             ),
             .workDir       = std::move(workDirCache),
             .argsJson      = std::move(argsJsonCache),
-            .resultPayload = {},
             .errorPayload  = {},
-            .isCanceled   = false
+            .isCanceled    = false
         };
 
         PluginxxString scheduleError{};
@@ -3058,7 +3143,7 @@ inline void blocking_tool(
                     (void)token;
                     auto* j = static_cast<Job*>(ud);
                     try {
-                        // 实现体返回 `std::string` (成功) 或 `ToolResult` (带状态)
+                        // 实现体返回 `std::string` (成功) 或 `ToolResult` (带状态/附件)
                         if constexpr (std::is_invocable_v<
                                           BlockFn,
                                           Ctx&,
@@ -3068,7 +3153,8 @@ inline void blocking_tool(
                                           const PluginxxCancelToken*>) {
                             detail::toolBodyResultTo(
                                 j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir, token),
-                                j->resultPayload,
+                                j->resultText,
+                                j->resultMetadata,
                                 j->resultStatus
                             );
                         } else if constexpr (std::is_invocable_v<
@@ -3079,7 +3165,8 @@ inline void blocking_tool(
                                                  const PluginxxCancelToken*>) {
                             detail::toolBodyResultTo(
                                 j->shim->fn(*j->shim->ctx, j->args, j->tid, token),
-                                j->resultPayload,
+                                j->resultText,
+                                j->resultMetadata,
                                 j->resultStatus
                             );
                         } else if constexpr (std::is_invocable_v<
@@ -3090,7 +3177,8 @@ inline void blocking_tool(
                                                  std::string_view>) {
                             detail::toolBodyResultTo(
                                 j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir),
-                                j->resultPayload,
+                                j->resultText,
+                                j->resultMetadata,
                                 j->resultStatus
                             );
                         } else if constexpr (std::is_invocable_v<
@@ -3100,7 +3188,8 @@ inline void blocking_tool(
                                                  const PluginxxCancelToken*>) {
                             detail::toolBodyResultTo(
                                 j->shim->fn(*j->shim->ctx, j->args, token),
-                                j->resultPayload,
+                                j->resultText,
+                                j->resultMetadata,
                                 j->resultStatus
                             );
                         } else if constexpr (std::is_invocable_v<
@@ -3109,7 +3198,8 @@ inline void blocking_tool(
                                                  const PluginxxCancelToken*>) {
                             detail::toolBodyResultTo(
                                 j->shim->fn(j->args, token),
-                                j->resultPayload,
+                                j->resultText,
+                                j->resultMetadata,
                                 j->resultStatus
                             );
                         } else if constexpr (std::is_invocable_v<
@@ -3119,22 +3209,27 @@ inline void blocking_tool(
                                                  std::string_view>) {
                             detail::toolBodyResultTo(
                                 j->shim->fn(*j->shim->ctx, j->args, j->tid),
-                                j->resultPayload,
+                                j->resultText,
+                                j->resultMetadata,
                                 j->resultStatus
                             );
                         } else if constexpr (std::is_invocable_v<BlockFn, Ctx&, std::string_view>) {
                             detail::toolBodyResultTo(
                                 j->shim->fn(*j->shim->ctx, j->args),
-                                j->resultPayload,
+                                j->resultText,
+                                j->resultMetadata,
                                 j->resultStatus
                             );
                         } else {
                             detail::toolBodyResultTo(
-                                j->shim->fn(j->args), j->resultPayload, j->resultStatus
+                                j->shim->fn(j->args),
+                                j->resultText,
+                                j->resultMetadata,
+                                j->resultStatus
                             );
                         }
                     } catch (const CanceledException& e) {
-                        j->isCanceled  = true;
+                        j->isCanceled   = true;
                         j->errorPayload = e.what();
                     } catch (const std::exception& e) {
                         j->errorPayload = e.what();
@@ -3145,42 +3240,51 @@ inline void blocking_tool(
                 },
                 [](void* ud, int32_t status, void* res, const PluginxxStringView* err) {
                     (void)res;
-                    auto*              j       = static_cast<Job*>(ud);
-                    int32_t            st      = status;
-                    PluginxxStringView payload = PluginStringView::from(nullptr, 0);
+                    auto*              j          = static_cast<Job*>(ud);
+                    int32_t            st         = status;
+                    PluginxxStringView resultText = PluginStringView::from(nullptr, 0);
+                    PluginxxStringView metadata   = PluginStringView::from(nullptr, 0);
 
                     if (!PluginStringView::empty(err)) {
-                        st      = PLUGINXX_OPERATOR_FAILED;
-                        payload = *err;
+                        st         = PLUGINXX_OPERATOR_FAILED;
+                        resultText = *err;
                     } else if (!j->errorPayload.empty()) {
                         if (j->isCanceled) {
                             st = PLUGINXX_OPERATOR_CANCELED;
                         } else {
                             st = PLUGINXX_OPERATOR_FAILED;
                         }
-                        payload = PluginStringView::from(
+                        resultText = PluginStringView::from(
                             j->errorPayload.data(),
                             j->errorPayload.size()
                         );
                     } else if (j->resultStatus != ToolStatus::Ok) {
-                        // 实现体返回了 `ToolResult`: 终态与正文照搬 (失败/取消)
-                        st      = detail::toolStatusOfOperator(j->resultStatus);
-                        payload = PluginStringView::from(
-                            j->resultPayload.data(),
-                            j->resultPayload.size()
+                        // 实现体返回了 `ToolResult`: 终态与两段照搬 (失败/取消)
+                        st         = detail::toolStatusOfOperator(j->resultStatus);
+                        resultText = PluginStringView::from(
+                            j->resultText.data(),
+                            j->resultText.size()
+                        );
+                        metadata = PluginStringView::from(
+                            j->resultMetadata.data(),
+                            j->resultMetadata.size()
                         );
                     } else if (st == PLUGINXX_OPERATOR_CANCELED || j->isCanceled) {
                         st = PLUGINXX_OPERATOR_CANCELED;
                     } else {
-                        st      = PLUGINXX_OPERATOR_OK;
-                        payload = PluginStringView::from(
-                            j->resultPayload.data(),
-                            j->resultPayload.size()
+                        st         = PLUGINXX_OPERATOR_OK;
+                        resultText = PluginStringView::from(
+                            j->resultText.data(),
+                            j->resultText.size()
+                        );
+                        metadata = PluginStringView::from(
+                            j->resultMetadata.data(),
+                            j->resultMetadata.size()
                         );
                     }
 
                     if (j->notify.done) {
-                        j->notify.done(j->notify.host_ud, st, &payload);
+                        j->notify.done(j->notify.host_ud, st, &resultText, &metadata);
                     }
                     // OpCore::onEndpointDone 先在当前调用内线性化
                     // completionSubmitted_，因此 notify.done 返回后，主程序
@@ -3307,9 +3411,14 @@ inline asio::awaitable<void> runPolledToolBody(Job* job) {
             job->workDir,
             &job->token
         );
-        // 实现体返回 `std::string` (成功) 或 `ToolResult` (带状态)
+        // 实现体返回 `std::string` (成功) 或 `ToolResult` (带状态/附件)
         auto bodyStatus = ToolStatus::Ok;
-        toolBodyResultTo(std::move(bodyResult), job->payload, bodyStatus);
+        toolBodyResultTo(
+            std::move(bodyResult),
+            job->payload,
+            job->resultMetadata,
+            bodyStatus
+        );
         job->status = toolStatusOfOperator(bodyStatus);
     } catch (const CanceledException& e) {
         job->status  = PLUGINXX_OPERATOR_CANCELED;
@@ -3324,6 +3433,7 @@ inline asio::awaitable<void> runPolledToolBody(Job* job) {
     if (job->status == PLUGINXX_OPERATOR_OK && job->Canceled()) {
         job->status = PLUGINXX_OPERATOR_CANCELED;
         job->payload.clear();
+        job->resultMetadata.clear();
     }
 }
 
@@ -3339,7 +3449,12 @@ inline asio::awaitable<void> runPolledPumpJob(Job* job) {
     auto          root    = job->root;
     auto*         bridge  = job->bridge;
     const int32_t status  = job->status;
-    std::string   payload = job->payload;
+    // 两段在这里拼成帧 (见 `agentxx/plugin/tool_result_frame.h`);
+    // 用本地变量: `runCleanup` 释放 Job 之后仍要拿它上报。
+    const std::string payload = agentxx::plugin::encodeToolResultFrame(
+        job->payload,
+        job->resultMetadata
+    );
     if (!root || !root->claimFinish()) {
         co_return;
     }
@@ -3403,7 +3518,10 @@ inline void polled_tool(
         PolledShim*                         shim   = nullptr;
         detail::PollOneBridge*              bridge = nullptr;
         std::shared_ptr<detail::PolledRoot> root;
-        PluginxxOperatorNotify              notify{};
+        /// 两段结果的通知器 + 元数据 (根只能传单段, 两段在收尾时拼成帧)
+        AgentxxPluginToolNotify notify{nullptr, nullptr};
+        /// 业务体返回的元数据 JSON (无元数据为空)
+        std::string            resultMetadata;
         detail::RootRequest                 request;
         std::string                         tid;     ///< 作用域键 (= request.scopeKey)
         std::string                         args;    ///< 工具参数 JSON
@@ -3413,7 +3531,7 @@ inline void polled_tool(
         PluginxxCancelToken token{nullptr, nullptr};
         /// 终态 (由业务体包装写入; 上报方见上)。
         int32_t     status = PLUGINXX_OPERATOR_OK;
-        std::string payload;
+        std::string payload; ///< 结果正文
 
         /// 是否已请求取消 (本实例取消标志 + 会话级 CancelRegistry)。
         bool Canceled() const noexcept {
@@ -3444,12 +3562,12 @@ inline void polled_tool(
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
 
-    spec.execute_start = [](void*                         user_data,
-                            const PluginxxStringView*     args_json,
-                            const PluginxxStringView*     thread_id,
-                            const PluginxxStringView*     tool_call_id,
-                            const PluginxxOperatorNotify* notify,
-                            PluginxxString*               error_out) -> void* {
+    spec.execute_start = [](void*                          user_data,
+                            const PluginxxStringView*      args_json,
+                            const PluginxxStringView*      thread_id,
+                            const PluginxxStringView*      tool_call_id,
+                            const AgentxxPluginToolNotify* notify,
+                            PluginxxString*                error_out) -> void* {
         auto* s = static_cast<PolledShim*>(user_data);
         if (!s || !s->ctx) {
             if (error_out) {
@@ -3470,16 +3588,16 @@ inline void polled_tool(
             c.cancelRegistry.clearCanceled(request.scopeKey);
         }
 
-        auto* job       = new Job();
-        job->shim       = s;
-        job->notify     = notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr};
-        job->request    = std::move(request);
-        job->tid        = job->request.scopeKey;
-        job->args       = job->request.argsJson;
+        auto* job        = new Job();
+        job->shim        = s;
+        job->notify      = notify ? *notify : AgentxxPluginToolNotify{nullptr, nullptr};
+        job->request     = std::move(request);
+        job->tid         = job->request.scopeKey;
+        job->args        = job->request.argsJson;
         auto agentRaw = s->agent.raw();
         job->workDir  = c.workDir(&agentRaw, job->tid);
         job->cancelFlag = cancelFlag;
-        job->root       = std::make_shared<detail::PolledRoot>(job->notify);
+        job->root       = std::make_shared<detail::PolledRoot>(detail::frameNotify(job->notify));
         job->token      = PluginxxCancelToken{kTokenIsRequested, job};
         {
             // 补充回收: 停止/关闭路径 (failAllPolledRoots) 会执行它; 正常完成时
@@ -4038,7 +4156,8 @@ inline PluginxxString call_tool_blocking(
         std::condition_variable cv;
         bool                    done   = false;
         int32_t                 status = PLUGINXX_OPERATOR_OK;
-        std::string             payload;
+        std::string             result;
+        std::string             metadata;
     } state;
 
     auto nameSv = PluginStringView::from(name.data(), name.size());
@@ -4051,13 +4170,16 @@ inline PluginxxString call_tool_blocking(
         &nameSv,
         &argsSv,
         &tidSv,
-        [](void* ud, int32_t st, const PluginxxStringView* pl) {
+        [](void* ud, int32_t st, const PluginxxStringView* res, const PluginxxStringView* meta) {
             auto*           s = static_cast<SyncState*>(ud);
             std::lock_guard lk(s->mtx);
             s->done   = true;
             s->status = st;
-            if (pl && pl->data && pl->size > 0) {
-                s->payload.assign(pl->data, static_cast<size_t>(pl->size));
+            if (res && res->data && res->size > 0) {
+                s->result.assign(res->data, static_cast<size_t>(res->size));
+            }
+            if (meta && meta->data && meta->size > 0) {
+                s->metadata.assign(meta->data, static_cast<size_t>(meta->size));
             }
             s->cv.notify_one();
         },
@@ -4076,15 +4198,17 @@ inline PluginxxString call_tool_blocking(
         });
     }
 
+    // 失败时把错误内容交给调用方; `metadata` 这里不返回 (需要附件请用
+    // `co_await call_tool_result`, 或在插件自己的挂载上处理)
     if (state.status != PLUGINXX_OPERATOR_OK) {
         if (error_out) {
-            auto paySv = PluginStringView::from(state.payload.data(), state.payload.size());
+            auto paySv = PluginStringView::from(state.result.data(), state.result.size());
             *error_out = PluginString::from(host, &paySv);
         }
         return PluginxxString{nullptr, 0};
     }
 
-    auto paySv = PluginStringView::from(state.payload.data(), state.payload.size());
+    auto paySv = PluginStringView::from(state.result.data(), state.result.size());
     return PluginString::from(host, &paySv);
 }
 

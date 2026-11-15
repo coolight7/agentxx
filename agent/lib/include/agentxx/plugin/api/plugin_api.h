@@ -112,6 +112,65 @@ typedef void*(PLUGINXX_CALL* AgentxxPluginAgentUnmountFn)(
 
 /* ==================== 工具定义 ==================== */
 
+/// 工具结果的两段上报: 正文与元数据分开传, **不要**把两段拼成一段 JSON
+///
+/// 为什么要分开 (而不是一个 `{text, attachments}` 信封):
+/// - 正文是工具的原始输出, 可能是本地代码页的字节 (命令行输出、本地日志),
+///   而 JSON 只接受合法 UTF-8 —— 进一次 JSON 序列化, 非法字节就被替换成 U+FFFD,
+///   主程序再也无法做编码探测与无损转码;
+/// - 正文动辄几百 KB, JSON 转义/反转义是额外的整份内存与 CPU 开销。
+///
+/// 约定:
+/// - `result` = 正文 (对应 `agentxx::util::ToolResult::text`), 原样字节, 允非 UTF-8;
+/// - `payload` = 正文以外的结构化元数据 (JSON 对象), 目前是多模态附件
+///   `{"attachments":[…]}`; 没有元数据就传 NULL 或空视图, 不产生任何解析开销。
+
+/// 工具完成通知器 (主程序在 `execute_start` 时下发; 工具终结时被调方须【恰好回调一次】)
+///
+/// - 可从插件的任意线程回调; 主程序内部投递回 io 线程
+/// - `status` 取 `PLUGINXX_OPERATOR_OK` / `FAILED` / `CANCELED`;
+///   `FAILED` 时正文只写错误内容, 不加 `[Error: …]` 前缀 (主程序统一排版)
+/// - 三个字符串视图都是只读借用, 仅在本次回调期间有效
+/// - 三选一都能用: 普通工具用 `done`; 插件 SDK 在只有一段可用的位置用
+///   `done_text` / `done_frame` (两个都在主程序侧实现, 插件直接挂函数指针即可)
+typedef struct AgentxxPluginToolNotify {
+    /// 两段完成 (正文 + 元数据) —— 常规用法
+    void(PLUGINXX_CALL* done)(
+        void*                     host_ud,
+        int32_t                   status,
+        const PluginxxStringView* result,
+        const PluginxxStringView* payload
+    );
+    /// 只有正文的完成 (元数据为空)
+    /// - 签名与 `PluginxxOperatorNotify.done` 完全一致, 因此可以整接插给
+    ///   插件框架的协程根 (那里只传一段): 典型用法见 SDK 的 `tool` (Task 型工具)
+    void(PLUGINXX_CALL* done_text)(
+        void*                     host_ud,
+        int32_t                   status,
+        const PluginxxStringView* result
+    );
+    /// 整帧完成: `frame` 是工具 SDK 拼好的两段帧 (见 `agentxx/plugin/tool_result_frame.h`)
+    /// - 同样与 `PluginxxOperatorNotify.done` 签名一致, 给受控轮询工具的根直接挂上
+    ///   (那个根也只能传一段字符串, 由 SDK 在插件侧把两段拼成帧)
+    /// - 普通插件不需要它
+    void(PLUGINXX_CALL* done_frame)(
+        void*                     host_ud,
+        int32_t                   status,
+        const PluginxxStringView* frame
+    );
+    void* host_ud;
+} AgentxxPluginToolNotify;
+
+/// 工具调用完成回调 (插件互调 `call_tool_async` 使用; 两段含义同上)
+/// - 主程序保证在**调用方** io 线程派发, 且只派发一次
+/// - 字符串视图只读借用, 仅本次回调内有效
+typedef void(PLUGINXX_CALL* AgentxxPluginToolCallback)(
+    void*                     ud,
+    int32_t                   status,
+    const PluginxxStringView* result,
+    const PluginxxStringView* payload
+);
+
 #define AGENTXX_PLUGIN_TOOL_FLAG_NONE         0
 #define AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY (1 << 0) ///< 输出超限时自动压缩 (经 share_store 卸载)
 /// 该工具的执行体可与其他声明了本标志的工具**并发执行**
@@ -139,16 +198,18 @@ typedef struct AgentxxPluginToolSpec {
 
     /// 启动执行 (【主程序 io 线程调用】, 非阻塞; 操作契约):
     /// - 入参均为指针传递 (只读借用, 仅本次调用有效)
-    /// - 快同步工具: 算完 → notify->done(PLUGINXX_OPERATOR_OK, &res_sv) → 返回 NULL
+    /// - 结果分两段上报 (正文 + 元数据), 见 [AgentxxPluginToolNotify]:
+    ///   快同步工具算完 → `notify->done(PLUGINXX_OPERATOR_OK, &result_sv, &payload_sv)`
+    ///   → 返回 NULL
     /// - 锚定协程/自管异步: 创建/挂起任务 → 返回 op 句柄
     /// - 失败: 返回 NULL 且 *error_out 输出错误 (跨边界堆分配字符串, host->alloc 分配)
     void*(PLUGINXX_CALL* execute_start)(
-        void*                         user_data,
-        const PluginxxStringView*     args_json,
-        const PluginxxStringView*     session_id,
-        const PluginxxStringView*     tool_call_id,
-        const PluginxxOperatorNotify* notify,
-        PluginxxString*               error_out
+        void*                          user_data,
+        const PluginxxStringView*      args_json,
+        const PluginxxStringView*      session_id,
+        const PluginxxStringView*      tool_call_id,
+        const AgentxxPluginToolNotify* notify,
+        PluginxxString*                error_out
     );
     /// 协作式取消请求 (io 线程, 非阻塞; 不可取消可留 NULL)
     void(PLUGINXX_CALL* execute_cancel)(void* user_data, void* op);
@@ -168,8 +229,12 @@ typedef struct AgentxxPluginToolSpec {
 /// v3: 工具结果的成败由最终通知的状态位表达 (`PLUGINXX_OPERATOR_OK`/`FAILED`/`CANCELED`),
 ///     结果文本只给模型读 —— 插件不要再把 `[Error: ...]` 之类前缀写进 payload,
 ///     失败时只给错误内容 (主程序统一排版); 布局未变 (基线不变)
-#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION     3
-#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_MIN_VERSION 3
+/// v4: 工具结果改成**两段上报** (`result` 正文 + `payload` 元数据), 完成通知器由
+///     `PluginxxOperatorNotify` 换成 [AgentxxPluginToolNotify], 插件互调回调换成
+///     [AgentxxPluginToolCallback]; 成员顺序不变, 但两处签名变了 = 破坏性改动
+///     (旧插件重建后才能加载; 全局 API 代次同步 +1)
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION     4
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_MIN_VERSION 4
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_BASELINE_SIZE sizeof(AgentxxPluginToolsIface)
 
@@ -195,15 +260,16 @@ typedef struct AgentxxPluginToolsIface {
 
     /* ---- 插件互调: 完成回调形 ---- */
     /// 调用该 agent 工具表里的一个工具 (异步; 取消用 `pluginxx.cancel.op_cancel`)
+    /// - 结果按两段给 `cb` (正文 + 元数据), 与工具自己的上报形状一致
     PluginxxOperatorHandle*(PLUGINXX_CALL* call_tool_async)(
-        const PluginxxHost*       host,
-        const PluginxxScopeRef*   agent,
-        const PluginxxStringView* name,
-        const PluginxxStringView* args_json,
-        const PluginxxStringView* session_id,
-        PluginxxOperatorCallback  cb,
-        void*                     ud,
-        PluginxxString*           error_out
+        const PluginxxHost*        host,
+        const PluginxxScopeRef*    agent,
+        const PluginxxStringView*  name,
+        const PluginxxStringView*  args_json,
+        const PluginxxStringView*  session_id,
+        AgentxxPluginToolCallback  cb,
+        void*                      ud,
+        PluginxxString*            error_out
     );
 } AgentxxPluginToolsIface;
 
