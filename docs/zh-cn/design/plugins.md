@@ -1164,7 +1164,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
 
 Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_javascript_engine` JS 运行时插件加载：
 
-- **统一插件模型**：所有插件都是 C++ 插件；JS 插件表现为标准 C++ 动态库外壳 (如 `example_js`) 附带 `plugin.js`
+- **统一插件模型**：所有插件都是 C++ 插件；JS 插件表现为标准 C++ 动态库外壳 (如 `example_js`) 附带 `plugin.js`。壳可以只导出 agent 侧入口、只导出 client 侧入口，或两套都导出（同一动态库两套符号）；脚本用 `agentxx.side`（`"agent"` / `"client"`）判断自己在哪一侧
 - **执行流程**：主程序加载 JS 插件壳 → 壳 `create` 只构造上下文 (解析自身 `plugin.js` 路径) → 壳 `start` 校验 `interpreter.js` 能力后经该能力把 `plugin.js` 交给引擎 → 引擎登记脚本并在**每个 agent 挂载作用域各建一份实例**(新建 JSContext 执行脚本)，把脚本声明的工具与广播订阅绑定到该 agent；脚本注册属于壳实例的挂载事务，因此壳的 start 只需等脚本**登记**完成 (异步 done)，失败由主程序回滚
 - **一插件多 agent 挂载 (= C++ 插件同一套生命周期)**：引擎在自己的 `mount` 里登记作用域 (`agent_id` + `mount_seq`)、对该 agent 补建全部脚本实例；`unmount` 时销毁该作用域的实例。因此脚本顶层代码就是“该 agent 的插件实例初始化”，脚本里的全局变量天然按 agent 隔离；进程级状态请放在 C++ 壳的 `start` 里。同一脚本在 N 个 agent 上注册同名工具互不冲突 (各自属于自己的挂载)
 - **引擎线程属于 start 事务**：`agentxx_javascript_engine` 的 `create` 只构造，`start` 才创建 JSRuntime 与专用 JS 线程并注册 `interpreter.js` 能力，`stop` 停止线程并释放 runtime (同时清空脚本登记与挂载作用域)；`disable → enable` 往返即一次 `stop + start`，引擎线程与脚本实例按事务重建 (壳插件在自身 start 中重新加载脚本)
@@ -1177,10 +1177,15 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 - **查询面已对齐**：`getPrompt()` / `setPrompt(objOrString)` / `getToolPrompt(name)` (提示词贡献与工具提示词)、`getSessionWorkDir(sessionId?)` / `isCanceled(sessionId?)`、`getMessages(sessionId)` / `messagesCount(sessionId)`、`getGraphJson()` / `getGraphName()` / `setGraphJson(objOrString)`、`listMounts()` / `getMount(agentId?)` (缺省查本实例所属 agent)、`addShareStore(sessionId, content)` (返回条目 id)、`getOwnResources()`、`getModelConfig()`
 - **会话运行时 (`agentxx.agent.runtime`) 已对齐**：`mountRoot({name, config, mountPlugins, includeCreator})` (返回 `rootId`，被拒为空串，需在容器级时机调，在 `mount` 里调会被拒)、`unmountRoot(rootId)`；`openChannel({rootId, sessionId?, title?, model?, maxQueue?, interruptTimeoutMs?, onEvent})` (返回 `channelId`，被拒为 0)、`closeChannel` / `cancelChannel` / `sendInput(channelId, textOrInput)` / `selectModel` / `respondInterrupt(channelId, interruptId, values)` / `getChannelState` / `getChannelMessages`；`registerTrigger({channelId, topic, policy?, debounceMs?, maxQueue?, delivery?})` / `unregisterTrigger`、`registerTimer({channelId, firstDelayMs, intervalMs?, policy?, input?})` / `unregisterTimer`、`emitEvent(topic, payload)`。`onEvent(ev)` 的 `ev` 是 `{channelId, kind, text?, interruptId?, payload}`，`kind` 取 `ready` / `turn_start` / `delta_text` / `delta_thinking` / `tool_start` / `tool_end` / `gen_status` / `turn_end` / `context_stats` / `input_ack` / `queue_state` / `interrupt` / `interrupt_expired` / `tip` / `error` / `closed`；与后台任务一样在主程序 io 线程收事件、转投 JS 线程后才调脚本（`closed` 是最后一条，到这就释放登记）。`listRuntime()` 返回清单对象 `{roots, triggers, timers}`（`roots[]` 每项带 `rootId` / `name` / `ready` / `configSummary` / `channels[]`）
 - **广播**：`declareBroadcast(decl)` (声明自己的频道，失败报异常，`id` 可短名) / `readBroadcast(id)` (没声明、没当前值或已结束都返回 `null`) / `publish` / `subscribe` / `unsubscribe` / `endBroadcast(id, reason?)`
-- **未对齐的面：工具特化渲染**（显示名 + 折叠/展开内容）。两条原因都不是"UI 线程不能跑 JS"：
-    - **注册在 client 侧**：渲染器由客户端插件经 `agentxx.client.ui` 的 `register_tool_renderer` 注册 (`AgentxxToolRenderSpec`)，而 `agentxx_javascript_engine` 只有 agent 侧入口 (`agentxx_plugin_agent_*`)，agent 侧的脚本拿不到客户端注册表；目前也没有 client 侧 JS 引擎。
-    - **内容回调是同步返回的**：它在 **client IO 线程**执行，并在同一次调用里返回文本 / items（UI 线程只读语义缓存 `ClientToolRenderCache`，未命中就提交 `ClientToolRenderRequest`，结果到达后 `onToolRenderUpdated` 重绘，见 §9.6；没有语义缓存的环境如单元测试 / 精简嵌入会同步内联调用）。显示名是注册时就有的，首帧直接可见。JS 要实现它，得在那个回调里同步转到 JS 线程取值；脚本里 `await` 会把 client IO 线程卡住，因此需要超时保护，或给 ABI 加"先返回 pending、稍后回填缓存"的形态。
-  - 现在的做法：需要特化渲染的插件把渲染器写在 C++ 壳里（壳要有 client 侧入口并注册到客户端注册表），脚本只管工具逻辑。
+- **client 侧脚本 (`agentxx.side === "client"`)**：同一个动态库同时导出 `agentxx_plugin_client_*` 入口，因此脚本可以直接作为 **client 端插件**运行（客户端插件加载器给它一份 JS 实例，桥只暴露 client 侧接口）：
+    - 展示：`showToast(text, level)`、`updateToolDecor(toolCallId, decor)`、`openOverlay({type, title, payload, extra})` / `closeOverlay()`、**`registerToolRenderer({tool, displayName, collapsed, expanded})`** / `unregisterToolRenderer(tool)`（工具行特化渲染）
+    - 会话与跨端：`getClientState()`、`sendUserInput(sessionId, text)`、`requestCancel(sessionId)`、`sendPluginData(topic, json)`
+    - 自身信息：`getOwnInfo()` / `getPluginArgs()` / `getPluginConfigPath()` / `getLanguage()` / `setLanguage(tag)`
+    - 广播：`subscribe` / `unsubscribe` / `publish`（client 侧事件是唯一通道，见 §20）
+    - 实例模型：client 表成员**不带** `PluginxxScopeRef`，因此一份脚本一个实例（无 agent 挂载作用域），脚本全局状态天然按进程隔离；壳只用一份 `start`/`stop`，不需要 mount 入口
+    - **渲染回调是同步的**：回调在 client io 线程要求立即返回内容，而 JS 只在 JS 线程执行。引擎因此提供一条 io→JS 的同步桥：请求投到 JS 线程后最多等 `150 ms` (`kRenderSyncTimeoutMs`)；超时、引擎已停、或 JS 线程正卡在“等 io 线程处理它的表调用”上一律直接放弃，本次按“没有自定义内容”回退默认渲染（不报错、不阻塞界面）。脚本的两个回调**必须同步返回值**（返回 Promise 视为没有内容）；耗时计算请改为订阅事件后用 `updateToolDecor` 推数据
+    - 还没搬上桥的面（后续按同一套补）：状态栏项 / 侧边栏面板 / Info 段落 / 斜杠命令 / 客户端定时器 / 全局快捷键 / 动作回调绑定 —— 它们都要长期保存句柄或回调登记，先在 C++ client 壳里做
+    - 示例：`example_js` 的 `plugin.js` 用 `agentxx.side` 分支，client 侧给 `js_hello` 注册一个特化渲染器（用例 `client_plugins` 第 34 段）；它的清单同时声明 agent 侧 `agentxx.agent.core` 与 client 侧 `agentxx.client.msg_decor`，两侧各自只比较自己那部分
 - 可自研脚本JS 运行时插件 (Python/Lua 等) 替换或扩充脚本能力
 
 ---
@@ -1191,7 +1196,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 |------|------|
 | `example_plugin` | 原生 C++ 综合示例 (fast_tool/Task 协程/call_tool/sleep/**协程驱动桥**/**受控轮询 polled_tool**/功能埋点订阅/事件/能力/client 入口) |
 | `example_graph_node` | Graph 扩展示例 (自定义节点类型 + set_graph_json 改图, 需 `agentxx.agent.graph` 接口) |
-| `example_js` | JS 插件示例 (C++ 壳 + `plugin.js`) |
+| `example_js` | JS 插件示例 (C++ 壳 + `plugin.js`；同一动态库双入口，脚本用 `agentxx.side` 分支，client 侧给 `js_hello` 注册工具特化渲染) |
 | `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
 | `example_multi_mount` | 多挂载示例 (每 agent 一份状态: 计数 + 挂载级 `config_json`; 见 §18) |
 | `example_event` | 广播示例 (声明频道、发布值、订阅自己的与主程序的频道、读当前值; 见 §20) |
@@ -1210,7 +1215,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 | `agentxx_computer_use` | 键鼠控制 (仅 Windows, depends: screen_capture) |
 | `agentxx_audio_stream` | 音频流捕获 (**全平台跳过构建**: WASAPI 实现未启用, 当前仅桩实现) |
 | `agentxx_text_selection_monitor` | 文本选择监听 (仅 Windows UIAutomation) |
-| `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`) |
+| `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`；agent 侧与 client 侧双入口，共用一套 JS 线程/实例，只按侧分流桥与实例作用域) |
 | `example_js_execute_command` | JS 代码执行工具 (`example_js_execute_command`, 依赖 `agentxx_javascript_engine`) |
 | `agentxx_chatbot` | 聊天平台桥接 (QQ, 结构化预留其它平台): 每账号 + 每群/私聊一个独立会话, 每个人设一个根 agent; 工具 `chatbot_send_message` / `_history` / `_chat_info` / `_status` / `_set_mode` / `_recall_message` / `_task`; client 侧「机器人」侧边栏面板 (会话/会话 id/排队数/人设, 见 §13.1) |
 
@@ -1496,6 +1501,10 @@ Closing → CloseFailed → Closing (可重试)
   按取消完成 —— 满足"所有已接受操作必须终结"。
 - **线程空闲判定必须有不变式**：主程序线程据"无在手中任务 + 队列为空"判定可直接收尾，
   因此插件线程取任务/执行定时器与置忙标记必须在同一临界区内完成。
+- **主程序线程不得无限等插件线程**：客户端渲染回调要求同步返回内容（§12 的 client 侧
+  脚本），引擎为此加了一条带上限 (150 ms) 的 io→JS 同步桥，并在 JS 线程正卡在"等主程序
+  处理它的表调用"时直接放弃。不要把它改成无超时等待 —— 那样脚本里的表调用与渲染回调
+  会互等，UI 也卡死。
 - **脚本/子对象注册归属调用方实例**：引擎注册的脚本挂在调用方 (壳插件) 实例上，
   由主程序在该实例停用/卸载时统一撤销；引擎自身的 `stop` 只释放运行时，不假设主程序
   注册表的清理顺序。

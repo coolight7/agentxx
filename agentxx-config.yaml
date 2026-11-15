@@ -366,6 +366,8 @@ memory:
 # 形态一: 插件目录 (含 plugin.yaml; entry 指向动态库, depends 声明依赖)
 #   plugins/example_js/ 为 JS 示例插件 (C++ 壳 + plugin.js), depends:
 #   agentxx_javascript_engine (JS 解释器引擎, 需同时配置)
+#   同一动态库双入口: agent 侧注册工具, client 侧注册工具行特化渲染
+#   (脚本用 agentxx.side 分支); 两侧配置里都写成同一条即可
 # 形态二: 直接库路径 (无 plugin.yaml; 插件名按文件名推导 libfoo.so → foo)
 #   示例插件编译产物: agent/build/linux-debug/exec/plugins/libexample_plugin.so
 #   引擎插件编译产物: agent/build/linux-debug/exec/plugins/libagentxx_javascript_engine.so

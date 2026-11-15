@@ -1,11 +1,17 @@
 /// libexample_js.so —— example_js 插件的 C++ 壳 (统一插件模型示例)
 ///
+/// 双入口: 同一个动态库既做 agent 侧插件, 也做 client 侧插件
+/// - 两侧壳逻辑完全一样 (能力校验 → 把同目录 plugin.js 交给 `interpreter.js`
+///   引擎执行 → 停用时卸载脚本), 差别只在 create 阶段查询哪一侧的接口表;
+/// - 脚本自己用 `agentxx.side` 判断跑在哪一侧, 各注册自己那侧的东西。
+///
 /// 实例生命周期: create 只构造, start 加载脚本, stop 停止脚本执行
 /// - create: 只构造上下文 (查询接口表 + 解析自身路径), 不注册、不启动线程;
 /// - start:  校验 "interpreter.js" 能力可用后, 把同目录 plugin.js 交给引擎执行,
-///           脚本内注册的工具/订阅全部属于本实例的注册事务;
+///           脚本内注册的工具/订阅/展示项全部属于本实例的注册事务;
 /// - stop:   通知引擎卸载脚本 (撤销脚本注册), 引擎不可用时只记录;
 /// - destroy: 只释放本地状态, 不再调用主程序接口。
+#include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -25,11 +31,19 @@ constexpr const char* kInterpreterCapability
     = "plugin.agentxx_javascript_engine.interpreter.js";
 
 struct ShellCtx {
-    const PluginxxHost*          host = nullptr;
-    agentxx::plugin::AgentIfaces iface{};
-    std::string                  name;
-    std::string                  dir;
-    std::string                  scriptPath;
+    const PluginxxHost* host = nullptr;
+    /// 本实例服务哪一侧 (create 决定; 之后只读)
+    bool clientSide = false;
+    /// 两侧的接口表聚合 (只填对应那一侧, 另一侧全空)
+    agentxx::plugin::AgentIfaces  agent{};
+    agentxx::plugin::ClientIfaces client{};
+    /// 两侧通用表 (壳自己用: 能力调用 / JSON 解析 / 日志)
+    const PluginxxCapabilitiesIface* capabilities = nullptr;
+    const PluginxxJsonIface*         json         = nullptr;
+    const PluginxxLogIface*          log          = nullptr;
+    std::string                      name;
+    std::string                      dir;
+    std::string                      scriptPath;
     /// 脚本是否已由引擎加载 (load 成功后置位, stop 撤销; 仅在所属 IO 线程访问)
     bool scriptLoaded = false;
     /// start/stop 的 op 占位句柄 (主程序只当不透明非空 token; 每实例独立)
@@ -37,9 +51,9 @@ struct ShellCtx {
 };
 
 void shellLog(const ShellCtx* ctx, int level, const std::string& msg) {
-    if (ctx && ctx->host && ctx->iface.log && ctx->iface.log->log) {
+    if (ctx && ctx->host && ctx->log && ctx->log->log) {
         auto sv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
-        ctx->iface.log->log(ctx->host, level, &sv);
+        ctx->log->log(ctx->host, level, &sv);
     }
 }
 
@@ -56,7 +70,7 @@ bool fileExists(const std::string& p) {
 /// 拼装 JSON 转义后的字符串字段 (经主程序 json 接口表, 避免路径/名称转义错误)
 /// - 转义逻辑统一在 SDK (见 agentxx::plugin::jsonEscape), 此处仅固定本插件的调用形态
 std::string jsonEscapedString(const ShellCtx& ctx, const std::string& value) {
-    return agentxx::plugin::jsonEscape(ctx.host, ctx.iface.json, value);
+    return agentxx::plugin::jsonEscape(ctx.host, ctx.json, value);
 }
 
 /// "interpreter.js" 能力调用参数: {"op": "load", "name": <插件名>, "path": <脚本路径>}
@@ -141,7 +155,7 @@ bool dispatchScriptUnload(ShellCtx& ctx, const PluginxxOperatorNotify* stopNotif
         return false;
     }
     ctx.scriptLoaded = false;
-    if (!ctx.iface.capabilities || !ctx.iface.capabilities->invoke_capability) {
+    if (!ctx.capabilities || !ctx.capabilities->invoke_capability) {
         return false;
     }
     auto capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
@@ -153,7 +167,7 @@ bool dispatchScriptUnload(ShellCtx& ctx, const PluginxxOperatorNotify* stopNotif
         &ctx,
         stopNotify != nullptr && stopNotify->done ? *stopNotify : PluginxxOperatorNotify{}
     );
-    auto* h = ctx.iface.capabilities->invoke_capability(
+    auto* h = ctx.capabilities->invoke_capability(
         ctx.host,
         nullptr,
         &capSv,
@@ -165,11 +179,7 @@ bool dispatchScriptUnload(ShellCtx& ctx, const PluginxxOperatorNotify* stopNotif
     );
     if (err.data) {
         if (!h) {
-            shellLog(
-                &ctx,
-                3,
-                fmt::format("example_js: unload dispatch failed: {}", err.data)
-            );
+            shellLog(&ctx, 3, fmt::format("example_js: unload dispatch failed: {}", err.data));
         }
         agentxx::plugin::PluginString::free(ctx.host, &err);
     }
@@ -180,106 +190,98 @@ bool dispatchScriptUnload(ShellCtx& ctx, const PluginxxOperatorNotify* stopNotif
     return true;
 }
 
-} // namespace
-
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const PluginxxInfo* {
-            static const PluginxxInfo info{
-                PLUGINXX_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("example_js"),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "Example JS plugin (C++ shell + JS via interpreter.js capability)"
-                ),
-            };
-            return &info;
-        }
+/// create 的公共主体: 查命侧接口表 → 解析自身名称与路径 → 定位 plugin.js
+///
+/// - agent 侧: `plugins.get_own_info` + `AgentIfaces`
+/// - client 侧: `self.get_own_info` + `ClientIfaces`
+int createShell(const PluginxxHost* host, bool clientSide, void** plugin_ctx) {
+    if (!host || !host->vtable || !plugin_ctx) {
+        return -1;
+    }
+    auto ctx          = std::make_unique<ShellCtx>();
+    ctx->host         = host;
+    ctx->clientSide   = clientSide;
+    ctx->capabilities = pluginxx::queryInterface<PluginxxCapabilitiesIface>(
+        host,
+        PLUGINXX_IFACE_CAPABILITIES
     );
+    ctx->json  = pluginxx::queryInterface<PluginxxJsonIface>(host, PLUGINXX_IFACE_JSON);
+    ctx->log   = pluginxx::queryInterface<PluginxxLogIface>(host, PLUGINXX_IFACE_LOG);
+    if (clientSide) {
+        ctx->client = agentxx::plugin::ClientIfaces::query(host);
+        if (!ctx->client.self || !ctx->client.self->get_own_info) {
+            return -1;
+        }
+    } else {
+        ctx->agent = agentxx::plugin::AgentIfaces::query(host);
+        if (!ctx->agent.plugins || !ctx->agent.plugins->get_own_info) {
+            return -1;
+        }
+    }
+    if (!ctx->capabilities || !ctx->json || !ctx->log) {
+        return -1;
+    }
+    auto logE = [&](const std::string& msg) {
+        auto sv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
+        ctx->log->log(host, 4, &sv);
+    };
+
+    PluginxxString info{nullptr, 0};
+    const int32_t  infoRc = clientSide ? ctx->client.self->get_own_info(host, &info)
+                                       : ctx->agent.plugins->get_own_info(host, &info);
+    if (infoRc != 0 || !info.data) {
+        logE("example_js: get_own_info failed");
+        return -1;
+    }
+    auto field = [&](const char* key) -> std::string {
+        PluginxxString v{nullptr, 0};
+        auto           infoSv = agentxx::plugin::PluginStringView::toSv(&info);
+        auto           keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
+        ctx->json->json_get_string(host, &infoSv, &keySv, &v);
+        if (!v.data) {
+            return {};
+        }
+        std::string s(v.data, static_cast<size_t>(v.size));
+        agentxx::plugin::PluginString::free(host, &v);
+        return s;
+    };
+    std::string libPath = field("path");
+    ctx->name           = field("name");
+    agentxx::plugin::PluginString::free(host, &info);
+    if (ctx->name.empty() || libPath.empty()) {
+        logE("example_js: own info invalid");
+        return -1;
+    }
+    ctx->dir = dirOf(libPath);
+    // path 可能是插件目录 (client 侧记录的加载路径就是目录), 也可能是库文件本身
+    {
+        std::error_code ec;
+        if (std::filesystem::is_directory(libPath, ec)) {
+            ctx->dir = libPath;
+        }
+    }
+
+    ctx->scriptPath = fmt::format("{}/plugin.js", ctx->dir);
+    if (!fileExists(ctx->scriptPath)) {
+        auto pos = ctx->dir.find_last_of("/\\");
+        if (pos != std::string::npos) {
+            std::string parent = ctx->dir.substr(0, pos);
+            if (fileExists(fmt::format("{}/plugin.js", parent))) {
+                ctx->dir        = parent;
+                ctx->scriptPath = fmt::format("{}/plugin.js", parent);
+            }
+        }
+    }
+    *plugin_ctx = ctx.release();
+    return 0;
 }
 
-/// create: 只构造上下文 (查询接口表 + 解析自身名称/路径), 不做运行时注册,
-/// 不启动线程, 不调用能力。
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    ShellCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            shellLog(raw, 4, msg ? msg : "");
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto ctx   = std::make_unique<ShellCtx>();
-            ctx->host  = host;
-            ctx->iface = agentxx::plugin::AgentIfaces::query(host);
-            raw        = ctx.get();
-            if (!ctx->iface.capabilities || !ctx->iface.plugins || !ctx->iface.json
-                || !ctx->iface.log) {
-                return -1;
-            }
-            const auto& s_if = ctx->iface;
-            auto        logE = [&](const std::string& msg) {
-                auto sv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
-                s_if.log->log(host, 4, &sv);
-            };
-
-            PluginxxString info{nullptr, 0};
-            s_if.plugins->get_own_info(host, &info);
-            if (!info.data) {
-                logE("example_js: get_own_info failed");
-                return -1;
-            }
-            auto field = [&](const char* key) -> std::string {
-                PluginxxString v{nullptr, 0};
-                auto           infoSv = agentxx::plugin::PluginStringView::toSv(&info);
-                auto           keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
-                s_if.json->json_get_string(host, &infoSv, &keySv, &v);
-                if (!v.data) {
-                    return {};
-                }
-                std::string s(v.data, static_cast<size_t>(v.size));
-                agentxx::plugin::PluginString::free(host, &v);
-                return s;
-            };
-            std::string libPath = field("path");
-            ctx->name           = field("name");
-            agentxx::plugin::PluginString::free(host, &info);
-            if (ctx->name.empty() || libPath.empty()) {
-                logE("example_js: own info invalid");
-                return -1;
-            }
-            ctx->dir = dirOf(libPath);
-
-            ctx->scriptPath = fmt::format("{}/plugin.js", ctx->dir);
-            if (!fileExists(ctx->scriptPath)) {
-                auto pos = ctx->dir.find_last_of("/\\");
-                if (pos != std::string::npos) {
-                    std::string parent = ctx->dir.substr(0, pos);
-                    if (fileExists(fmt::format("{}/plugin.js", parent))) {
-                        ctx->dir        = parent;
-                        ctx->scriptPath = fmt::format("{}/plugin.js", parent);
-                    }
-                }
-            }
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
-    );
-}
-
-/// start 事务: 依赖能力校验 + 脚本加载。
-/// - 加载经 "interpreter.js" 能力异步执行, 脚本注册的工具/订阅属于本实例;
+/// start 事务: 依赖能力校验 + 脚本加载 (两侧共用)。
+/// - 加载经 "interpreter.js" 能力异步执行, 脚本注册的工具/展示项属于本实例;
 ///   因此 start 必须等加载结束才 done (返回主程序托管句柄, 完成回调上报结果);
 /// - 能力不可用或脚本缺失 → 返回 NULL + error (拒绝); 加载失败 → done FAILED;
 ///   两条路径都由主程序回滚本次加载, 不留注册残留。
-static void*
-    jsShellAgentStart(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+void* shellStart(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     auto setErr = [&](const std::string& msg) -> void* {
         if (error) {
             agentxx::plugin::PluginString::set(ctx.host, error, msg);
@@ -289,14 +291,14 @@ static void*
     if (!notify || !notify->done) {
         return setErr("example_js start: notify required");
     }
-    if (!ctx.iface.capabilities || !ctx.iface.capabilities->capability_info
-        || !ctx.iface.capabilities->invoke_capability) {
+    if (!ctx.capabilities || !ctx.capabilities->capability_info
+        || !ctx.capabilities->invoke_capability) {
         return setErr("example_js start: host lacks capabilities interface");
     }
-    auto capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
+    auto           capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
     PluginxxString capInfo{nullptr, 0};
     const bool     hasCap
-        = ctx.iface.capabilities->capability_info(ctx.host, &capSv, &capInfo) == 0;
+        = ctx.capabilities->capability_info(ctx.host, &capSv, &capInfo) == 0;
     if (capInfo.data) {
         agentxx::plugin::PluginString::free(ctx.host, &capInfo);
     }
@@ -316,7 +318,7 @@ static void*
     auto           argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
     PluginxxString err{nullptr, 0};
     auto*          state = new std::pair<ShellCtx*, PluginxxOperatorNotify>(&ctx, *notify);
-    auto*          h     = ctx.iface.capabilities->invoke_capability(
+    auto*          h     = ctx.capabilities->invoke_capability(
         ctx.host,
         nullptr,
         &capSv,
@@ -342,12 +344,11 @@ static void*
     return &ctx.opToken; ///< 已接受: 完成通知在加载回调中发出
 }
 
-/// stop 事务: 通知引擎卸载脚本 (撤销脚本注册的工具/订阅/定时器)。
+/// stop 事务: 通知引擎卸载脚本 (撤销脚本注册的工具/订阅/展示项)。
 /// - 引擎已停用/卸载时卸载调用失败: 只记录, 脚本上下文由引擎的停止路径释放;
 /// - 卸载 op 自身持有本实例 caller lease, 主程序会等它完成后才 destroy;
 /// - 本函数同步完成 stop 本身 (卸载为 fire-and-forget, 无阻塞等待)。
-static void*
-    jsShellAgentStop(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+void* shellStop(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (!notify || !notify->done) {
         return nullptr;
     }
@@ -358,7 +359,73 @@ static void*
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(ShellCtx, jsShellAgentStart, jsShellAgentStop, nullptr, nullptr)
+} // namespace
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(ShellCtx, shellStart, shellStop, nullptr, nullptr)
+AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(ShellCtx, shellStart, shellStop)
+
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
+    return agentxx::plugin::guardCall(
+        [](const char*) noexcept {},
+        nullptr,
+        [&]() -> const PluginxxInfo* {
+            static const PluginxxInfo info{
+                PLUGINXX_API_VERSION,
+                0,
+                agentxx::plugin::PluginStringView::fromCstr("example_js"),
+                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+                agentxx::plugin::PluginStringView::fromCstr(
+                    "Example JS plugin (C++ shell + JS via interpreter.js capability)"
+                ),
+            };
+            return &info;
+        }
+    );
+}
+
+extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
+    return agentxx::plugin::guardCall(
+        [](const char*) noexcept {},
+        static_cast<const AgentxxClientPluginInfo*>(nullptr),
+        [&]() -> const AgentxxClientPluginInfo* {
+            static const AgentxxClientPluginInfo info{
+                AGENTXX_CLIENT_PLUGIN_API_VERSION,
+                0,
+                agentxx::plugin::PluginStringView::fromCstr("example_js"),
+                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+                agentxx::plugin::PluginStringView::fromCstr(
+                    "Example JS plugin, client side (C++ shell + JS via interpreter.js)"
+                ),
+            };
+            return &info;
+        }
+    );
+}
+
+/// agent 侧 create: 只构造上下文 (查询接口表 + 解析自身名称/路径), 不做运行时注册,
+/// 不启动线程, 不调用能力。
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
+    return agentxx::plugin::guardCall(
+        [](const char*) noexcept {},
+        -1,
+        [&]() -> int {
+            return createShell(host, /*clientSide=*/false, plugin_ctx);
+        }
+    );
+}
+
+/// client 侧 create: 同上, 只是查 client 侧接口表
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {
+    return agentxx::plugin::guardCall(
+        [](const char*) noexcept {},
+        -1,
+        [&]() -> int {
+            return createShell(host, /*clientSide=*/true, plugin_ctx);
+        }
+    );
+}
 
 extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ShellCtx*>(plugin_ctx);
@@ -375,4 +442,8 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
             delete ctx;
         }
     );
+}
+
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
+    agentxx_plugin_agent_destroy(plugin_ctx);
 }

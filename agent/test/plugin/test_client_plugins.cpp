@@ -4262,6 +4262,150 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         mgrC.reset();
     }
 
+        // ---- 34. JS 脚本作为 client 插件: 工具行特化渲染由脚本提供 ----
+    //
+    // 加载顺序 = 依赖顺序: 先 JS 引擎 (client 入口), 再 example_js (它的 client
+    // 入口把 plugin.js 交给引擎执行)。脚本用 `agentxx.side` 判定跑在 client 侧,
+    // 注册 `js_hello` 的渲染器; 内容由脚本回调给出 (io 线程 → JS 线程同步桥)。
+    {
+        auto mgrJs = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
+        mgrJs->setUiAdapter(std::make_shared<MockPluginUiAdapter>());
+
+        auto jsEngine = co_await mgrJs->loadNativeAsync(findPluginPath("agentxx_javascript_engine"));
+        XX_TEST_EXPECT_TRUE(jsEngine != nullptr);
+        if (jsEngine) {
+            auto jsShell = co_await mgrJs->loadNativeAsync(findPluginPath("example_js"));
+            XX_TEST_EXPECT_TRUE(jsShell != nullptr);
+            if (jsShell) {
+                // 注册表: 脚本注册的渲染项已生效 (显示名来自脚本)
+                {
+                    auto                                        reg = mgrJs->uiRegistrySnapshot();
+                    const agentxx::plugin::ClientToolRenderReg* hit = nullptr;
+                    for (const auto& r : reg->toolRenderers) {
+                        if (r.toolName == "js_hello") {
+                            hit = &r;
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(hit != nullptr);
+                    if (hit) {
+                        XX_TEST_EXPECT_EQ(hit->plugin, std::string{"example_js"});
+                        XX_TEST_EXPECT_EQ(hit->displayName, std::string{"JS Hello"});
+                        XX_TEST_EXPECT_TRUE(hit->collapsedFn != nullptr);
+                        XX_TEST_EXPECT_TRUE(hit->expandedFn != nullptr);
+                    }
+                }
+
+                // 折叠内容 (运行中 / 已完成): 两次内容不同 → 回调真的在执行
+                auto runningJs = co_await renderToolAsync(
+                    mgrJs,
+                    "call-js-1",
+                    "js_hello",
+                    R"({"name":"Ada"})",
+                    "",
+                    false,
+                    false,
+                    80
+                );
+                XX_TEST_EXPECT_EQ(runningJs.displayName, std::string{"JS Hello"});
+                XX_TEST_EXPECT_TRUE(runningJs.matched);
+                XX_TEST_EXPECT_EQ(runningJs.summary, std::string{"greeting Ada..."});
+
+                auto doneJs = co_await renderToolAsync(
+                    mgrJs,
+                    "call-js-2",
+                    "js_hello",
+                    R"({"name":"Ada"})",
+                    R"({"greeting":"Hello, Ada!"})",
+                    true,
+                    false,
+                    80
+                );
+                XX_TEST_EXPECT_EQ(doneJs.summary, std::string{"greeted Ada"});
+
+                // 展开内容: items 由脚本给出 (第一项是标题)
+                XX_TEST_EXPECT_TRUE(doneJs.items.is_array());
+                XX_TEST_EXPECT_TRUE(doneJs.items.size() >= 2);
+                if (doneJs.items.is_array() && doneJs.items.size() >= 2) {
+                    XX_TEST_EXPECT_EQ(
+                        doneJs.items[0].value("text", std::string{}),
+                        std::string{"JS Hello (client side)"}
+                    );
+                    XX_TEST_EXPECT_EQ(
+                        doneJs.items[1].value("text", std::string{}),
+                        std::string{"target: Ada"}
+                    );
+                }
+
+                // 只给了折叠内容的其它工具仍走默认渲染 (未注册 → 不命中)
+                auto otherJs = co_await renderToolAsync(
+                    mgrJs,
+                    "call-js-3",
+                    "js_async_wait",
+                    "{}",
+                    "{}",
+                    true,
+                    false,
+                    80
+                );
+                XX_TEST_EXPECT_EQ(otherJs.displayName, std::string{"js_async_wait"});
+                XX_TEST_EXPECT_TRUE(!otherJs.matched);
+
+                // 禁用 → 注册项与缓存一齐摘除; 启用 → start 重跑脚本重新注册
+                mgrJs->disable("example_js");
+                {
+                    auto reg    = mgrJs->uiRegistrySnapshot();
+                    bool exists = false;
+                    for (const auto& r : reg->toolRenderers) {
+                        if (r.toolName == "js_hello") {
+                            exists = true;
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(!exists);
+                }
+                mgrJs->enable("example_js");
+                bool restored = false;
+                for (int i = 0; i < 200 && !restored; ++i) {
+                    co_await sleepMs(5);
+                    auto reg = mgrJs->uiRegistrySnapshot();
+                    for (const auto& r : reg->toolRenderers) {
+                        if (r.toolName == "js_hello" && r.displayName == "JS Hello") {
+                            restored = true;
+                        }
+                    }
+                }
+                XX_TEST_EXPECT_TRUE(restored);
+                // 重新注册后的回调照样可用 (新实例 + 新的脚本函数)
+                auto againJs = co_await renderToolAsync(
+                    mgrJs,
+                    "call-js-4",
+                    "js_hello",
+                    R"({"name":"Bob"})",
+                    "",
+                    false,
+                    false,
+                    80
+                );
+                XX_TEST_EXPECT_EQ(againJs.summary, std::string{"greeting Bob..."});
+
+                // 卸载 example_js → 脚本注册的渲染项随之消失
+                XX_TEST_EXPECT_TRUE(co_await mgrJs->unloadAsync("example_js"));
+                {
+                    auto reg  = mgrJs->uiRegistrySnapshot();
+                    bool exists = false;
+                    for (const auto& r : reg->toolRenderers) {
+                        if (r.toolName == "js_hello") {
+                            exists = true;
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(!exists);
+                }
+            }
+            // 引擎最后卸载 (example_js 依赖它, 必须先卸)
+            XX_TEST_EXPECT_TRUE(co_await mgrJs->unloadAsync("agentxx_javascript_engine"));
+        }
+        mgrJs.reset();
+    }
+
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
 }
 

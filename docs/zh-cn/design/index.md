@@ -2393,7 +2393,7 @@ agent/
 │   ├── example_resources/        # 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则)
 │   ├── example_feature/          # 功能埋点示例插件 (登记实现行 + 订阅同名频道)
 │   ├── example_multi_mount/      # 一插件多 agent 挂载示例插件 (挂载作用域/会话/事件)
-│   ├── agentxx_javascript_engine/ # QuickJS JS 运行时插件 (能力 interpreter.js; 专用 JS 线程+沙箱)
+│   ├── agentxx_javascript_engine/ # QuickJS JS 运行时插件 (能力 interpreter.js; 专用 JS 线程+沙箱; agent/client 双入口)
 │   ├── agentxx_codegraph/        # CodeGraph 代码分析插件 (search/context/callers/callees/path 共 5 工具 + client Info 栏段落)
 │   ├── agentxx_filesystem/       # 文件系统 9 工具 (list/read/write/edit/glob/grep/move/copy/remove)
 │   ├── agentxx_execute_command/  # 命令执行 2 工具 (bash/windows)

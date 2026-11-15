@@ -187,6 +187,14 @@ constexpr size_t  kStackLimit         = 4 * 1024 * 1024;
 constexpr size_t  kTaskTimeoutMs      = 60000;  ///< 单任务 (工具执行等) 超时
 constexpr int64_t kPromiseWaitLimitMs = 120000; ///< Promise 等待上限 (绝对截止时间)
 
+/// client 侧同步渲染回调的等待上限 (io 线程等 JS 线程)
+///
+/// 渲染回调在 client io 线程同步执行, 而 JS 只在 JS 线程执行 —— 只能阻塞等待。
+/// 取一个短上限: 超时按"这次没有自定义内容"处理 (界面回退默认渲染), 不让界面
+/// 卡在脚本上。脚本里做耗时计算应改为不依赖渲染回调的方式 (例如订阅事件后
+/// 用 `updateToolDecor` 推数据)。
+constexpr int kRenderSyncTimeoutMs = 150;
+
 /// JS 面的通知点序号 → 通知型功能埋点 id
 ///
 /// 通知点已经是"通知型功能埋点": 脚本里 `agentxx.onHook(point, fn)` 等价于订阅同名
@@ -301,6 +309,21 @@ enum BridgeMagic {
     B_ADD_SHARE_STORE,
     B_GET_OWN_RESOURCES,
     B_GET_MODEL_CONFIG,
+    // client 侧桥 (`agentxx.side == "client"`)。与 agent 侧同义的方法复用上面的
+    // magic (log / getPluginArgs / getLanguage / setLanguage / subscribe /
+    // unsubscribe / publish / setTimeout / clearTimeout), 其余在这里追加
+    B_CLIENT_GET_OWN_INFO,
+    B_CLIENT_GET_CONFIG_PATH,
+    B_CLIENT_GET_STATE,
+    B_CLIENT_SEND_INPUT,
+    B_CLIENT_REQUEST_CANCEL,
+    B_CLIENT_SEND_PLUGIN_DATA,
+    B_CLIENT_SHOW_TOAST,
+    B_CLIENT_UPDATE_TOOL_DECOR,
+    B_CLIENT_REGISTER_TOOL_RENDERER,
+    B_CLIENT_UNREGISTER_TOOL_RENDERER,
+    B_CLIENT_OPEN_OVERLAY,
+    B_CLIENT_CLOSE_OVERLAY,
 };
 
 /// 工具执行请求/结果 (execute 桥跨线程传递)
@@ -371,6 +394,47 @@ struct JsCallbackHook {
     int64_t     token = 0; ///< JS 侧回调表的键
 };
 
+/// 一次同步渲染调用 (client io 线程创建, 交给 JS 线程执行)
+///
+/// - 输入是主程序给的只读借用视图, 跨线程后生命周期不保证: 必须在这里拷一份
+/// - 槽在堆上 (`shared_ptr`): io 线程超时返回后任务仍持有它, 不会写已销毁的栈
+struct JsRenderSync {
+    std::mutex              m;
+    std::condition_variable cv;
+    bool                    done      = false; ///< JS 线程已写入结果
+    std::atomic<bool>       abandoned{false};  ///< 调用方已超时: 任务不必再执行
+    bool                    collapsed = true;  ///< true = 折叠内容, false = 展开内容
+    // 输入拷贝
+    std::string toolCallId;
+    std::string toolName;
+    std::string argsJson;
+    std::string resultText;
+    bool        finished = false;
+    bool        isError  = false;
+    int32_t     maxWidth = 0;
+    // 输出
+    bool        failed = false; ///< 脚本抛异常 / 形态不对 / 引擎已停
+    std::string text;           ///< 折叠内容文本, 或展开内容的 items JSON
+};
+
+/// client 侧工具特化渲染注册项
+///
+/// - 注册/注销在 JS 线程, 回调查找在 client io 线程
+/// - **不含 JSValue**: 脚本函数按 token 存在 `JsPluginCtx::renderCallbacks` 里,
+///   因此本对象可被任意线程释放 (满足"JSValue 只在 JS 线程释放")
+/// - 生命周期覆盖引擎: 它作为 `user_data` 被主程序持有, 摘除时移进
+///   `retiredRenders_` 而不就地释放
+struct JsRenderReg {
+    JsEngine*   engine = nullptr;
+    std::string instanceKey;
+    std::string toolName;
+    /// 脚本函数 token (0 = 脚本没给该回调)
+    /// - 原子: io 线程的回调会读它们, JS 线程会写 (抹零)
+    std::atomic<int64_t> collapsedToken{0};
+    std::atomic<int64_t> expandedToken{0};
+    std::atomic<bool>    dead{false}; ///< JS 侧已释放: 回调直接失败
+};
+
 /// JS 插件上下文 (生命周期: plugins_ / mirror / 进行中任务共享持有)
 /// - 一个实例 = 一份 (脚本, 挂载作用域) 组合: 每个 agent 各自一份 JSContext,
 ///   脚本里的全局状态因而天然按 agent 隔离 (与 C++ 插件"一插件多 agent 挂载"一致)
@@ -399,6 +463,11 @@ struct JsPluginCtx {
     std::map<int64_t, JSValue> asyncWorkCallbacks;
     /// 会话通道事件回调: token -> fn (开通道时登记; 随上下文释放)
     std::map<int64_t, JSValue> channelCallbacks;
+    /// client 侧工具特化渲染回调: token -> fn (注册渲染器时登记; 随上下文释放)
+    /// - 引擎的注册项 (JsRenderReg) 只记 token, JSValue 始终由本实例拥有
+    std::map<int64_t, JSValue> renderCallbacks;
+    /// client 侧广播订阅: token -> 主程序订阅句柄 (退订时用)
+    std::map<int64_t, PluginxxSubscription*> clientSubs;
     /// 回调 token 自增源 (仅 JS 线程使用)
     int64_t nextCallbackToken = 0;
     /// 脚本初始化事务的撤销动作 (注册工具/通知/订阅/资源成功时按序追加)。
@@ -454,7 +523,29 @@ public:
         Stopping, ///< 停止中: 拒绝新 post, 收尾线程正在 join JS 线程/释放 runtime
     };
 
-    JsEngine() = default;
+    /// 本引擎服务的插件侧
+    ///
+    /// - 同一动态库导出两套入口 (`agentxx_plugin_agent_*` / `agentxx_plugin_client_*`),
+    ///   各自 `new JsEngine(Side)`
+    /// - 引擎内部只有**桥**与**实例作用域**按侧区分; JS 线程、runtime、实例表、
+    ///   定时器、停止收尾全部共用一套
+    enum class Side {
+        Agent,  ///< agent 侧: 脚本用 agent 表, 每个 agent 挂载一份实例
+        Client, ///< client 侧: 脚本用 client 表, 没有挂载作用域 (一份脚本一个实例)
+    };
+
+    explicit JsEngine(Side side = Side::Agent) :
+        side_(side) {}
+
+    /// 本引擎服务的插件侧
+    Side side() const noexcept {
+        return side_;
+    }
+
+    /// 是否 client 侧 (桥与实例作用域按它分流)
+    bool isClientSide() const noexcept {
+        return side_ == Side::Client;
+    }
 
     /// 析构: 只处理已经安全停止 (或可以同步收尾) 的对象。
     /// 主程序协议要求 destroy 前 stop 已完成, 正常路径此处是空操作。
@@ -497,6 +588,17 @@ public:
         sc.agentId.assign(spec->agent_id.data, static_cast<size_t>(spec->agent_id.size));
         sc.seq = spec->mount_seq;
         sc.key = fmt::format("{}#{}", sc.agentId, sc.seq);
+        return sc;
+    }
+
+    /// client 侧的固定伪作用域
+    ///
+    /// client 表成员签名里没有 `PluginxxScopeRef`, 但实例键要区分脚本与挂载位置。
+    /// 这里给一个固定键 `client`, agentId 留空 —— `JsPluginCtx::scope()` 因此返回
+    /// `nullptr`, 所有表调用都按"无作用域"处理 (与 C++ client 插件一致)。
+    static MountScope clientScope() {
+        MountScope sc;
+        sc.key = "client";
         return sc;
     }
 
@@ -802,11 +904,16 @@ public:
         ScriptEntry entry{name, path, code, host};
         scripts_.emplace(name, entry);
         // 作用域快照: JS 线程只认本次投递携带的列表, 不读 io 线程状态
+        // - client 侧没有 agent 挂载: 固定一份伪作用域, 脚本顶层立即执行
         std::vector<MountScope> scopes;
-        scopes.reserve(scopes_.size());
-        for (const auto& [key, scope] : scopes_) {
-            (void)key;
-            scopes.push_back(scope);
+        if (isClientSide()) {
+            scopes.push_back(clientScope());
+        } else {
+            scopes.reserve(scopes_.size());
+            for (const auto& [key, scope] : scopes_) {
+                (void)key;
+                scopes.push_back(scope);
+            }
         }
         if (!post([this, entry, scopes, notify]() {
                 if (stopping()) {
@@ -1507,7 +1614,18 @@ private:
             }
         }
         timers_.clear();
-        // 2. 残余实例上下文 (正常路径引擎卸载前 JS 插件已级联卸载; 补充释放,
+        // 2. client 侧渲染注册: 先标记失效 (io 线程的回调据此直接失败),
+        //    脚本函数留在实例里随 JSContext 一起释放
+        {
+            std::lock_guard<std::mutex> lk(renderMtx_);
+            for (auto& [tool, reg] : renders_) {
+                (void)tool;
+                reg->dead.store(true, std::memory_order_release);
+                reg->collapsedToken.store(0, std::memory_order_release);
+                reg->expandedToken.store(0, std::memory_order_release);
+            }
+        }
+        // 3. 残余实例上下文 (正常路径引擎卸载前 JS 插件已级联卸载; 补充释放,
         //    保证 JS_FreeRuntime 前所有 JSContext 已 Free, 无 gc 断言)
         for (auto& [key, pctx] : plugins_) {
             (void)key;
@@ -2220,92 +2338,126 @@ private:
             );
             JS_SetPropertyStr(ctx, bridge, name, fn);
         };
-        def("registerTool", B_REGISTER_TOOL, 1);
-        def("unregisterTool", B_UNREGISTER_TOOL, 1);
-        def("callTool", B_CALL_TOOL, 3);
-        def("getShareStore", B_GET_SHARE_STORE, 2);
-        def("emitMessageTip", B_EMIT_MESSAGE_TIP, 3);
-        def("log", B_LOG, 2);
-        def("onHook", B_REGISTER_HOOK, 2);
-        def("offHook", B_UNREGISTER_HOOK, 2);
-        def("subscribe", B_SUBSCRIBE, 2);
-        def("unsubscribe", B_UNSUBSCRIBE, 1);
-        def("publish", B_PUBLISH, 2);
-        def("setTimeout", B_SET_TIMEOUT, 2);
-        def("clearTimeout", B_CLEAR_TIMEOUT, 1);
-        def("listPlugins", B_LIST_PLUGINS, 0);
-        def("getPlugin", B_GET_PLUGIN, 1);
-        // 会话资源扩展 (主程序 plugin_api v8): Skill/Memory/MCP 贡献
-        def("addSkillDir", B_ADD_SKILL_DIR, 1);
-        def("removeSkillDir", B_REMOVE_SKILL_DIR, 1);
-        def("addMemoryFile", B_ADD_MEMORY_FILE, 1);
-        def("removeMemoryFile", B_REMOVE_MEMORY_FILE, 1);
-        def("addMcpServer", B_ADD_MCP_SERVER, 1);
-        def("removeMcpServer", B_REMOVE_MCP_SERVER, 1);
-        // 与 C++ 插件 SDK 同名同义的查询/声明接口
-        def("scope", B_SCOPE, 0);
-        def("getConfig", B_GET_CONFIG, 0);
-        def("getPluginArgs", B_GET_PLUGIN_ARGS, 0);
-        def("getLanguage", B_GET_LANGUAGE, 0);
-        def("setLanguage", B_SET_LANGUAGE, 1);
-        def("registerToolPermission", B_REGISTER_TOOL_PERMISSION, 1);
-        def("unregisterToolPermission", B_UNREGISTER_TOOL_PERMISSION, 1);
-        def("registerReadPathPermission", B_REGISTER_READ_PATH_PERMISSION, 2);
-        def("registerWritePathPermission", B_REGISTER_WRITE_PATH_PERMISSION, 2);
-        // 网络 (`agentxx.net`): 与 C++ 插件 SDK 同名; 结果对象里 `ok` 是业务结论
-        def("netCall", B_NET_CALL, 2);
-        def("netCallAsync", B_NET_CALL_ASYNC, 2);
-        def("netCancel", B_NET_CANCEL, 1);
-        def("netFetch", B_NET_FETCH, 2);
-        def("netDownload", B_NET_DOWNLOAD, 2);
-        def("netWsConnect", B_NET_WS_CONNECT, 1);
-        def("netWsSend", B_NET_WS_SEND, 2);
-        def("netWsClose", B_NET_WS_CLOSE, 3);
-        def("netHttpServe", B_NET_HTTP_SERVE, 1);
-        def("netHttpRespond", B_NET_HTTP_RESPOND, 1);
-        def("netInfo", B_NET_INFO, 0);
-        // 后台任务: 只能碰本实例提交的 (`agentxx.agent.runtime` v2)
-        def("submitAsyncWork", B_SUBMIT_ASYNC_WORK, 1);
-        def("cancelAsyncWork", B_CANCEL_ASYNC_WORK, 1);
-        def("getAsyncWork", B_GET_ASYNC_WORK, 1);
-        def("listAsyncWork", B_LIST_ASYNC_WORK, 1);
-        // 提示词 / 会话 / 上下文 / 执行图 / 挂载查询
-        def("getPrompt", B_GET_PROMPT, 0);
-        def("setPrompt", B_SET_PROMPT, 1);
-        def("getToolPrompt", B_GET_TOOL_PROMPT, 1);
-        def("getSessionWorkDir", B_GET_SESSION_WORK_DIR, 1);
-        def("isCanceled", B_IS_CANCELED, 1);
-        def("getMessages", B_GET_MESSAGES, 1);
-        def("messagesCount", B_MESSAGES_COUNT, 1);
-        def("getGraphJson", B_GET_GRAPH_JSON, 0);
-        def("getGraphName", B_GET_GRAPH_NAME, 0);
-        def("setGraphJson", B_SET_GRAPH_JSON, 1);
-        def("listMounts", B_LIST_MOUNTS, 0);
-        def("getMount", B_GET_MOUNT, 1);
-        // 会话运行时: 自建根 / 会话通道 / 触发器 / 定时器 (容器级接口)
-        def("mountRoot", B_MOUNT_ROOT, 1);
-        def("unmountRoot", B_UNMOUNT_ROOT, 1);
-        def("openChannel", B_OPEN_CHANNEL, 1);
-        def("closeChannel", B_CLOSE_CHANNEL, 1);
-        def("sendInput", B_SEND_INPUT, 2);
-        def("cancelChannel", B_CANCEL_CHANNEL, 1);
-        def("selectModel", B_SELECT_MODEL, 2);
-        def("respondInterrupt", B_RESPOND_INTERRUPT, 3);
-        def("getChannelState", B_GET_CHANNEL_STATE, 1);
-        def("getChannelMessages", B_GET_CHANNEL_MESSAGES, 1);
-        def("listRuntime", B_LIST_RUNTIME, 0);
-        def("registerTrigger", B_REGISTER_TRIGGER, 1);
-        def("unregisterTrigger", B_UNREGISTER_TRIGGER, 1);
-        def("registerTimer", B_REGISTER_TIMER, 1);
-        def("unregisterTimer", B_UNREGISTER_TIMER, 1);
-        def("emitEvent", B_EMIT_EVENT, 2);
-        // 广播写入方 / share_store 写入 / 资源与模型查询
-        def("declareBroadcast", B_DECLARE_BROADCAST, 1);
-        def("readBroadcast", B_READ_BROADCAST, 1);
-        def("endBroadcast", B_END_BROADCAST, 2);
-        def("addShareStore", B_ADD_SHARE_STORE, 2);
-        def("getOwnResources", B_GET_OWN_RESOURCES, 0);
-        def("getModelConfig", B_GET_MODEL_CONFIG, 0);
+        // 桥属于哪一侧: 脚本据此决定注册什么 (`agentxx.side` 取值 "agent" | "client")
+        JS_SetPropertyStr(
+            ctx,
+            bridge,
+            "side",
+            JS_NewString(ctx, isClientSide() ? "client" : "agent")
+        );
+        if (isClientSide()) {
+            // client 侧桥子集: 展示 / 会话 / 自有信息 / 广播。
+            // 注意: 渲染内容回调在 client io 线程同步进入 JS 线程, 脚本必须同步
+            // 返回结果 (返回 Promise 按"没有自定义内容"处理)。
+            def("log", B_LOG, 2);
+            def("getOwnInfo", B_CLIENT_GET_OWN_INFO, 0);
+            def("getPluginArgs", B_GET_PLUGIN_ARGS, 0);
+            def("getPluginConfigPath", B_CLIENT_GET_CONFIG_PATH, 0);
+            def("getLanguage", B_GET_LANGUAGE, 0);
+            def("setLanguage", B_SET_LANGUAGE, 1);
+            def("getClientState", B_CLIENT_GET_STATE, 0);
+            def("sendUserInput", B_CLIENT_SEND_INPUT, 2);
+            def("requestCancel", B_CLIENT_REQUEST_CANCEL, 1);
+            def("sendPluginData", B_CLIENT_SEND_PLUGIN_DATA, 2);
+            def("showToast", B_CLIENT_SHOW_TOAST, 2);
+            def("updateToolDecor", B_CLIENT_UPDATE_TOOL_DECOR, 2);
+            def("registerToolRenderer", B_CLIENT_REGISTER_TOOL_RENDERER, 1);
+            def("unregisterToolRenderer", B_CLIENT_UNREGISTER_TOOL_RENDERER, 1);
+            def("openOverlay", B_CLIENT_OPEN_OVERLAY, 1);
+            def("closeOverlay", B_CLIENT_CLOSE_OVERLAY, 0);
+            def("subscribe", B_SUBSCRIBE, 2);
+            def("unsubscribe", B_UNSUBSCRIBE, 1);
+            def("publish", B_PUBLISH, 2);
+            def("setTimeout", B_SET_TIMEOUT, 2);
+            def("clearTimeout", B_CLEAR_TIMEOUT, 1);
+        } else {
+            def("registerTool", B_REGISTER_TOOL, 1);
+            def("unregisterTool", B_UNREGISTER_TOOL, 1);
+            def("callTool", B_CALL_TOOL, 3);
+            def("getShareStore", B_GET_SHARE_STORE, 2);
+            def("emitMessageTip", B_EMIT_MESSAGE_TIP, 3);
+            def("log", B_LOG, 2);
+            def("onHook", B_REGISTER_HOOK, 2);
+            def("offHook", B_UNREGISTER_HOOK, 2);
+            def("subscribe", B_SUBSCRIBE, 2);
+            def("unsubscribe", B_UNSUBSCRIBE, 1);
+            def("publish", B_PUBLISH, 2);
+            def("setTimeout", B_SET_TIMEOUT, 2);
+            def("clearTimeout", B_CLEAR_TIMEOUT, 1);
+            def("listPlugins", B_LIST_PLUGINS, 0);
+            def("getPlugin", B_GET_PLUGIN, 1);
+            // 会话资源扩展 (主程序 plugin_api v8): Skill/Memory/MCP 贡献
+            def("addSkillDir", B_ADD_SKILL_DIR, 1);
+            def("removeSkillDir", B_REMOVE_SKILL_DIR, 1);
+            def("addMemoryFile", B_ADD_MEMORY_FILE, 1);
+            def("removeMemoryFile", B_REMOVE_MEMORY_FILE, 1);
+            def("addMcpServer", B_ADD_MCP_SERVER, 1);
+            def("removeMcpServer", B_REMOVE_MCP_SERVER, 1);
+            // 与 C++ 插件 SDK 同名同义的查询/声明接口
+            def("scope", B_SCOPE, 0);
+            def("getConfig", B_GET_CONFIG, 0);
+            def("getPluginArgs", B_GET_PLUGIN_ARGS, 0);
+            def("getLanguage", B_GET_LANGUAGE, 0);
+            def("setLanguage", B_SET_LANGUAGE, 1);
+            def("registerToolPermission", B_REGISTER_TOOL_PERMISSION, 1);
+            def("unregisterToolPermission", B_UNREGISTER_TOOL_PERMISSION, 1);
+            def("registerReadPathPermission", B_REGISTER_READ_PATH_PERMISSION, 2);
+            def("registerWritePathPermission", B_REGISTER_WRITE_PATH_PERMISSION, 2);
+            // 网络 (`agentxx.net`): 与 C++ 插件 SDK 同名; 结果对象里 `ok` 是业务结论
+            def("netCall", B_NET_CALL, 2);
+            def("netCallAsync", B_NET_CALL_ASYNC, 2);
+            def("netCancel", B_NET_CANCEL, 1);
+            def("netFetch", B_NET_FETCH, 2);
+            def("netDownload", B_NET_DOWNLOAD, 2);
+            def("netWsConnect", B_NET_WS_CONNECT, 1);
+            def("netWsSend", B_NET_WS_SEND, 2);
+            def("netWsClose", B_NET_WS_CLOSE, 3);
+            def("netHttpServe", B_NET_HTTP_SERVE, 1);
+            def("netHttpRespond", B_NET_HTTP_RESPOND, 1);
+            def("netInfo", B_NET_INFO, 0);
+            // 后台任务: 只能碰本实例提交的 (`agentxx.agent.runtime` v2)
+            def("submitAsyncWork", B_SUBMIT_ASYNC_WORK, 1);
+            def("cancelAsyncWork", B_CANCEL_ASYNC_WORK, 1);
+            def("getAsyncWork", B_GET_ASYNC_WORK, 1);
+            def("listAsyncWork", B_LIST_ASYNC_WORK, 1);
+            // 提示词 / 会话 / 上下文 / 执行图 / 挂载查询
+            def("getPrompt", B_GET_PROMPT, 0);
+            def("setPrompt", B_SET_PROMPT, 1);
+            def("getToolPrompt", B_GET_TOOL_PROMPT, 1);
+            def("getSessionWorkDir", B_GET_SESSION_WORK_DIR, 1);
+            def("isCanceled", B_IS_CANCELED, 1);
+            def("getMessages", B_GET_MESSAGES, 1);
+            def("messagesCount", B_MESSAGES_COUNT, 1);
+            def("getGraphJson", B_GET_GRAPH_JSON, 0);
+            def("getGraphName", B_GET_GRAPH_NAME, 0);
+            def("setGraphJson", B_SET_GRAPH_JSON, 1);
+            def("listMounts", B_LIST_MOUNTS, 0);
+            def("getMount", B_GET_MOUNT, 1);
+            // 会话运行时: 自建根 / 会话通道 / 触发器 / 定时器 (容器级接口)
+            def("mountRoot", B_MOUNT_ROOT, 1);
+            def("unmountRoot", B_UNMOUNT_ROOT, 1);
+            def("openChannel", B_OPEN_CHANNEL, 1);
+            def("closeChannel", B_CLOSE_CHANNEL, 1);
+            def("sendInput", B_SEND_INPUT, 2);
+            def("cancelChannel", B_CANCEL_CHANNEL, 1);
+            def("selectModel", B_SELECT_MODEL, 2);
+            def("respondInterrupt", B_RESPOND_INTERRUPT, 3);
+            def("getChannelState", B_GET_CHANNEL_STATE, 1);
+            def("getChannelMessages", B_GET_CHANNEL_MESSAGES, 1);
+            def("listRuntime", B_LIST_RUNTIME, 0);
+            def("registerTrigger", B_REGISTER_TRIGGER, 1);
+            def("unregisterTrigger", B_UNREGISTER_TRIGGER, 1);
+            def("registerTimer", B_REGISTER_TIMER, 1);
+            def("unregisterTimer", B_UNREGISTER_TIMER, 1);
+            def("emitEvent", B_EMIT_EVENT, 2);
+            // 广播写入方 / share_store 写入 / 资源与模型查询
+            def("declareBroadcast", B_DECLARE_BROADCAST, 1);
+            def("readBroadcast", B_READ_BROADCAST, 1);
+            def("endBroadcast", B_END_BROADCAST, 2);
+            def("addShareStore", B_ADD_SHARE_STORE, 2);
+            def("getOwnResources", B_GET_OWN_RESOURCES, 0);
+            def("getModelConfig", B_GET_MODEL_CONFIG, 0);
+        }
 
         int ok = JS_SetPropertyStr(ctx, global, "agentxx", bridge) >= 0;
         // 常用工具函数注入全局 (沙箱内可用): 裸 setTimeout/clearTimeout
@@ -2337,7 +2489,68 @@ private:
     static JSValue
         bridgeCall(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic);
 
+    /// client 侧桥 C 函数 (同一入口按引擎侧分流; 由 [bridgeCall] 调用)
+    static JSValue clientBridgeCall(
+        JSContext*    ctx,
+        int           argc,
+        JSValueConst* argv,
+        int           magic,
+        JsPluginCtx*  pctx
+    );
+
+    // ==================== client 侧工具特化渲染 (io 线程 ↔ JS 线程) ====================
+
+    /// 折叠内容回调 (client io 线程调用; 输出字符串由主程序释放)
+    static int32_t PLUGINXX_CALL renderCollapsed(
+        void*                         ud,
+        const AgentxxToolRenderInput* input,
+        AgentxxToolCollapsedOutput*   output
+    );
+
+    /// 展开内容回调 (client io 线程; 只在用户展开该工具行时调用)
+    static int32_t PLUGINXX_CALL renderExpanded(
+        void*                         ud,
+        const AgentxxToolRenderInput* input,
+        AgentxxToolExpandedOutput*    output
+    );
+
+    /// 把一次渲染调用投递到 JS 线程并同步等待结果
+    ///
+    /// - 返回 false = 没拿到 JS 结果 (引擎停止 / 超时 / JS 线程正在等主程序),
+    ///   调用方按"这次没有自定义内容"处理
+    /// - 超时后任务仍可能稍后执行: 槽由任务自己持有 (堆上), 不引用调用方栈
+    /// - `reg` 的生命周期覆盖引擎 (摘除时移进 `retiredRenders_`, 不就地释放)
+    bool invokeRenderSync(JsRenderReg* reg, const std::shared_ptr<JsRenderSync>& slot);
+
+    /// 在 JS 线程执行一次渲染调用 (查实例 → 取脚本函数 → 调用 → 转换结果)
+    void runRenderSyncOnJsThread(JsRenderReg* reg, const std::shared_ptr<JsRenderSync>& slot
+    ) noexcept;
+
+    /// 摘除一份渲染注册 (JS 线程调用): 标记失效并从索引里删除
+    void retireRenderOnJsThread(const std::string& toolName);
+
+    /// 释放一份渲染注册占用的脚本函数 (JS 线程调用)
+    static void dropRenderCallbacksOnJsThread(JsPluginCtx* pctx, JsRenderReg* reg);
+
     // ==================== 成员 ====================
+
+    /// 本引擎服务的插件侧 (create 决定, 之后只读)
+    Side side_ = Side::Agent;
+
+    /// JS 线程正在调用主程序的层数
+    ///
+    /// io 线程的同步渲染回调看到非零就直接失败 —— 否则两边互等
+    /// (io 线程等 JS 线程, JS 线程等 io 线程处理它的表调用)。
+    std::atomic<int> jsHostCallDepth_{0};
+
+    /// client 侧工具特化渲染注册索引 (工具名 → 注册项)
+    ///
+    /// 注册/注销在 JS 线程, 回调查找在 client io 线程, 因此用互斥保护。
+    /// 摘除的注册项移进 `retiredRenders_` 而不就地释放: 它作为 `user_data`
+    /// 被主程序持有, 可能还有回调在路上。
+    std::mutex renderMtx_;
+    std::map<std::string, std::shared_ptr<JsRenderReg>, std::less<>> renders_;
+    std::vector<std::shared_ptr<JsRenderReg>>                      retiredRenders_;
 
     JSRuntime*                        rt_         = nullptr;
     const PluginxxHost*               engineHost_ = nullptr;
@@ -2580,6 +2793,12 @@ JsPluginCtx::~JsPluginCtx() {
             JS_FreeValue(ctx, fn);
         }
         channelCallbacks.clear();
+        for (auto& [token, fn] : renderCallbacks) {
+            (void)token;
+            JS_FreeValue(ctx, fn);
+        }
+        renderCallbacks.clear();
+        clientSubs.clear(); ///< 句柄由主程序回收 (实例卸载时统一摘除), 这里只丢记录
         JS_FreeContext(ctx);
         ctx = nullptr;
     }
@@ -2612,12 +2831,17 @@ JSValue JsEngine::bridgeCall(
     if (!pctx || !pctx->host || !pctx->engine) {
         return JS_ThrowInternalError(ctx, "agentxx bridge: plugin context invalid");
     }
+    auto* engine = pctx->engine;
+    if (engine->isClientSide()) {
+        // client 侧脚本: 只用 client 表 (agent 专有表在客户端不存在)
+        return clientBridgeCall(ctx, argc, argv, magic, pctx);
+    }
     const PluginxxHost* host = pctx->host;
     const auto&         vt   = *host->vtable; // 核心: alloc/free/strdup
     (void)vt;
     // COM 风格接口表查询 (进程级静态数据; 各能力经稳定 IID 分发)
     const agentxx::plugin::AgentIfaces iface  = agentxx::plugin::AgentIfaces::query(host);
-    auto*                              engine = pctx->engine;
+    (void)engine;
 
     /// 订阅一个频道并把 (topic / handler / 主程序订阅句柄) 记进 agents 数组
     /// - `return` token (>= 0, 之后传给 unsubscribe / offHook); -1 = 主程序拒绝订阅
@@ -4411,6 +4635,781 @@ JSValue JsEngine::bridgeCall(
 }
 
 // =====================================================================
+// client 侧桥实现 (脚本作为 client 插件运行)
+// =====================================================================
+
+JSValue JsEngine::clientBridgeCall(
+    JSContext*    ctx,
+    int           argc,
+    JSValueConst* argv,
+    int           magic,
+    JsPluginCtx*  pctx
+) {
+    auto*               engine = pctx->engine;
+    const PluginxxHost* host   = pctx->host;
+    if (!engine || !host || !host->vtable) {
+        return JS_ThrowInternalError(ctx, "agentxx bridge: plugin context invalid");
+    }
+    // COM 风格接口表查询 (client 侧的通用表同样由主程序提供)
+    const agentxx::plugin::ClientIfaces iface = agentxx::plugin::ClientIfaces::query(host);
+
+    /// 标记"JS 线程正在调用主程序": client io 线程的同步渲染回调据此直接失败
+    /// (两边互等: io 线程等 JS 线程, JS 线程等 io 线程处理它的表调用)
+    struct HostCallGuard {
+        std::atomic<int>& depth;
+
+        explicit HostCallGuard(std::atomic<int>& d) :
+            depth(d) {
+            depth.fetch_add(1, std::memory_order_acq_rel);
+        }
+
+        ~HostCallGuard() {
+            depth.fetch_sub(1, std::memory_order_acq_rel);
+        }
+    } hostCallGuard(engine->jsHostCallDepth_);
+
+    /// 取对象里的文本字段 (非字符串时转成文本; 缺失/不可转给空串)
+    auto strField = [&](JSValueConst obj, const char* key) -> std::string {
+        if (!JS_IsObject(obj)) {
+            return {};
+        }
+        JSValue     v = JS_GetPropertyStr(ctx, obj, key);
+        std::string out;
+        if (JS_IsString(v)) {
+            out = jsToCppString(ctx, v);
+        } else if (!JS_IsUndefined(v) && !JS_IsNull(v) && !JS_IsFunction(ctx, v)) {
+            out = valueToJsonString(ctx, v);
+        }
+        JS_FreeValue(ctx, v);
+        return out;
+    };
+
+    /// 取对象里的 JSON 字段: 字符串按原样 (已是 JSON 文本), 对象/数组序列化
+    auto jsonField = [&](JSValueConst obj, const char* key) -> std::string {
+        if (!JS_IsObject(obj)) {
+            return {};
+        }
+        JSValue     v = JS_GetPropertyStr(ctx, obj, key);
+        std::string out;
+        if (JS_IsString(v)) {
+            out = jsToCppString(ctx, v);
+        } else if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+            out = valueToJsonString(ctx, v);
+        }
+        JS_FreeValue(ctx, v);
+        return out;
+    };
+
+    /// 主程序堆字符串 → JS 值 (JSON 优先, 失败退回原文; 释放主程序字符串)
+    auto takeHostJson = [&](PluginxxString& s, const char* tag) -> JSValue {
+        if (!s.data) {
+            return JS_NULL;
+        }
+        std::string text(s.data, static_cast<size_t>(s.size));
+        agentxx::plugin::PluginString::free(host, &s);
+        return jsonTextToValue(ctx, text, tag);
+    };
+
+    /// 主程序堆字符串 → JS 字符串 (释放主程序字符串)
+    auto takeHostText = [&](PluginxxString& s) -> JSValue {
+        if (!s.data) {
+            return JS_NewString(ctx, "");
+        }
+        JSValue out = JS_NewStringLen(ctx, s.data, static_cast<size_t>(s.size));
+        agentxx::plugin::PluginString::free(host, &s);
+        return out;
+    };
+
+    switch (magic) {
+        case B_LOG: {
+            int level = 2;
+            if (argc >= 1 && JS_IsNumber(argv[0])) {
+                int32_t lv = 0;
+                JS_ToInt32(ctx, &lv, argv[0]);
+                level = lv;
+            }
+            std::string msg   = argc >= 2 ? jsToCppString(ctx, argv[1]) : "";
+            auto        msgSv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
+            if (iface.log && iface.log->log) {
+                iface.log->log(host, level, &msgSv);
+            }
+            return JS_UNDEFINED;
+        }
+
+        case B_CLIENT_GET_OWN_INFO: {
+            if (!iface.self || !iface.self->get_own_info) {
+                return JS_NULL;
+            }
+            PluginxxString out{nullptr, 0};
+            if (iface.self->get_own_info(host, &out) != 0) {
+                return JS_NULL;
+            }
+            return takeHostJson(out, "<own_info>");
+        }
+
+        case B_GET_PLUGIN_ARGS: { // 与 agent 侧同名: client 侧走 self 表
+            if (!iface.self || !iface.self->get_plugin_args) {
+                return JS_NULL;
+            }
+            PluginxxString out{nullptr, 0};
+            if (iface.self->get_plugin_args(host, &out) != 0) {
+                return JS_NULL;
+            }
+            return takeHostJson(out, "<plugin_args>");
+        }
+
+        case B_CLIENT_GET_CONFIG_PATH: {
+            if (!iface.self || !iface.self->get_plugin_config_path) {
+                return JS_NewString(ctx, "");
+            }
+            PluginxxString out{nullptr, 0};
+            if (iface.self->get_plugin_config_path(host, &out) != 0) {
+                return JS_NewString(ctx, "");
+            }
+            return takeHostText(out);
+        }
+
+        case B_GET_LANGUAGE: {
+            if (!iface.self || !iface.self->get_language) {
+                return JS_NewString(ctx, "en");
+            }
+            PluginxxString out{nullptr, 0};
+            if (iface.self->get_language(host, &out) != 0) {
+                return JS_NewString(ctx, "en");
+            }
+            return takeHostText(out);
+        }
+
+        case B_SET_LANGUAGE: {
+            if (!iface.self || !iface.self->set_language || argc < 1 || !JS_IsString(argv[0])) {
+                return JS_FALSE;
+            }
+            std::string lang   = jsToCppString(ctx, argv[0]);
+            auto        langSv = agentxx::plugin::PluginStringView::from(lang.data(), lang.size());
+            return iface.self->set_language(host, &langSv) == 0 ? JS_TRUE : JS_FALSE;
+        }
+
+        case B_CLIENT_GET_STATE: {
+            if (!iface.session || !iface.session->get_client_state) {
+                return JS_NULL;
+            }
+            PluginxxString out{nullptr, 0};
+            if (iface.session->get_client_state(host, &out) != 0) {
+                return JS_NULL;
+            }
+            return takeHostJson(out, "<client_state>");
+        }
+
+        case B_CLIENT_SEND_INPUT: {
+            if (!iface.session || !iface.session->send_user_input || argc < 2) {
+                return JS_ThrowTypeError(ctx, "sendUserInput: (sessionId, text) required");
+            }
+            std::string sid  = jsToCppString(ctx, argv[0]);
+            std::string text = jsToCppString(ctx, argv[1]);
+            auto        sidSv = agentxx::plugin::PluginStringView::from(sid.data(), sid.size());
+            auto        textSv = agentxx::plugin::PluginStringView::from(text.data(), text.size());
+            return iface.session->send_user_input(host, &sidSv, &textSv) == AGENTXX_RESULT_OK
+                       ? JS_TRUE
+                       : JS_FALSE;
+        }
+
+        case B_CLIENT_REQUEST_CANCEL: {
+            if (!iface.session || !iface.session->request_cancel) {
+                return JS_UNDEFINED;
+            }
+            std::string sid   = argc >= 1 ? jsToCppString(ctx, argv[0]) : std::string{};
+            auto        sidSv = agentxx::plugin::PluginStringView::from(sid.data(), sid.size());
+            iface.session->request_cancel(host, &sidSv);
+            return JS_UNDEFINED;
+        }
+
+        case B_CLIENT_SEND_PLUGIN_DATA: {
+            if (!iface.wire || !iface.wire->send_plugin_data || argc < 2) {
+                return JS_FALSE;
+            }
+            std::string topic = jsToCppString(ctx, argv[0]);
+            std::string payload
+                = JS_IsString(argv[1]) ? jsToCppString(ctx, argv[1])
+                                       : valueToJsonString(ctx, argv[1]);
+            auto topicSv = agentxx::plugin::PluginStringView::from(topic.data(), topic.size());
+            auto paySv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+            return iface.wire->send_plugin_data(host, &topicSv, &paySv) == AGENTXX_RESULT_OK
+                       ? JS_TRUE
+                       : JS_FALSE;
+        }
+
+        case B_CLIENT_SHOW_TOAST: {
+            if (!iface.ui || !iface.ui->show_toast || argc < 1) {
+                return JS_UNDEFINED;
+            }
+            std::string text  = jsToCppString(ctx, argv[0]);
+            int32_t     level = 0;
+            if (argc >= 2 && JS_IsNumber(argv[1])) {
+                JS_ToInt32(ctx, &level, argv[1]);
+            }
+            auto textSv = agentxx::plugin::PluginStringView::from(text.data(), text.size());
+            iface.ui->show_toast(host, &textSv, level);
+            return JS_UNDEFINED;
+        }
+
+        case B_CLIENT_UPDATE_TOOL_DECOR: {
+            if (!iface.ui || !iface.ui->update_tool_decor || argc < 2) {
+                return JS_FALSE;
+            }
+            std::string tcid  = jsToCppString(ctx, argv[0]);
+            std::string decor
+                = JS_IsString(argv[1]) ? jsToCppString(ctx, argv[1])
+                                       : valueToJsonString(ctx, argv[1]);
+            auto tcidSv  = agentxx::plugin::PluginStringView::from(tcid.data(), tcid.size());
+            auto decorSv = agentxx::plugin::PluginStringView::from(decor.data(), decor.size());
+            return iface.ui->update_tool_decor(host, &tcidSv, &decorSv) == AGENTXX_RESULT_OK
+                       ? JS_TRUE
+                       : JS_FALSE;
+        }
+
+        case B_CLIENT_OPEN_OVERLAY: {
+            if (!iface.ui || !iface.ui->open_overlay) {
+                return JS_FALSE;
+            }
+            if (argc < 1 || !JS_IsObject(argv[0])) {
+                return JS_ThrowTypeError(ctx, "openOverlay: spec object required");
+            }
+            const JSValueConst specObj = argv[0];
+            // 类型: 数字直接用; 字符串按名字 (`mermaid` / `text` / `diff` / `custom`)
+            int32_t type = AGENTXX_OVERLAY_TEXT;
+            {
+                JSValue tv = JS_GetPropertyStr(ctx, specObj, "type");
+                if (JS_IsNumber(tv)) {
+                    JS_ToInt32(ctx, &type, tv);
+                } else if (JS_IsString(tv)) {
+                    const std::string name = jsToCppString(ctx, tv);
+                    if (name == "mermaid") {
+                        type = AGENTXX_OVERLAY_MERMAID;
+                    } else if (name == "diff") {
+                        type = AGENTXX_OVERLAY_DIFF;
+                    } else if (name == "custom" || name == "items") {
+                        type = AGENTXX_OVERLAY_CUSTOM;
+                    } else {
+                        type = AGENTXX_OVERLAY_TEXT;
+                    }
+                }
+                JS_FreeValue(ctx, tv);
+            }
+            std::string title      = strField(specObj, "title");
+            std::string payload    = strField(specObj, "payload");
+            std::string extraJson  = jsonField(specObj, "extra");
+            AgentxxOverlaySpec spec{};
+            spec.version     = 1;
+            spec.struct_size = sizeof(AgentxxOverlaySpec);
+            spec.type        = type;
+            spec.title       = agentxx::plugin::PluginStringView::from(title.data(), title.size());
+            spec.payload = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+            spec.extra_json
+                = agentxx::plugin::PluginStringView::from(extraJson.data(), extraJson.size());
+            return iface.ui->open_overlay(host, &spec) == AGENTXX_RESULT_OK ? JS_TRUE : JS_FALSE;
+        }
+
+        case B_CLIENT_CLOSE_OVERLAY: {
+            if (iface.ui && iface.ui->close_overlay) {
+                iface.ui->close_overlay(host);
+            }
+            return JS_UNDEFINED;
+        }
+
+        case B_CLIENT_REGISTER_TOOL_RENDERER: {
+            if (!iface.ui || !iface.ui->register_tool_renderer) {
+                return JS_FALSE; ///< 主程序不支持工具行定制: 附加能力, 忽略
+            }
+            if (argc < 1 || !JS_IsObject(argv[0])) {
+                return JS_ThrowTypeError(ctx, "registerToolRenderer: spec object required");
+            }
+            const JSValueConst specObj = argv[0];
+            std::string        toolName = strField(specObj, "tool");
+            if (toolName.empty()) {
+                toolName = strField(specObj, "toolName");
+            }
+            if (toolName.empty()) {
+                return JS_ThrowTypeError(ctx, "registerToolRenderer: tool name required");
+            }
+            const std::string displayName = strField(specObj, "displayName");
+            JSValue           collapsed   = JS_GetPropertyStr(ctx, specObj, "collapsed");
+            JSValue           expanded    = JS_GetPropertyStr(ctx, specObj, "expanded");
+            const bool        hasCollapsed = JS_IsFunction(ctx, collapsed);
+            const bool        hasExpanded  = JS_IsFunction(ctx, expanded);
+
+            auto reg         = std::make_shared<JsRenderReg>();
+            reg->engine      = engine;
+            reg->instanceKey = pctx->instanceKey;
+            reg->toolName    = toolName;
+            if (hasCollapsed) {
+                const int64_t token = ++pctx->nextCallbackToken;
+                reg->collapsedToken.store(token, std::memory_order_release);
+                pctx->renderCallbacks[token] = JS_DupValue(ctx, collapsed);
+            }
+            if (hasExpanded) {
+                const int64_t token = ++pctx->nextCallbackToken;
+                reg->expandedToken.store(token, std::memory_order_release);
+                pctx->renderCallbacks[token] = JS_DupValue(ctx, expanded);
+            }
+            JS_FreeValue(ctx, collapsed);
+            JS_FreeValue(ctx, expanded);
+
+            AgentxxToolRenderSpec spec{};
+            spec.struct_size  = sizeof(AgentxxToolRenderSpec);
+            spec.version      = 1;
+            spec.tool_name
+                = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
+            spec.display_name
+                = agentxx::plugin::PluginStringView::from(displayName.data(), displayName.size());
+            spec.collapsed_fn = hasCollapsed ? &JsEngine::renderCollapsed : nullptr;
+            spec.expanded_fn  = hasExpanded ? &JsEngine::renderExpanded : nullptr;
+            spec.user_data    = reg.get();
+            const int32_t rc  = iface.ui->register_tool_renderer(host, &spec);
+            if (rc != AGENTXX_RESULT_OK) {
+                // 主程序拒绝 (重复注册 / 参数非法): 不留下无人用的脚本函数
+                dropRenderCallbacksOnJsThread(pctx, reg.get());
+                return JS_FALSE;
+            }
+            {
+                std::lock_guard<std::mutex> lk(engine->renderMtx_);
+                auto                        old = engine->renders_.find(toolName);
+                if (old != engine->renders_.end()) {
+                    // 旧注册项不能就地释放: user_data 可能还有回调在用
+                    old->second->dead.store(true, std::memory_order_release);
+                    engine->retiredRenders_.push_back(old->second);
+                    engine->renders_.erase(old);
+                }
+                engine->renders_[toolName] = reg;
+            }
+            // 脚本先卸载时也要撤销 (主程序在插件实例卸载时同样会摘除)
+            pctx->rollbackActions.push_back([engine, ui = iface.ui, host, toolName]() {
+                engine->retireRenderOnJsThread(toolName);
+                if (ui && ui->unregister_tool_renderer) {
+                    auto tn
+                        = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
+                    ui->unregister_tool_renderer(host, &tn);
+                }
+            });
+            return JS_TRUE;
+        }
+
+        case B_CLIENT_UNREGISTER_TOOL_RENDERER: {
+            if (argc < 1 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "unregisterToolRenderer: tool name required");
+            }
+            const std::string toolName = jsToCppString(ctx, argv[0]);
+            if (toolName.empty()) {
+                return JS_FALSE;
+            }
+            engine->retireRenderOnJsThread(toolName);
+            if (!iface.ui || !iface.ui->unregister_tool_renderer) {
+                return JS_FALSE;
+            }
+            auto tn = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
+            return iface.ui->unregister_tool_renderer(host, &tn) == AGENTXX_RESULT_OK ? JS_TRUE
+                                                                                     : JS_FALSE;
+        }
+
+        case B_SUBSCRIBE: {
+            if (!iface.broadcasts || !iface.broadcasts->subscribe_broadcast || argc < 2
+                || !JS_IsString(argv[0]) || !JS_IsFunction(ctx, argv[1])) {
+                return JS_ThrowTypeError(ctx, "subscribe: (topic, handler) required");
+            }
+            const std::string topic = jsToCppString(ctx, argv[0]);
+            auto              binding = std::make_unique<JsHookBinding>();
+            binding->engine           = engine;
+            binding->instanceKey      = pctx->instanceKey;
+            binding->topic            = topic;
+            auto topicSv = agentxx::plugin::PluginStringView::from(topic.data(), topic.size());
+            // client 侧没有 agent 作用域: 传 nullptr = 订阅主程序总线
+            auto* sub = iface.broadcasts->subscribe_broadcast(
+                host,
+                nullptr,
+                &topicSv,
+                &JsEngine::eventFire,
+                binding.get(),
+                nullptr,
+                nullptr
+            );
+            if (!sub) {
+                return throwJsError(
+                    ctx,
+                    fmt::format("subscribe: host subscription failed: {}", topic)
+                );
+            }
+            const int64_t token     = ++pctx->nextCallbackToken;
+            pctx->clientSubs[token] = sub;
+            pctx->hookBindings.push_back(std::move(binding));
+            pctx->rollbackActions.push_back([bc = iface.broadcasts, sub]() {
+                if (bc && bc->unsubscribe_broadcast) {
+                    bc->unsubscribe_broadcast(sub);
+                }
+            });
+            return JS_NewInt64(ctx, token);
+        }
+
+        case B_UNSUBSCRIBE: {
+            if (argc < 1 || !JS_IsNumber(argv[0])) {
+                return JS_ThrowTypeError(ctx, "unsubscribe: token required");
+            }
+            int64_t token = 0;
+            JS_ToInt64(ctx, &token, argv[0]);
+            auto it = pctx->clientSubs.find(token);
+            if (it != pctx->clientSubs.end()) {
+                if (iface.broadcasts && iface.broadcasts->unsubscribe_broadcast) {
+                    iface.broadcasts->unsubscribe_broadcast(it->second);
+                }
+                pctx->clientSubs.erase(it);
+            }
+            return JS_UNDEFINED;
+        }
+
+        case B_PUBLISH: {
+            std::string topic = argc >= 1 ? jsToCppString(ctx, argv[0]) : std::string{};
+            std::string payload = "{}";
+            if (argc >= 2) {
+                if (JS_IsString(argv[1])) {
+                    payload = jsToCppString(ctx, argv[1]);
+                } else if (JS_IsObject(argv[1])) {
+                    const std::string text = valueToJsonString(ctx, argv[1]);
+                    if (!text.empty()) {
+                        payload = text;
+                    }
+                }
+            }
+            auto topicSv = agentxx::plugin::PluginStringView::from(topic.data(), topic.size());
+            auto paySv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+            agentxx::plugin::publishPluginBroadcast(host, iface.broadcasts, topicSv, paySv);
+            return JS_UNDEFINED;
+        }
+
+        case B_SET_TIMEOUT: {
+            if (argc < 2 || !JS_IsFunction(ctx, argv[0])) {
+                return JS_ThrowTypeError(ctx, "setTimeout: (fn, ms) required");
+            }
+            double ms = 0;
+            JS_ToFloat64(ctx, &ms, argv[1]);
+            auto              id = ++engine->timerSeq_;
+            JsEngine::JsTimer t;
+            t.due = std::chrono::steady_clock::now()
+                    + std::chrono::milliseconds(static_cast<int64_t>(ms < 0 ? 0 : ms));
+            t.instanceKey       = pctx->instanceKey;
+            t.fn                = JS_DupValue(ctx, argv[0]);
+            engine->timers_[id] = std::move(t);
+            ++engine->timerEpoch_; // 定时器集合变化: 唤醒等待中的 JS 线程重算
+            engine->cv_.notify_all();
+            return JS_NewInt32(ctx, static_cast<int32_t>(id));
+        }
+
+        case B_CLEAR_TIMEOUT: {
+            if (argc < 1 || !JS_IsNumber(argv[0])) {
+                return JS_ThrowTypeError(ctx, "clearTimeout: id required");
+            }
+            int32_t id = 0;
+            JS_ToInt32(ctx, &id, argv[0]);
+            auto it = engine->timers_.find(static_cast<uint64_t>(id));
+            if (it != engine->timers_.end()) {
+                ++engine->timerEpoch_;
+                JS_FreeValue(ctx, it->second.fn);
+                engine->timers_.erase(it);
+            }
+            return JS_UNDEFINED;
+        }
+
+        default:
+            return JS_ThrowInternalError(
+                ctx,
+                "bridge method not available on client side (magic %d)",
+                magic
+            );
+    }
+}
+
+// =====================================================================
+// client 侧工具特化渲染: io 线程 → JS 线程的同步桥
+// =====================================================================
+
+int32_t PLUGINXX_CALL JsEngine::renderCollapsed(
+    void*                         ud,
+    const AgentxxToolRenderInput* input,
+    AgentxxToolCollapsedOutput*   output
+) {
+    if (!ud || !input || !output) {
+        return AGENTXX_RESULT_ERR_ARG;
+    }
+    auto* reg    = static_cast<JsRenderReg*>(ud);
+    auto* engine = reg->engine;
+    if (!engine || reg->dead.load(std::memory_order_acquire)
+        || reg->collapsedToken.load(std::memory_order_acquire) == 0) {
+        return AGENTXX_RESULT_ERR_STATE;
+    }
+    try {
+        auto slot       = std::make_shared<JsRenderSync>();
+        slot->collapsed = true;
+        slot->toolCallId
+            = std::string(agentxx::plugin::PluginStringView::str(input->tool_call_id));
+        slot->toolName = std::string(agentxx::plugin::PluginStringView::str(input->tool_name));
+        slot->argsJson = std::string(agentxx::plugin::PluginStringView::str(input->args_json));
+        slot->resultText
+            = std::string(agentxx::plugin::PluginStringView::str(input->result_text));
+        slot->finished = input->is_finished != 0;
+        slot->isError  = input->is_error != 0;
+        slot->maxWidth = input->max_width;
+        if (!engine->invokeRenderSync(reg, slot)) {
+            return AGENTXX_RESULT_ERR_STATE; ///< 超时 / 引擎停止: 回退默认渲染
+        }
+        if (slot->failed || slot->text.empty()) {
+            return AGENTXX_RESULT_OK; ///< 没有自定义内容 (空输出)
+        }
+        output->text = agentxx::plugin::PluginString::from(engine->host(), slot->text);
+        return AGENTXX_RESULT_OK;
+    } catch (...) {
+        return AGENTXX_RESULT_ERR_INTERNAL;
+    }
+}
+
+int32_t PLUGINXX_CALL JsEngine::renderExpanded(
+    void*                         ud,
+    const AgentxxToolRenderInput* input,
+    AgentxxToolExpandedOutput*    output
+) {
+    if (!ud || !input || !output) {
+        return AGENTXX_RESULT_ERR_ARG;
+    }
+    auto* reg    = static_cast<JsRenderReg*>(ud);
+    auto* engine = reg->engine;
+    if (!engine || reg->dead.load(std::memory_order_acquire)
+        || reg->expandedToken.load(std::memory_order_acquire) == 0) {
+        return AGENTXX_RESULT_ERR_STATE;
+    }
+    try {
+        auto slot        = std::make_shared<JsRenderSync>();
+        slot->collapsed  = false;
+        slot->toolCallId
+            = std::string(agentxx::plugin::PluginStringView::str(input->tool_call_id));
+        slot->toolName = std::string(agentxx::plugin::PluginStringView::str(input->tool_name));
+        slot->argsJson = std::string(agentxx::plugin::PluginStringView::str(input->args_json));
+        slot->resultText
+            = std::string(agentxx::plugin::PluginStringView::str(input->result_text));
+        slot->finished = input->is_finished != 0;
+        slot->isError  = input->is_error != 0;
+        slot->maxWidth = input->max_width;
+        if (!engine->invokeRenderSync(reg, slot)) {
+            return AGENTXX_RESULT_ERR_STATE;
+        }
+        if (slot->failed || slot->text.empty()) {
+            return AGENTXX_RESULT_OK;
+        }
+        output->items_json = agentxx::plugin::PluginString::from(engine->host(), slot->text);
+        return AGENTXX_RESULT_OK;
+    } catch (...) {
+        return AGENTXX_RESULT_ERR_INTERNAL;
+    }
+}
+
+bool JsEngine::invokeRenderSync(JsRenderReg* reg, const std::shared_ptr<JsRenderSync>& slot) {
+    if (!reg || !slot) {
+        return false;
+    }
+    // JS 线程正在等主程序 (client io 线程): 再让 io 线程等它就会互等, 直接放弃
+    if (jsHostCallDepth_.load(std::memory_order_acquire) > 0) {
+        return false;
+    }
+    if (!post([this, reg, slot]() {
+            if (slot->abandoned.load(std::memory_order_acquire)) {
+                return; ///< 调用方已超时: 不必再跑脚本
+            }
+            runRenderSyncOnJsThread(reg, slot);
+        })) {
+        return false; ///< 引擎已停止
+    }
+    std::unique_lock<std::mutex> lk(slot->m);
+    const bool                   ok = slot->cv.wait_for(
+        lk,
+        std::chrono::milliseconds(kRenderSyncTimeoutMs),
+        [&slot]() {
+            return slot->done;
+        }
+    );
+    if (!ok) {
+        slot->abandoned.store(true, std::memory_order_release);
+        return false;
+    }
+    return true;
+}
+
+void JsEngine::runRenderSyncOnJsThread(
+    JsRenderReg*                        reg,
+    const std::shared_ptr<JsRenderSync>& slot
+) noexcept {
+    auto finish = [&slot](bool failed, std::string text) {
+        {
+            std::lock_guard<std::mutex> lk(slot->m);
+            slot->failed = failed;
+            slot->text   = std::move(text);
+            slot->done   = true;
+        }
+        slot->cv.notify_all();
+    };
+    try {
+        if (!reg || reg->dead.load(std::memory_order_acquire) || stopping()) {
+            finish(true, {});
+            return;
+        }
+        auto pctx = findPlugin(reg->instanceKey);
+        if (!pctx || pctx->deleted || !pctx->ctx) {
+            finish(true, {});
+            return;
+        }
+        const int64_t token = slot->collapsed ? reg->collapsedToken.load(std::memory_order_acquire)
+                                              : reg->expandedToken.load(std::memory_order_acquire);
+        if (token == 0) {
+            finish(true, {});
+            return;
+        }
+        auto fit = pctx->renderCallbacks.find(token);
+        if (fit == pctx->renderCallbacks.end()) {
+            finish(true, {});
+            return;
+        }
+        JSContext* ctx = pctx->ctx;
+        pctx->inflight++;
+        struct InflightGuard {
+            JsPluginCtx* p;
+
+            explicit InflightGuard(JsPluginCtx* pctx) :
+                p(pctx) {}
+
+            ~InflightGuard() {
+                p->inflight--;
+            }
+        } guard(pctx.get());
+
+        JSValue input = JS_NewObject(ctx);
+        JS_SetPropertyStr(
+            ctx,
+            input,
+            "toolCallId",
+            JS_NewStringLen(ctx, slot->toolCallId.data(), slot->toolCallId.size())
+        );
+        JS_SetPropertyStr(
+            ctx,
+            input,
+            "toolName",
+            JS_NewStringLen(ctx, slot->toolName.data(), slot->toolName.size())
+        );
+        JS_SetPropertyStr(
+            ctx,
+            input,
+            "argsJson",
+            JS_NewStringLen(ctx, slot->argsJson.data(), slot->argsJson.size())
+        );
+        JS_SetPropertyStr(
+            ctx,
+            input,
+            "args",
+            jsonTextToValue(ctx, slot->argsJson, "<tool_args>")
+        );
+        JS_SetPropertyStr(
+            ctx,
+            input,
+            "resultText",
+            JS_NewStringLen(ctx, slot->resultText.data(), slot->resultText.size())
+        );
+        JS_SetPropertyStr(ctx, input, "finished", slot->finished ? JS_TRUE : JS_FALSE);
+        JS_SetPropertyStr(ctx, input, "isError", slot->isError ? JS_TRUE : JS_FALSE);
+        JS_SetPropertyStr(ctx, input, "maxWidth", JS_NewInt32(ctx, slot->maxWidth));
+
+        JSValue argv[1] = {input};
+        JSValue ret     = JS_Call(ctx, fit->second, JS_UNDEFINED, 1, argv);
+        JS_FreeValue(ctx, input);
+        if (JS_IsException(ret)) {
+            JSValue exc = JS_GetException(ctx);
+            logAt(
+                3,
+                fmt::format(
+                    "interpreter.js: tool renderer threw: {}",
+                    valueToJsonString(ctx, exc)
+                )
+                    .c_str()
+            );
+            JS_FreeValue(ctx, exc);
+            JS_FreeValue(ctx, ret);
+            finish(true, {});
+            return;
+        }
+
+        std::string text;
+        bool        shapeOk = true;
+        if (slot->collapsed) {
+            if (JS_IsString(ret)) {
+                text = jsToCppString(ctx, ret);
+            } else if (JS_IsObject(ret) && !JS_IsFunction(ctx, ret)) {
+                // {text: "..."} 形态 (方便回调顺带返回其它字段)
+                JSValue tv = JS_GetPropertyStr(ctx, ret, "text");
+                if (JS_IsString(tv)) {
+                    text = jsToCppString(ctx, tv);
+                }
+                JS_FreeValue(ctx, tv);
+            } else if (!JS_IsNull(ret) && !JS_IsUndefined(ret)) {
+                shapeOk = false; ///< 数组/数字/函数等形态: 按"没有自定义内容"处理
+            }
+        } else {
+            if (JS_IsString(ret)) {
+                text = jsToCppString(ctx, ret); ///< 已是 items JSON 文本
+            } else if (JS_IsArray(ret)) {
+                text = valueToJsonString(ctx, ret);
+            } else if (!JS_IsNull(ret) && !JS_IsUndefined(ret)) {
+                shapeOk = false;
+            }
+        }
+        JS_FreeValue(ctx, ret);
+        finish(!shapeOk, std::move(text));
+    } catch (...) {
+        finish(true, {});
+    }
+}
+
+void JsEngine::retireRenderOnJsThread(const std::string& toolName) {
+    std::shared_ptr<JsRenderReg> reg;
+    {
+        std::lock_guard<std::mutex> lk(renderMtx_);
+        auto                        it = renders_.find(toolName);
+        if (it == renders_.end()) {
+            return;
+        }
+        reg = it->second;
+        reg->dead.store(true, std::memory_order_release);
+        // 注册项不就地释放: user_data 可能还有回调在用, 留到引擎析构
+        retiredRenders_.push_back(reg);
+        renders_.erase(it);
+    }
+    if (auto pctx = findPlugin(reg->instanceKey)) {
+        dropRenderCallbacksOnJsThread(pctx.get(), reg.get());
+    }
+}
+
+void JsEngine::dropRenderCallbacksOnJsThread(JsPluginCtx* pctx, JsRenderReg* reg) {
+    if (!pctx || !pctx->ctx || !reg) {
+        return;
+    }
+    auto dropOne = [&](std::atomic<int64_t>& tokenRef) {
+        const int64_t token = tokenRef.load(std::memory_order_acquire);
+        if (token == 0) {
+            return;
+        }
+        auto it = pctx->renderCallbacks.find(token);
+        if (it != pctx->renderCallbacks.end()) {
+            JS_FreeValue(pctx->ctx, it->second);
+            pctx->renderCallbacks.erase(it);
+        }
+        tokenRef.store(0, std::memory_order_release);
+    };
+    dropOne(reg->collapsedToken);
+    dropOne(reg->expandedToken);
+}
+
+// =====================================================================
 // 插件入口 (主程序 dlsym)
 // =====================================================================
 
@@ -4837,4 +5836,105 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
             delete engine;
         }
     ); // 停止 JS 线程并释放 runtime
+}
+
+// =====================================================================
+// client 侧入口 (同一动态库双入口)
+//
+// 与 agent 侧完全同一套引擎: 线程 / 运行时 / 实例 / 定时器 / 停止收尾共用, 只有
+// 桥与实例作用域按侧分流 (见 [JsEngine::Side])。client 表成员不带作用域, 因此
+// 一份脚本一个实例, 没有 mount/unmount 入口。
+// =====================================================================
+
+extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
+    return agentxx::plugin::guardCall(
+        [](const char*) noexcept {},
+        static_cast<const AgentxxClientPluginInfo*>(nullptr),
+        [&]() -> const AgentxxClientPluginInfo* {
+            static const AgentxxClientPluginInfo info{
+                AGENTXX_CLIENT_PLUGIN_API_VERSION,
+                0,
+                agentxx::plugin::PluginStringView::fromCstr("agentxx_javascript_engine"),
+                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+                agentxx::plugin::PluginStringView::fromCstr(
+                    "JS interpreter plugin (QuickJS): hosts type:js plugins (client side)"
+                ),
+            };
+            return &info;
+        }
+    );
+}
+
+extern "C" PLUGINXX_EXPORT int
+    agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {
+    // create 只构造上下文 (不创建 runtime/线程, 不做任何注册)
+    JsEngine* raw = nullptr;
+    return agentxx::plugin::guardCall(
+        [&raw](const char* m) noexcept {
+            if (raw) {
+                raw->guardLog(m);
+            }
+        },
+        -1,
+        [&]() -> int {
+            if (!host || !host->vtable || !plugin_ctx) {
+                return -1;
+            }
+            auto* engine = new JsEngine(JsEngine::Side::Client);
+            raw          = engine; ///< create 段内异常路径日志可用
+            engine->setEngineHost(host);
+            // 引擎自身要用的通用表 (日志 / JSON 参数解析 / 能力注册) 必须存在
+            const agentxx::plugin::ClientIfaces s_if
+                = agentxx::plugin::ClientIfaces::query(host);
+            const ::PluginxxCapabilitiesIface* caps
+                = pluginxx::queryInterface<::PluginxxCapabilitiesIface>(
+                    host,
+                    PLUGINXX_IFACE_CAPABILITIES
+                );
+            if (!s_if.log || !s_if.json || !caps) {
+                delete engine;
+                raw = nullptr;
+                return -1;
+            }
+            *plugin_ctx = engine; ///< 所有权移交主程序 (destroy 时取回归还)
+            return 0;
+        }
+    );
+}
+
+extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_client_start(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    // 与 agent 侧同一套 start 事务: 建 runtime + JS 线程, 注册能力 "interpreter.js"
+    return jsEngineStart(plugin_ctx, notify, err);
+}
+
+extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_client_stop(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    return jsEngineStop(plugin_ctx, notify, err);
+}
+
+extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
+    auto* engine = static_cast<JsEngine*>(plugin_ctx);
+    const PluginxxHost*     ownHost = engine ? engine->host() : nullptr;
+    const PluginxxLogIface* ownLog  = nullptr;
+    if (ownHost && ownHost->vtable && ownHost->vtable->query_interface) {
+        auto iidSv = agentxx::plugin::PluginStringView::fromCstr(PLUGINXX_IFACE_LOG);
+        ownLog
+            = static_cast<const PluginxxLogIface*>(ownHost->vtable->query_interface(ownHost, &iidSv)
+            );
+    }
+    agentxx::plugin::guardCallVoid(
+        [ownHost, ownLog](const char* m) noexcept {
+            agentxx::plugin::logTo(ownHost, ownLog, 4, "agentxx_javascript_engine", m);
+        },
+        [engine]() noexcept {
+            delete engine;
+        }
+    );
 }

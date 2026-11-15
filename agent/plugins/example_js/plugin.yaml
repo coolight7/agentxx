@@ -2,13 +2,16 @@
 # 所有插件统一为 C++ 插件: entry 指向本插件的 C++ 壳 (libexample_js.so),
 # 壳经能力调用把 plugin.js 交给 interpreter.js 引擎执行
 # depends: 必选依赖 —— agentxx_javascript_engine 未安装时本插件加载失败
+# 双入口: 同一动态库导出 agent 侧与 client 侧入口, 脚本用 `agentxx.side` 分支
 name: example_js
 version: 1.0.0
-description: "Example JS plugin: C++ shell + JS via interpreter.js capability"
+description: "Example JS plugin: C++ shell + JS via interpreter.js capability (agent + client)"
 entry: libexample_js.so
 depends:
   - agentxx_javascript_engine
-# 接口协商: 能力调用属核心接口范围
+# 接口协商: agent 侧用核心接口 (能力调用); client 侧用工具行定制
+# (脚本给 `js_hello` 注册一个特化渲染器)。两侧各自只比较自己那部分。
 interfaces:
   require:
     - agentxx.agent.core
+    - agentxx.client.msg_decor

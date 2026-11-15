@@ -304,15 +304,26 @@ path/to/agentxx_test --log-level warn string_util regex
   (主程序已按挂载记录撤销)。JS SDK 与 C++ 侧同名同义 (`registerTool` / `subscribe` / `publish` /
   `addSkillDir` / `registerToolPermission` / `getConfig` / `scope()` / `netCall` / `netFetch` /
   `submitAsyncWork` / `getPrompt` / `getMessages` / `getGraphJson` / `mountRoot` /
-  `openChannel` / `registerTrigger` 等), 只剩工具特化渲染未做: 它注册在 **client 侧**
-  (`agentxx.client.ui` 的 `register_tool_renderer`), 而引擎只有 agent 侧入口; 另外内容回调
-  在 client IO 线程同步返回结果 (UI 线程只读语义缓存、未命中就投递请求), JS 要实现得
-  同步转到 JS 线程并对 `await` 加超时, 或扩 ABI 支持"先 pending、稍后回填"。详见 plugins.md §12
-  - **正解是让 JS 脚本也能作为 client 侧插件运行** (client 侧 JS 引擎): 到时脚本直接用
-    同一张 `agentxx.client.ui` 表, 不需要跨端登记。**不要再为它加 agent 侧接口表**:
-    2026-11 曾按"agent 侧登记 + wire 往返"实现过一版 (agentxx.agent.tool_render +
-    三条 wire 消息), 评估后整体回退 —— 渲染器注册面只在 client 侧一处 (见
-    `resource/history/subagent-tool-parity/work.md` 的"第五步 (已回退)")
+  `openChannel` / `registerTrigger` 等)。详见 plugins.md §12
+  - **client 侧脚本 (2026-11 完成)**: 同一动态库另导 `agentxx_plugin_client_*`
+    (`JsEngine::Side::Client`), 一份脚本一个实例 (client 表不带 `PluginxxScopeRef`, 实例键 =
+    `脚本名@client`); 桥只给 client 面 —— 日志 / `getOwnInfo` 等自身信息 / `getClientState` /
+    `sendUserInput` / `requestCancel` / `sendPluginData` / `showToast` / `updateToolDecor` /
+    `openOverlay` / `closeOverlay` / `subscribe` / `publish` / **`registerToolRenderer`**;
+    脚本按 `agentxx.side` (`"agent"`|`"client"`) 分支注册
+  - **渲染回调是同步的**: 回调在 client io 线程要立刻返回值, JS 只在 JS 线程执行, 因此
+    `JsEngine::invokeRenderSync` 投递后最多等 `kRenderSyncTimeoutMs` (150ms); 超时 / 引擎已停 /
+    JS 线程正卡在等主程序 (`jsHostCallDepth_ > 0`) 一律直接放弃 → 回退默认渲染。脚本的两个
+    回调**必须同步返回** (返回 Promise = 没有内容), 耗时逻辑改成订阅事件 + `updateToolDecor`;
+    **不要把桥改成无超时等待** (两边互等, 界面卡死)
+  - 还没搬上桥的 client 面: 状态栏项 / 面板 / Info 段落 / 命令 / 客户端定时器 / 快捷键 /
+    动作回调绑定 (要长期保存句柄或回调登记, 先写在 C++ client 壳里)
+  - 示例 `example_js`: 双入口 + `plugin.js` 按 side 分支; 清单同时声明 `agentxx.agent.core`
+    与 `agentxx.client.msg_decor`; 用例 `client_plugins` 第 34 段
+  - **不要再为它加 agent 侧接口表**: 2026-11 曾按"agent 侧登记 + wire 往返"实现过一版
+    (`agentxx.agent.tool_render` + 三条 wire 消息), 评估后整体回退 —— 渲染器注册面只在
+    client 侧一处 (见 `resource/history/subagent-tool-parity/work.md` 的"第五步 (已回退)");
+    现在的做法见 `resource/history/client-side-js-engine/`
 - 插件接口为 **API v1**: 入口为 `agentxx_plugin_agent_create` /
   `agentxx_plugin_agent_destroy` 实例对 (client 侧 `agentxx_plugin_client_create` / `_destroy`)。
   【API v1 规范】全局 API 版本及全部接口表版本均重置为 1；明确 8 字节结构体对齐与定长基础类型 (`int32_t/int64_t/uint64_t`)；跨边界函数统一 `PLUGINXX_CALL` 调用约定；结构体参数一律传递指针 (`const Struct*`)，结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码；核心 vtable 精简为 `alloc/free` 操作 (去除了 `strdup`，采用头文件内联 `pluginxx_strdup`)。
