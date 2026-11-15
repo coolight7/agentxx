@@ -18,10 +18,16 @@
   展开内容、斜杠命令 `execute`）要改异步，其余要么已是操作契约（工具/图节点/能力行/
   生命周期/任务），要么是通知型（动作/定时器/快捷键/广播/通道/后台任务事件）；
   新契约保留"回调内部立刻 `notify->done` 就当同步完成"的快路径，快插件行为不变；
+- **入口符号 `get_info`/`create`/`destroy` 保持同步**（§6.5）：契约内没有可等待的工作，
+  `create` 只改执行线程（agent 侧 `dlopen` + `create` 一并挪到加载线程池，客户端已经如此），
+  `destroy` 出现在不能等待的回滚与析构路径上；
+- **命名**（§7.4）：异步是默认契约，成员名不再带 `async` —— `call_tool_async` → `call_tool`、
+  `net.call_async` 合并进异步化后的 `net.call`、kit/JS 的 `netCallAsync` 同理；
+  `*Blocking` 与后台任务域（`agentxx_async_*` / `submit_async_work` / `async_work.*`）不动；
 - 目标 ABI：`AgentxxPluginOpResult{status, payload}` + `AgentxxPluginOpCallback`，
   成员签名平铺参数 + 表尾追加 `cb/ud/error_out`（返回 `NULL` = 未受理）；
 - 顺序语义：同实例按受理顺序执行（FIFO），不提供并行；
-- 版本策略：全局 `AGENTXX_PLUGIN_API_VERSION` 5 → 6，受影响表保留 IID、`VERSION` → 2、
+- 版本策略：全局 `AGENTXX_PLUGIN_API_VERSION` 5 → 6，受影响表保留 IID、`VERSION` 各自 +1、
   `BASELINE_SIZE` 重置（未发布 + 明确不兼容旧插件）；
 - kit 三形态：`co_await` / 回调 / 阻塞（仅非 io 线程）；
 - 分阶段 A（骨架 + `get_share_store`/`add_share_store` 试点）→ B 业务批 1 →
@@ -34,6 +40,7 @@
 - 逐表成员改造（按 [plan.md](plan.md) §5 的四张清单）；
 - 3 个回答型回调改异步（[plan.md](plan.md) §6：工具折叠/展开渲染、命令 `execute`），
   连带删除 client 侧 150 ms 同步桥；
+- 命名去 `async` 后缀（[plan.md](plan.md) §7.4）与 `create` 执行线程调整（§6.5）；
 - 插件 SDK kit 的三种消费形态；
 - JS 桥逐表改成 Promise（删掉对应位置的 `ioCallSyncKeep`）；
 - 12 个内置插件与示例按需迁移；
@@ -67,12 +74,15 @@
    通知型回调（void 投递）一律不动 —— 它们本来就不等结果，改了只多一次往返。
 7. **回答型回调保留同步快路径**：回调内部立刻 `notify->done` 时当帧就用这份内容，
    所以现有 C++ 插件的渲染/命令行为、缓存命中与刷新次数与改之前完全一致。
-8. **版本不发明第二套 IID**：未发布阶段直接重置 version/baseline，首次发布后再改签名
+8. **"异步"只标在真正阻塞的形态上**：默认异步、名字不带 `async`；只有 `*Blocking` 与
+   后台任务域保留这个字（那个 async 是"放后台跑"，不是回调式异步）。
+9. **版本不发明第二套 IID**：未发布阶段直接重置 version/baseline，首次发布后再改签名
    才走"换 IID"。
 
 ## 风险
 
-- 126 个成员里 ≈45 个要改签名，且同时要改 3 个回答型回调：分 5 阶段，阶段 A 定模板。
+- 126 个成员里 ≈45 个要改签名，且同时要改 3 个回答型回调、改 2 处成员名：分 5 阶段，
+  阶段 A 定模板。
 - 顺序语义被误用（注册后立刻用）：成员内部按受理顺序执行 + 文档强调"注册类调用要
   `co_await` 完再继续"。
 

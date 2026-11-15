@@ -130,7 +130,7 @@
 | `plugins.list_plugins` / `get_plugin` / `get_own_info` | ✅ | 序列化清单 (随插件数增长) |
 | `config.*` | ⏸ | 读进程配置 (内存) |
 | `json.*` / `log.log` | ❌ | 纯函数 / 写日志 |
-| `net.*` | ⏸/🔁 | `info`、`call` 是快操作；`call_async`/`fetch`/`download` 已是异步 |
+| `net.*` | ✅/⏸ | `call` 统一成异步并合并 `call_async` (名字见 §7.4)；`cancel` 是记账保持同步 |
 
 **统计** (agent 侧 53 + client 36 + 通用 37 成员): 改异步 ≈ 45 项，保持同步 ≈ 55 项，已是异步 ≈ 12 项，明确不可异步 ≈ 14 项。
 
@@ -163,7 +163,7 @@
 | 后台任务 `on_event` (`AgentxxPluginAsyncWorkEventFn`) | 容器 io | void 投递 | ⏸ 保持 |
 | 驱动 `drive_once` (`PluginxxDriveOnceFn`) | 主程序 io | void 单步推进 | ⏸ 保持 |
 | 取消查询 `is_requested` (`PluginxxCancelToken`) | 任意 | 同步查询 | ❌ 必须同步 |
-| 入口 `get_info` / `create` / `destroy` | 加载线程 | 构造/析构 | ❌ 必须同步 |
+| 入口 `get_info` / `create` / `destroy` | 加载（agent 侧现在在 io，见 §6.5） | 静态元数据 / 构造 / 释放 | ⏸ 保持 (原因见 §6.5) |
 | host vtable `alloc` / `free` / `query_interface` | 任意 | 内存与查表基础 | ❌ 必须同步 |
 
 ### 6.2 插件传给表成员的完成回调
@@ -223,6 +223,22 @@ kit 里的工具写法不受影响: `fast_tool` 的业务体本来就是同步�
 "回调里立刻 `done`"；`blocking_tool` / `polled_tool` 本来就走 offload 与 op。只有渲染器
 与命令的新 kit 写法需要区分"当场给"与"晚点给"两种。
 
+### 6.5 入口符号为什么保持同步 (`get_info` / `create` / `destroy`)
+
+这三个不是表成员，是 `dlsym` 出来的入口符号。三者的共同点: **契约内没有可等待的工作**，
+异步化不会让调用方少等，只会把"必须立刻知道结果"的地方变成状态机。
+
+| 入口 | 现在做什么 | 为什么不做成异步 |
+|---|---|---|
+| `get_info` | 返回一份静态常量结构（名字/版本/描述/API 版本） | 调用方拿到它才决定"继续加载还是拒绝"，是加载流程的第一个分支；契约明写"纯静态元数据, 不得读取/依赖任何实例状态"。异步化要先给它一个通知器上下文，而此刻实例还没建（没有 `host_ud`）；换来的只是"允许在这里读盘"，而那正好是不想允许的 |
+| `create` | `new Ctx` + 存 `host` | 契约规定只构造、不注册、不起线程；重活属于 `start`（已是通知契约）。异步化会多出"半构造实例"的等待态与回滚分支。**真正要改的是执行线程**：客户端已把 `create` 卸到加载线程池，agent 侧现在直接在 io 线程调用（`lifecycle.h` 的 `createFn(...)`），本次一并挪到线程池 |
+| `destroy` | 释放本地对象 | 它出现在**不能等待**的路径上: 加载失败回滚 (`rollbackLoad`) 与"实例最后一个引用析构"（那里还要决定是否 `dlclose`）。异步化会产生"`destroy` 已返回、插件代码还在跑、库不能卸"的新状态。重活必须在 `stop`（已异步，且 stop 完成后才 destroy） |
+
+结论: 保持同步签名，但把 `create`（连同 `dlopen`）挪到加载线程池 —— "插件代码不占 io 线程"
+这个目标照样达成，且不动 ABI。将来如果确实有插件必须在创建期等待 I/O，再**新增**入口符号
+`<前缀>_create_async`（有则用、无则走同步），不推翻现有符号；`get_info` 与 `destroy`
+不开这条路。
+
 ## 7. 目标 ABI 形态
 
 ### 7.1 成员签名
@@ -272,12 +288,34 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
 改签名属于破坏性变更。当前全局 `AGENTXX_PLUGIN_API_VERSION` = 5 (未发布)，本次直接:
 
 - 全局抬到 **6**；
-- 受影响的表**保留 IID 名字**，`VERSION` 抬到 2、`MIN_VERSION` 同步抬到 2、`BASELINE_SIZE` 重置为新的完整布局；
+- 受影响的表**保留 IID 名字**，`VERSION` = 各表**现有值 + 1**（如 `agentxx.agent.tools` 3 → 4、`agentxx.client.ui` 1 → 2）、`MIN_VERSION` = 新的 `VERSION`、`BASELINE_SIZE` 重置为新的完整布局；
 - 未受影响的表不动。
 
 理由: 项目约定"重排/改签名 → 换 IID"的目的是在已发布版本下避免老插件拿到不匹配的表；本项目当前**未发布且明确不兼容旧插件**，重置 version/baseline 更简单，也不必发明第二套 IID 命名。等首次发布后如再改签名，才走"换 IID"。
 
 `boundaries` 测试逐表校验四件套与成员顺序清单，改完必须同步更新它的期望表。
+
+### 7.4 命名: 异步是默认，成员名不再带 `async`
+
+大部分成员改造完后，"回调式异步"就是默认契约，名字里再带 `async` 只是重复。规则:
+
+- **默认异步**: 表成员、kit 函数、脚本 API 一律不带 `async` 后缀；
+- **只有真正阻塞的那个才加后缀**: `*Blocking`（如 `netCallBlocking` / `netFetchBlocking` / `tableOpBlocking`）；
+- **后台任务域保留 `async`**: 那里的 async 指"放到后台跑"，与"回调式异步"是两件事 —— `agentxx_async_run/query/await/manager/emit`、`submit_async_work` / `cancel_async_work` / `get_async_work` / `list_async_work`、`AgentxxPluginAsyncWorkSpec`、`agentxx.agent.async.done`、`async_work.*` 配置键都不改。
+
+改名清单:
+
+| 位置 | 现名 | 新名 |
+|---|---|---|
+| 表成员 (`agentxx.agent.tools`) | `call_tool_async` | `call_tool` |
+| 表成员 (`pluginxx.net`) | `call_async` | 删除，合并进 `call`（`call` 本身改成异步契约） |
+| C++ kit | `netCallAsync(...)` | `netCall(...)`（返回 awaiter / 回调形态） |
+| C++ kit | `asyncNetFetch(ex, ...)` | `netFetch(ex, ...)` 重载 |
+| JS SDK | `netCallAsync` | 删除，`netCall` 改成返回 Promise |
+| 框架注释 | `tables.h` 里引用的 `invoke_capability_async` | 该名字不存在，改为 `invoke_capability` |
+
+`net.call` 由同步改成异步属于框架侧改动 (`cxx_pluginxx`)，单独一步做；改完 `net` 表只剩一个
+入口，脚本侧也不再需要区分"快操作同步调、慢操作异步调"。
 
 ## 8. kit 层: 三种消费形态
 
@@ -287,15 +325,18 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
 | 回调 | `kit::tableOpCallback(ctx, ..., [](result){...})` | 任意线程；回调由主程序投递回实例 io 线程 |
 | 阻塞便捷 | `kit::tableOpBlocking(...)` | **禁止在 io 线程调用** (运行时检测 `is_io_thread` 直接返回错误)；用于插件自己的线程 / `blocking_tool` 体内 |
 
-实现要点: `co_await` 形态与现有 `co_await netCallAsync(ctx, op, args)`、`co_await invoke_cap(...)` 用同一套挂起协议 (回调不直接恢复插件协程，而是经实例 io 线程恢复)，因此不用新造机制。
+实现要点: `co_await` 形态与现有网络表的协程形态（改名后是 `netCall`，见 §7.4）
+`co_await invoke_cap(...)` 用同一套挂起协议 (回调不直接恢复插件协程，而是经实例 io 线程恢复)，因此不用新造机制。
 
 ## 9. 分阶段实施
 
 | 阶段 | 范围 | 产出 |
 |---|---|---|
-| A 骨架 | 新增 `AgentxxPluginOpResult`/`AgentxxPluginOpCallback`、全局 API 版本 6；挑 `agentxx.agent.session` 的 `get_share_store`/`add_share_store` 做成试点 | kit 三种形态 + JS 桥试点 (Promise 化，删除该两处的同步桥) + 测试 |
+| A 骨架 | 新增 `AgentxxPluginOpResult`/`AgentxxPluginOpCallback`、全局 API 版本 6；挑 `agentxx.agent.session` 的 `get_share_store`/`add_share_store` 做成试点；已异步的成员先去后缀 (`call_tool_async` → `call_tool`) | kit 三种形态 + JS 桥试点 (Promise 化，删除该两处的同步桥) + 测试 |
+| A2 加载线程 | agent 侧 `dlopen` + `create` 挪到加载线程池（与客户端一致，见 §6.5） | 插件加载/回滚用例；日志能看到入口不在 io 线程 |
 | B 业务批 1 | `tools.register_tool`、`check_paths`、`context.get_messages`、`prompt.*`、`resources.*`、`graph.get/set_graph_json`、`mount.list/get`、`model.get_config` | 12 个内置插件与示例按需迁移 |
 | C runtime 批 | `mount_root`、`open_channel`、`close_channel`、`unmount_root`、`get_channel_state`、`get_context_messages`、`list_runtime`、`submit_async_work`、`*-async_work` 查询 | 会话运行时相关测试 (`plugin_agent_runtime` / `plugin_example_runtime`) 全绿 |
+| C2 net 统一 | 框架侧: `pluginxx.net` 的 `call` 改异步、删 `call_async`；kit 的 `netCallAsync` / `asyncNetFetch` 改名 (§7.4) | 4 个网络插件与 JS 桥用例 |
 | D client 批 | `ui.*` 注册/更新、`session.get_client_state`、`self.get_own_info`、`keybind.list_keybinds`；三个回答型回调改异步 (工具折叠/展开渲染、命令 `execute`, 见 §6) | `client_plugins` / `plugin_ui` 相关用例 |
 | E 收尾 | 删除残留同步路径与 `ioCallSyncKeep`、删除 client 侧 150 ms 同步桥 (`invokeRenderSync` / `invokeCallbackSync` / `kClientSyncTimeoutMs`)、更新 `plugins.md` §8.3 全表、`AGENTS.md`、`config-keys` 若涉及 | 全量回归 + 性能对比 |
 
@@ -308,6 +349,7 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
 - **JS 侧**: 表异步化后，`client_plugins` 里"脚本在渲染回调里调表"的用例应不再依赖 150 ms 兜底；引擎的 `ioCallSyncKeep` 调用点应归零。
 - **回答型回调 (§6)**: 快路径 (回调内同步 `done`) 下渲染次数与缓存命中与改之前一致；慢路径 (稍后 `done`) 先显示默认内容、到达后刷新同一行；参数或版本变化后旧代际的 `done` 被丢弃；行删除/实例卸载后的 `done` 不写回界面。
 - **顺序语义**: 新增用例 —— 连续 `register_tool(A)`→`register_tool(B)`→查询，两工具都可见且顺序稳定；`set_prompt`→`get_prompt` 看到新值。
+- **命名 (§7.4)**: 全量检索确认表头、kit、脚本 API 里不再有"只为区分回调式异步"的 `_async` 名；`*Blocking` 与后台任务域的名字逐项核对。
 
 ## 11. 风险与对策
 
@@ -318,6 +360,7 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
 | 顺序语义被误用 (注册后立刻用) | 成员内部保证按受理顺序执行；文档与 kit 示例强调"注册类调用要 `co_await` 完再继续" |
 | 每次调用多一次 op 分配 | 高频只读成员 (messages_count / is_canceled / get_language) 保持同步；其余调用频度低 |
 | 错误定位变分散 | 入口错误仍同步返回；回调里带 `status` + 文本，`resultName()` 统一翻译 |
+| `create` 挪到线程池后，插件在 `create` 里直接调"仅 io 线程"的表成员 | kit 的 `ioCallSync` 已经是这条路径（客户端插件早就是同一个处境）；kit 注释与 `plugins.md` 各加一句 |
 | 破坏性变更 | 未发布 + 明确不兼容；全局版本抬到 6，老插件在加载期被拒并给出"请重新编译"的日志 |
 
 ## 12. 不做的事
@@ -325,6 +368,7 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
 - 不把 `log` / `json.*` / `broadcasts.*` / `is_io_thread` / `op_cancel` / `tasks` 记账类改成异步 (语义要求同步，或改动没有收益)。
 - 不把通知型回调 (动作/定时器/快捷键/广播订阅/通道事件/后台任务事件) 改成异步 —— 它们本来就不等结果，改了只多一次往返。
 - 不给渲染/命令这种回答型回调加"请求超时与取消": 不答就一直用默认内容，行删除或实例卸载后迟到的结果直接丢弃。
+- 不把 `get_info` / `destroy` 改成异步；`create` 只改执行线程，不改签名（理由见 §6.5）。
 - 不引入"同一实例并行执行表调用"。
 - 不为旧签名保留兼容成员 (不做双份接口)。
 - 不改"插件提供实现"那一侧的通知契约 (工具/能力行/图节点/生命周期已经是 notify 形态)。
