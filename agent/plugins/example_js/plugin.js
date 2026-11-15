@@ -442,6 +442,27 @@ if (SIDE === "client") {
       agentxx.unsubscribe(token);
       out.streamSeen = seen.length;
       out.streamEndReason = endReason;
+
+      // 6) 执行图节点类型: 登记 → 同名再登记 (覆盖) → 注销 → 再注销
+      // - 同名再登记不抛异常 (本实例的旧登记先撤销, 后登记者生效)
+      // - 注销不存在的类型也只是什么也不做
+      const nodeType = "js_parity_probe_node";
+      try {
+        out.registerNodeType = agentxx.registerNodeType({
+          type: nodeType,
+          run: (input) => ({
+            writes: [{ channel: "js.probe", value: { node: input.nodeName }, mode: "overwrite" }],
+          }),
+        });
+        out.registerNodeTypeAgain = agentxx.registerNodeType({
+          type: nodeType,
+          run: () => ({ writes: [] }),
+        });
+        out.unregisterNodeType = agentxx.unregisterNodeType(nodeType);
+        out.unregisterNodeTypeAgain = agentxx.unregisterNodeType(nodeType);
+      } catch (e) {
+        out.registerNodeTypeError = String(e && e.message ? e.message : e);
+      }
       return out;
     },
   });
@@ -481,6 +502,33 @@ if (SIDE === "client") {
       text: "deliberate failure: " + (args.reason || "no reason given"),
     }),
   });
+
+  // ---- 执行图节点类型: 脚本自定义节点 (`agentxx.agent.graph`) ----
+  // - 必须在实例初始化 (脚本顶层) 登记: 主程序只在建图之前认新类型
+  // - run 收到 {nodeName, type, config, state, threadId}, 返回节点输出:
+  //   {writes: [{channel, value, mode}], command: {goto_node, updates}, sends: [...]}
+  // - 节点执行是异步操作契约, run 也可以返回 Promise
+  try {
+    agentxx.registerNodeType({
+      type: "js_echo_node",
+      configSchema: {
+        type: "object",
+        properties: { echo: { type: "string" } },
+      },
+      run: (input) => ({
+        writes: [
+          {
+            channel: "js.out",
+            value: { node: input.nodeName, echo: input.config && input.config.echo },
+            mode: "overwrite",
+          },
+        ],
+      }),
+    });
+  } catch (e) {
+    // 宿主没有图注册表 (例如只验证脚本能力的环境): 不影响其余注册
+    agentxx.log(3, "example_js registerNodeType skipped: " + e);
+  }
 
   // ---- 通知点: agent_start (point 0) ----
   agentxx.onHook(0, (info) => {

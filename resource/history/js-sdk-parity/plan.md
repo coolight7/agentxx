@@ -80,10 +80,10 @@ C++ SDK 每加一个接口表成员，脚本侧就可能落后一格。本任务
 
 ### 3.2 不实现 (及理由)
 
-- `graph.register_node_type` / `unregister_node_type`：图引擎在自身线程**同步**调用节点的
-  执行函数，而脚本代码只能在自己的 JS 线程执行。要支持就得加一条 io→JS 的同步桥
-  (与 client 渲染回调的 150 ms 桥同类) 并把节点执行放进热路径，代价与风险都高于收益。
-  需要自定义节点的插件请写成 C++ 插件 (示例 `example_graph_node`)。
+- ~~`graph.register_node_type` / `unregister_node_type`~~：**后来已实现**（见 `work.md` §5）。
+  当初判断“图引擎在自身线程同步调用节点执行函数”有误 —— 节点执行走的是 `run_start` +
+  `notify->done` 的异步操作契约，与能力行同一形状，因此不需要 io→JS 同步桥。脚本现在用
+  `registerNodeType({type, run, configSchema?})` 登记，`run(input)` 返回节点输出对象。
 - `scheduler.is_io_thread` / `post_to_io` / `sleep` / `op_cancel` / `offload`：脚本没有
   "线程" 概念 (`is_io_thread` 无意义)，定时用 `setTimeout`，`offload` 只能跑 C++ 函数。
 - `cancel.op_cancel`：脚本侧没有通用 op 句柄；网络有 `netCancel`、通道有 `cancelChannel`、

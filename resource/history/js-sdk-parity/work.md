@@ -58,13 +58,42 @@
    绑定带订阅下标，`doEventFire`/`doEventEndFire` 只处理本订阅那一条（`token<0` 时退回
    按 topic 匹配）。
 
+### 5. 执行图节点类型（`registerNodeType` / `unregisterNodeType`）
+
+原先把它归在“脚本侧不做的事”，理由是“图引擎在自身线程同步调节点执行，脚本只能在自己
+的 JS 线程跑”。重新看 `plugin_graph_node.cpp` 后发现节点执行本来就是**异步操作契约**：
+`run_start` 返回 op 句柄，结果经 `notify->done` 回来 —— 和能力行是同一套形状，不需要
+io→JS 同步桥，于是在同一套跨线程记账上把它做出来了：
+
+- `JsCapCall` 增加 `graphNode` 标记（节点输出不做功能埋点包装）；新增
+  `JsGraphNodeType{engine, instanceKey, typeName, fnToken, dead}`（主程序把地址当
+  `user_data`，与 `JsCapImpl` 一样由引擎保活到析构）。
+- `startScriptCall(...)`：从 `capImplStart` 里抽出来的公共部分（建 `JsCapCall`、进在飞表、
+  投递到 JS 线程），能力行与图节点共用。
+- `graphNodeStart`：把 `node_name` / `config_json` / `state_json` / `thread_id` 拼成
+  `{nodeName, type, config, state, threadId}`（JSON 解析不了就原样给字符串），投给脚本；
+  `graphNodeCancel` 按取消收尾。
+- `doCapCall` 的节点分支：空回答（`undefined`/`null`）按 `{}`（这个节点什么也不写），
+  非对象回答直接以“graph node `x` must return an object”失败，不把非对象塞给图引擎。
+- `registerGraphNodeRow` / `unregisterGraphNodeRow`：与能力行同样的登记/撤销与
+  `rollbackActions`（脚本卸载、顶层异常都会撤），登记用**脚本实例的 host**。
+- 桥：`B_REGISTER_NODE_TYPE` / `B_UNREGISTER_NODE_TYPE` + `def("registerNodeType", …, 1)` /
+  `def("unregisterNodeType", …, 1)`（`configSchema` 经 `propJson` 原样交给主程序）。
+- 示例 `example_js/plugin.js` 顶层登记 `js_echo_node`（返回 `{writes:[{channel:"js.out",…}]}`），
+  `js_parity_probe` 增加“登记 → 同名再登记（覆盖）→ 注销 → 再注销”四项。
+
+测试侧两处配套：`test_plugins` 的最小 `AgentContext` 补了 `graphRegistry`（不补就没有图
+注册表，脚本顶层登记会被拒），并新增一段**真实建图执行** —— 用 `GraphCompiler::parse` +
+`GraphEngine::link` 跑 `__start__ → js_echo → __end__`，断言写进 `js.out` 通道的
+`{node:"js_echo", echo:"hello-js"}`，证明输入拼装与输出解析都真的通。
+
 ## 验证
 
 Windows Debug，`agent/build/windows-debug/exec/agentxx_test.exe`：
 
 | 模块 | 结果 |
 |---|---|
-| `plugins` | 677 / 0（改前 649，新增 28 条） |
+| `plugins` | 691 / 0（对齐改动 677，加执行图节点后 +8；改前 649） |
 | `client_plugins` | 832 / 0（改前 829，新增 3 条含两轮派发） |
 | `plugin_broadcast` | 90 / 0 |
 | `plugin_point` | 68 / 0 |
@@ -107,3 +136,15 @@ Windows Debug，`agent/build/windows-debug/exec/agentxx_test.exe`：
   同引擎里 A 脚本调 B 脚本时会把 JS 线程堵在等自己。
 - 脚本里的能力回调允许返回 Promise，`drivePromise` 会泵任务/定时器/job；但长时间阻塞
   会拖住同引擎其它脚本，功能埋点实现应快速返回。
+- 图节点类型只能在**建图之前**登记才生效（主程序按类型名编译图）：脚本要在顶层登记，
+  运行期再登记只影响之后重建的图。注册表本身不提供删除类型，注销只是把槽位失活，
+  已编译的引擎不受影响。
+- 测试装置里没有 `graphRegistry` 时，脚本顶层调 `registerNodeType` 会被主程序以
+  `ERR_UNSUPPORTED` 拒绕（`graphRegistry not ready`）；示例脚本用 try/catch 包住并记一条
+  日志，避免一个可选能力让整份脚本加载失败。
+- **脚本实例的建立时机决定了登记的确定性**：`attachMountScope` 把实例创建投递到 JS 线程
+  就返回了挂载完成 (`notify->done`)，而 `BaseAgent::init` 的顺序是 `plugin_mount` →
+  `engine_build`，两者并行。因此脚本顶层登记的节点类型有概率晚于首次建图；要严格进入首次
+  建图，只能用 C++ 插件在 mount 回调里同步登记。没有改成“mount 等脚本初始化完再 ack”：
+  脚本顶层注册工具会同步等 io 线程 (`ioCallSyncKeep`)，io 线程若在 mount 里等 JS 就是互等。
+  该限制同样作用于脚本注册的工具/订阅（它们不在建图时被读取，所以平时看不出来）。

@@ -330,6 +330,9 @@ enum BridgeMagic {
     B_GET_CONFIG_PATH,
     B_CHECK_PATHS,
     B_FILTER_PATHS,
+    // 执行图节点类型: 登记脚本实现的节点 (run 回调) / 注销
+    B_REGISTER_NODE_TYPE,
+    B_UNREGISTER_NODE_TYPE,
     // client 侧桥 (`agentxx.side == "client"`)。与 agent 侧同义的方法复用上面的
     // magic (log / getPluginArgs / getLanguage / setLanguage / subscribe /
     // unsubscribe / publish / setTimeout / clearTimeout), 其余在这里追加
@@ -432,8 +435,22 @@ struct JsCapCall {
     int64_t                  fnToken = 0;
     std::string              argsJson;
     bool                     pointMode = false;
+    /// 执行图节点类型 (回答是节点输出 JSON, 不做功能埋点的包装)
+    bool                     graphNode = false;
     PluginxxOperatorNotify   notify{};
     std::atomic<bool>        settled{false};
+};
+
+/// 一条由脚本实现的执行图节点类型
+///
+/// - 主程序把本对象地址当 `user_data` (节点执行时回传), 因此必须活到引擎析构
+/// - 节点执行也是异步操作契约 (`notify->done`), 与能力行同一套跨线程记账
+struct JsGraphNodeType {
+    JsEngine*            engine = nullptr;
+    std::string          instanceKey;
+    std::string          typeName;
+    std::atomic<int64_t> fnToken{0};
+    std::atomic<bool>    dead{false};
 };
 
 /// 一次 `invokeCapability` 的跨线程完成桥 (与 [JsNetBridge] 同构)
@@ -1553,6 +1570,20 @@ public:
     /// 取消一次尚未完成的脚本能力调用 (任意线程; 幂等)
     static void PLUGINXX_CALL capImplCancel(void* ctx, void* op);
 
+    /// 脚本节点类型的运行处理器 (任意线程): 复制参数与完成通知, 投递到 JS 线程
+    static void* PLUGINXX_CALL graphNodeStart(
+        void*                         user_data,
+        const PluginxxStringView*     node_name,
+        const PluginxxStringView*     config_json,
+        const PluginxxStringView*     state_json,
+        const PluginxxStringView*     thread_id,
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
+    );
+
+    /// 取消一次尚未完成的脚本节点执行 (任意线程; 幂等)
+    static void PLUGINXX_CALL graphNodeCancel(void* user_data, void* op);
+
     // ==================== 任务队列 ====================
 
     /// 投递任务到 JS 线程 (非阻塞); 返回 false = 引擎已停止 (未入队)
@@ -2223,6 +2254,37 @@ private:
     /// 收尾一次脚本能力调用 (恰好一次): 先从在飞表摘除, 再回调主程序的完成通知
     /// - 正常完成 / 取消 / 引擎停止三条路径都走这里, `settled` 只是兵底
     void finishCapCall(JsCapCall* call, int32_t status, const std::string& payload);
+
+    /// 建一次脚本调用 (能力行 / 执行图节点共用), 注册进在飞表后投递到 JS 线程
+    /// - 返回 op 句柄 (主程序用来取消); 引擎已停止时返回 nullptr 且不回调 notify
+    void* startScriptCall(
+        const std::string&            instanceKey,
+        const std::string&            label,
+        int64_t                       fnToken,
+        std::string                   inputJson,
+        bool                          pointMode,
+        bool                          graphNode,
+        const PluginxxOperatorNotify& notify
+    );
+
+    /// 登记一条脚本实现的节点类型 (JS 线程)
+    int32_t registerGraphNodeRow(
+        JSContext*                     ctx,
+        JsPluginCtx*                   pctx,
+        const AgentxxPluginGraphIface* graph,
+        const std::string&             typeName,
+        JSValueConst                   run,
+        const std::string&             configSchema,
+        std::string*                   error
+    );
+
+    /// 撤销本实例的节点类型 (JS 线程; 不存在的类型什么也不做)
+    void unregisterGraphNodeRow(
+        JSContext*                     ctx,
+        JsPluginCtx*                   pctx,
+        const AgentxxPluginGraphIface* graph,
+        const std::string&             typeName
+    );
 
     /// 登记一条脚本实现的能力行 (JS 线程)
     /// - 一条行 = 一个 [JsCapImpl] (主程序持有它的地址) + 一个回调 token + 一个撤销动作
@@ -2965,6 +3027,9 @@ private:
             def("getGraphJson", B_GET_GRAPH_JSON, 0);
             def("getGraphName", B_GET_GRAPH_NAME, 0);
             def("setGraphJson", B_SET_GRAPH_JSON, 1);
+            // 执行图节点类型: 登记脚本实现的节点 (run 回调) / 注销
+            def("registerNodeType", B_REGISTER_NODE_TYPE, 1);
+            def("unregisterNodeType", B_UNREGISTER_NODE_TYPE, 1);
             def("listMounts", B_LIST_MOUNTS, 0);
             def("getMount", B_GET_MOUNT, 1);
             // 会话运行时: 自建根 / 会话通道 / 触发器 / 定时器 (容器级接口)
@@ -3191,6 +3256,8 @@ private:
     std::vector<std::shared_ptr<JsCapImpl>>     capImpls_;
     std::unordered_map<JsCapCall*, std::shared_ptr<JsCapCall>> capCalls_;
     std::unordered_map<JsCapInvokeBridge*, std::shared_ptr<JsCapInvokeBridge>> capInvokes_;
+    /// 脚本节点类型 (同样由引擎保活: 主程序把地址当 user_data)
+    std::vector<std::shared_ptr<JsGraphNodeType>> graphNodes_;
 
     /// 定时器集合版本号: 注册/清除/执行都会递增, 作为等待条件的唤醒依据
     /// (只做"是否变化"判断, 不代表业务语义)
@@ -3502,6 +3569,34 @@ void JsEngine::doCapCall(JsCapCall* call) {
             if (!JS_IsUndefined(outcome.value) && !JS_IsNull(outcome.value)) {
                 answer = valueToJsonString(pctx->ctx, outcome.value);
             }
+            if (keep->graphNode) {
+                // 执行图节点: 回答必须是节点输出对象 (`{writes, command, sends}`)
+                // - 脚本没答 (undefined/null) = 这个节点什么也不写
+                // - 给了别的类型就失败: 图引擎只接受对象, 与其在那边报"不是 JSON 对象",
+                //   不如在这里点出是哪个节点、该返回什么
+                if (answer.empty()) {
+                    answer = "{}";
+                } else {
+                    bool isObject = false;
+                    try {
+                        isObject = utilxx_base::Json::parse(answer).is_object();
+                    } catch (const utilxx_base::Json::exception&) {
+                        isObject = false;
+                    }
+                    if (!isObject) {
+                        finishCapCall(
+                            call,
+                            PLUGINXX_OPERATOR_FAILED,
+                            fmt::format(
+                                "graph node `{}` must return an object "
+                                "({{writes, command, sends}})",
+                                keep->capId
+                            )
+                        );
+                        break;
+                    }
+                }
+            }
             if (keep->pointMode && !answer.empty()) {
                 bool raw = false;
                 if (JS_IsObject(outcome.value)) {
@@ -3551,32 +3646,54 @@ void* PLUGINXX_CALL JsEngine::capImplStart(
     if (impl->dead.load(std::memory_order_acquire) || token == 0) {
         return nullptr; ///< 行已注销: 主程序按"提供者不可用"跳过
     }
-    auto call           = std::make_shared<JsCapCall>();
-    call->engine        = engine;
-    call->instanceKey   = impl->instanceKey;
-    call->capId         = impl->capId;
-    call->fnToken       = token;
-    call->pointMode     = impl->pointMode;
-    call->argsJson.assign(
+    std::string argsJson{
         args_json && args_json->data ? args_json->data : "",
         args_json ? static_cast<size_t>(args_json->size) : 0
+    };
+    return engine->startScriptCall(
+        impl->instanceKey,
+        impl->capId,
+        token,
+        std::move(argsJson),
+        impl->pointMode,
+        false,
+        *notify
     );
-    call->notify = *notify;
-    JsCapCall* raw = call.get();
+}
+
+void* JsEngine::startScriptCall(
+    const std::string&            instanceKey,
+    const std::string&            label,
+    int64_t                       fnToken,
+    std::string                   inputJson,
+    bool                          pointMode,
+    bool                          graphNode,
+    const PluginxxOperatorNotify& notify
+) {
+    auto call         = std::make_shared<JsCapCall>();
+    call->engine      = this;
+    call->instanceKey = instanceKey;
+    call->capId       = label;
+    call->fnToken     = fnToken;
+    call->pointMode   = pointMode;
+    call->graphNode   = graphNode;
+    call->argsJson    = std::move(inputJson);
+    call->notify      = notify;
+    JsCapCall* raw    = call.get();
     {
-        std::lock_guard<std::mutex> lk(engine->capMtx_);
-        engine->capCalls_[raw] = call;
+        std::lock_guard<std::mutex> lk(capMtx_);
+        capCalls_[raw] = call;
     }
-    if (!engine->post([engine, raw]() {
-            if (engine->stopping()) {
-                engine->finishCapCall(raw, PLUGINXX_OPERATOR_CANCELED, std::string{});
+    if (!post([this, raw]() {
+            if (stopping()) {
+                finishCapCall(raw, PLUGINXX_OPERATOR_CANCELED, std::string{});
                 return;
             }
-            engine->doCapCall(raw);
+            doCapCall(raw);
         })) {
         // 引擎已停止: 不回调 notify (主程序按启动失败处理), 只丢掉这次调用
-        std::lock_guard<std::mutex> lk(engine->capMtx_);
-        engine->capCalls_.erase(raw);
+        std::lock_guard<std::mutex> lk(capMtx_);
+        capCalls_.erase(raw);
         return nullptr;
     }
     return raw;
@@ -3588,6 +3705,213 @@ void PLUGINXX_CALL JsEngine::capImplCancel(void* ctx, void* op) {
         return;
     }
     impl->engine->finishCapCall(static_cast<JsCapCall*>(op), PLUGINXX_OPERATOR_CANCELED, std::string{});
+}
+
+void* PLUGINXX_CALL JsEngine::graphNodeStart(
+    void*                         user_data,
+    const PluginxxStringView*     node_name,
+    const PluginxxStringView*     config_json,
+    const PluginxxStringView*     state_json,
+    const PluginxxStringView*     thread_id,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
+) {
+    auto* node   = static_cast<JsGraphNodeType*>(user_data);
+    auto* engine = node != nullptr ? node->engine : nullptr;
+    if (engine == nullptr || notify == nullptr || !notify->done) {
+        return nullptr;
+    }
+    const int64_t token = node->fnToken.load(std::memory_order_acquire);
+    if (node->dead.load(std::memory_order_acquire) || token == 0) {
+        // 类型已注销: 主程序按"启动失败"收尾这次执行 (给一句能读懂的原因,
+        // 否则框架只会报 protocol violation: null operation without done/error)
+        if (error_out != nullptr && engine->engineHost_ != nullptr) {
+            *error_out = agentxx::plugin::PluginString::fromCstr(
+                engine->engineHost_,
+                "script node type is no longer registered"
+            );
+        }
+        return nullptr;
+    }
+    // 节点输入统一成一个对象: 名字 / 线程 id 是字符串, config 与 state 按原文解析。
+    // 解析不了就原样当字符串交给脚本 —— 上游给的格式问题不该让节点直接失败。
+    auto textOf = [](const PluginxxStringView* sv) {
+        return std::string{
+            sv != nullptr && sv->data != nullptr ? sv->data : "",
+            sv != nullptr ? static_cast<size_t>(sv->size) : size_t{0}
+        };
+    };
+    auto jsonOf = [](const std::string& text) -> utilxx_base::Json {
+        if (text.empty()) {
+            return utilxx_base::Json();
+        }
+        try {
+            return utilxx_base::Json::parse(text);
+        } catch (const utilxx_base::Json::exception&) {
+            return utilxx_base::Json(text);
+        }
+    };
+    utilxx_base::Json input = utilxx_base::Json::object();
+    input["nodeName"]       = textOf(node_name);
+    input["type"]           = node->typeName;
+    input["config"]         = jsonOf(textOf(config_json));
+    input["state"]          = jsonOf(textOf(state_json));
+    input["threadId"]       = textOf(thread_id);
+    void* op                = engine->startScriptCall(
+        node->instanceKey,
+        node->typeName,
+        token,
+        input.dump(),
+        false,
+        true,
+        *notify
+    );
+    if (op == nullptr && error_out != nullptr && engine->engineHost_ != nullptr) {
+        // 引擎正在停止: 这次执行没有开始, 由主程序按失败收尾
+        *error_out = agentxx::plugin::PluginString::fromCstr(
+            engine->engineHost_,
+            "interpreter.js engine stopped"
+        );
+    }
+    return op;
+}
+
+void PLUGINXX_CALL JsEngine::graphNodeCancel(void* user_data, void* op) {
+    auto* node = static_cast<JsGraphNodeType*>(user_data);
+    if (node == nullptr || node->engine == nullptr || op == nullptr) {
+        return;
+    }
+    node->engine->finishCapCall(
+        static_cast<JsCapCall*>(op),
+        PLUGINXX_OPERATOR_CANCELED,
+        std::string{}
+    );
+}
+
+int32_t JsEngine::registerGraphNodeRow(
+    JSContext*                     ctx,
+    JsPluginCtx*                   pctx,
+    const AgentxxPluginGraphIface* graph,
+    const std::string&             typeName,
+    JSValueConst                   run,
+    const std::string&             configSchema,
+    std::string*                   error
+) {
+    if (graph == nullptr || graph->register_node_type == nullptr || pctx == nullptr) {
+        if (error != nullptr) {
+            *error = "host lacks graph interface";
+        }
+        return PLUGINXX_RESULT_ERR_INTERNAL;
+    }
+    if (typeName.empty() || !JS_IsFunction(ctx, run)) {
+        if (error != nullptr) {
+            *error = "node type name and run function required";
+        }
+        return PLUGINXX_RESULT_ERR_ARG;
+    }
+    // 同一实例重复登记同名类型按覆盖处理: 先撤掉旧类型 (后登记者生效)
+    unregisterGraphNodeRow(ctx, pctx, graph, typeName);
+
+    auto node           = std::make_shared<JsGraphNodeType>();
+    node->engine        = this;
+    node->instanceKey   = pctx->instanceKey;
+    node->typeName      = typeName;
+    const int64_t token = ++pctx->nextCapToken;
+    pctx->capCallbacks[token] = JS_DupValue(ctx, run);
+    node->fnToken.store(token, std::memory_order_release);
+
+    AgentxxPluginGraphNodeTypeSpec spec{};
+    spec.struct_size = sizeof(AgentxxPluginGraphNodeTypeSpec);
+    spec.type        = agentxx::plugin::PluginStringView::from(typeName.data(), typeName.size());
+    // 节点执行也是异步操作契约 (run_start 返回 op 句柄, 结果经 notify->done 回来),
+    // 所以脚本回调走与能力行同一套跨线程记账
+    spec.run_start  = &JsEngine::graphNodeStart;
+    spec.run_cancel = &JsEngine::graphNodeCancel;
+    spec.user_data  = node.get();
+    spec.config_schema_json = agentxx::plugin::PluginStringView::from(
+        configSchema.data(),
+        configSchema.size()
+    );
+
+    // 类型归属于**脚本实例**的插件 (pctx->host), 不是引擎实例
+    const PluginxxHost* instanceHost = pctx->host != nullptr ? pctx->host : engineHost_;
+    const int32_t       rc = graph->register_node_type(instanceHost, pctx->scope(), &spec);
+    if (rc != AGENTXX_RESULT_OK) {
+        // 登记失败: 收回回调 token 与节点标记 (不留半截状态)
+        node->dead.store(true);
+        node->fnToken.store(0);
+        auto it = pctx->capCallbacks.find(token);
+        if (it != pctx->capCallbacks.end()) {
+            JS_FreeValue(ctx, it->second);
+            pctx->capCallbacks.erase(it);
+        }
+        return rc;
+    }
+    {
+        std::lock_guard<std::mutex> lk(capMtx_);
+        graphNodes_.push_back(node);
+    }
+    // 脚本卸载 / 顶层异常回滚: 撤销这个类型 (主程序通常已按挂载记录撤销, 幂等)
+    JsGraphNodeType* rawNode = node.get();
+    JsPluginCtx*     rawCtx  = pctx;
+    pctx->rollbackActions.push_back([graph, rawNode, rawCtx, token, typeName]() {
+        rawNode->dead.store(true);
+        rawNode->fnToken.store(0);
+        if (rawCtx->ctx != nullptr) {
+            auto it = rawCtx->capCallbacks.find(token);
+            if (it != rawCtx->capCallbacks.end()) {
+                JS_FreeValue(rawCtx->ctx, it->second);
+                rawCtx->capCallbacks.erase(it);
+            }
+        }
+        if (graph->unregister_node_type != nullptr) {
+            auto typeSv = agentxx::plugin::PluginStringView::from(
+                typeName.data(),
+                typeName.size()
+            );
+            graph->unregister_node_type(rawCtx->host, rawCtx->scope(), &typeSv);
+        }
+    });
+    return 0;
+}
+
+void JsEngine::unregisterGraphNodeRow(
+    JSContext*                     ctx,
+    JsPluginCtx*                   pctx,
+    const AgentxxPluginGraphIface* graph,
+    const std::string&             typeName
+) {
+    if (pctx == nullptr) {
+        return;
+    }
+    std::vector<std::shared_ptr<JsGraphNodeType>> matched;
+    {
+        std::lock_guard<std::mutex> lk(capMtx_);
+        for (auto& node : graphNodes_) {
+            if (!node->dead.load() && node->instanceKey == pctx->instanceKey
+                && node->typeName == typeName) {
+                matched.push_back(node);
+            }
+        }
+    }
+    for (auto& node : matched) {
+        node->dead.store(true);
+        const int64_t token = node->fnToken.exchange(0);
+        if (token != 0 && pctx->ctx != nullptr) {
+            auto it = pctx->capCallbacks.find(token);
+            if (it != pctx->capCallbacks.end()) {
+                JS_FreeValue(ctx, it->second);
+                pctx->capCallbacks.erase(it);
+            }
+        }
+        if (graph != nullptr && graph->unregister_node_type != nullptr) {
+            auto typeSv = agentxx::plugin::PluginStringView::from(
+                typeName.data(),
+                typeName.size()
+            );
+            graph->unregister_node_type(pctx->host, pctx->scope(), &typeSv);
+        }
+    }
 }
 
 void JsEngine::unprovideCapabilityRow(
@@ -5025,6 +5349,63 @@ JSValue JsEngine::bridgeCall(
             return iface.graph->set_graph_json(host, pctx->scope(), &jsonSv) == AGENTXX_RESULT_OK
                        ? JS_TRUE
                        : JS_FALSE;
+        }
+
+        // ---- 执行图节点类型: 脚本自定义节点 ----
+        // 节点执行是异步操作契约 (run_start 返回 op 句柄, 结果经 notify->done 回来),
+        // 所以脚本回调跑在 JS 线程, 不需要 io 线程同步等待; 图必须在登记之后才编译,
+        // 因此脚本应在实例初始化 (脚本顶层) 阶段登记。
+        case B_REGISTER_NODE_TYPE: {
+            // registerNodeType({type, run, configSchema?}) -> true (失败抛异常)
+            if (!iface.graph || !iface.graph->register_node_type) {
+                return throwJsError(ctx, "registerNodeType: host lacks graph interface");
+            }
+            if (argc < 1 || !JS_IsObject(argv[0])) {
+                return JS_ThrowTypeError(ctx, "registerNodeType: options object required");
+            }
+            JSValueConst      opt      = argv[0];
+            const std::string typeName = propString(ctx, opt, "type");
+            JSValue           runVal   = JS_GetPropertyStr(ctx, opt, "run");
+            if (typeName.empty() || !JS_IsFunction(ctx, runVal)) {
+                JS_FreeValue(ctx, runVal);
+                return JS_ThrowTypeError(ctx, "registerNodeType: {type, run} required");
+            }
+            std::string   err;
+            const int32_t rc = engine->registerGraphNodeRow(
+                ctx,
+                pctx,
+                iface.graph,
+                typeName,
+                runVal,
+                propJson(ctx, opt, "configSchema"),
+                &err
+            );
+            JS_FreeValue(ctx, runVal);
+            if (rc != 0) {
+                return throwJsError(
+                    ctx,
+                    fmt::format(
+                        "registerNodeType: {} (rc={}{})",
+                        typeName,
+                        rc,
+                        err.empty() ? "" : ", " + err
+                    )
+                );
+            }
+            return JS_TRUE;
+        }
+
+        case B_UNREGISTER_NODE_TYPE: {
+            if (!iface.graph || !iface.graph->unregister_node_type || argc < 1
+                || !JS_IsString(argv[0])) {
+                return JS_FALSE;
+            }
+            const std::string typeName = jsToCppString(ctx, argv[0]);
+            if (typeName.empty()) {
+                return JS_FALSE;
+            }
+            engine->unregisterGraphNodeRow(ctx, pctx, iface.graph, typeName);
+            return JS_TRUE;
         }
 
         case B_LIST_MOUNTS: {

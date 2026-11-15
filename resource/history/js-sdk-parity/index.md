@@ -16,25 +16,28 @@ C++ 插件 SDK (`plugin_kit.h`)：每个 C ABI 成员要么有同名同义的 JS
 
 ## 状态
 
-进行中 (见 `work.md` 的进度)
+已完成（含后续补上的执行图节点类型，见 `work.md` §5）
 
 ## 关键决策
 
 - **实现**：`getOwnInfo` / `getPluginConfigPath`(agent 侧缺)、`checkPaths` + `filterPaths`
   (`check_paths` 三态查询)、`subscribe` 的 `options` 与流结束回调 (`subscribe_broadcast_ex`)、
   能力表全套 (`provideCapability` / `unprovideCapability` / `providePoint` / `listCapabilities` /
-  `capabilityInfo` / `invokeCapability`)
-- **不实现** (记录理由，见 `plan.md` §3)：`graph.register_node_type`、`scheduler.*`、
-  `cancel.op_cancel`、`tasks.*`、`coroutine_runtime.*`、`json.*`
+  `capabilityInfo` / `invokeCapability`)、执行图节点类型 (`registerNodeType` / `unregisterNodeType`)
+- **不实现** (记录理由，见 `plan.md` §3)：`scheduler.*`、`cancel.op_cancel`、`tasks.*`、
+  `coroutine_runtime.*`、`json.*`（`graph.register_node_type` 后来发现可行，已实现）
 
 ## 结论
 
-- 脚本侧与 C++ 插件 SDK 的**差距已清空**：能对齐的都补齐了，剩下 6 项（图节点类型 /
-  scheduler / cancel.op_cancel / tasks / coroutine_runtime / json）在脚本模型下确实不需要，
-  理由写在 `plan.md` §3.2 与 `plugins.md` §12。
+- 脚本侧与 C++ 插件 SDK 的**差距已清空**：能对齐的都补齐了，剩下 5 项（scheduler /
+  cancel.op_cancel / tasks / coroutine_runtime / json）在脚本模型下确实不需要，
+  理由写在 `plan.md` §3.2 与 `plugins.md` §12。图节点类型最初也归在这组里，后来发现
+  节点执行本身是异步操作契约（`run_start` + `notify->done`），与能力行走同一套跨线程
+  记账即可，已实现并做了真实建图执行的用例。
 - 过程中发现并修掉两处**旧 bug**：实例订阅表从未初始化（脚本 `subscribe`/`onHook` 的
   回调从不执行）、一次派发会重复调用同频道的全部处理器（现按订阅下标各调一次）。
-- 测试：`plugins` 677、`client_plugins` 832，插件相关 15 个模块全绿（见 `work.md`）。
+- 测试：`plugins` 691（含图节点真实执行）、`client_plugins` 832，插件相关 15 个模块全绿
+  （见 `work.md`）。
 - 偏差：`providePoint` 只做"登记 / 自省 / 撤销"的端到端验证，没有在真实取值链上断言
   （取值链由 `plugin_point` / `plugin_feature` 覆盖 C++ 侧；脚本侧的登记形状与它们同一张表）。
 

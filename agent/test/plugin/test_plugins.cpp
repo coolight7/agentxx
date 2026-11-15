@@ -112,6 +112,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // 加载 io executor (与 BaseAgent::init 一致): 跨线程 (JS 线程/线程池) 的
     // vtable 调用经真实 post 到 io 线程执行, 而非测试默认的"伪 io 线程"直连
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+    // 执行图注册表: 插件注册自定义节点类型需要 (与 BaseAgent::init 一致)
+    ctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
     ctx->pluginMount = co_await ctx->pluginManager->mountAgentAsync(ctx);
 
@@ -622,6 +624,11 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_async_wait"));
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_call_js"));
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_call_host"));
+        // 脚本在初始化阶段登记的执行图节点类型已进 per-agent GraphRegistry
+        XX_TEST_EXPECT_TRUE(ctx->graphRegistry != nullptr);
+        if (ctx->graphRegistry) {
+            XX_TEST_EXPECT_TRUE(ctx->graphRegistry->contains_type("js_echo_node"));
+        }
 
         // ---- 14. JS 工具执行 (同步 + async Promise) ----
         {
@@ -850,6 +857,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_EQ(j["plainSeenAfterPublish"].get<int64_t>(), int64_t{1});
                 XX_TEST_EXPECT_EQ(j["streamSeen"].get<int64_t>(), int64_t{1});
                 XX_TEST_EXPECT_TRUE(j["streamEndReason"].is_object());
+
+                // 执行图节点类型 (`agentxx.agent.graph`): 登记 / 同名覆盖 / 注销
+                XX_TEST_EXPECT_FALSE(j.contains("registerNodeTypeError"));
+                XX_TEST_EXPECT_TRUE(j["registerNodeType"].is_boolean());
+                XX_TEST_EXPECT_TRUE(j["registerNodeType"].get<bool>());
+                XX_TEST_EXPECT_TRUE(j["registerNodeTypeAgain"].get<bool>());
+                XX_TEST_EXPECT_TRUE(j["unregisterNodeType"].get<bool>());
+                XX_TEST_EXPECT_TRUE(j["unregisterNodeTypeAgain"].get<bool>());
             }
         }
 
@@ -867,6 +882,66 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(j["resultIsObject"].get<bool>());
                 XX_TEST_EXPECT_FALSE(j["ok"].get<bool>());
                 XX_TEST_EXPECT_TRUE(j["error"].is_string());
+            }
+        }
+
+        // ---- 16d. 脚本自定义执行图节点: 建最小图并真实执行 ----
+        // 节点类型由脚本在初始化阶段登记 (`js_echo_node`); 这里让图引擎按类型名
+        // 实例化并跑一次, 校验节点拿到 config/名字, 输出落到通道上
+        {
+            XX_TEST_EXPECT_TRUE(ctx->graphRegistry != nullptr);
+            if (ctx->graphRegistry != nullptr
+                && ctx->graphRegistry->contains_type("js_echo_node")) {
+                neograph::json graphJson = {
+                    {"name", "js.node.test"},
+                    {
+                     "channels", {{"js.out", {{"reducer", "overwrite"}}}},
+                     },
+                    {
+                     "nodes", {{"js_echo", {{"type", "js_echo_node"}, {"echo", "hello-js"}}}},
+                     },
+                    {
+                     "edges",
+                     neograph::json::array({
+                            {{"from", "__start__"}, {"to", "js_echo"}},
+                            {{"from", "js_echo"}, {"to", "__end__"}},
+                        }),
+                     },
+                };
+                auto topology
+                    = neograph::graph::GraphCompiler::parse(graphJson, *ctx->graphRegistry);
+                auto validated = neograph::graph::GraphValidator::require_valid(
+                    std::move(topology),
+                    *ctx->graphRegistry
+                );
+                neograph::graph::EngineConfig    engineConfig;
+                neograph::graph::EngineResources resources;
+                resources.registry = ctx->graphRegistry;
+                auto engine        = neograph::graph::GraphEngine::link(
+                    std::move(validated),
+                    std::move(engineConfig),
+                    std::move(resources)
+                );
+                XX_TEST_EXPECT_TRUE(engine != nullptr);
+                if (engine) {
+                    neograph::graph::RunConfig runCfg;
+                    runCfg.thread_id = "js-node-run";
+                    auto result      = co_await engine->run_async(runCfg);
+                    XX_TEST_EXPECT_FALSE(result.interrupted);
+                    const auto& channels = result.output["channels"];
+                    XX_TEST_EXPECT_TRUE(channels.contains("js.out"));
+                    if (channels.contains("js.out")) {
+                        const auto& value = channels["js.out"]["value"];
+                        XX_TEST_EXPECT_EQ(
+                            value["node"].get<std::string>(),
+                            std::string{"js_echo"}
+                        );
+                        XX_TEST_EXPECT_EQ(
+                            value["echo"].get<std::string>(),
+                            std::string{"hello-js"}
+                        );
+                    }
+                }
             }
         }
 
