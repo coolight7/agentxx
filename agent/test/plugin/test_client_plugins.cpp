@@ -4526,6 +4526,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(sdkToast.find(" afterEnd=true") != std::string::npos);
                     // 第一轮: 脚本自己的订阅还没收到过东西
                     XX_TEST_EXPECT_TRUE(sdkToast.find(" echo=0 ends=0") != std::string::npos);
+                    // 能力行 (client 侧登记为进程级行): 登记 → 调用 → 注销 一轮跑通
+                    XX_TEST_EXPECT_TRUE(
+                        sdkToast.find(" cap=true/pong/client") != std::string::npos
+                    );
+                    // JSON 辅助 (`agentxx.json`): 取顶层字符串字段
+                    XX_TEST_EXPECT_TRUE(sdkToast.find(" json=v") != std::string::npos);
 
                     // 第二轮: 上一轮的 publish / end 已经派发到脚本订阅 (回调在 JS 线程)
                     // - 同一频道多个订阅各收一次; 流结束回调 (onEnd) 也到一次
@@ -4542,6 +4548,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 2);
                     const std::string sdkToast2 = adapterJs->lastToast();
                     XX_TEST_EXPECT_TRUE(sdkToast2.find(" echo=1 ends=1") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(
+                        sdkToast2.find(" cap=true/pong/client") != std::string::npos
+                    );
                 }
 
                 // 禁用 → 注册项与缓存一齐摘除; 启用 → start 重跑脚本重新注册

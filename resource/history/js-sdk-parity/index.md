@@ -29,15 +29,18 @@ C++ 插件 SDK (`plugin_kit.h`)：每个 C ABI 成员要么有同名同义的 JS
 
 ## 结论
 
-- 脚本侧与 C++ 插件 SDK 的**差距已清空**：能对齐的都补齐了，剩下 5 项（scheduler /
-  cancel.op_cancel / tasks / coroutine_runtime / json）在脚本模型下确实不需要，
-  理由写在 `plan.md` §3.2 与 `plugins.md` §12。图节点类型最初也归在这组里，后来发现
-  节点执行本身是异步操作契约（`run_start` + `notify->done`），与能力行走同一套跨线程
-  记账即可，已实现并做了真实建图执行的用例。
+- 脚本侧与 C++ 插件 SDK 的**差距已清空**：能对齐的都补齐了，剩下 4 项（scheduler /
+  cancel.op_cancel / tasks / coroutine_runtime）在脚本模型下确实不需要，
+  理由写在 `plan.md` §3.2 与 `plugins.md` §12。图节点类型与 `json.*` 最初也归在这组里，
+  后来发现前者本来就是异步操作契约（`run_start` + `notify->done`）、后者两个成员直接可转译，
+  均已实现并做了真实用例。
+- 接口级细节（工具选项 / 协作式取消 / client 侧能力行）已在第二轮补齐，见 `work.md` §6；
+  剩下的差异只有语言模型类的：无线程与 offload、无协程、无通用 op 句柄、
+  以及脚本没有 create/start/mount 三段与进程级单例。
 - 过程中发现并修掉两处**旧 bug**：实例订阅表从未初始化（脚本 `subscribe`/`onHook` 的
   回调从不执行）、一次派发会重复调用同频道的全部处理器（现按订阅下标各调一次）。
-- 测试：`plugins` 691（含图节点真实执行）、`client_plugins` 832，插件相关 15 个模块全绿
-  （见 `work.md`）。
+- 测试：`plugins` 702（含图节点真实执行、工具标志/超时/取消、JSON）、`client_plugins` 835
+  （含 client 侧能力行往返），插件相关 20 个模块全绿（见 `work.md`）。
 - 偏差：`providePoint` 只做"登记 / 自省 / 撤销"的端到端验证，没有在真实取值链上断言
   （取值链由 `plugin_point` / `plugin_feature` 覆盖 C++ 侧；脚本侧的登记形状与它们同一张表）。
 

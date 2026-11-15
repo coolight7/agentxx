@@ -865,6 +865,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(j["registerNodeTypeAgain"].get<bool>());
                 XX_TEST_EXPECT_TRUE(j["unregisterNodeType"].get<bool>());
                 XX_TEST_EXPECT_TRUE(j["unregisterNodeTypeAgain"].get<bool>());
+
+                // JSON 辅助 (`agentxx.json`): 转义结果是带引号的 JSON 字符串字面量
+                // (与 C++ kit 的 jsonEscape 一致), 取字段给顶层字符串
+                XX_TEST_EXPECT_EQ(
+                    j["jsonEscape"].get<std::string>(),
+                    std::string{"\"a\\\"b\\\\c\""}
+                );
+                XX_TEST_EXPECT_EQ(j["jsonGetString"].get<std::string>(), std::string{"v"});
             }
         }
 
@@ -943,6 +951,41 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     }
                 }
             }
+        }
+
+        // ---- 16e. 工具标志 / 默认超时 / 协作式取消 (与 C++ kit 同语义) ----
+        {
+            // 标志: autoSummary / parallelSafe / repeatCallCheck 直接体现在工具对象上
+            auto flagTool = ctx->toolRegistry->find("js_flag_probe");
+            XX_TEST_EXPECT_TRUE(flagTool != nullptr);
+            if (flagTool) {
+                XX_TEST_EXPECT_TRUE(flagTool->autoSummaryOutput);
+                XX_TEST_EXPECT_TRUE(flagTool->supportsParallel);
+                XX_TEST_EXPECT_TRUE(flagTool->repeatCallCheck);
+            }
+            // 默认超时 (timeoutMs: 120): 工具跑 1s, 主程序按超时失败收尾
+            auto cancelTool = ctx->toolRegistry->find("js_cancel_probe");
+            XX_TEST_EXPECT_TRUE(cancelTool != nullptr);
+            if (cancelTool) {
+                const auto result
+                    = co_await cancelTool->execute_async(utilxx_base::Json::object());
+                XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Failed);
+                XX_TEST_EXPECT_TRUE(result.text.find("timed out") != std::string::npos);
+            }
+            // 取消标记被脚本看到: js_cancel_probe 在下一轮循环里读到 ctx.isCanceled()
+            bool cancelObserved = false;
+            auto reportTool     = ctx->toolRegistry->find("js_cancel_report");
+            XX_TEST_EXPECT_TRUE(reportTool != nullptr);
+            if (reportTool) {
+                for (int i = 0; i < 150 && !cancelObserved; ++i) {
+                    co_await sleepMs(20);
+                    const auto report
+                        = co_await reportTool->execute_async(utilxx_base::Json::object());
+                    auto rj        = utilxx_base::Json::parse(report.text);
+                    cancelObserved = rj.value<int64_t>("canceledAt", -1) >= 0;
+                }
+            }
+            XX_TEST_EXPECT_TRUE(cancelObserved);
         }
 
         // ---- JS 脚本顶层异常的事务化回滚 ----

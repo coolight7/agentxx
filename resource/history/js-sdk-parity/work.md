@@ -87,14 +87,40 @@ io→JS 同步桥，于是在同一套跨线程记账上把它做出来了：
 `GraphEngine::link` 跑 `__start__ → js_echo → __end__`，断言写进 `js.out` 通道的
 `{node:"js_echo", echo:"hello-js"}`，证明输入拼装与输出解析都真的通。
 
+### 6. 接口级剩余差异补齐（工具选项 / 取消 / JSON / client 能力行）
+
+对齐盘点后还差四处，本轮全部补上：
+
+1. **工具选项**：`registerTool` 现在读 `timeoutMs` / `autoSummary` / `parallelSafe` /
+   `repeatCallCheck` → 填 `spec.default_timeout_ms` 与 `spec.flags`（与 `kit::fast_tool` 同一组）；
+   主程序 `PluginMount::invokeTool` 本来就会按 `default_timeout_ms` 包一层超时，所以脚本工具
+   现在能真的"到点失败"。
+2. **协作式取消**：`spec.execute_cancel` 不再留空。op 句柄是**自增 id 编码的指针**，
+   取消路径只拿它查在飞表（`toolOps_`）、不解引用 —— 主程序的取消可能落在
+   "JS 已 done、完成包还没提交"的窗口里，那里直接解引用会 UAF。脚本侧由
+   `ctx.isCanceled()`（`JS_NewCFunctionData` 带本次执行 id）轮询；取消后终态为
+   `canceled`，结果不再被采用。
+3. **`agentxx.json` 上桥**：`jsonEscape(text)` / `jsonGetString(jsonText, key)`，与
+   C++ kit 的 `jsonEscape` 一样返回**带引号**的 JSON 字符串字面量（首版测试按不带引号断言，
+   已按主程序契约改正）。
+4. **client 侧能力行**：`capabilityProvideValue` / `Unprovide` / `List` / `Info` /
+   `Invoke` 五个 helper 从 `bridgeCall` 里抽出来，agent 与 client 两侧共用；client 实例没有
+   挂载作用域，`register_capability` 收到 null scope（框架文档：空 = 进程级行），因此两侧
+   同一份实现即可。`providePoint` 不上 client 侧（功能埋点是 agent 侧概念）。
+
+测试：`plugins` 691 → 702（工具标志 3 条、超时 2 条、取消被脚本看见 1 条、JSON 2 条等），
+`client_plugins` 832 → 835（能力行往返 + JSON）。取消用例是端到端行为断言：
+`js_cancel_probe` 带 `timeoutMs: 120`、体内 10ms 轮询一次，主程序超时后返回 `timed out`，
+随后 `js_cancel_report` 读到脚本看到的取消位置（`canceledAt >= 0`）。
+
 ## 验证
 
 Windows Debug，`agent/build/windows-debug/exec/agentxx_test.exe`：
 
 | 模块 | 结果 |
 |---|---|
-| `plugins` | 691 / 0（对齐改动 677，加执行图节点后 +8；改前 649） |
-| `client_plugins` | 832 / 0（改前 829，新增 3 条含两轮派发） |
+| `plugins` | 702 / 0（对齐改动 677；加执行图节点 691；本轮接口补齐 702） |
+| `client_plugins` | 835 / 0（改前 829；能力行 + JSON 后 835） |
 | `plugin_broadcast` | 90 / 0 |
 | `plugin_point` | 68 / 0 |
 | `plugin_feature` | 34 / 0 |

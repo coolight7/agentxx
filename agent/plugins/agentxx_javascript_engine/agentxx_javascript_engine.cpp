@@ -333,6 +333,9 @@ enum BridgeMagic {
     // 执行图节点类型: 登记脚本实现的节点 (run 回调) / 注销
     B_REGISTER_NODE_TYPE,
     B_UNREGISTER_NODE_TYPE,
+    // JSON 表 (`agentxx.json`): 转义 / 取顶层字符串字段 (agent 与 client 两侧)
+    B_JSON_ESCAPE,
+    B_JSON_GET_STRING,
     // client 侧桥 (`agentxx.side == "client"`)。与 agent 侧同义的方法复用上面的
     // magic (log / getPluginArgs / getLanguage / setLanguage / subscribe /
     // unsubscribe / publish / setTimeout / clearTimeout), 其余在这里追加
@@ -370,6 +373,15 @@ enum BridgeMagic {
     B_CLIENT_LIST_KEYBINDS,
 };
 
+/// 一次工具执行的跨线程状态 (脚本经 `ctx.isCanceled()` 轮询)
+///
+/// - `canceled`: 主程序请求取消 (会话取消 / 超时 / 后台任务取消)
+/// - 脚本不查就继续跑完 (与 C++ SDK 的协作式取消同语义)
+/// - 状态对象由引擎在飞表保活, op 句柄只作查找键 (取消路径不解引用)
+struct JsToolOp {
+    std::atomic<bool> canceled{false};
+};
+
 /// 工具执行请求/结果 (execute 桥跨线程传递)
 struct ToolExecReq {
     std::string args, tid, tcid;
@@ -382,6 +394,10 @@ struct ToolExecReq {
     /// - `ok` / `failed` / `interrupted` / `canceled`, 未知取值按 `ok`
     int32_t     status = PLUGINXX_OPERATOR_OK;
     bool done          = false;
+    /// 本次执行的跨线程取消状态 (与 [JsToolOp] 同一对象)
+    std::shared_ptr<JsToolOp> op;
+    /// 本次执行的 id (脚本 `ctx.isCanceled()` 按它查状态)
+    int64_t                   opId = 0;
 };
 
 /// 工具绑定 (注册工具时创建, 由 JsPluginCtx 持有; execute 回调期间存活
@@ -1557,6 +1573,20 @@ public:
     /// 流结束回调桥 (`subscribe` 带 `onEnd` 时): io 线程调用; post 到 JS 线程
     static void PLUGINXX_CALL eventEndFire(const PluginxxStringView* reason_json, void* ud);
 
+    /// 工具执行的取消请求 (任意线程; 幂等): 只置协作式标记
+    /// - `op` 是自增 id 编码的句柄, 这里只把它当键查在飞表 (不解引用)
+    static void PLUGINXX_CALL toolExecuteCancel(void* user_data, void* op);
+
+    /// `ctx.isCanceled()` 的 C 函数: func_data[0] = 本次执行的 id
+    static JSValue toolIsCanceledFn(
+        JSContext*    ctx,
+        JSValueConst  this_val,
+        int           argc,
+        JSValueConst* argv,
+        int           magic,
+        JSValueConst* func_data
+    );
+
     /// 能力实现行的处理器 (任意线程): 复制参数与完成通知, 投递到 JS 线程执行脚本
     static void* PLUGINXX_CALL capImplStart(
         void*                         ctx,
@@ -1583,6 +1613,58 @@ public:
 
     /// 取消一次尚未完成的脚本节点执行 (任意线程; 幂等)
     static void PLUGINXX_CALL graphNodeCancel(void* user_data, void* op);
+
+    /// 能力表 / JSON 表的桥实现 (agent 与 client 两侧共用)
+    /// - 能力行归属脚本所在插件, 作用域取 `pctx->scope()` (client 侧为进程级行)
+    static JSValue capabilityProvideValue(
+        JSContext*                       ctx,
+        JsPluginCtx*                     pctx,
+        const PluginxxCapabilitiesIface* caps,
+        int                              argc,
+        JSValueConst*                    argv,
+        bool                             pointMode,
+        const char*                      label
+    );
+    static JSValue capabilityUnprovideValue(
+        JSContext*                       ctx,
+        JsPluginCtx*                     pctx,
+        const PluginxxCapabilitiesIface* caps,
+        int                              argc,
+        JSValueConst*                    argv
+    );
+    static JSValue capabilityListValue(
+        JSContext*                       ctx,
+        JsPluginCtx*                     pctx,
+        const PluginxxCapabilitiesIface* caps
+    );
+    static JSValue capabilityInfoValue(
+        JSContext*                       ctx,
+        JsPluginCtx*                     pctx,
+        const PluginxxCapabilitiesIface* caps,
+        int                              argc,
+        JSValueConst*                    argv
+    );
+    static JSValue capabilityInvokeValue(
+        JSContext*                       ctx,
+        JsPluginCtx*                     pctx,
+        const PluginxxCapabilitiesIface* caps,
+        int                              argc,
+        JSValueConst*                    argv
+    );
+    static JSValue jsonEscapeValue(
+        JSContext*               ctx,
+        JsPluginCtx*             pctx,
+        const PluginxxJsonIface* jsonIface,
+        int                      argc,
+        JSValueConst*            argv
+    );
+    static JSValue jsonGetStringValue(
+        JSContext*               ctx,
+        JsPluginCtx*             pctx,
+        const PluginxxJsonIface* jsonIface,
+        int                      argc,
+        JSValueConst*            argv
+    );
 
     // ==================== 任务队列 ====================
 
@@ -2081,6 +2163,21 @@ private:
             "toolCallId",
             JS_NewString(pctx->ctx, req.tcid.c_str())
         );
+        // 协作式取消: 脚本在回调里轮询 ctx.isCanceled() (与 C++ SDK 的取消语义一致)
+        // - 函数里带着本次执行的 id, 取消标记可能在任意线程置位
+        if (req.opId > 0) {
+            JSValue idVal = JS_NewInt64(pctx->ctx, req.opId);
+            JSValue cancelFn = JS_NewCFunctionData(
+                pctx->ctx,
+                &JsEngine::toolIsCanceledFn,
+                0,
+                0,
+                1,
+                &idVal
+            );
+            JS_FreeValue(pctx->ctx, idVal); ///< 构造时已复制一份数据
+            JS_SetPropertyStr(pctx->ctx, ctxObj, "isCanceled", cancelFn);
+        }
         JSValue argv[2] = {argsObj, ctxObj};
         JSValue ret     = JS_Call(pctx->ctx, execFn, JS_UNDEFINED, 2, argv);
         JS_FreeValue(pctx->ctx, argsObj);
@@ -2966,6 +3063,14 @@ private:
             def("declareBroadcast", B_DECLARE_BROADCAST, 1);
             def("readBroadcast", B_READ_BROADCAST, 1);
             def("endBroadcast", B_END_BROADCAST, 2);
+            // 能力行 (client 侧登记为进程级行) + JSON 辅助
+            def("provideCapability", B_PROVIDE_CAPABILITY, 1);
+            def("unprovideCapability", B_UNPROVIDE_CAPABILITY, 2);
+            def("listCapabilities", B_LIST_CAPABILITIES, 0);
+            def("capabilityInfo", B_CAPABILITY_INFO, 1);
+            def("invokeCapability", B_INVOKE_CAPABILITY, 3);
+            def("jsonEscape", B_JSON_ESCAPE, 1);
+            def("jsonGetString", B_JSON_GET_STRING, 2);
         } else {
             def("registerTool", B_REGISTER_TOOL, 1);
             def("unregisterTool", B_UNREGISTER_TOOL, 1);
@@ -3030,6 +3135,9 @@ private:
             // 执行图节点类型: 登记脚本实现的节点 (run 回调) / 注销
             def("registerNodeType", B_REGISTER_NODE_TYPE, 1);
             def("unregisterNodeType", B_UNREGISTER_NODE_TYPE, 1);
+            // JSON 辅助: 转义一段文本 / 取顶层字符串字段
+            def("jsonEscape", B_JSON_ESCAPE, 1);
+            def("jsonGetString", B_JSON_GET_STRING, 2);
             def("listMounts", B_LIST_MOUNTS, 0);
             def("getMount", B_GET_MOUNT, 1);
             // 会话运行时: 自建根 / 会话通道 / 触发器 / 定时器 (容器级接口)
@@ -3259,6 +3367,12 @@ private:
     /// 脚本节点类型 (同样由引擎保活: 主程序把地址当 user_data)
     std::vector<std::shared_ptr<JsGraphNodeType>> graphNodes_;
 
+    /// 在飞工具执行 (id → 取消状态)
+    /// - op 句柄 = id 编码的指针: 取消路径只查表, 不会解引用已释放对象
+    std::mutex                                                  toolOpMtx_;
+    std::unordered_map<int64_t, std::shared_ptr<JsToolOp>>      toolOps_;
+    int64_t                                                     nextToolOpId_ = 0;
+
     /// 定时器集合版本号: 注册/清除/执行都会递增, 作为等待条件的唤醒依据
     /// (只做"是否变化"判断, 不代表业务语义)
     uint64_t timerEpoch_ = 0;
@@ -3346,19 +3460,32 @@ void* JsEngine::toolExecuteStart(
             tool_call_id ? static_cast<size_t>(tool_call_id->size) : 0
         };
 
-        // op 句柄仅作占位标识 (主程序不解释其内容): 所有权随任务闭包移交 JS 线程,
-        // 通知完成后由闭包自身释放 —— 支持同一JS 运行时插件被多实例加载/反复加载
-        // (此前成功路径 new 后无人 delete, 每次工具执行泄漏句柄)
-        auto*                  op      = new int(0);
+        // 取消状态: 进在飞表 (op 句柄 = id 编码的指针, 只作查找键), 执行结束从表里摘除
+        // - 主程序的取消可能落在"JS 已 done、完成包还没提交"的窗口里, 因此取消路径
+        //   只查表、不解引用句柄 (查不到 = 这次执行已结束)
+        auto opState = std::make_shared<JsToolOp>();
+        int64_t opId = 0;
+        {
+            std::lock_guard<std::mutex> lk(engine->toolOpMtx_);
+            opId                    = ++engine->nextToolOpId_;
+            engine->toolOps_[opId]  = opState;
+        }
+        req->op   = opState;
+        req->opId = opId;
+        void* rawOp = reinterpret_cast<void*>(static_cast<intptr_t>(opId));
+
         PluginxxOperatorNotify ntfCopy = *notify;
-        if (!engine->post([engine, binding, req, ntfCopy, op]() {
-                // ---- JS 线程: 执行并上报 (RAII 补充释放句柄) ----
+        if (!engine->post([engine, binding, req, ntfCopy, opId]() {
+                // ---- JS 线程: 执行并上报 (离开作用域时从在飞表摘除) ----
                 struct OpReleaser {
-                    int* p;
+                    JsEngine* engine;
+                    int64_t   id;
+
                     ~OpReleaser() {
-                        delete p;
+                        std::lock_guard<std::mutex> lk(engine->toolOpMtx_);
+                        engine->toolOps_.erase(id);
                     }
-                } releaser{op};
+                } releaser{engine, opId};
                 if (engine->stopping()) {
                     // 停止中: 不再执行插件 JS 代码, 但已接受的 op 必须终结
                     auto errSv = agentxx::plugin::PluginStringView::fromCstr(
@@ -3368,8 +3495,11 @@ void* JsEngine::toolExecuteStart(
                     return;
                 }
                 engine->doToolExecute(binding, *req);
-                if (req->Canceled) {
-                    // 引擎停止/取消: 终态为 Canceled, 不是普通失败
+                const bool canceled = req->Canceled
+                    || (req->op != nullptr
+                        && req->op->canceled.load(std::memory_order_acquire));
+                if (canceled) {
+                    // 引擎停止/主程序取消: 终态为 Canceled, 不是普通失败
                     auto errSv = agentxx::plugin::PluginStringView::from(
                         req->error.data(),
                         req->error.size()
@@ -3396,8 +3526,11 @@ void* JsEngine::toolExecuteStart(
                     ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_OK, &resSv);
                 }
             })) {
-            // 引擎已停止: 启动失败 (未入队 → 句柄由本函数直接释放)
-            delete op;
+            // 引擎已停止: 启动失败 (未入队 → 在飞表里的登记要退回)
+            {
+                std::lock_guard<std::mutex> lk(engine->toolOpMtx_);
+                engine->toolOps_.erase(opId);
+            }
             if (error_out && engine->engineHost_) {
                 *error_out = agentxx::plugin::PluginString::fromCstr(
                     engine->engineHost_,
@@ -3406,7 +3539,7 @@ void* JsEngine::toolExecuteStart(
             }
             return nullptr;
         }
-        return op;
+        return rawOp;
     } catch (...) {
         // 异常分类上报 + 经通知器上报失败 (主程序 io 线程等通知, 必须终结)
         ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
@@ -3425,10 +3558,61 @@ void* JsEngine::toolExecuteStart(
 }
 
 
+/// 协作式取消: 主程序请求取消一次工具执行
+/// - 只置标记, 不打断 JS (脚本在回调里轮询 `ctx.isCanceled()` 才看得到)
+/// - `op` 是 id 编码的句柄, 只作查找键: 查不到说明这次执行已结束, 什么也不做
+void PLUGINXX_CALL JsEngine::toolExecuteCancel(void* user_data, void* op) {
+    auto* binding = static_cast<JsToolBinding*>(user_data);
+    auto* engine  = binding != nullptr ? binding->engine : nullptr;
+    if (engine == nullptr || op == nullptr) {
+        return;
+    }
+    const int64_t id = static_cast<int64_t>(reinterpret_cast<intptr_t>(op));
+    std::shared_ptr<JsToolOp> state;
+    {
+        std::lock_guard<std::mutex> lk(engine->toolOpMtx_);
+        auto                        it = engine->toolOps_.find(id);
+        if (it == engine->toolOps_.end()) {
+            return;
+        }
+        state = it->second;
+    }
+    state->canceled.store(true, std::memory_order_release);
+}
+
+JSValue JsEngine::toolIsCanceledFn(
+    JSContext*    ctx,
+    JSValueConst  this_val,
+    int           argc,
+    JSValueConst* argv,
+    int           magic,
+    JSValueConst* func_data
+) {
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    (void)magic;
+    int64_t id = 0;
+    if (func_data == nullptr || JS_ToInt64(ctx, &id, func_data[0]) != 0 || id <= 0) {
+        return JS_FALSE;
+    }
+    auto* pctx = static_cast<JsPluginCtx*>(JS_GetContextOpaque(ctx));
+    if (pctx == nullptr || pctx->engine == nullptr) {
+        return JS_FALSE;
+    }
+    auto*       engine = pctx->engine;
+    std::lock_guard<std::mutex> lk(engine->toolOpMtx_);
+    auto                        it = engine->toolOps_.find(id);
+    if (it == engine->toolOps_.end()) {
+        return JS_TRUE; ///< 执行已结束: 按"可以停下"回答, 避免脚本继续做无用功
+    }
+    return it->second->canceled.load(std::memory_order_acquire) ? JS_TRUE : JS_FALSE;
+}
+
 void JsEngine::eventFire(const PluginxxStringView* event_json, void* ud) {
     auto* binding = static_cast<JsHookBinding*>(ud);
     auto* engine  = binding ? binding->engine : nullptr;
-    // C ABI 回调异常守卫: 事件分发由主程序 io 线程调用, 异常不外泄
+    // C ABI 回调异常守卫: 事件分发由主程序 io 线程调用, 异常不外溢
     agentxx::plugin::guardCallVoid(
         [engine](const char* m) noexcept {
             if (engine) {
@@ -4178,6 +4362,304 @@ static JSValue throwJsError(JSContext* ctx, const std::string& msg) {
 // agentxx 桥实现 (C 函数, magic 分派)
 // =====================================================================
 
+/// 登记一条脚本能力实现行 (`provideCapability` / `providePoint` 共用)
+///
+/// - agent 侧与 client 侧共用: 行归属于脚本所在的插件实例 (`pctx->host`),
+///   作用域取自 `pctx->scope()` (client 实例没有挂载作用域 → 进程级行)
+/// - `pointMode` 时回答按功能埋点的 `pointAnswer` 规范化
+JSValue JsEngine::capabilityProvideValue(
+    JSContext*                       ctx,
+    JsPluginCtx*                     pctx,
+    const PluginxxCapabilitiesIface* caps,
+    int                              argc,
+    JSValueConst*                    argv,
+    bool                             pointMode,
+    const char*                      label
+) {
+    auto* engine = pctx->engine;
+    if (pointMode) {
+        // providePoint(pointId, handler, {priority?, timeoutMs?, ownerTag?})
+        // 登记形状与 kit 的 providePoint 同一套: many + first + 只开 impl 阶段
+        if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsFunction(ctx, argv[1])) {
+            return JS_ThrowTypeError(
+                ctx,
+                "%s: (pointId, handler, options?) required",
+                label
+            );
+        }
+        const std::string pointId = jsToCppString(ctx, argv[0]);
+        JSValueConst      opt = argc >= 3 && JS_IsObject(argv[2]) ? argv[2] : JS_UNDEFINED;
+        std::string       err;
+        const int32_t     rc = engine->provideCapabilityRow(
+            ctx,
+            pctx,
+            caps,
+            pointId,
+            JS_IsObject(opt) ? propString(ctx, opt, "ownerTag") : std::string{},
+            argv[1],
+            true,
+            PLUGINXX_CAPABILITY_IMPLS_MANY,
+            PLUGINXX_CAPABILITY_MERGE_FIRST,
+            PLUGINXX_CAPABILITY_PHASE_MASK_IMPL,
+            JS_IsObject(opt) ? static_cast<int32_t>(propInt64(ctx, opt, "priority", 0)) : 0,
+            JS_IsObject(opt) ? static_cast<int32_t>(propInt64(ctx, opt, "timeoutMs", 0)) : 0,
+            &err
+        );
+        if (rc != 0) {
+            return throwJsError(
+                ctx,
+                fmt::format(
+                    "{}: {} (rc={}{})",
+                    label,
+                    pointId,
+                    rc,
+                    err.empty() ? "" : ", " + err
+                )
+            );
+        }
+        return JS_TRUE;
+    }
+
+    if (argc < 1 || !JS_IsObject(argv[0])) {
+        return JS_ThrowTypeError(ctx, "%s: options object required", label);
+    }
+    JSValueConst      opt = argv[0];
+    const std::string id  = propString(ctx, opt, "id");
+    JSValue           fnVal = JS_GetPropertyStr(ctx, opt, "handler");
+    if (id.empty() || !JS_IsFunction(ctx, fnVal)) {
+        JS_FreeValue(ctx, fnVal);
+        return JS_ThrowTypeError(ctx, "%s: {id, handler} required", label);
+    }
+    std::string   err;
+    const int32_t rc = engine->provideCapabilityRow(
+        ctx,
+        pctx,
+        caps,
+        id,
+        propString(ctx, opt, "ownerTag"),
+        fnVal,
+        false,
+        capabilityImplsOf(ctx, opt),
+        capabilityMergeOf(ctx, opt),
+        capabilityPhasesOf(ctx, opt),
+        static_cast<int32_t>(propInt64(ctx, opt, "priority", 0)),
+        static_cast<int32_t>(propInt64(ctx, opt, "timeoutMs", 0)),
+        &err
+    );
+    JS_FreeValue(ctx, fnVal);
+    if (rc != 0) {
+        return throwJsError(
+            ctx,
+            fmt::format(
+                "{}: {} (rc={}{})",
+                label,
+                id,
+                rc,
+                err.empty() ? "" : ", " + err
+            )
+        );
+    }
+    return JS_TRUE;
+}
+
+/// 撤销本实例的一条能力实现行 (`unprovideCapability`)
+JSValue JsEngine::capabilityUnprovideValue(
+    JSContext*                       ctx,
+    JsPluginCtx*                     pctx,
+    const PluginxxCapabilitiesIface* caps,
+    int                              argc,
+    JSValueConst*                    argv
+) {
+    if (argc < 1 || !JS_IsString(argv[0])) {
+        return JS_ThrowTypeError(ctx, "unprovideCapability: (id, ownerTag?) required");
+    }
+    pctx->engine->unprovideCapabilityRow(
+        ctx,
+        pctx,
+        caps,
+        jsToCppString(ctx, argv[0]),
+        argc >= 2 && JS_IsString(argv[1]) ? jsToCppString(ctx, argv[1]) : std::string{}
+    );
+    return JS_TRUE;
+}
+
+/// 能力清单 (`listCapabilities`); 主程序不支持时给空数组
+JSValue JsEngine::capabilityListValue(
+    JSContext*                       ctx,
+    JsPluginCtx*                     pctx,
+    const PluginxxCapabilitiesIface* caps
+) {
+    const PluginxxHost* host = pctx->host;
+    if (caps == nullptr || caps->list_capabilities == nullptr) {
+        return JS_NewArray(ctx);
+    }
+    PluginxxString out{nullptr, 0};
+    if (caps->list_capabilities(host, &out) != PLUGINXX_RESULT_OK || out.data == nullptr) {
+        return JS_NewArray(ctx);
+    }
+    std::string json(out.data, static_cast<size_t>(out.size));
+    agentxx::plugin::PluginString::free(host, &out);
+    return jsonTextToValue(ctx, json, "<capabilities>");
+}
+
+/// 一条能力的声明与实现行 (`capabilityInfo`); 未声明给 null
+JSValue JsEngine::capabilityInfoValue(
+    JSContext*                       ctx,
+    JsPluginCtx*                     pctx,
+    const PluginxxCapabilitiesIface* caps,
+    int                              argc,
+    JSValueConst*                    argv
+) {
+    const PluginxxHost* host = pctx->host;
+    if (caps == nullptr || caps->capability_info == nullptr || argc < 1
+        || !JS_IsString(argv[0])) {
+        return JS_NULL;
+    }
+    const std::string id   = jsToCppString(ctx, argv[0]);
+    auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+    PluginxxString    out{nullptr, 0};
+    if (caps->capability_info(host, &idSv, &out) != PLUGINXX_RESULT_OK || out.data == nullptr) {
+        return JS_NULL; ///< 未声明 / 没有任何实现行
+    }
+    std::string json(out.data, static_cast<size_t>(out.size));
+    agentxx::plugin::PluginString::free(host, &out);
+    return jsonTextToValue(ctx, json, "<capability>");
+}
+
+/// 调用一条能力 (`invokeCapability`): 始终返回 Promise, 结算成 `{ok, status, value|error}`
+///
+/// 同步等待会让"同引擎里 A 脚本调 B 脚本"自锁, 因此完成回调只投递回 JS 线程结算。
+JSValue JsEngine::capabilityInvokeValue(
+    JSContext*                       ctx,
+    JsPluginCtx*                     pctx,
+    const PluginxxCapabilitiesIface* caps,
+    int                              argc,
+    JSValueConst*                    argv
+) {
+    if (caps == nullptr || caps->invoke_capability == nullptr) {
+        return throwJsError(ctx, "invokeCapability: host lacks capabilities interface");
+    }
+    if (argc < 1 || !JS_IsString(argv[0])) {
+        return JS_ThrowTypeError(ctx, "invokeCapability: (id, args?, options?) required");
+    }
+    auto*             engine   = pctx->engine;
+    const PluginxxHost* host   = pctx->host;
+    const std::string id       = jsToCppString(ctx, argv[0]);
+    const std::string argsJson = argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{"{}"};
+    int32_t           phase    = 0;
+    int32_t           timeoutMs = -1; ///< -1 = 用声明里的超时
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        phase     = static_cast<int32_t>(propInt64(ctx, argv[2], "phase", 0));
+        timeoutMs = static_cast<int32_t>(propInt64(ctx, argv[2], "timeoutMs", -1));
+    }
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise)) {
+        return promise;
+    }
+    auto bridge     = std::make_shared<JsCapInvokeBridge>();
+    bridge->engine  = engine;
+    bridge->ctx     = ctx;
+    bridge->resolve = resolving[0];
+    bridge->reject  = resolving[1];
+    JsCapInvokeBridge* rawBridge = bridge.get();
+    {
+        std::lock_guard<std::mutex> lk(engine->capMtx_);
+        engine->capInvokes_[rawBridge] = bridge;
+    }
+    auto idSv   = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+    auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+    PluginxxString          err{nullptr, 0};
+    PluginxxOperatorHandle* handle = nullptr;
+    if (caps->invoke_capability_ex != nullptr) {
+        handle = caps->invoke_capability_ex(
+            host,
+            pctx->scope(),
+            &idSv,
+            &argsSv,
+            phase,
+            timeoutMs,
+            &JsEngine::capInvokeDone,
+            rawBridge,
+            &err
+        );
+    } else {
+        handle = caps->invoke_capability(
+            host,
+            pctx->scope(),
+            &idSv,
+            &argsSv,
+            phase,
+            &JsEngine::capInvokeDone,
+            rawBridge,
+            &err
+        );
+    }
+    if (handle == nullptr) {
+        // 真正被拒 (能力未声明 / 没有实现行): 也走 resolve, 业务结论看 ok
+        std::string message = "capability is not available";
+        if (err.data) {
+            message.assign(err.data, static_cast<size_t>(err.size));
+            agentxx::plugin::PluginString::free(host, &err);
+        }
+        engine->settleCapInvoke(rawBridge, PLUGINXX_OPERATOR_FAILED, message);
+    }
+    return promise;
+}
+
+/// `jsonEscape(text)` → 转义成可直接放进 JSON 字符串的内容
+JSValue JsEngine::jsonEscapeValue(
+    JSContext*               ctx,
+    JsPluginCtx*             pctx,
+    const PluginxxJsonIface* jsonIface,
+    int                      argc,
+    JSValueConst*            argv
+) {
+    const PluginxxHost* host = pctx->host;
+    if (jsonIface == nullptr || jsonIface->json_escape == nullptr || argc < 1) {
+        return JS_NewString(ctx, "");
+    }
+    const std::string s  = jsToCppString(ctx, argv[0]);
+    auto              sv = agentxx::plugin::PluginStringView::from(s.data(), s.size());
+    PluginxxString    out{nullptr, 0};
+    if (jsonIface->json_escape(host, &sv, &out) != PLUGINXX_RESULT_OK || out.data == nullptr) {
+        return JS_NewString(ctx, "");
+    }
+    JSValue escaped = JS_NewStringLen(ctx, out.data, static_cast<size_t>(out.size));
+    agentxx::plugin::PluginString::free(host, &out);
+    return escaped;
+}
+
+/// `jsonGetString(jsonText, key)` → 取顶层字符串字段 (不是字符串给空串)
+JSValue JsEngine::jsonGetStringValue(
+    JSContext*               ctx,
+    JsPluginCtx*             pctx,
+    const PluginxxJsonIface* jsonIface,
+    int                      argc,
+    JSValueConst*            argv
+) {
+    const PluginxxHost* host = pctx->host;
+    if (jsonIface == nullptr || jsonIface->json_get_string == nullptr || argc < 2) {
+        return JS_NewString(ctx, "");
+    }
+    const std::string jsonText
+        = JS_IsString(argv[0]) ? jsToCppString(ctx, argv[0]) : argsJsonText(ctx, argv[0]);
+    const std::string key = jsToCppString(ctx, argv[1]);
+    auto              jsonSv = agentxx::plugin::PluginStringView::from(
+        jsonText.data(),
+        jsonText.size()
+    );
+    auto keySv = agentxx::plugin::PluginStringView::from(key.data(), key.size());
+    PluginxxString out{nullptr, 0};
+    if (jsonIface->json_get_string(host, &jsonSv, &keySv, &out) != PLUGINXX_RESULT_OK
+        || out.data == nullptr) {
+        return JS_NewString(ctx, "");
+    }
+    JSValue value = JS_NewStringLen(ctx, out.data, static_cast<size_t>(out.size));
+    agentxx::plugin::PluginString::free(host, &out);
+    return value;
+}
+
 JSValue JsEngine::bridgeCall(
     JSContext*    ctx,
     JSValueConst  this_val,
@@ -4380,9 +4862,24 @@ JSValue JsEngine::bridgeCall(
             spec.description = agentxx::plugin::PluginStringView::from(desc.data(), desc.size());
             spec.parameters_json
                 = agentxx::plugin::PluginStringView::from(paramsJson.data(), paramsJson.size());
+            // 与 C++ kit 的 fast_tool / blocking_tool / polled_tool 同一组可选项:
+            // - timeoutMs: 本次调用的默认超时 (0 = 不限), 超时按普通失败结束
+            // - autoSummary / parallelSafe / repeatCallCheck: 工具行为标志 (见 plugin_api.h)
+            spec.default_timeout_ms = propInt64(ctx, specObj, "timeoutMs", 0);
+            int32_t flags           = AGENTXX_PLUGIN_TOOL_FLAG_NONE;
+            if (propBool(ctx, specObj, "autoSummary", false)) {
+                flags |= AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
+            }
+            if (propBool(ctx, specObj, "parallelSafe", false)) {
+                flags |= AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE;
+            }
+            if (propBool(ctx, specObj, "repeatCallCheck", false)) {
+                flags |= AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
+            }
+            spec.flags = flags;
             // 统一异步操作模型: 异步桥 (JS 线程完成时经通知器上报)
             spec.execute_start  = &JsEngine::toolExecuteStart;
-            spec.execute_cancel = nullptr;
+            spec.execute_cancel = &JsEngine::toolExecuteCancel;
             spec.user_data      = binding.get();
             int rc              = iface.tools->register_tool(host, pctx->scope(), &spec);
             if (rc != 0) {
@@ -6020,212 +6517,47 @@ JSValue JsEngine::bridgeCall(
         }
 
         // ---- 能力表 (`agentxx.capabilities`): 登记脚本实现行 / 注销 / 自省 / 调用 ----
-        case B_PROVIDE_CAPABILITY: {
-            if (argc < 1 || !JS_IsObject(argv[0])) {
-                return JS_ThrowTypeError(ctx, "provideCapability: options object required");
-            }
-            JSValueConst  opt = argv[0];
-            const std::string id = propString(ctx, opt, "id");
-            JSValue       fnVal  = JS_GetPropertyStr(ctx, opt, "handler");
-            if (id.empty() || !JS_IsFunction(ctx, fnVal)) {
-                JS_FreeValue(ctx, fnVal);
-                return JS_ThrowTypeError(
-                    ctx,
-                    "provideCapability: {id, handler} required"
-                );
-            }
-            std::string err;
-            const int32_t rc = engine->provideCapabilityRow(
+        // 实现放在 capability*Value (agent 与 client 两侧共用; client 侧登记的是进程级行)
+        case B_PROVIDE_CAPABILITY:
+            return capabilityProvideValue(
                 ctx,
                 pctx,
                 iface.capabilities,
-                id,
-                propString(ctx, opt, "ownerTag"),
-                fnVal,
+                argc,
+                argv,
                 false,
-                capabilityImplsOf(ctx, opt),
-                capabilityMergeOf(ctx, opt),
-                capabilityPhasesOf(ctx, opt),
-                static_cast<int32_t>(propInt64(ctx, opt, "priority", 0)),
-                static_cast<int32_t>(propInt64(ctx, opt, "timeoutMs", 0)),
-                &err
+                "provideCapability"
             );
-            JS_FreeValue(ctx, fnVal);
-            if (rc != 0) {
-                return throwJsError(
-                    ctx,
-                    fmt::format(
-                        "provideCapability: {} (rc={}{})",
-                        id,
-                        rc,
-                        err.empty() ? "" : ", " + err
-                    )
-                );
-            }
-            return JS_TRUE;
-        }
 
-        case B_PROVIDE_POINT: {
-            // providePoint(pointId, handler, {priority?, timeoutMs?, ownerTag?})
-            // 登记形状与 kit 的 providePoint 同一套: many + first + 只开 impl 阶段
-            if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsFunction(ctx, argv[1])) {
-                return JS_ThrowTypeError(
-                    ctx,
-                    "providePoint: (pointId, handler, options?) required"
-                );
-            }
-            const std::string pointId = jsToCppString(ctx, argv[0]);
-            JSValueConst      opt     = argc >= 3 && JS_IsObject(argv[2]) ? argv[2] : JS_UNDEFINED;
-            std::string       err;
-            const int32_t     rc      = engine->provideCapabilityRow(
+        case B_PROVIDE_POINT:
+            return capabilityProvideValue(
                 ctx,
                 pctx,
                 iface.capabilities,
-                pointId,
-                JS_IsObject(opt) ? propString(ctx, opt, "ownerTag") : std::string{},
-                argv[1],
+                argc,
+                argv,
                 true,
-                PLUGINXX_CAPABILITY_IMPLS_MANY,
-                PLUGINXX_CAPABILITY_MERGE_FIRST,
-                PLUGINXX_CAPABILITY_PHASE_MASK_IMPL,
-                JS_IsObject(opt) ? static_cast<int32_t>(propInt64(ctx, opt, "priority", 0)) : 0,
-                JS_IsObject(opt) ? static_cast<int32_t>(propInt64(ctx, opt, "timeoutMs", 0)) : 0,
-                &err
+                "providePoint"
             );
-            if (rc != 0) {
-                return throwJsError(
-                    ctx,
-                    fmt::format(
-                        "providePoint: {} (rc={}{})",
-                        pointId,
-                        rc,
-                        err.empty() ? "" : ", " + err
-                    )
-                );
-            }
-            return JS_TRUE;
-        }
 
-        case B_UNPROVIDE_CAPABILITY: {
-            if (argc < 1 || !JS_IsString(argv[0])) {
-                return JS_ThrowTypeError(ctx, "unprovideCapability: (id, ownerTag?) required");
-            }
-            engine->unprovideCapabilityRow(
-                ctx,
-                pctx,
-                iface.capabilities,
-                jsToCppString(ctx, argv[0]),
-                argc >= 2 && JS_IsString(argv[1]) ? jsToCppString(ctx, argv[1]) : std::string{}
-            );
-            return JS_TRUE;
-        }
+        case B_UNPROVIDE_CAPABILITY:
+            return capabilityUnprovideValue(ctx, pctx, iface.capabilities, argc, argv);
 
-        case B_LIST_CAPABILITIES: {
-            if (!iface.capabilities || !iface.capabilities->list_capabilities) {
-                return JS_NewArray(ctx);
-            }
-            PluginxxString out{nullptr, 0};
-            if (iface.capabilities->list_capabilities(host, &out) != PLUGINXX_RESULT_OK
-                || !out.data) {
-                return JS_NewArray(ctx);
-            }
-            std::string json(out.data, static_cast<size_t>(out.size));
-            agentxx::plugin::PluginString::free(host, &out);
-            return jsonTextToValue(ctx, json, "<capabilities>");
-        }
+        case B_LIST_CAPABILITIES:
+            return capabilityListValue(ctx, pctx, iface.capabilities);
 
-        case B_CAPABILITY_INFO: {
-            if (!iface.capabilities || !iface.capabilities->capability_info || argc < 1
-                || !JS_IsString(argv[0])) {
-                return JS_NULL;
-            }
-            const std::string id   = jsToCppString(ctx, argv[0]);
-            auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-            PluginxxString    out{nullptr, 0};
-            if (iface.capabilities->capability_info(host, &idSv, &out) != PLUGINXX_RESULT_OK
-                || !out.data) {
-                return JS_NULL; ///< 未声明 / 没有任何实现行
-            }
-            std::string json(out.data, static_cast<size_t>(out.size));
-            agentxx::plugin::PluginString::free(host, &out);
-            return jsonTextToValue(ctx, json, "<capability>");
-        }
+        case B_CAPABILITY_INFO:
+            return capabilityInfoValue(ctx, pctx, iface.capabilities, argc, argv);
 
-        case B_INVOKE_CAPABILITY: {
-            // invokeCapability(id, args?, {phase?, timeoutMs?}) -> Promise
-            // - 一律返回 Promise 并 resolve 成 `{ok, status, value|error}`: 不阻塞 JS 线程
-            //   (同步等待会让"同引擎里 A 脚本调 B 脚本"自锁)
-            if (!iface.capabilities || !iface.capabilities->invoke_capability) {
-                return throwJsError(ctx, "invokeCapability: host lacks capabilities interface");
-            }
-            if (argc < 1 || !JS_IsString(argv[0])) {
-                return JS_ThrowTypeError(
-                    ctx,
-                    "invokeCapability: (id, args?, options?) required"
-                );
-            }
-            const std::string id       = jsToCppString(ctx, argv[0]);
-            const std::string argsJson = argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{"{}"};
-            int32_t           phase    = 0;
-            int32_t           timeoutMs = -1; ///< -1 = 用声明里的超时
-            if (argc >= 3 && JS_IsObject(argv[2])) {
-                phase     = static_cast<int32_t>(propInt64(ctx, argv[2], "phase", 0));
-                timeoutMs = static_cast<int32_t>(propInt64(ctx, argv[2], "timeoutMs", -1));
-            }
-            JSValue resolving[2];
-            JSValue promise = JS_NewPromiseCapability(ctx, resolving);
-            if (JS_IsException(promise)) {
-                return promise;
-            }
-            auto bridge      = std::make_shared<JsCapInvokeBridge>();
-            bridge->engine   = engine;
-            bridge->ctx      = ctx;
-            bridge->resolve  = resolving[0];
-            bridge->reject   = resolving[1];
-            JsCapInvokeBridge* rawBridge = bridge.get();
-            {
-                std::lock_guard<std::mutex> lk(engine->capMtx_);
-                engine->capInvokes_[rawBridge] = bridge;
-            }
-            auto idSv   = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-            auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
-            PluginxxString err{nullptr, 0};
-            PluginxxOperatorHandle* handle = nullptr;
-            if (iface.capabilities->invoke_capability_ex) {
-                handle = iface.capabilities->invoke_capability_ex(
-                    host,
-                    pctx->scope(),
-                    &idSv,
-                    &argsSv,
-                    phase,
-                    timeoutMs,
-                    &JsEngine::capInvokeDone,
-                    rawBridge,
-                    &err
-                );
-            } else {
-                handle = iface.capabilities->invoke_capability(
-                    host,
-                    pctx->scope(),
-                    &idSv,
-                    &argsSv,
-                    phase,
-                    &JsEngine::capInvokeDone,
-                    rawBridge,
-                    &err
-                );
-            }
-            if (handle == nullptr) {
-                // 真正被拒 (能力未声明 / 没有实现行): 也走 resolve, 业务结论看 ok
-                std::string message = "capability is not available";
-                if (err.data) {
-                    message.assign(err.data, static_cast<size_t>(err.size));
-                    agentxx::plugin::PluginString::free(host, &err);
-                }
-                engine->settleCapInvoke(rawBridge, PLUGINXX_OPERATOR_FAILED, message);
-            }
-            return promise;
-        }
+        case B_INVOKE_CAPABILITY:
+            return capabilityInvokeValue(ctx, pctx, iface.capabilities, argc, argv);
+
+        // ---- JSON 辅助 (`agentxx.json`): 转义 / 取顶层字符串字段 ----
+        case B_JSON_ESCAPE:
+            return jsonEscapeValue(ctx, pctx, iface.json, argc, argv);
+
+        case B_JSON_GET_STRING:
+            return jsonGetStringValue(ctx, pctx, iface.json, argc, argv);
 
         default:
             return JS_ThrowInternalError(ctx, "unknown bridge magic %d", magic);
@@ -6543,6 +6875,75 @@ JSValue JsEngine::clientBridgeCall(
     };
 
     switch (magic) {
+        // ---- 能力行: 与 agent 侧同一套实现 (client 实例没有挂载作用域 → 进程级行) ----
+        // 功能埋点 (providePoint) 是 agent 侧概念, client 侧不提供
+        case B_PROVIDE_CAPABILITY:
+            return JsEngine::capabilityProvideValue(
+                ctx,
+                pctx,
+                agentxx::plugin::queryInterface<PluginxxCapabilitiesIface>(
+                    host,
+                    PLUGINXX_IFACE_CAPABILITIES
+                ),
+                argc,
+                argv,
+                false,
+                "provideCapability"
+            );
+
+        case B_UNPROVIDE_CAPABILITY:
+            return JsEngine::capabilityUnprovideValue(
+                ctx,
+                pctx,
+                agentxx::plugin::queryInterface<PluginxxCapabilitiesIface>(
+                    host,
+                    PLUGINXX_IFACE_CAPABILITIES
+                ),
+                argc,
+                argv
+            );
+
+        case B_LIST_CAPABILITIES:
+            return JsEngine::capabilityListValue(
+                ctx,
+                pctx,
+                agentxx::plugin::queryInterface<PluginxxCapabilitiesIface>(
+                    host,
+                    PLUGINXX_IFACE_CAPABILITIES
+                )
+            );
+
+        case B_CAPABILITY_INFO:
+            return JsEngine::capabilityInfoValue(
+                ctx,
+                pctx,
+                agentxx::plugin::queryInterface<PluginxxCapabilitiesIface>(
+                    host,
+                    PLUGINXX_IFACE_CAPABILITIES
+                ),
+                argc,
+                argv
+            );
+
+        case B_INVOKE_CAPABILITY:
+            return JsEngine::capabilityInvokeValue(
+                ctx,
+                pctx,
+                agentxx::plugin::queryInterface<PluginxxCapabilitiesIface>(
+                    host,
+                    PLUGINXX_IFACE_CAPABILITIES
+                ),
+                argc,
+                argv
+            );
+
+        // ---- JSON 辅助 (`agentxx.json`): 两侧同一套实现 ----
+        case B_JSON_ESCAPE:
+            return JsEngine::jsonEscapeValue(ctx, pctx, iface.json, argc, argv);
+
+        case B_JSON_GET_STRING:
+            return JsEngine::jsonGetStringValue(ctx, pctx, iface.json, argc, argv);
+
         case B_LOG: {
             int level = 2;
             if (argc >= 1 && JS_IsNumber(argv[0])) {

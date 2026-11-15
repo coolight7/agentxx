@@ -345,9 +345,11 @@ path/to/agentxx_test --log-level warn string_util regex
     `run({nodeName, type, config, state, threadId})` 返回节点输出 `{writes, command, sends}`,
     同样是异步操作契约所以可以返回 Promise, 回调在 JS 线程; 类型须在建图前 (脚本顶层) 登记,
     随挂载卸载自动撤销; 脚本实例在 mount 之后才由 JS 线程建立, 要与首次建图严格同步须改用
-    C++ 插件在 mount 里登记);
-    **故意不做**: `scheduler.*` / `cancel.op_cancel` / `tasks.*` / `coroutine_runtime.*` /
-    `json.*`; 顺带修了两处旧 bug: 实例订阅表 `agents` 从未初始化 (脚本 `subscribe` / `onHook`
+    C++ 插件在 mount 里登记)、工具选项与取消 (`registerTool` 的 `timeoutMs` /
+    `autoSummary` / `parallelSafe` / `repeatCallCheck`; 工具回调的 `ctx.isCanceled()`
+    是协作式取消, 主程序只置标记)、`jsonEscape` / `jsonGetString`、client 侧能力行
+    (进程级行; `providePoint` 只在 agent 侧);
+    **故意不做**: `scheduler.*` / `cancel.op_cancel` / `tasks.*` / `coroutine_runtime.*`; 顺带修了两处旧 bug: 实例订阅表 `agents` 从未初始化 (脚本 `subscribe` / `onHook`
     的回调永远不执行)、一次派发会把同频道所有处理器都调一遍 (现按订阅下标各调一次)
   - **不要再为它加 agent 侧接口表**: 2026-11 曾按"agent 侧登记 + wire 往返"实现过一版
     (`agentxx.agent.tool_render` + 三条 wire 消息), 评估后整体回退 —— 渲染器注册面只在

@@ -202,7 +202,7 @@ if (SIDE === "client") {
     { onEnd: () => { subEnds++; } },
   );
 
-  // ---- client 侧: 通用表 (配置 / 插件清单 / 广播声明-发布-读-结束) ----
+  // ---- client 侧: 通用表 (配置 / 插件清单 / 广播声明-发布-读-结束 / 能力行) ----
   // 这些入口会等主程序 io 线程, 所以放在投递式回调 (动作) 里调。
   agentxx.bindAction("js.demo.sdk", () => {
     const plugins = agentxx.listPlugins();
@@ -217,17 +217,40 @@ if (SIDE === "client") {
     // 订阅自检: 本频道的发布与结束在上一轮已经到过回调 (处理异步, 这里读到的是上一轮)
     agentxx.publish(subChannel, { n: 1 });
     agentxx.endBroadcast(subChannel, "round done");
-    agentxx.showToast(
-      "sdk: plugins=" + (plugins ? plugins.length : -1) +
-        " self=" + (self && self.name ? self.name : "?") +
-        " config=" + (cfg === null ? "null" : "object") +
-        " read=" + (current && current.tick === 1) +
-        " ended=" + ended +
-        " afterEnd=" + (afterEnd === null) +
-        " echo=" + subEcho +
-        " ends=" + subEnds,
-      0,
-    );
+
+    // 能力行 (client 侧登记的是进程级行): 登记 → 调用 (Promise) → 注销
+    // - toast 在 Promise 落地后才发, 所以订阅计数先取快照, 保持"本次动作时刻"的语义
+    const echoSeen = subEcho;
+    const endsSeen = subEnds;
+    const capId = "client.selftest";
+    let capProvided = "false";
+    try {
+      capProvided = String(agentxx.provideCapability({
+        id: capId,
+        handler: (args) => ({ echo: args && args.ping, side: "client" }),
+      }));
+    } catch (e) {
+      capProvided = "error";
+    }
+    agentxx.invokeCapability("plugin.example_js." + capId, { ping: "pong" }).then((r) => {
+      const value = (r && r.value) || {};
+      agentxx.unprovideCapability(capId);
+      agentxx.showToast(
+        "sdk: plugins=" + (plugins ? plugins.length : -1) +
+          " self=" + (self && self.name ? self.name : "?") +
+          " config=" + (cfg === null ? "null" : "object") +
+          " read=" + (current && current.tick === 1) +
+          " ended=" + ended +
+          " afterEnd=" + (afterEnd === null) +
+          " echo=" + echoSeen +
+          " ends=" + endsSeen +
+          " cap=" + capProvided +
+          "/" + (r && r.ok ? value.echo : "fail") +
+          "/" + (value.side || "-") +
+          " json=" + agentxx.jsonGetString('{"k":"v"}', "k"),
+        0,
+      );
+    });
   });
 
 } else {
@@ -463,6 +486,10 @@ if (SIDE === "client") {
       } catch (e) {
         out.registerNodeTypeError = String(e && e.message ? e.message : e);
       }
+
+      // 7) JSON 辅助 (`agentxx.json`): 转义一段文本 / 取顶层字符串字段
+      out.jsonEscape = agentxx.jsonEscape('a"b\\c');
+      out.jsonGetString = agentxx.jsonGetString('{"k":"v","n":1}', "k");
       return out;
     },
   });
@@ -526,9 +553,51 @@ if (SIDE === "client") {
       }),
     });
   } catch (e) {
-    // 宿主没有图注册表 (例如只验证脚本能力的环境): 不影响其余注册
+    // 主程序没有图注册表 (例如只验证脚本能力的环境): 不影响其余注册
     agentxx.log(3, "example_js registerNodeType skipped: " + e);
   }
+
+  // ---- 工具 11: 工具标志与默认超时 (与 C++ kit 的 flags / timeoutMs 对齐) ----
+  agentxx.registerTool({
+    name: "js_flag_probe",
+    description: "JS plugin demo: tool with autoSummary / parallelSafe / repeatCallCheck.",
+    parameters: {},
+    autoSummary: true,
+    parallelSafe: true,
+    repeatCallCheck: true,
+    timeoutMs: 5000,
+    execute: () => ({ ok: true }),
+  });
+
+  // ---- 工具 12: 协作式取消 (ctx.isCanceled() 轮询, 与 C++ SDK 同语义) ----
+  // - 主程序取消 (会话取消 / timeoutMs 到点) 只置标记, 脚本不查就继续跑完
+  let cancelProbeObservation = -1;
+
+  agentxx.registerTool({
+    name: "js_cancel_probe",
+    description: "JS plugin demo: poll ctx.isCanceled() while working (default timeout 120ms).",
+    parameters: {},
+    timeoutMs: 120,
+    execute: async (args, ctx) => {
+      let seen = -1;
+      for (let i = 0; i < 100; i++) {
+        if (typeof ctx.isCanceled === "function" && ctx.isCanceled()) {
+          seen = i;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      cancelProbeObservation = seen;
+      return { canceledAt: seen };
+    },
+  });
+
+  agentxx.registerTool({
+    name: "js_cancel_report",
+    description: "JS plugin demo: report what the cancel probe last observed.",
+    parameters: {},
+    execute: () => ({ canceledAt: cancelProbeObservation }),
+  });
 
   // ---- 通知点: agent_start (point 0) ----
   agentxx.onHook(0, (info) => {
