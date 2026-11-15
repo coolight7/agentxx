@@ -3,7 +3,7 @@
 > 目标读者: 修改插件接口表 / vtable / kit 的开发者
 > 相关文档: [plugins.md](../../../docs/zh-cn/design/plugins.md) (插件系统总览与 §8 接口表分类) · [js-runtime plan](../js-runtime-singleton/plan.md) (JS 运行时单例重构) · [index.md](../../../docs/zh-cn/design/index.md) (主程序架构)
 >
-> 本文件是任务规划 (未实施), 落地后结论搬进 [plugins.md](../../../docs/zh-cn/design/plugins.md) §8 与 `AGENTS.md`。
+> 本文件是任务规划 (未实施), 实施完成后结论搬进 [plugins.md](../../../docs/zh-cn/design/plugins.md) §8 与 `AGENTS.md`。
 
 ## 1. 背景与目标
 
@@ -37,7 +37,7 @@
 
 ## 4. 设计原则
 
-1. **能异步的一律异步**，只有"必须同步"的语义才保留同步 (清单见 §6)。
+1. **能异步的一律异步**，只有"必须同步"的语义才保留同步 (成员清单见 §5, 回调清单见 §6)。
 2. **异步 ≠ 并行**: 同一实例的调用按受理顺序执行 (io 线程 FIFO)，顺序语义不因异步化改变。
 3. **错误分层**: 参数/作用域/状态类错误在**入口**同步返回 (`NULL` + `error_out`)；执行期错误经回调 `status = FAILED`；取消走 `CANCELED`。这样"写错参数"仍然是立刻可见的编译期/运行期错误，不需要等一次往返。
 4. **payload 语义不变**: 回调载荷就是原来 `out` 的内容 (JSON 或纯文本)，迁移时下游解析代码不用改。
@@ -134,9 +134,98 @@
 
 **统计** (agent 侧 53 + client 36 + 通用 37 成员): 改异步 ≈ 45 项，保持同步 ≈ 55 项，已是异步 ≈ 12 项，明确不可异步 ≈ 14 项。
 
-## 6. 目标 ABI 形态
+回调函数不在上面四张表里，单独盘点见 §6: **需要改的只有 3 个回答型回调**。
 
-### 6.1 成员签名
+## 6. 回调函数盘点与结论
+
+接口表里的回调分两个方向。判断改不改的标准不是"实现得慢不慢"，而是**调用方是否必须在本帧/本次调用里拿到返回值**:
+
+- **通知型** (`void`，只把事件交给插件): 主程序不等结果，回调慢只拖住它自己那条线程 → **保持同步**。正确写法是"拷走数据、立刻返回，重活投递回自己的线程"（相关结构体注释已经是这么要求的）。
+- **回答型** (返回 `int32_t` + 出参，调用方要用这个值继续算): 调用方被迫等 → **改异步**；同时保留"回调内部立刻 `notify->done` 就当同步完成"的快路径，本来就在微秒级算完的插件行为不变。
+
+### 6.1 主程序调用插件的回调 (插件注册 / 传入)
+
+| 回调 | 调用方与线程 | 现状 | 结论 |
+|---|---|---|---|
+| `start` / `stop` (`PluginxxStartFn` / `PluginxxStopFn`) | 主程序 → 插件, io | notify/op | 🔁 已是异步 |
+| `mount` / `unmount` (`AgentxxPluginAgentMountFn` / `UnmountFn`) | 主程序 → 插件, io | notify/op | 🔁 已是异步 |
+| 工具 `execute_start` / `execute_cancel` | 主程序, io | notify/op + 取消 | 🔁 已是异步 |
+| 图节点 `run_start` / `run_cancel` | 主程序, io | notify/op + 取消 | 🔁 已是异步 |
+| 能力行 `run_start` / `cancel` | 主程序, io | notify/op + 取消 | 🔁 已是异步 |
+| `tasks.register_task` 的 `cancel_fn` + `notify` | 主程序, io | notify/op | 🔁 已是异步 |
+| **工具折叠内容 `collapsed_fn`** | client io | **同步返回文本** | ✅ **改异步** |
+| **工具展开内容 `expanded_fn`** | client io (仅展开时) | **同步返回 items JSON** | ✅ **改异步** |
+| **斜杠命令 `execute`** | client io | **同步返回动作 JSON** | ✅ **改异步** |
+| 动作处理 `AgentxxUiActionFn` | client io | void 投递 | ⏸ 保持 |
+| 定时器 `on_timer` / 快捷键 `on_keybind` | client io | void 投递 | ⏸ 保持 |
+| 广播订阅 `handler` / `on_end` (`subscribe_broadcast(_ex)`) | 派发线程 | void 投递 | ⏸ 保持 |
+| 会话通道 `on_event` (`AgentxxPluginChannelEventFn`) | 根所属 io | void 投递 | ⏸ 保持 |
+| 后台任务 `on_event` (`AgentxxPluginAsyncWorkEventFn`) | 容器 io | void 投递 | ⏸ 保持 |
+| 驱动 `drive_once` (`PluginxxDriveOnceFn`) | 主程序 io | void 单步推进 | ⏸ 保持 |
+| 取消查询 `is_requested` (`PluginxxCancelToken`) | 任意 | 同步查询 | ❌ 必须同步 |
+| 入口 `get_info` / `create` / `destroy` | 加载线程 | 构造/析构 | ❌ 必须同步 |
+| host vtable `alloc` / `free` / `query_interface` | 任意 | 内存与查表基础 | ❌ 必须同步 |
+
+### 6.2 插件传给表成员的完成回调
+
+| 回调 | 用在哪 | 现状 | 结论 |
+|---|---|---|---|
+| `PluginxxOperatorCallback cb` | `call_tool_async` / `invoke_capability(_ex)` / `scheduler.sleep` / `scheduler.offload` | 回调式异步 | 🔁 |
+| `PluginxxOperatorNotify*` (`done(status, payload)`) | 所有操作契约的入参与出参 (`register_task` 是出参) | 恰好一次, 任意线程 | 🔁 |
+| `scheduler.post_to_io(fn, ud)` | 投递一次 | fire-and-forget | ⏸ |
+| `coroutine_runtime.request_driver(drive_once, ud)` | 协程推进 | 主程序异步投递 | ⏸ |
+| `net.call_async` 的 `notify` | 网络请求 | 已完成 | 🔁 |
+| `pluginxx.cancel.op_cancel` | 取消 | 同步非阻塞 | ❌ 必须同步 |
+
+结论: 回调里只有 **3 个回答型** 要改（都是 client 侧），其它要么已经是操作契约，要么本来就是通知，改了只多一次往返。
+
+### 6.3 三个回答型回调的新契约
+
+三者统一成与工具 `execute_start` 同构的形态:
+
+```c
+/// 结果经 notify 交回: status = OK 时 payload 是内容；其它值等于"这次没有自定义内容"
+/// - 回调内部立刻 notify->done(...) → 用本次内容 (快路径, 与改之前行为一致)
+/// - 也可以返回后稍晚再 done → 主程序先用默认内容/上次缓存渲染, 结果到达时刷新该行
+/// - 仍返回 `int32_t`: 0 = 已受理; 非 0 = 没受理 (写 error_out), 按默认渲染处理
+typedef int32_t(PLUGINXX_CALL* AgentxxToolCollapsedRenderFn)(
+    void*                         user_data,
+    const AgentxxToolRenderInput* input,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
+);
+```
+
+| 回调 | `done` 的 payload | 主程序拿到后 |
+|---|---|---|
+| 折叠内容 | 一行纯文本 | 替换该行折叠态的内容并沿用缓存 |
+| 展开内容 | items JSON 数组 | 填充展开体 (只在展开时请求) |
+| 命令 `execute` | 动作 JSON | 按动作执行 (与现在收到返回值后的处理相同) |
+
+- **没有自定义内容**: `done(OK, 空)` 或 `done(FAILED, ...)` 都按默认渲染处理（与现在"出参留空"一致）;
+- **失效与代际**: 每行的折叠内容与展开内容各自有请求代际 (就是现有缓存键 `#c` / `#e`)。参数签名、版本号变化或行被删除时，旧代际的 `done` 只被丢弃，不会写回界面;
+- **不做请求超时/取消**: 插件不答就一直用默认内容，界面不受影响（脚本侧另有任务预算，超时按失败收尾）；实例卸载后仍有 `done` 到达也只被丢弃。
+
+**为什么这样不损失体验**: 现有 C++ 渲染体都在微秒到毫秒级，`done` 在回调内部同步发出，主程序当帧就能取到内容 —— 缓存命中、内容、刷新次数与现在完全一样；只有真的慢（脚本、网络、大文件差异）才走"先默认、后刷新"。
+
+**连带收益**: client 侧 JS 不再需要 150 ms 同步桥 (`invokeRenderSync` / `invokeCallbackSync` / `kClientSyncTimeoutMs`)。脚本里这两个回调可以直接返回字符串 / 数组，也可以返回 Promise (引擎在 resolve 后 `done`)。
+
+### 6.4 受影响的声明
+
+| 声明 | 改动 |
+|---|---|
+| `AgentxxToolCollapsedRenderFn` / `AgentxxToolExpandedRenderFn` | 追加 `notify` + `error_out` 参数 |
+| `AgentxxToolRenderSpec` | `version` 1 → 2 (两个回调 typedef 换签名) |
+| `AgentxxClientUiIface::register_command` 的 `execute` | 换成同一形态的内联函数指针 (随该表 VERSION → 2 + BASELINE 重置) |
+| kit (`plugin_kit.h`) | 包一层"现在就算完"与"稍后 `done`"两种写法；脚本侧对应返回字符串/数组/Promise |
+
+kit 里的工具写法不受影响: `fast_tool` 的业务体本来就是同步返回结果，内部等价于
+"回调里立刻 `done`"；`blocking_tool` / `polled_tool` 本来就走 offload 与 op。只有渲染器
+与命令的新 kit 写法需要区分"当场给"与"晚点给"两种。
+
+## 7. 目标 ABI 形态
+
+### 7.1 成员签名
 
 保持"平铺参数 + 尾部追加回调"，避免为每个成员新增 args 结构 (参数已稳定，扩展走 `_ex` 惯例):
 
@@ -172,13 +261,13 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
 - `pluginxx.cancel.op_cancel` 可取消尚未完成的调用 (协作式)；
 - 主程序保证回调在它自己的 io 线程上发出 (插件不必关心线程)，与现有 `invoke_capability` 一致。
 
-### 6.2 顺序与并发
+### 7.2 顺序与并发
 
 - 同一实例的表调用按**受理顺序**执行 (投递队列 FIFO)；跨实例互不影响。
 - 成员实现内部可以 `co_await` 真正的异步动作 (磁盘/网络/等待会话)，但下游队列仍按受理顺序取，不会乱序。
 - 不提供"并行执行同实例的表调用"开关：需要并发就用 `agentxx_async_run` / `submitAsyncWork` 那套后台任务，语义更清楚。
 
-### 6.3 接口表版本策略
+### 7.3 接口表版本策略
 
 改签名属于破坏性变更。当前全局 `AGENTXX_PLUGIN_API_VERSION` = 5 (未发布)，本次直接:
 
@@ -190,7 +279,7 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
 
 `boundaries` 测试逐表校验四件套与成员顺序清单，改完必须同步更新它的期望表。
 
-## 7. kit 层: 三种消费形态
+## 8. kit 层: 三种消费形态
 
 | 形态 | 入口 | 约束 |
 |---|---|---|
@@ -200,39 +289,42 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
 
 实现要点: `co_await` 形态与现有 `co_await netCallAsync(ctx, op, args)`、`co_await invoke_cap(...)` 用同一套挂起协议 (回调不直接恢复插件协程，而是经实例 io 线程恢复)，因此不用新造机制。
 
-## 8. 分阶段实施
+## 9. 分阶段实施
 
 | 阶段 | 范围 | 产出 |
 |---|---|---|
 | A 骨架 | 新增 `AgentxxPluginOpResult`/`AgentxxPluginOpCallback`、全局 API 版本 6；挑 `agentxx.agent.session` 的 `get_share_store`/`add_share_store` 做成试点 | kit 三种形态 + JS 桥试点 (Promise 化，删除该两处的同步桥) + 测试 |
 | B 业务批 1 | `tools.register_tool`、`check_paths`、`context.get_messages`、`prompt.*`、`resources.*`、`graph.get/set_graph_json`、`mount.list/get`、`model.get_config` | 12 个内置插件与示例按需迁移 |
 | C runtime 批 | `mount_root`、`open_channel`、`close_channel`、`unmount_root`、`get_channel_state`、`get_context_messages`、`list_runtime`、`submit_async_work`、`*-async_work` 查询 | 会话运行时相关测试 (`plugin_agent_runtime` / `plugin_example_runtime`) 全绿 |
-| D client 批 | `ui.*` 注册/更新、`session.get_client_state`、`self.get_own_info`、`keybind.list_keybinds` | `client_plugins` / `plugin_ui` 相关用例 |
-| E 收尾 | 删除残留同步路径与 `ioCallSyncKeep`、更新 `plugins.md` §8.3 全表、`AGENTS.md`、`config-keys` 若涉及 | 全量回归 + 性能对比 |
+| D client 批 | `ui.*` 注册/更新、`session.get_client_state`、`self.get_own_info`、`keybind.list_keybinds`；三个回答型回调改异步 (工具折叠/展开渲染、命令 `execute`, 见 §6) | `client_plugins` / `plugin_ui` 相关用例 |
+| E 收尾 | 删除残留同步路径与 `ioCallSyncKeep`、删除 client 侧 150 ms 同步桥 (`invokeRenderSync` / `invokeCallbackSync` / `kClientSyncTimeoutMs`)、更新 `plugins.md` §8.3 全表、`AGENTS.md`、`config-keys` 若涉及 | 全量回归 + 性能对比 |
 
 每阶段独立可编译、可测；阶段 A 的试点决定后续所有成员的模板，先定稿再铺开。
 
-## 9. 验证
+## 10. 验证
 
 - **功能**: 每阶段跑该表相关测试模块；阶段 E 跑 `plugins`、`client_plugins`、`plugin_*` 全量。
 - **io 线程占用**: `KeyMetrics` 增加 `table_calls` (按表名 + 成员名累计次数/总耗时/最大耗时，仅在 `dev_mode` 收集)，加载快照输出。验收标准: 单次表调用在 io 线程上的耗时 P99 低于 2 ms (磁盘类成员经异步后不再计入 io 线程时间)。
 - **JS 侧**: 表异步化后，`client_plugins` 里"脚本在渲染回调里调表"的用例应不再依赖 150 ms 兜底；引擎的 `ioCallSyncKeep` 调用点应归零。
+- **回答型回调 (§6)**: 快路径 (回调内同步 `done`) 下渲染次数与缓存命中与改之前一致；慢路径 (稍后 `done`) 先显示默认内容、到达后刷新同一行；参数或版本变化后旧代际的 `done` 被丢弃；行删除/实例卸载后的 `done` 不写回界面。
 - **顺序语义**: 新增用例 —— 连续 `register_tool(A)`→`register_tool(B)`→查询，两工具都可见且顺序稳定；`set_prompt`→`get_prompt` 看到新值。
 
-## 10. 风险与对策
+## 11. 风险与对策
 
 | 风险 | 对策 |
 |---|---|
-| 89 个成员一次性改动，迁移面大 | 分 5 阶段；阶段 A 定模板；每阶段只改一组表 |
+| ≈45 个成员要改签名，涉及 12 个内置插件与示例 | 分 5 阶段；阶段 A 定模板；每阶段只改一组表 |
 | C++ 作者使用成本上升 | kit 三种形态；`start`/`mount` 体本来就是协程锚定，`co_await` 直接可用 |
 | 顺序语义被误用 (注册后立刻用) | 成员内部保证按受理顺序执行；文档与 kit 示例强调"注册类调用要 `co_await` 完再继续" |
 | 每次调用多一次 op 分配 | 高频只读成员 (messages_count / is_canceled / get_language) 保持同步；其余调用频度低 |
 | 错误定位变分散 | 入口错误仍同步返回；回调里带 `status` + 文本，`resultName()` 统一翻译 |
 | 破坏性变更 | 未发布 + 明确不兼容；全局版本抬到 6，老插件在加载期被拒并给出"请重新编译"的日志 |
 
-## 11. 不做的事
+## 12. 不做的事
 
 - 不把 `log` / `json.*` / `broadcasts.*` / `is_io_thread` / `op_cancel` / `tasks` 记账类改成异步 (语义要求同步，或改动没有收益)。
+- 不把通知型回调 (动作/定时器/快捷键/广播订阅/通道事件/后台任务事件) 改成异步 —— 它们本来就不等结果，改了只多一次往返。
+- 不给渲染/命令这种回答型回调加"请求超时与取消": 不答就一直用默认内容，行删除或实例卸载后迟到的结果直接丢弃。
 - 不引入"同一实例并行执行表调用"。
 - 不为旧签名保留兼容成员 (不做双份接口)。
 - 不改"插件提供实现"那一侧的通知契约 (工具/能力行/图节点/生命周期已经是 notify 形态)。

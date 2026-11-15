@@ -3,7 +3,7 @@
 > 目标读者: 修改 `agentxx_javascript_engine` / 编写 JS 插件的开发者
 > 相关文档: [plugins.md](../../../docs/zh-cn/design/plugins.md) (插件系统总览, §12 是当前 JS 插件说明) · [plugin-api-async plan](../plugin-api-async/plan.md) (插件接口表异步化, 本设计的前置项) · [index.md](../../../docs/zh-cn/design/index.md)
 >
-> 本文件是任务规划 (未实施), 落地后结论搬进 [plugins.md](../../../docs/zh-cn/design/plugins.md) §12 与 `AGENTS.md`。
+> 本文件是任务规划 (未实施), 实施完成后结论搬进 [plugins.md](../../../docs/zh-cn/design/plugins.md) §12 与 `AGENTS.md`。
 
 ## 1. 背景与现状
 
@@ -149,6 +149,10 @@ client 侧不再单独维护一套 `clientBridgeCall`：client 的 ui/session/wi
 |---|---|
 | 前置（plugin-api-async 完成） | 所有重活表成员已是异步契约 → `mount.getMessages()` 直接返回 Promise，引擎只登记回调，**不需要任何 io→JS 同步桥** |
 | 中间态（异步化未完成时） | 同步成员仍走现有 `ioCallSyncKeep`（含 150 ms 上限）。JS 重构可以先做，但会保留这段过渡代码 |
+
+client 侧两个"回答型"回调（工具折叠/展开渲染、命令 `execute`）的异步化也在
+plugin-api-async 阶段 D 完成（见 [其 plan §6](../plugin-api-async/plan.md)）；那一步完成后，
+本重构的 mount 桥可以完全去掉 `invokeRenderSync` / `invokeCallbackSync`。
 
 **建议顺序: 先做接口表异步化，再做本重构**，这样 mount bridge 的实现量少一半，也避免"先写同步桥再删"。
 
