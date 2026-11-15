@@ -163,3 +163,19 @@ client 侧插件（`agentxx.client.*`）的能力因此对脚本不可见，工�
 - `agentxx_test plugins`：agent 侧 JS 引擎/示例插件行为不变
 - `agentxx_test boundaries config_keys plugin_cleanup`：契约与文档自检
 - 手工：`agentxx_test --log-level warn client_plugins plugins` 无警告
+
+## 7. 第二批（同日追加）
+
+第一批只做到“渲染器 + 展示类调用”，client 表里需要长期持有句柄或回调登记的部分
+留在了 C++ 壳里。第二批沿用同一套桥把它们补齐，设计上没有新概念：
+
+- **句柄**：C 表的不透明指针存不进 JS 的 number → 实例侧 `clientHandles` 记
+  token → {类别, 指针, id}，`0` = 不支持或失败；类别校验后的更新/注销返回布尔值
+- **回调**：`JsClientCallback`（不含 `JSValue`）与路由键一起登记；摘注册不就地释放
+  （注册项作为 `user_data` 被主程序持有，可能还有在途投递）
+- **两条调用路径**：命令 `execute` 走同步桥（与渲染同一 150 ms 上限）；动作/定时器/
+  快捷键只投递，主程序不等结果
+- **撤销**：所有 client 注册也进 `pctx->rollbackActions`，脚本顶层失败或卸载时逆序撤销
+
+验证：`client_plugins` 817 / 0（该段两批共添 43 条断言：首批 23 + 展示项/交互 12 +
+注销与查询 8，覆盖七类面）；其余插件/配置/边界模块与第一批结果一致。

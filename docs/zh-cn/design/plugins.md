@@ -1179,13 +1179,18 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 - **广播**：`declareBroadcast(decl)` (声明自己的频道，失败报异常，`id` 可短名) / `readBroadcast(id)` (没声明、没当前值或已结束都返回 `null`) / `publish` / `subscribe` / `unsubscribe` / `endBroadcast(id, reason?)`
 - **client 侧脚本 (`agentxx.side === "client"`)**：同一个动态库同时导出 `agentxx_plugin_client_*` 入口，因此脚本可以直接作为 **client 端插件**运行（客户端插件加载器给它一份 JS 实例，桥只暴露 client 侧接口）：
     - 展示：`showToast(text, level)`、`updateToolDecor(toolCallId, decor)`、`openOverlay({type, title, payload, extra})` / `closeOverlay()`、**`registerToolRenderer({tool, displayName, collapsed, expanded})`** / `unregisterToolRenderer(tool)`（工具行特化渲染）
+    - 展示项（句柄是整数 token，0 = 主程序不支持或注册失败）：`registerStatusItem({id, props, align, order})` / `updateStatusItem(h, props)` / `unregisterStatusItem(h)`、`registerPanel({id, props})` / `updatePanel(h, items|itemsJson)` / `unregisterPanel(h)`、`registerInfoSection({id, props})` / `updateInfoSection(h, items)` / `unregisterInfoSection(h)`（`items` 可给数组，主程序自动包成 `{"items":[...]}`）
+    - 交互：`registerCommand({name, description, execute})` / `unregisterCommand(name)`（`execute(args)` 同步返回动作 JSON，与 C++ 插件同格式：`{"action":"toast"|"send"|"none",...}`）、`bindAction(targetId, handler)` / `unbindAction(targetId)`（按钮动作，`handler({ownerId, actionId, args})`）、`registerKeybind({keys, description}, fn)` / `unregisterKeybind(h)` / `listKeybinds()`、`setClientTimer({intervalMs, repeat, pauseWhenHidden, ownerId}, fn)` / `cancelClientTimer(h)` / `isRegionVisible(ownerId)`
+    - 句柄约定：client 表的句柄是不透明指针，JS 的 number 存不下 —— 桥把它们换成**整数 token**（`JsPluginCtx::clientHandles`），注销/更新用 token；类别不对或已注销一律返回 false，不报错
     - 会话与跨端：`getClientState()`、`sendUserInput(sessionId, text)`、`requestCancel(sessionId)`、`sendPluginData(topic, json)`
     - 自身信息：`getOwnInfo()` / `getPluginArgs()` / `getPluginConfigPath()` / `getLanguage()` / `setLanguage(tag)`
     - 广播：`subscribe` / `unsubscribe` / `publish`（client 侧事件是唯一通道，见 §20）
     - 实例模型：client 表成员**不带** `PluginxxScopeRef`，因此一份脚本一个实例（无 agent 挂载作用域），脚本全局状态天然按进程隔离；壳只用一份 `start`/`stop`，不需要 mount 入口
-    - **渲染回调是同步的**：回调在 client io 线程要求立即返回内容，而 JS 只在 JS 线程执行。引擎因此提供一条 io→JS 的同步桥：请求投到 JS 线程后最多等 `150 ms` (`kRenderSyncTimeoutMs`)；超时、引擎已停、或 JS 线程正卡在“等 io 线程处理它的表调用”上一律直接放弃，本次按“没有自定义内容”回退默认渲染（不报错、不阻塞界面）。脚本的两个回调**必须同步返回值**（返回 Promise 视为没有内容）；耗时计算请改为订阅事件后用 `updateToolDecor` 推数据
-    - 还没搬上桥的面（后续按同一套补）：状态栏项 / 侧边栏面板 / Info 段落 / 斜杠命令 / 客户端定时器 / 全局快捷键 / 动作回调绑定 —— 它们都要长期保存句柄或回调登记，先在 C++ client 壳里做
-    - 示例：`example_js` 的 `plugin.js` 用 `agentxx.side` 分支，client 侧给 `js_hello` 注册一个特化渲染器（用例 `client_plugins` 第 34 段）；它的清单同时声明 agent 侧 `agentxx.agent.core` 与 client 侧 `agentxx.client.msg_decor`，两侧各自只比较自己那部分
+    - 不在 client 桥上：网络（`agentxx.net` 的 `netCall`/`netFetch`/WS）、后台任务、会话运行时、图与提示词 —— 这些都是 agent 侧能力；客户端脚本要取数据就用 `sendPluginData` 通知 agent 侧插件，或者写成 C++ client 插件
+    - **同步回调有上限**：渲染内容回调与命令 `execute` 都在主程序 io 线程要求同步返回，而 JS 只在 JS 线程执行。引擎因此提供一条 io→JS 的同步桥：请求投到 JS 线程后最多等 `150 ms` (`kClientSyncTimeoutMs`)；超时、引擎已停、或 JS 线程正卡在“等 io 线程处理它的表调用”上一律直接放弃（渲染回退默认内容 / 命令按失败处理，不报错、不阻塞界面）。这两类回调**必须同步返回值**（返回 Promise 视为没有内容）；耗时计算请改为订阅事件后用 `updateToolDecor` 推数据。动作/定时器/快捷键回调是投递式的（fire-and-forget），不受此限
+    - **回调里别再调 client 表**：client 表的注册/更新入口在 JS 线程上会同步等 io 线程做完（`ioCallSyncKeep`），而渲染/命令回调这阵 io 线程正等着 JS —— 两边互等只会等到 150 ms 上限后各自退回（渲染没内容、表调用正常完成）。需要动展示项的活放动作/定时器/快捷键回调里，它们是投递式的，io 线程不在等
+    - 一次没拿到内容的渲染会按“没有自定义内容”缓存，界面用默认渲染；同一行输入不变时不会反复请求（参数/结果变化、行重建、重新注册后会再请求）
+    - 示例：`example_js` 的 `plugin.js` 用 `agentxx.side` 分支，client 侧注册了工具行特化渲染、状态栏项、Info 段落、面板、斜杠命令 `/jsdemo`、按钮动作、快捷键 `ctrl+alt+j` 与一个 60ms×2 的定时器；另有一个 `ctrl+alt+u` 演示注销与查询（`listKeybinds` / `isRegionVisible` / `unregister*` / `cancelClientTimer`）。它的清单同时声明 agent 侧 `agentxx.agent.core` 与 client 侧 `agentxx.client.msg_decor`，两侧各自只比较自己那部分
 - 可自研脚本JS 运行时插件 (Python/Lua 等) 替换或扩充脚本能力
 
 ---

@@ -41,6 +41,107 @@ if (SIDE === "client") {
   }
   agentxx.log(2, "example_js: client side ready (side=" + SIDE + ")");
 
+  // ---- client 侧: 展示面 (状态栏项 / Info 段落 / 侧边栏面板) ----
+  // 句柄都是不透明整数 token; 0 = 主程序不支持或注册失败 (附加能力, 不报错)。
+  const status = agentxx.registerStatusItem({
+    id: "js.demo",
+    props: { text: "js: ready", tooltip: "example_js (client side)" },
+    align: 1,
+    order: 50,
+  });
+  const info = agentxx.registerInfoSection({
+    id: "js.demo.info",
+    props: { title: "JS Demo" },
+  });
+  if (info) {
+    agentxx.updateInfoSection(info, [
+      { kind: "Text", text: "side: client", tone: "hint" },
+      { kind: "Text", text: "渲染器: js_hello", tone: "hint" },
+    ]);
+  }
+  const panel = agentxx.registerPanel({ id: "js.demo.panel", props: { title: "JS Demo" } });
+  if (panel) {
+    agentxx.updatePanel(panel, [
+      { kind: "Text", text: "example_js (client side)", type: "title" },
+      {
+        kind: "Button",
+        label: "打个招呼",
+        action: { kind: "dispatch", name: "js.demo.hello" },
+      },
+    ]);
+  }
+
+  // ---- client 侧: 斜杠命令 (execute 同步返回动作 JSON) ----
+  // 动作格式与 C++ client 插件一致: {"action":"toast","text":...} /
+  // {"action":"send","text":...} / {"action":"none"}
+  agentxx.registerCommand({
+    name: "jsdemo",
+    description: "example_js: 打个招呼 (client 侧命令)",
+    execute: () => ({ action: "toast", text: "hello from JS", level: 0 }),
+  });
+
+  // ---- client 侧: 按钮动作绑定 (面板里的 Button 点击后派发到这里) ----
+  agentxx.bindAction("js.demo.panel", (ev) => {
+    agentxx.showToast("JS action: " + (ev.actionId || "?"), 0);
+  });
+
+  // ---- client 侧: 全局快捷键 ----
+  let keyTicks = 0;
+  const tickBind = agentxx.registerKeybind(
+    { keys: "ctrl+alt+j", description: "example_js: 状态栏计数 +1" },
+    () => {
+      keyTicks += 1;
+      if (status) {
+        agentxx.updateStatusItem(status, { text: "js: key " + keyTicks });
+      }
+    },
+  );
+
+  // ---- client 侧: 定时器 (主程序驱动; 不可见时顺延) ----
+  let timerTicks = 0;
+  const demoTimer = agentxx.setClientTimer(
+    { intervalMs: 60, repeat: 2, pauseWhenHidden: true, ownerId: "js.demo.info" },
+    () => {
+      timerTicks += 1;
+      if (info) {
+        agentxx.updateInfoSection(info, [
+          { kind: "Text", text: "side: client", tone: "hint" },
+          { kind: "Text", text: "timer tick " + timerTicks, tone: "hint" },
+        ]);
+      }
+    },
+  );
+
+  // ---- client 侧: 注销与查询入口 ----
+  // 这是投递式回调 (主程序不等结果), 所以里面可以安全调表;
+  // 命令 execute 与渲染回调里不要这么写 (两边会互等, 150ms 后各自退回)。
+  agentxx.registerKeybind(
+    { keys: "ctrl+alt+u", description: "example_js: 注销展示项" },
+    () => {
+      const binds = agentxx.listKeybinds();
+      const visible = agentxx.isRegionVisible("js.demo.info");
+      if (info) {
+        agentxx.unregisterInfoSection(info);
+      }
+      if (panel) {
+        agentxx.unregisterPanel(panel);
+      }
+      if (status) {
+        agentxx.unregisterStatusItem(status);
+      }
+      if (demoTimer) {
+        agentxx.cancelClientTimer(demoTimer);
+      }
+      if (tickBind) {
+        agentxx.unregisterKeybind(tickBind);
+      }
+      agentxx.showToast(
+        "cleanup: binds=" + binds.length + " visible=" + visible,
+        0,
+      );
+    },
+  );
+
 } else {
 
   // ---- 工具 1: 纯 JS 计算 ----

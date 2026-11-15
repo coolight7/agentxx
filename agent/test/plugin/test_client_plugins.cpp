@@ -4268,8 +4268,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // 入口把 plugin.js 交给引擎执行)。脚本用 `agentxx.side` 判定跑在 client 侧,
     // 注册 `js_hello` 的渲染器; 内容由脚本回调给出 (io 线程 → JS 线程同步桥)。
     {
-        auto mgrJs = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
-        mgrJs->setUiAdapter(std::make_shared<MockPluginUiAdapter>());
+        auto mgrJs    = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
+        auto adapterJs = std::make_shared<MockPluginUiAdapter>();
+        mgrJs->setUiAdapter(adapterJs);
 
         auto jsEngine = co_await mgrJs->loadNativeAsync(findPluginPath("agentxx_javascript_engine"));
         XX_TEST_EXPECT_TRUE(jsEngine != nullptr);
@@ -4350,6 +4351,134 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_EQ(otherJs.displayName, std::string{"js_async_wait"});
                 XX_TEST_EXPECT_TRUE(!otherJs.matched);
 
+                // 展示面: 状态栏项 / Info 段落 / 面板 / 命令 (脚本注册, 句柄是整数 token)
+                {
+                    auto reg = mgrJs->uiRegistrySnapshot();
+                    bool hasStatus = false;
+                    std::string statusText;
+                    for (const auto& s : reg->statusItems) {
+                        if (s.id == "js.demo") {
+                            hasStatus  = true;
+                            statusText = s.text;
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(hasStatus);
+                    XX_TEST_EXPECT_EQ(statusText, std::string{"js: ready"});
+
+                    bool hasInfo = false;
+                    for (const auto& sec : reg->infoSections) {
+                        if (sec.id == "js.demo.info") {
+                            hasInfo = true;
+                            XX_TEST_EXPECT_EQ(sec.title, std::string{"JS Demo"});
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(hasInfo);
+
+                    bool hasPanel = false;
+                    for (const auto& p : reg->panels) {
+                        if (p.id == "js.demo.panel") {
+                            hasPanel = true;
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(hasPanel);
+                    XX_TEST_EXPECT_TRUE(mgrJs->hasCommand("jsdemo"));
+                }
+
+                // 命令: 脚本 execute 同步返回动作 JSON (io 线程等 JS 线程拿结果)
+                {
+                    const int before = adapterJs->toastCount();
+                    mgrJs->invokeCommand("jsdemo", "{}");
+                    XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 1);
+                    XX_TEST_EXPECT_EQ(adapterJs->lastToast(), std::string{"hello from JS"});
+                }
+
+                // 快捷键: 派发后脚本更新状态栏文本
+                mgrJs->postKeybindInvocation("ctrl+alt+j");
+                co_await sleepMs(80);
+                {
+                    auto        reg  = mgrJs->uiRegistrySnapshot();
+                    std::string text = "(missing)";
+                    for (const auto& s : reg->statusItems) {
+                        if (s.id == "js.demo") {
+                            text = s.text;
+                        }
+                    }
+                    XX_TEST_EXPECT_EQ(text, std::string{"js: key 1"});
+                }
+
+                // 按钮动作: 面板 button 派发 → 脚本回调 (fire-and-forget)
+                {
+                    const int before = adapterJs->toastCount();
+                    mgrJs->dispatchAction("example_js", "js.demo.panel", "js.demo.hello", "{}");
+                    for (int i = 0; i < 60 && adapterJs->toastCount() == before; ++i) {
+                        co_await sleepMs(5);
+                    }
+                    XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 1);
+                    XX_TEST_EXPECT_EQ(
+                        adapterJs->lastToast(),
+                        std::string{"JS action: js.demo.hello"}
+                    );
+                }
+
+                // 定时器: 主程序驱动 (60ms × 2; 区域不可见时顺延, 这里先上报可见)
+                mgrJs->reportRegionVisible("js.demo.info", true);
+                {
+                    bool fired = false;
+                    for (int i = 0; i < 120 && !fired; ++i) {
+                        co_await sleepMs(10);
+                        auto reg = mgrJs->uiRegistrySnapshot();
+                        for (const auto& sec : reg->infoSections) {
+                            if (sec.id == "js.demo.info"
+                                && sec.items.dump().find("timer tick 2") != std::string::npos) {
+                                fired = true;
+                            }
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(fired);
+                }
+
+                // 注销与查询入口: 快捷键回调里调表 (投递式, io 线程不在等, 不会互等)
+                {
+                    const int before = adapterJs->toastCount();
+                    mgrJs->postKeybindInvocation("ctrl+alt+u");
+                    for (int i = 0; i < 100 && adapterJs->toastCount() == before; ++i) {
+                        co_await sleepMs(5);
+                    }
+                    XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 1);
+                    // listKeybinds() 拿到数组 (本例两个键位), isRegionVisible 前面已上报
+                    XX_TEST_EXPECT_TRUE(
+                        adapterJs->lastToast().rfind("cleanup: binds=", 0) == 0
+                    );
+                    XX_TEST_EXPECT_TRUE(
+                        adapterJs->lastToast().find("visible=true") != std::string::npos
+                    );
+                    // 状态栏项 / 面板 / Info 段落与另一个键位都已注销
+                    auto reg = mgrJs->uiRegistrySnapshot();
+                    bool hasStatus = false;
+                    bool hasInfo   = false;
+                    bool hasPanel  = false;
+                    for (const auto& s : reg->statusItems) {
+                        if (s.id == "js.demo") {
+                            hasStatus = true;
+                        }
+                    }
+                    for (const auto& sec : reg->infoSections) {
+                        if (sec.id == "js.demo.info") {
+                            hasInfo = true;
+                        }
+                    }
+                    for (const auto& p : reg->panels) {
+                        if (p.id == "js.demo.panel") {
+                            hasPanel = true;
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(!hasStatus);
+                    XX_TEST_EXPECT_TRUE(!hasInfo);
+                    XX_TEST_EXPECT_TRUE(!hasPanel);
+                    XX_TEST_EXPECT_TRUE(!mgrJs->hasKeybind("ctrl+alt+j"));
+                    XX_TEST_EXPECT_TRUE(mgrJs->hasKeybind("ctrl+alt+u"));
+                }
+
                 // 禁用 → 注册项与缓存一齐摘除; 启用 → start 重跑脚本重新注册
                 mgrJs->disable("example_js");
                 {
@@ -4374,18 +4503,30 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     }
                 }
                 XX_TEST_EXPECT_TRUE(restored);
-                // 重新注册后的回调照样可用 (新实例 + 新的脚本函数)
-                auto againJs = co_await renderToolAsync(
-                    mgrJs,
-                    "call-js-4",
-                    "js_hello",
-                    R"({"name":"Bob"})",
-                    "",
-                    false,
-                    false,
-                    80
-                );
-                XX_TEST_EXPECT_EQ(againJs.summary, std::string{"greeting Bob..."});
+                // 重新注册后的回调照样可用 (新实例 + 新的脚本函数)。
+                // - enable 后脚本顶层还在跑: 它每做一次展示项注册都要在主程序 io 线程执行
+                //   (ioCallSyncKeep), 这期间 JS 线程正卡在等主程序 (`jsHostCallDepth_ > 0`),
+                //   同步桥按设计直接放弃 → 这一次渲染回退默认内容 (真实界面下一帧会再请求)
+                // - 失败的渲染会写一份“未命中”缓存, 同 tool_call_id + 同参数不会重试,
+                //   所以这里用新的 id 重试到脚本跑完
+                std::string againSummary;
+                for (int i = 0; i < 60 && againSummary.empty(); ++i) {
+                    if (i > 0) {
+                        co_await sleepMs(10);
+                    }
+                    auto againJs = co_await renderToolAsync(
+                        mgrJs,
+                        "call-js-4-" + std::to_string(i),
+                        "js_hello",
+                        R"({"name":"Bob"})",
+                        "",
+                        false,
+                        false,
+                        80
+                    );
+                    againSummary = againJs.summary;
+                }
+                XX_TEST_EXPECT_EQ(againSummary, std::string{"greeting Bob..."});
 
                 // 卸载 example_js → 脚本注册的渲染项随之消失
                 XX_TEST_EXPECT_TRUE(co_await mgrJs->unloadAsync("example_js"));

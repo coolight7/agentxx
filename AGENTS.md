@@ -305,19 +305,27 @@ path/to/agentxx_test --log-level warn string_util regex
   `addSkillDir` / `registerToolPermission` / `getConfig` / `scope()` / `netCall` / `netFetch` /
   `submitAsyncWork` / `getPrompt` / `getMessages` / `getGraphJson` / `mountRoot` /
   `openChannel` / `registerTrigger` 等)。详见 plugins.md §12
-  - **client 侧脚本 (2026-11 完成)**: 同一动态库另导 `agentxx_plugin_client_*`
-    (`JsEngine::Side::Client`), 一份脚本一个实例 (client 表不带 `PluginxxScopeRef`, 实例键 =
-    `脚本名@client`); 桥只给 client 面 —— 日志 / `getOwnInfo` 等自身信息 / `getClientState` /
-    `sendUserInput` / `requestCancel` / `sendPluginData` / `showToast` / `updateToolDecor` /
-    `openOverlay` / `closeOverlay` / `subscribe` / `publish` / **`registerToolRenderer`**;
-    脚本按 `agentxx.side` (`"agent"`|`"client"`) 分支注册
-  - **渲染回调是同步的**: 回调在 client io 线程要立刻返回值, JS 只在 JS 线程执行, 因此
-    `JsEngine::invokeRenderSync` 投递后最多等 `kRenderSyncTimeoutMs` (150ms); 超时 / 引擎已停 /
-    JS 线程正卡在等主程序 (`jsHostCallDepth_ > 0`) 一律直接放弃 → 回退默认渲染。脚本的两个
-    回调**必须同步返回** (返回 Promise = 没有内容), 耗时逻辑改成订阅事件 + `updateToolDecor`;
-    **不要把桥改成无超时等待** (两边互等, 界面卡死)
-  - 还没搬上桥的 client 面: 状态栏项 / 面板 / Info 段落 / 命令 / 客户端定时器 / 快捷键 /
-    动作回调绑定 (要长期保存句柄或回调登记, 先写在 C++ client 壳里)
+  - **client 侧脚本 (2026-11 完成, client 六张表已全部上桥)**: 同一动态库另导
+    `agentxx_plugin_client_*` (`JsEngine::Side::Client`), 一份脚本一个实例 (client 表不带
+    `PluginxxScopeRef`, 实例键 = `脚本名@client`); 脚本按 `agentxx.side` (`"agent"`|`"client"`)
+    分支注册。桥按面分组: 展示 (`showToast` / `updateToolDecor` / `openOverlay` / `closeOverlay` /
+    **`registerToolRenderer`** / `registerStatusItem` / `registerPanel` / `registerInfoSection`)、
+    交互 (`registerCommand` / `bindAction` / `registerKeybind` / `setClientTimer` /
+    `isRegionVisible`)、会话与跨端 (`getClientState` / `sendUserInput` / `requestCancel` /
+    `sendPluginData`)、自身信息与广播 (`getOwnInfo` / `getPluginArgs` / `getPluginConfigPath` /
+    `getLanguage` / `setLanguage` / `subscribe` / `publish`)。网络 (`agentxx.net`) / 后台任务 /
+    会话运行时 / 图 / 提示词不在 client 桥上 (那些是 agent 侧能力)
+  - **展示项句柄是整数 token**: client 表的句柄是主程序侧的不透明指针, JS 的 number 存不下;
+    桥在 `JsPluginCtx::clientHandles` 里换成 token (`0` = 主程序不支持或注册失败),
+    更新/注销都用 token, 类别不对或已注销返回 false (不抛异常)
+  - **同步回调有 150ms 上限**: 渲染内容回调与命令 `execute` 在 client io 线程要求同步返回,
+    而 JS 只在 JS 线程执行, 因此 `JsEngine::invokeRenderSync` / `invokeCallbackSync` 投递后最多等
+    `kClientSyncTimeoutMs` (150ms); 超时 / 引擎已停 / JS 线程正卡在等主程序
+    (`jsHostCallDepth_ > 0`) 一律直接放弃 (渲染回退默认内容, 命令按失败处理)。这两类回调
+    **必须同步返回** (返回 Promise = 没有内容), 耗时逻辑改成订阅事件 + `updateToolDecor`;
+    动作/定时器/快捷键回调是投递式的, 不受此限; 回调里也**不要**再调 client 表 (注册/更新入口
+    在 JS 线程同步等 io 线程, 两边互等只能等到 150ms 后各自退回); **不要把桥改成无超时等待**
+    (两边互等, 界面卡死)。一次没拿到内容的渲染按"没有自定义内容"缓存, 界面用默认渲染
   - 示例 `example_js`: 双入口 + `plugin.js` 按 side 分支; 清单同时声明 `agentxx.agent.core`
     与 `agentxx.client.msg_decor`; 用例 `client_plugins` 第 34 段
   - **不要再为它加 agent 侧接口表**: 2026-11 曾按"agent 侧登记 + wire 往返"实现过一版
