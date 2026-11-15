@@ -154,6 +154,10 @@ client 侧两个"回答型"回调（工具折叠/展开渲染、命令 `execute`
 plugin-api-async 阶段 D 完成（见 [其 plan §6](../plugin-api-async/plan.md)）；那一步完成后，
 本重构的 mount 桥可以完全去掉 `invokeRenderSync` / `invokeCallbackSync`。
 
+另一个后续任务是[插件独立线程](../plugin-executor/index.md)：插件代码搬到插件线程后，
+JS 引擎把已有的 JS 线程**声明为实例自带执行器**（见其 plan §5.4），依旧只多一跳，
+不会被多绕一层到共享插件线程。
+
 **建议顺序: 先做接口表异步化，再做本重构**，这样 mount bridge 的实现量少一半，也避免"先写同步桥再删"。
 
 ## 5. 生命周期契约

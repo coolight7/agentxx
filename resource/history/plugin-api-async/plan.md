@@ -19,7 +19,7 @@
 
 **目标**: 把"插件调用主程序"的接口表统一成**异步操作契约** (受理即可返回，结果经回调交回) —— 既让主程序 io 线程只做受理与投递，也**让插件的线程绝不阻塞等待另一条线程**；同时让 JS 桥彻底摆脱同步往返。能在调用方线程当场算完、同步不产生任何等待的成员只有 10 项 (§5.5)，其余全部异步。
 
-**不是目标**: 不引入"并行执行同一实例的表调用"；不改"插件提供实现、主程序调用"那一侧 (工具/能力/图节点/生命周期已经是 notify 契约)。
+**不是目标**: 不引入"并行执行同一实例的表调用"；不改"插件提供实现、主程序调用"那一侧的回调形态 (工具/能力/图节点/生命周期已经是 notify 契约)。后者是另一个任务: 把插件代码从 io 线程搬到插件线程，见 [plugin-executor plan](../plugin-executor/plan.md)。
 
 ## 2. 现状: 三种模型
 
@@ -181,7 +181,7 @@
 
 | 成员 | 现在的实际用途 | 结论 |
 |---|---|---|
-| `scheduler.is_io_thread` | 两个 kit 的阻塞便捷形态用它做安全闸: 在 io 线程上阻塞等待 io 自己 → 必死锁，所以 `netCallBlocking` / `call_tool_blocking` / `invoke_capability_blocking` 先问一句，在 io 线程上直接返回 `wrong_thread` (见 `plugin_kit.h` 与 `framework kit.h`)。另有一份重复的 `coroutine_runtime.is_io_thread`，两个 kit 各读一份 | **保留一份** (放 `scheduler`)，职责从"我要不要投递"改成"我能不能阻塞"；`coroutine_runtime` 里那份删除，框架 kit 的 `isIoThread()` 改读 `scheduler` |
+| `scheduler.is_io_thread` | 两个 kit 的阻塞便捷形态用它做安全闸: 在 io 线程上阻塞等待 io 自己 → 必死锁，所以 `netCallBlocking` / `call_tool_blocking` / `invoke_capability_blocking` 先问一句，在 io 线程上直接返回 `wrong_thread` (见 `plugin_kit.h` 与 `framework kit.h`)。另有一份重复的 `coroutine_runtime.is_io_thread`，两个 kit 各读一份 | **保留一份** (放 `scheduler`)，职责从"我要不要投递"改成"我能不能阻塞"；`coroutine_runtime` 里那份删除，框架 kit 的 `isIoThread()` 改读 `scheduler`。**后续可彻底删除**: 插件独立线程完成后插件代码不再跑在 io 上，阻塞形态自然不会卡死，见 [plugin-executor plan](../plugin-executor/plan.md) |
 | `scheduler.post_to_io` | 实现是 `ioCallSyncKeep` + `postCallback`：**调用线程要等 io 跑完一个只负责入队的 lambda**，自己就是一次阻塞往返。唯一实质使用者是框架 kit 把协程首步排到 io (`kit.h` 的 spawn)；17 个内置插件里没有任何直接调用 | **删除**，改用 `request_driver` (合并后为 `scheduler.request_driver`)：一次性 ticket、带执行 lease、可取消，而且不阻塞调用方 |
 
 删掉 `post_to_io` 后，“插件要把自己的活放到主程序 io 线程上跑”这个能力仍然存在 ——

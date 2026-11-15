@@ -69,7 +69,8 @@
 规划中（2026-11）。方案已写入 [plan.md](plan.md)，实施未开始。
 
 前置: 无。后续依赖它的任务: [js-runtime-singleton](../js-runtime-singleton/index.md)
-（JS 运行时单例重构建议在它之后做，可少写一半同步桥过渡代码）。
+（JS 运行时单例重构建议在它之后做，可少写一半同步桥过渡代码）与
+[plugin-executor](../plugin-executor/index.md)（插件独立线程；表没异步化之前搬线程只会更慢）。
 
 ## 关键决策
 
