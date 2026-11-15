@@ -18,7 +18,7 @@
 而且**跨执行体的代价与实现快慢无关**: 即使表实现只是查一个 map，一次同步往返也要两次投递 + 两次线程唤醒，对方线程正忙 (io 线程在跑模型调用、JS 线程在跑长脚本) 时会直接放大到 ms 级。这是"连很快的成员也要异步"的理由 (§5.0)。
 
 **目标**: 把"插件调用主程序"的接口表统一成**异步操作契约** (受理即可返回，结果经回调交回)—— 既让主程序 io 线程只做受理与投递，也**让插件的线程绝不阻塞等待另一条线程**；同时让 JS 桥彻底摆脱同步往返。只有"能在调用方线程当场算完"的
-12 项保持同步 (§5.5)。
+10 项保持同步 (§5.5)。
 
 **不是目标**: 不引入"并行执行同一实例的表调用"；不改"插件提供实现、主程序调用"那一侧 (工具/能力/图节点/生命周期已经是 notify 契约)。
 
@@ -137,21 +137,26 @@
 | `capabilities.register_capability` / `unregister_capability(_ex)` | ✅ | 能力行表在 io 线程；`done` 时已可调用 |
 | `capabilities.invoke_capability(_ex)` | 🔁 | 已是回调式异步 |
 | `capabilities.capability_info` / `list_capabilities` | ✅ | 序列化清单 |
-| `scheduler.is_io_thread` | ❌ | 线程本地判定 (`mgr->isIoThread()`，不发任务)；改造后它的唯一职责从"要不要投递"变成"能不能阻塞"，保留**一份**，删掉 `coroutine_runtime` 里的副本 |
+| `scheduler.is_io_thread` | ❌ | 线程本地判定 (`mgr->isIoThread()`，不发任务)；合并后它是**唯一**一份，职责是"能不能阻塞" |
 | `scheduler.post_to_io` | 🗑 | 现在实现是 `ioCallSyncKeep` + `postCallback`：调用线程要**等** io 跑完一个只负责入队的 lambda。唯一实质使用者是框架 kit 的协程首步 (`kit.h` 的 spawn)，而 `coroutine_runtime.request_driver` 就是它的正确形态 (一次性 ticket + 执行 lease + 可取消) |
 | `scheduler.sleep` / `offload` | 🔁 | 已是回调式异步 |
 | `cancel.op_cancel` | ❌ | 必须同步非阻塞 |
 | `tasks.register_task` | 🔁 | 提供方通知契约 (`notify` 出参) |
 | `tasks.cancel_task` | ❌ | `void`、无结果、内部入队；任意线程调用不等待 |
-| `coroutine_runtime.request_driver` / `cancel_driver` | ❌ | 返回 ticket / `void`；drive 回调由主程序异步投递，调用方不等 |
+| `coroutine_runtime.request_driver` / `cancel_driver` | ❌ | 返回 ticket / `void`；drive 回调由主程序异步投递，调用方不等。**整张表并回 `scheduler`** (见 §5.7) |
+| `coroutine_runtime.is_io_thread` | 🗑 | 与 `scheduler.is_io_thread` 重复 (两份实现、两个 kit 各读一份)，合并后只留 `scheduler` 那一份 |
 | `coroutine_runtime.is_io_thread` | 🗑 | 与 `scheduler.is_io_thread` 重复 (两份实现、两个 kit 各读一份)，合并到 `scheduler` 那一份 |
 | `plugins.list_plugins` / `get_plugin` / `get_own_info` | ✅ | 序列化清单 (随插件数增长) |
 | `config.*` | ✅ | 配置由 io 线程持有；`get_language` 这类高频值请取一次缓存 |
 | `json.*` / `log.log` | ❌ | 本线程纯计算 / 写日志 (要保持顺序)，不跨执行体 |
 | `net.call` / `net.cancel` | ✅/❌ | `call` 统一成异步并合并 `call_async` (§7.4)，`cancel` 是 `void` 无结果、投递即返回 |
 
-**统计** (agent 侧 53 + client 36 + 通用 37 成员): 改异步 ≈ 107 项，已是异步 7 项，保持同步 10 项，删除 2 项；
-另把 `scheduler.op_cancel` / `capabilities.op_cancel` 合并进 `cancel.op_cancel` (总数随之再减 2)。
+**统计** (agent 侧 53 + client 36 + 通用 37 成员): 改异步 ≈ 107 项，已是异步 7 项，保持同步 10 项，
+删除 2 项；另删 1 张表 (`coroutine_runtime` 并回 `scheduler`，§5.7)、把 `scheduler.op_cancel` /
+`capabilities.op_cancel` 合并进 `cancel.op_cancel`。
+
+接口表总数随之变化: 通用表 10 → 9，agent 侧 20 → 19，client 侧 17 → 16 (`AGENTS.md` 与
+`plugins.md` 的数字要同步改)。
 回调函数不在上面四张表里，单独盘点见 §6: **需要改的只有 3 个回答型回调**。
 
 ### 5.5 保持同步的 10 项 (完整清单)
@@ -181,6 +186,53 @@
 删掉 `post_to_io` 后，“插件要把自己的活放到主程序 io 线程上跑”这个能力仍然存在 ——
 但走的是 `request_driver`（有 lease、可取消），而不是一个无凭无据的入队。需要“稍后执行自己的逻辑”的插件
 应当在自己的线程上做，不需要借 io。
+
+### 5.7 `coroutine_runtime` 并回 `scheduler`
+
+**结论: 可以合，建议合** —— 把 `request_driver` / `cancel_driver` 搬进 `pluginxx.scheduler`，删掉整张 `coroutine_runtime`。
+
+理由:
+
+1. 两者回答的是同一类问题 —— "怎么把一段执行安排到主程序的执行体上": `sleep`(让出)、`offload`(换线程)、`request_driver`(在 io 上推进一步)、`is_io_thread`(我在哪)。
+2. 删掉 `post_to_io`、去重 `is_io_thread`、把 `op_cancel` 并入 `cancel` 之后，两张表各自只剩 2~3 个成员，都太薄；合成一张 5 成员的表反而完整。
+3. **不损失粒度**: 主程序只支持一部分时把对应成员填 NULL (kit 现在就是这么判的，如 `iface.coroutineRuntime->request_driver`)，合表后照样能判。
+4. 少一张表 = 少一套四件套 + `IfaceMeta` 特化 + `static_assert` + `boundaries` 期望项，启动时也少一次 QueryInterface。
+
+合并后 `pluginxx.scheduler` 的成员:
+
+| 成员 | 结论 |
+|---|---|
+| `is_io_thread` | ❌ 保留 (唯一一份，职责是"能不能阻塞") |
+| `sleep` | 🔁 已是回调式异步 |
+| `offload` | 🔁 已是回调式异步 |
+| `request_driver` | ❌ 从 `coroutine_runtime` 搬来 (返回 ticket，不等待) |
+| `cancel_driver` | ❌ 从 `coroutine_runtime` 搬来 (`void`，不等待) |
+
+`post_to_io` 删除 (§5.6)、`op_cancel` 并入 `pluginxx.cancel`、`coroutine_runtime.is_io_thread` 去重。
+driver 那一段"不内联 / 每张票只跑一步 / 不得隐藏轮询"的协议约束仍留在表头注释里，只换位置。
+
+需要同步改的地方:
+
+| 位置 | 改动 |
+|---|---|
+| `cxx_pluginxx/include/pluginxx/api/tables.h` | driver 两成员搬进 scheduler；删 `PLUGINXX_IFACE_COROUTINE_RUNTIME*` 三件套与整张表；scheduler → VERSION+1 + BASELINE 重置 (IID 名字保留) |
+| `pluginxx/api/iface_meta.h` | 删 `IfaceMeta<PluginxxCoroutineRuntimeIface>` 与它的 `static_assert` |
+| `pluginxx/api/abi.h` | `PluginxxDriver` / `PluginxxDriveOnceFn` 注释里的"见 `pluginxx.coroutine_runtime`"改成 `scheduler` |
+| `pluginxx/host/tables_impl.h` | coroutine_runtime 段并入 scheduler 段 (版本填装、IID 白名单、`query_interface` 分派) |
+| `pluginxx/host_core.h`、`host/lifecycle.h`、`runtime/driver.h`、`runtime/instance_base.h` | 注释里的表名 |
+| `pluginxx/kit/kit.h` | `runtime_` 改读 `scheduler` (`is_io_thread` / `request_driver` / `cancel_driver` 三处读取点) |
+| `agentxx/plugin_kit.h` + `plugin_interfaces.h` | `PluginIfaces::coroutineRuntime` 成员删掉 (查询合并)，`AgentCoroutineRuntime` 常量删掉 |
+| `agentxx_chatbot` | `iface.coroutineRuntime->request_driver` / `cancel_driver` → `iface.scheduler->...` (面板刷新那两处) |
+| `example_plugin` | 降级注释里的表名 |
+| `plugin.yaml` | **不用改**: 清单只声明 `agentxx.*` 业务表，框架表不在声明范围内 |
+| 文档 | `plugins.md` 的接口表数量与分类、`AGENTS.md` 的"接口表数量"行、`boundaries` 期望表 |
+
+**不一起动的两张表**:
+
+- `pluginxx.tasks` (`register_task` / `cancel_task`): 它是"我还活着、别卸我的库"的租约协议，属于生命周期，不是调度;
+- `pluginxx.cancel` (`op_cancel`): 要能取消 `scheduler.sleep/offload`、`capabilities.invoke`、`tasks` 三类句柄，横跨多张表，独立成表更清楚。
+
+风险很小: 读 `coroutine_runtime` 的地方一共几处 (框架 kit、agentxx kit、chatbot)，表名一换就是编译错误，不会漏。
 
 ## 6. 回调函数盘点与结论
 
@@ -372,7 +424,7 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
 | A2 加载线程 | agent 侧 `dlopen` + `create` 挪到加载线程池（与客户端一致，见 §6.5） | 插件加载/回滚用例；日志能看到入口不在 io 线程 |
 | B 业务批 1 | `agentxx.agent` 业务表全部成员: `tools` / `permission` / `session` / `context` / `model` / `prompt` / `resources` / `graph` / `mount` | 12 个内置插件与示例按需迁移 |
 | C runtime 批 | `agentxx.agent.runtime` 全部成员 (含 `send_input` / `cancel` / `respond_interrupt` / `select_model` / `trigger` / `timer` / `emit_event` / `cancel_async_work`) | 会话运行时相关测试 (`plugin_agent_runtime` / `plugin_example_runtime`) 全绿 |
-| C2 框架表批 | 框架侧 (`cxx_pluginxx`): `broadcasts` 全部、`capabilities` 登记、`config` 全部、`net.call` 统一异步并删 `call_async`；删 `scheduler.post_to_io` (改走 `request_driver`)、删 `coroutine_runtime.is_io_thread` 副本、三处 `op_cancel` 合并；kit 的 `netCallAsync` / `asyncNetFetch` 改名 (§7.4) | 4 个网络插件、内置插件与 JS 桥用例 |
+| C2 框架表批 | 框架侧 (`cxx_pluginxx`): `broadcasts` 全部、`capabilities` 登记、`config` 全部、`net.call` 统一异步并删 `call_async`；删 `scheduler.post_to_io` (改走 `request_driver`)、删 `coroutine_runtime` 整张表并回 `scheduler` (§5.7)、三处 `op_cancel` 合并；kit 的 `netCallAsync` / `asyncNetFetch` 改名 (§7.4) | 4 个网络插件、chatbot 面板驱动、内置插件与 JS 桥用例 |
 | D client 批 | `agentxx.client.*` 六张表全部成员；三个回答型回调改异步 (工具折叠/展开渲染、命令 `execute`, 见 §6) | `client_plugins` / `plugin_ui` 相关用例 |
 | E 收尾 | 删除残留同步路径与 `ioCallSyncKeep`、删除 client 侧 150 ms 同步桥 (`invokeRenderSync` / `invokeCallbackSync` / `kClientSyncTimeoutMs`)、更新 `plugins.md` §8.3 全表、`AGENTS.md`、`config-keys` 若涉及 | 全量回归 + 性能对比 |
 
@@ -385,7 +437,7 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
 - **JS 侧**: 表异步化后，`client_plugins` 里"脚本在渲染回调里调表"的用例应不再依赖 150 ms 兜底；引擎的 `ioCallSyncKeep` 调用点应归零。
 - **回答型回调 (§6)**: 快路径 (回调内同步 `done`) 下渲染次数与缓存命中与改之前一致；慢路径 (稍后 `done`) 先显示默认内容、到达后刷新同一行；参数或版本变化后旧代际的 `done` 被丢弃；行删除/实例卸载后的 `done` 不写回界面。
 - **顺序语义**: 新增用例 —— 连续 `register_tool(A)`→`register_tool(B)`→查询，两工具都可见且顺序稳定；`set_prompt`→`get_prompt` 看到新值。
-- **零阻塞等待**: `dev_mode` 下计数"插件线程在等另一条线程"的调用（同步桥、`ioCallSyncKeep` 一类），除 §5.5 的 12 项与入口符号外应为 0；脚本侧一个 `await` 不应导致 JS 线程与 io 线程相互等待。
+- **零阻塞等待**: `dev_mode` 下计数"插件线程在等另一条线程"的调用（同步桥、`ioCallSyncKeep` 一类），除 §5.5 的 10 项与入口符号外应为 0；脚本侧一个 `await` 不应导致 JS 线程与 io 线程相互等待。
 - **命名 (§7.4)**: 全量检索确认表头、kit、脚本 API 里不再有"只为区分回调式异步"的 `_async` 名；`*Blocking` 与后台任务域的名字逐项核对。
 
 ## 11. 风险与对策
@@ -402,12 +454,13 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
 
 ## 12. 不做的事
 
-- 不改 §5.5 那 12 项 (纯函数 / 线程本地判定 / 本地标记 / 无结果投递)，它们同步不产生任何等待。
+- 不改 §5.5 那 10 项 (纯函数 / 线程本地判定 / 本地标记 / 无结果投递)，它们同步不产生任何等待。
 - 不把通知型回调 (动作/定时器/快捷键/广播订阅/通道事件/后台任务事件) 改成异步 —— 它们本来就不等结果，改了只多一次往返。
 - 不给渲染/命令这种回答型回调加"请求超时与取消": 不答就一直用默认内容，行删除或实例卸载后迟到的结果直接丢弃。
 - 不把 `get_info` / `destroy` 改成异步；`create` 只改执行线程，不改签名（理由见 §6.5）。
 - 不新增 `AgentxxPluginOpResult` / `AgentxxPluginOpCallback` 这类双胞胎类型 —— 完成回调直接用 `PluginxxOperatorCallback`。
-- 不保留 `scheduler.post_to_io` (它自己就是一次阻塞往返) 与 `coroutine_runtime.is_io_thread` 副本，理由见 §5.6。
+- 不保留 `scheduler.post_to_io` (它自己就是一次阻塞往返) 与 `coroutine_runtime` 整张表 (并回 `scheduler`)，理由见 §5.6 / §5.7。
+- 不把 `tasks` (租约协议) 与 `cancel` (跨表取消) 并进 `scheduler` —— 它们不是调度问题。
 - 不引入"同一实例并行执行表调用"。
 - 不为旧签名保留兼容成员 (不做双份接口)。
 - 不改"插件提供实现"那一侧的通知契约 (工具/能力行/图节点/生命周期已经是 notify 形态)。
