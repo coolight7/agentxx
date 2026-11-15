@@ -1094,11 +1094,8 @@ uint64_t MessageListComponent::itemKey(size_t index) {
             }
             // 显示名是同步查表的静态信息, 注册项变化 (插件启用/禁用) 不会改缓存版本:
             // 把名字的字符计进 key, 让名字切换时该块重建
-            const std::string_view nameSv = agentxx::plugin::toolDisplayNameFor(
-                st.pluginRegistry.get(),
-                callId,
-                toolName
-            );
+            const std::string_view nameSv
+                = agentxx::plugin::toolDisplayNameFor(st.pluginRegistry.get(), callId, toolName);
             for (const char c : nameSv) {
                 h = combine(h, static_cast<uint64_t>(static_cast<uint8_t>(c)));
             }
@@ -1676,9 +1673,7 @@ LazyBuiltItem MessageListComponent::buildGenPlaceholderItem(const TUIRenderState
         // 工具名按正常工具消息的同一套规则换成显示名 (如 agentxx_filesystem_read
         // -> "Read"): 名字是注册时确定的静态信息, 同步可读
         header.push_back(text(toolDisplayName) | color(theme.accentColor) | bold);
-        header.push_back(
-            text(" · ") | color(c) | theme.dim()
-        );
+        header.push_back(text(" · ") | color(c) | theme.dim());
     }
     header.push_back(
         text(tr(toolCall ? "msg.genToolCalling" : "msg.genWaiting")) | color(c) | theme.dim()
@@ -1706,8 +1701,7 @@ std::string MessageListComponent::toolDisplayNameOf(
     }
     // 只按工具名查注册表 (无 tool_call_id: 没有实例级装饰): 名字在注册时确定,
     // 同步读得到, 不需要投递渲染请求, 也没有"未就绪"状态
-    const auto name
-        = agentxx::plugin::toolDisplayNameFor(st.pluginRegistry.get(), {}, toolName);
+    const auto name = agentxx::plugin::toolDisplayNameFor(st.pluginRegistry.get(), {}, toolName);
     return name.empty() ? std::string{toolName} : std::string{name};
 }
 
@@ -1879,7 +1873,7 @@ void MessageListComponent::appendAttachmentList(
     header.push_back(
         text(attachmentCountText(msg.attachments.size())) | color(theme.accentColor) | bold
     );
-    header.push_back(text(tr("msg.attachOpen")) | theme.dim());
+    header.push_back(text(tr("msg.attachOpen")) | theme.dim() | bold);
     out.push_back(hbox(std::move(header)));
 
     // 每条附件一行 (只展示元信息, 不展示 Base64 数据): 类型 + 文件名 + 大小,
@@ -1902,9 +1896,9 @@ void MessageListComponent::appendAttachmentList(
             | color(theme.accentColor)
         );
         if (const std::string sizeText = attachmentSizeText(att.sizeBytes); !sizeText.empty()) {
-            row.push_back(text(" " + sizeText) | theme.dim());
+            row.push_back(text(" " + sizeText) | color(theme.hintColor));
         }
-        out.push_back(hbox(std::move(row)) | reflect(*boxPtr));
+        out.push_back(hbox(std::move(row)) | theme.dim() | reflect(*boxPtr));
     }
 }
 
@@ -1986,11 +1980,10 @@ Element MessageListComponent::buildMessageBlock(
                 // 预览自适应内容区剩余列宽 (前缀 = 标记 1 列 + 角色前缀 + 事件名
                 // + 分隔符 " · " + 右侧附件数量)
                 std::string_view sep = " · ";
-                const int        prefixCols
-                    = 1 + static_cast<int>(markdown::utf8_display_width(prefix))
-                      + static_cast<int>(markdown::utf8_display_width(eventName))
-                      + static_cast<int>(markdown::utf8_display_width(sep))
-                      + attachmentCountColumnsOf(msg);
+                const int prefixCols = 1 + static_cast<int>(markdown::utf8_display_width(prefix))
+                                       + static_cast<int>(markdown::utf8_display_width(eventName))
+                                       + static_cast<int>(markdown::utf8_display_width(sep))
+                                       + attachmentCountColumnsOf(msg);
                 const int   budget  = collapsedPreviewBudget(maxWidth, prefixCols);
                 std::string preview = eventContentPreview(msg.text, static_cast<size_t>(budget));
                 if (!preview.empty()) {
@@ -2294,16 +2287,13 @@ Element MessageListComponent::buildMessageBlock(
 
                 if (isError) {
                     // 执行失败: 内容固定为结果首行 (错误色), 不显示自定义内容
-                    withSeparator(oneLinePreview(
-                        msg.tool->toolResult,
-                        static_cast<size_t>(contentBudget)
-                    ));
+                    withSeparator(
+                        oneLinePreview(msg.tool->toolResult, static_cast<size_t>(contentBudget))
+                    );
                 } else if (!collapsed.text.empty()) {
                     // 自定义折叠内容 (装饰的 summary 或注册项算出的内容)
-                    withSeparator(oneLinePreview(
-                        collapsed.text,
-                        static_cast<size_t>(contentBudget)
-                    ));
+                    withSeparator(oneLinePreview(collapsed.text, static_cast<size_t>(contentBudget))
+                    );
                 } else if (collapsed.pending) {
                     // 自定义内容还在 client io 线程算, 且没有上一份可沿用:
                     // 只画名字。不用默认内容顶替 —— 否则会先闪一句默认内容再换掉
@@ -2312,10 +2302,9 @@ Element MessageListComponent::buildMessageBlock(
                     withSeparator(tr("msg.genToolCalling"));
                 } else {
                     // 默认渲染 · 已完成: 结果首行 (结果为空则不画)
-                    withSeparator(oneLinePreview(
-                        msg.tool->toolResult,
-                        static_cast<size_t>(contentBudget)
-                    ));
+                    withSeparator(
+                        oneLinePreview(msg.tool->toolResult, static_cast<size_t>(contentBudget))
+                    );
                 }
 
                 // 工具名: 运行中高亮
@@ -2340,8 +2329,7 @@ Element MessageListComponent::buildMessageBlock(
                         }
                     }();
                     header.push_back(
-                        text(std::move(content)) | color(previewColor) | theme.dim()
-                        | xflex_shrink
+                        text(std::move(content)) | color(previewColor) | theme.dim() | xflex_shrink
                     );
                 }
                 // 带附件时的数量贴在本行最右侧 (列表只在展开态画)

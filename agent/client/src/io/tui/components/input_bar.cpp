@@ -127,7 +127,8 @@ Element InputComponent::OnRender() {
     if (!attachments_.empty()) {
         Elements trayItems;
         trayItems.push_back(
-            text(trf("input.attachTray", attachments_.size())) | bold | color(theme.accentColor)
+            text(fmt::format("  @ {}({}): ", tr("input.attachTray"), attachments_.size())) | bold
+            | color(theme.accentColor)
         );
         for (size_t i = 0; i < attachments_.size(); ++i) {
             const auto& att     = attachments_[i];
@@ -138,9 +139,8 @@ Element InputComponent::OnRender() {
                 fmt::format("{}{}", kAttachDeletePrefix, i)
             );
             auto pill = hbox({
-                            text(fmt::format(" [ {} {} ( {} ) ", icon, att.displayName, sizeStr)),
+                            text(fmt::format("{} {} ({})", icon, att.displayName, sizeStr)),
                             std::move(delBtn),
-                            text(" ] "),
                         })
                         | bgcolor(theme.buttonActiveBgColor) | color(theme.buttonActiveTextColor);
             trayItems.push_back(pill);
