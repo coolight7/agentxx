@@ -312,9 +312,16 @@ path/to/agentxx_test --log-level warn string_util regex
     **`registerToolRenderer`** / `registerStatusItem` / `registerPanel` / `registerInfoSection`)、
     交互 (`registerCommand` / `bindAction` / `registerKeybind` / `setClientTimer` /
     `isRegionVisible`)、会话与跨端 (`getClientState` / `sendUserInput` / `requestCancel` /
-    `sendPluginData`)、自身信息与广播 (`getOwnInfo` / `getPluginArgs` / `getPluginConfigPath` /
-    `getLanguage` / `setLanguage` / `subscribe` / `publish`)。网络 (`agentxx.net`) / 后台任务 /
-    会话运行时 / 图 / 提示词不在 client 桥上 (那些是 agent 侧能力)
+    `sendPluginData`)、自身信息与通用表 (`getOwnInfo` / `getPluginArgs` / `getPluginConfigPath` /
+    `getLanguage` / `setLanguage` / `getConfig` / `listPlugins` / `getPlugin`)、广播 (`subscribe` /
+    `unsubscribe` / `publish` / `declareBroadcast` / `readBroadcast` / `endBroadcast`)、
+    **网络 (`agentxx.net`, 与 agent 插件同一张表: `netCall` / `netCallAsync` / `netCancel` /
+    `netFetch` / `netDownload` / `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpServe` /
+    `netHttpRespond` / `netInfo`)**。后台任务 / 会话运行时 / 图 / 提示词 / Skill-Memory-MCP
+    资源不在 client 桥上 (那些是 agent 侧能力)
+  - **Promise 续体由主循环泵**: 动作/定时器/快捷键/渲染/命令回调里写 `netFetch(...).then(...)`
+    会执行 —— JS 线程在每个任务与每个定时器之后泵微任务 (单次上限 10000 个 job);
+    回调本身仍要同步返回该返回的值 (渲染内容 / 动作 JSON), Promise 只用于“结果晚些到”的后续动作
   - **展示项句柄是整数 token**: client 表的句柄是主程序侧的不透明指针, JS 的 number 存不下;
     桥在 `JsPluginCtx::clientHandles` 里换成 token (`0` = 主程序不支持或注册失败),
     更新/注销都用 token, 类别不对或已注销返回 false (不抛异常)

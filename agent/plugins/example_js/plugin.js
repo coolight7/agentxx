@@ -142,6 +142,74 @@ if (SIDE === "client") {
     },
   );
 
+  // ---- client 侧: 网络 (`agentxx.net`, 与 agent 插件同一张表) ----
+  // 网络服务自有线程, 同步入口不从界面线程转一手, 所以命令回调里也能直接调。
+  agentxx.registerCommand({
+    name: "jsnet",
+    description: "example_js: 网络表自检 (net.info)",
+    execute: () => {
+      const info = agentxx.netInfo();
+      const bogus = agentxx.netCall("net.no_such_op", {});
+      const servers = info && info.servers ? info.servers.length : -1;
+      return {
+        action: "toast",
+        text:
+          "net info ok=" + (info && info.ok) +
+          " servers=" + servers +
+          " bogus ok=" + (bogus && bogus.ok),
+        level: 0,
+      };
+    },
+  });
+
+  // 回环往返: 脚本自己起一个 HTTP 服务 + 静态路由, 再用 netFetch 取回
+  // (Promise 完成时回到 JS 线程, 界面线程全程不等)。
+  agentxx.bindAction("js.demo.net", () => {
+    const served = agentxx.netCall("http.serve", { host: "127.0.0.1", port: 0 });
+    if (!served || !served.ok || !served.port) {
+      agentxx.showToast("net: serve failed", 2);
+      return;
+    }
+    agentxx.netCall("http.route", {
+      serverId: served.id,
+      path: "/hello",
+      bytes: "hello-from-js-client",
+    });
+    agentxx.netFetch("http://127.0.0.1:" + served.port + "/hello").then((r) => {
+      const body = (r && r.body) || "";
+      agentxx.showToast(
+        "net fetch: ok=" + (r && r.ok) +
+          " status=" + (r && r.status) +
+          " body=" + body,
+        0,
+      );
+      agentxx.netCall("http.stop", { serverId: served.id });
+    });
+  });
+
+  // ---- client 侧: 通用表 (配置 / 插件清单 / 广播声明-发布-读-结束) ----
+  // 这些入口会等主程序 io 线程, 所以放在投递式回调 (动作) 里调。
+  agentxx.bindAction("js.demo.sdk", () => {
+    const plugins = agentxx.listPlugins();
+    const self = agentxx.getPlugin("example_js");
+    const cfg = agentxx.getConfig();
+    const channel = "plugin.example_js.demo.channel";
+    agentxx.declareBroadcast({ id: channel, cache: "latest" });
+    agentxx.publish(channel, { tick: 1 });
+    const current = agentxx.readBroadcast(channel);
+    const ended = agentxx.endBroadcast(channel, "done");
+    const afterEnd = agentxx.readBroadcast(channel);
+    agentxx.showToast(
+      "sdk: plugins=" + (plugins ? plugins.length : -1) +
+        " self=" + (self && self.name ? self.name : "?") +
+        " config=" + (cfg === null ? "null" : "object") +
+        " read=" + (current && current.tick === 1) +
+        " ended=" + ended +
+        " afterEnd=" + (afterEnd === null),
+      0,
+    );
+  });
+
 } else {
 
   // ---- 工具 1: 纯 JS 计算 ----

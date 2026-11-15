@@ -345,6 +345,14 @@ struct ClientIfaces {
     ///   插件订阅即可, 不需要先声明; 跨端数据走
     ///   `agentxx.client.plugin.<插件名>.<事件>`
     const PluginxxBroadcastsIface* broadcasts = nullptr;
+    /// 网络 (`<应用名>.net`): HTTP / TCP / WS / UDP; 与 agent 侧同一个网络服务
+    /// - 网络服务自有线程, 同步 `call` 不投递到 client io 线程 (不阻塞界面)
+    /// - 资源按插件实例记账: 禁用/卸载时整批收掉 (服务、连接、未完成请求)
+    const PluginxxNetIface* net = nullptr;
+    /// 配置查询 (本插件条目参数 / 配置文件路径 / 语言)
+    const PluginxxConfigIface* config = nullptr; ///< "pluginxx.config"
+    /// 本主程序已加载的插件清单 (自描述查询)
+    const PluginxxPluginsIface* plugins = nullptr; ///< "pluginxx.plugins"
 
     /// 从主程序查询全部已知 client 侧接口表 (host 为空时返回全 NULL 聚合)
     static ClientIfaces query(const PluginxxHost* host) {
@@ -362,6 +370,9 @@ struct ClientIfaces {
         f.keybind = queryInterface<AgentxxClientKeybindIface>(host, AGENTXX_IFACE_CLIENT_KEYBIND);
         f.broadcasts
             = queryInterface<PluginxxBroadcastsIface>(host, PLUGINXX_IFACE_BROADCASTS);
+        f.net      = queryInterface<PluginxxNetIface>(host, PLUGINXX_IFACE_NET);
+        f.config   = queryInterface<PluginxxConfigIface>(host, PLUGINXX_IFACE_CONFIG);
+        f.plugins  = queryInterface<PluginxxPluginsIface>(host, PLUGINXX_IFACE_PLUGINS);
         return f;
     }
 };

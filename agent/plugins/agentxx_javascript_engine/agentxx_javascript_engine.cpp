@@ -195,6 +195,12 @@ constexpr int64_t kPromiseWaitLimitMs = 120000; ///< Promise 等待上限 (绝�
 /// 回调的方式 (例如订阅事件后用 `updateToolDecor` 推数据)。
 constexpr int kClientSyncTimeoutMs = 150;
 
+/// 每个任务/定时器之后最多泵多少次 Promise 微任务
+/// - 业务回调通常不等待 Promise: `netFetch(...).then(...)` 的续体必须在这里被泵出去,
+///   否则永远不会执行 (主循环不在其他地方执行 pending job)
+/// - 有上限: 脚本里互相调度的死循环不能卡住 JS 线程 (到限就记一条警告)
+constexpr int kMaxJobsPerDrain = 10000;
+
 /// JS 面的通知点序号 → 通知型功能埋点 id
 ///
 /// 通知点已经是"通知型功能埋点": 脚本里 `agentxx.onHook(point, fn)` 等价于订阅同名
@@ -1655,6 +1661,7 @@ private:
                     busy_ = true;
                     lk.unlock();
                     fireDueTimersInline();
+                    drainPromiseJobs();
                     lk.lock();
                     busy_ = false;
                     continue;
@@ -1671,6 +1678,9 @@ private:
             } catch (...) {
                 // 任务异常不得终止 JS 线程
             }
+            // 任务可能 resolve 了 Promise (网络完成 / 定时器 / 回调): 把续体泵完
+            // (仍在"忙"状态: 续体同样可能调主程序 vtable)
+            drainPromiseJobs();
             {
                 std::lock_guard<std::mutex> lk(mtx_);
                 busy_ = false;
@@ -2015,6 +2025,41 @@ private:
     }
 
     // ==================== Promise 驱动 ====================
+
+    /// 泵完已入队的 Promise 微任务 (JS 线程主循环在每个任务/定时器之后调用)
+    ///
+    /// - 业务回调 (`netFetch(...).then(...)` / `Promise.resolve().then(...)`) 不等待
+    ///   Promise, 主循环不主动泵的话续体永远不会执行
+    /// - 上游任务 (网络完成 / 发送通知) 也是任务: 它们 resolve 的 Promise 在这个循环里结算
+    /// - 有上限 ([kMaxJobsPerDrain]), job 抛异常只记日志并继续泵剩下的
+    void drainPromiseJobs() noexcept {
+        if (!rt_) {
+            return;
+        }
+        for (int i = 0; i < kMaxJobsPerDrain; ++i) {
+            JSContext* jobCtx = nullptr;
+            const int  rc     = JS_ExecutePendingJob(rt_, &jobCtx);
+            if (rc == 0) {
+                return;
+            }
+            if (rc < 0) {
+                if (jobCtx) {
+                    JSValue exc = JS_GetException(jobCtx);
+                    logAt(
+                        3,
+                        fmt::format(
+                            "interpreter.js: promise job threw: {}",
+                            valueToJsonString(jobCtx, exc)
+                        )
+                            .c_str()
+                    );
+                    JS_FreeValue(jobCtx, exc);
+                }
+                continue;
+            }
+        }
+        logAt(3, "interpreter.js: promise jobs not drained (per-task limit reached)");
+    }
 
     /// Promise 驱动结果: 调用方必须据此映射 Operation 终态 ——
     /// 拒绝/超时是失败, 引擎停止是取消, 不能当成成功文本。
@@ -2472,6 +2517,26 @@ private:
             def("registerKeybind", B_CLIENT_REGISTER_KEYBIND, 2);
             def("unregisterKeybind", B_CLIENT_UNREGISTER_KEYBIND, 1);
             def("listKeybinds", B_CLIENT_LIST_KEYBINDS, 0);
+            // 网络 (`agentxx.net`): 与 agent 侧同名同义; 结果对象里 `ok` 是业务结论
+            // - 同步入口用于快速操作; netFetch / netDownload / netCallAsync 返回 Promise
+            def("netCall", B_NET_CALL, 2);
+            def("netCallAsync", B_NET_CALL_ASYNC, 2);
+            def("netCancel", B_NET_CANCEL, 1);
+            def("netFetch", B_NET_FETCH, 2);
+            def("netDownload", B_NET_DOWNLOAD, 2);
+            def("netWsConnect", B_NET_WS_CONNECT, 1);
+            def("netWsSend", B_NET_WS_SEND, 2);
+            def("netWsClose", B_NET_WS_CLOSE, 3);
+            def("netHttpServe", B_NET_HTTP_SERVE, 1);
+            def("netHttpRespond", B_NET_HTTP_RESPOND, 1);
+            def("netInfo", B_NET_INFO, 0);
+            // 通用表: 配置 / 插件清单 / 广播声明与收尾 (与 agent 侧同名同义)
+            def("getConfig", B_GET_CONFIG, 0);
+            def("listPlugins", B_LIST_PLUGINS, 0);
+            def("getPlugin", B_GET_PLUGIN, 1);
+            def("declareBroadcast", B_DECLARE_BROADCAST, 1);
+            def("readBroadcast", B_READ_BROADCAST, 1);
+            def("endBroadcast", B_END_BROADCAST, 2);
         } else {
             def("registerTool", B_REGISTER_TOOL, 1);
             def("unregisterTool", B_UNREGISTER_TOOL, 1);
@@ -2598,6 +2663,19 @@ private:
         JSValueConst* argv,
         int           magic,
         JsPluginCtx*  pctx
+    );
+
+    /// 网络桥 (agent / client 两侧共用; `net` 取各自的 `<应用名>.net` 表)
+    /// - 同步入口 (`netCall` / `netWsConnect` / `netHttpServe` …) 阻塞 JS 线程等结果;
+    ///   网络服务自有线程, 不经主程序 io 线程, 所以同步回调里调也不会互等
+    /// - 慢操作 (`netFetch` / `netDownload` / `netCallAsync`) 返回 Promise (总是 resolve)
+    static JSValue netBridgeCall(
+        JSContext*              ctx,
+        JsPluginCtx*            pctx,
+        int                     magic,
+        int                     argc,
+        JSValueConst*           argv,
+        const PluginxxNetIface* net
     );
 
     // ==================== client 侧工具特化渲染 (io 线程 ↔ JS 线程) ====================
@@ -3096,108 +3174,6 @@ JSValue JsEngine::bridgeCall(
                 unsubscribeToken(i);
             }
         }
-    };
-
-    /// 同步网络调用: 阻塞 JS 线程直到网络侧给出结果 (只用于快速操作)
-    auto netSync = [&](const std::string& op, const std::string& argsJson) -> JSValue {
-        if (!iface.net || !iface.net->call) {
-            return netOutcomeToValue(ctx, PLUGINXX_RESULT_ERR_STATE, std::string{});
-        }
-        auto           opSv   = agentxx::plugin::PluginStringView::from(op.data(), op.size());
-        auto           argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
-        PluginxxString out{nullptr, 0};
-        const int32_t  code = iface.net->call(host, &opSv, &argsSv, &out);
-        std::string    json;
-        if (out.data) {
-            json.assign(out.data, static_cast<size_t>(out.size));
-            agentxx::plugin::PluginString::free(host, &out);
-        }
-        return netOutcomeToValue(ctx, code, json);
-    };
-
-    /// 异步网络调用 (Promise): 只受理, 结果经完成回调 settle
-    /// - Promise 总是 resolve 成结果对象; 受理失败也是对象 (`ok:false`)
-    auto netAsync = [&](const std::string& op, const std::string& argsJson) -> JSValue {
-        JSValue resolving[2];
-        JSValue promise = JS_NewPromiseCapability(ctx, resolving);
-        if (JS_IsException(promise)) {
-            return promise;
-        }
-        // 受理失败 (或主程序没提供网络能力): 立即 resolve 错误对象
-        const auto resolveNow = [&](JSValue out) {
-            JSValue argv[1] = {out};
-            JSValue rc      = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, argv);
-            JS_FreeValue(ctx, rc);
-            JS_FreeValue(ctx, out);
-            JS_FreeValue(ctx, resolving[0]);
-            JS_FreeValue(ctx, resolving[1]);
-        };
-        if (!iface.net || !iface.net->call_async) {
-            resolveNow(netOutcomeToValue(ctx, PLUGINXX_RESULT_ERR_STATE, std::string{}));
-            return promise;
-        }
-        auto* bridge    = new JsNetBridge{engine, ctx};
-        bridge->resolve = resolving[0];
-        bridge->reject  = resolving[1];
-        auto           opSv   = agentxx::plugin::PluginStringView::from(op.data(), op.size());
-        auto           argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
-        PluginxxOperatorNotify notify{&JsEngine::onNetCallDone, bridge};
-        PluginxxString         acceptedOut{nullptr, 0};
-        int64_t                requestId = 0;
-        const int32_t          code = iface.net->call_async(
-            host,
-            &opSv,
-            &argsSv,
-            &notify,
-            &acceptedOut,
-            &requestId
-        );
-        std::string accepted;
-        if (acceptedOut.data) {
-            accepted.assign(acceptedOut.data, static_cast<size_t>(acceptedOut.size));
-            agentxx::plugin::PluginString::free(host, &acceptedOut);
-        }
-        if (code != PLUGINXX_RESULT_OK) {
-            bool expected = false;
-            if (bridge->settled.compare_exchange_strong(
-                    expected,
-                    true,
-                    std::memory_order_acq_rel
-                )) {
-                bridge->engine->settleNetCall(bridge, PLUGINXX_OPERATOR_FAILED, std::move(accepted));
-            }
-            return promise;
-        }
-        bridge->requestId.store(requestId, std::memory_order_release);
-        return promise;
-    };
-
-    /// 网络参数 JSON: 第一个参数可以是 url 字符串或选项对象 (字段原样保留),
-    /// 再叠加一个字符串字段 (文件名 / 不需要时传空)
-    auto netArgs = [&](JSValueConst urlOrOptions,
-                       const char*  extraKey,
-                       const std::string& extraValue) -> std::string {
-        utilxx_base::Json args = utilxx_base::Json::object();
-        std::string       url;
-        if (JS_IsString(urlOrOptions)) {
-            url = jsToCppString(ctx, urlOrOptions);
-        } else if (JS_IsObject(urlOrOptions) && !JS_IsFunction(ctx, urlOrOptions)) {
-            try {
-                auto doc = utilxx_base::Json::parse(valueToJsonString(ctx, urlOrOptions));
-                if (doc.is_object()) {
-                    args = std::move(doc);
-                    url  = args.value("url", std::string{});
-                }
-            } catch (...) {
-            }
-        }
-        if (!url.empty()) {
-            args["url"] = url;
-        }
-        if (extraKey != nullptr && !extraValue.empty()) {
-            args[extraKey] = extraValue;
-        }
-        return args.dump();
     };
 
     switch (magic) {
@@ -3833,108 +3809,19 @@ JSValue JsEngine::bridgeCall(
                        : JS_FALSE;
         }
 
-        // ---- 网络 (`agentxx.net`): 插件不自己建连接 ----
-        // 同步入口用于快速操作 (`ws.connect` / `ws.send` / `http.serve` / `net.info` …);
-        // 慢操作 (`http.fetch` / `http.download`) 走 Promise, 不占住 JS 线程。
-        // 注意: 同一引擎里的脚本共享一份网络资源 (归属是该插件实例), 连接 id 要自己带前缀。
-        case B_NET_CALL: {
-            if (argc < 1 || !JS_IsString(argv[0])) {
-                return JS_ThrowTypeError(ctx, "netCall: op string required");
-            }
-            return netSync(
-                jsToCppString(ctx, argv[0]),
-                argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{"{}"}
-            );
-        }
-
-        case B_NET_CALL_ASYNC: {
-            if (argc < 1 || !JS_IsString(argv[0])) {
-                return JS_ThrowTypeError(ctx, "netCallAsync: op string required");
-            }
-            return netAsync(
-                jsToCppString(ctx, argv[0]),
-                argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{"{}"}
-            );
-        }
-
+        // ---- 网络 (`agentxx.net`): agent 与 client 两侧同一份实现 ----
+        case B_NET_CALL:
+        case B_NET_CALL_ASYNC:
+        case B_NET_CANCEL:
         case B_NET_FETCH:
-        case B_NET_DOWNLOAD: {
-            // netFetch(urlOrOptions) / netDownload(urlOrOptions, fileName?)
-            // - 选项对象的字段原样交给网络侧 (`method` / `headers` / `timeoutMs` …)
-            const char* op = magic == B_NET_DOWNLOAD ? pluginxx::net_op::httpDownload
-                                                     : pluginxx::net_op::httpFetch;
-            if (argc < 1) {
-                return JS_ThrowTypeError(ctx, "netFetch/netDownload: url required");
-            }
-            std::string fileName;
-            if (argc >= 2 && JS_IsString(argv[1])) {
-                fileName = jsToCppString(ctx, argv[1]);
-            }
-            return netAsync(op, netArgs(argv[0], "fileName", fileName));
-        }
-
-        case B_NET_WS_CONNECT: {
-            // netWsConnect(urlOrOptions): ok 只表示已发起, 握手结果看 `ws.open` 事件
-            if (argc < 1) {
-                return JS_ThrowTypeError(ctx, "netWsConnect: url required");
-            }
-            return netSync(pluginxx::net_op::wsConnect, netArgs(argv[0], nullptr, std::string{}));
-        }
-
-        case B_NET_WS_SEND: {
-            if (argc < 2) {
-                return JS_ThrowTypeError(ctx, "netWsSend: (id, text) required");
-            }
-            utilxx_base::Json args = utilxx_base::Json::object();
-            args["id"]             = jsToCppString(ctx, argv[0]);
-            args["text"]           = jsToCppString(ctx, argv[1]);
-            return netSync(pluginxx::net_op::wsSend, args.dump());
-        }
-
-        case B_NET_WS_CLOSE: {
-            if (argc < 1) {
-                return JS_ThrowTypeError(ctx, "netWsClose: id required");
-            }
-            utilxx_base::Json args = utilxx_base::Json::object();
-            args["id"]             = jsToCppString(ctx, argv[0]);
-            int64_t closeCode      = 1000;
-            if (argc >= 2 && JS_IsNumber(argv[1])) {
-                JS_ToInt64(ctx, &closeCode, argv[1]);
-            }
-            args["code"] = closeCode;
-            if (argc >= 3) {
-                args["reason"] = jsToCppString(ctx, argv[2]);
-            }
-            return netSync(pluginxx::net_op::wsClose, args.dump());
-        }
-
+        case B_NET_DOWNLOAD:
+        case B_NET_WS_CONNECT:
+        case B_NET_WS_SEND:
+        case B_NET_WS_CLOSE:
         case B_NET_HTTP_SERVE:
-        case B_NET_HTTP_RESPOND: {
-            const char* op = magic == B_NET_HTTP_SERVE ? pluginxx::net_op::httpServe
-                                                      : pluginxx::net_op::httpRespond;
-            return netSync(op, argc >= 1 ? argsJsonText(ctx, argv[0]) : std::string{"{}"});
-        }
-
+        case B_NET_HTTP_RESPOND:
         case B_NET_INFO:
-            return netSync(pluginxx::net_op::info, "{}");
-
-        case B_NET_CANCEL: {
-            int64_t requestId = 0;
-            if (argc >= 1) {
-                JS_ToInt64(ctx, &requestId, argv[0]);
-            }
-            if (!iface.net || !iface.net->cancel || requestId <= 0) {
-                return netOutcomeToValue(ctx, PLUGINXX_RESULT_ERR_ARG, std::string{});
-            }
-            PluginxxString out{nullptr, 0};
-            const int32_t  code = iface.net->cancel(host, requestId, &out);
-            std::string    json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            return netOutcomeToValue(ctx, code, json);
-        }
+            return netBridgeCall(ctx, pctx, magic, argc, argv, iface.net);
 
         // ---- 后台任务 (`agentxx.agent.runtime` v2): 只能碰本实例提交的 ----
         case B_SUBMIT_ASYNC_WORK: {
@@ -4780,6 +4667,230 @@ JSValue JsEngine::bridgeCall(
 
         default:
             return JS_ThrowInternalError(ctx, "unknown bridge magic %d", magic);
+    }
+}
+
+// =====================================================================
+// 网络桥 (agent 与 client 两侧共用)
+// =====================================================================
+
+JSValue JsEngine::netBridgeCall(
+    JSContext*              ctx,
+    JsPluginCtx*            pctx,
+    int                     magic,
+    int                     argc,
+    JSValueConst*           argv,
+    const PluginxxNetIface* net
+) {
+    auto*               engine = pctx ? pctx->engine : nullptr;
+    const PluginxxHost* host   = pctx ? pctx->host : nullptr;
+    if (!engine || !host) {
+        return JS_ThrowInternalError(ctx, "agentxx net bridge: plugin context invalid");
+    }
+
+    /// 同步网络调用: 阻塞 JS 线程直到网络侧给出结果 (只用于快速操作)
+    /// - 网络服务自有线程, **不**经主程序 io 线程: 在命令/渲染这类同步回调里调
+    ///   也不会与界面线程互等
+    auto netSync = [&](const std::string& op, const std::string& argsJson) -> JSValue {
+        if (!net || !net->call) {
+            return netOutcomeToValue(ctx, PLUGINXX_RESULT_ERR_STATE, std::string{});
+        }
+        auto           opSv   = agentxx::plugin::PluginStringView::from(op.data(), op.size());
+        auto           argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+        PluginxxString out{nullptr, 0};
+        const int32_t  code = net->call(host, &opSv, &argsSv, &out);
+        std::string    json;
+        if (out.data) {
+            json.assign(out.data, static_cast<size_t>(out.size));
+            agentxx::plugin::PluginString::free(host, &out);
+        }
+        return netOutcomeToValue(ctx, code, json);
+    };
+
+    /// 异步网络调用 (Promise): 只受理, 结果经完成回调 settle
+    /// - Promise 总是 resolve 成结果对象; 受理失败也是对象 (`ok:false`)
+    auto netAsync = [&](const std::string& op, const std::string& argsJson) -> JSValue {
+        JSValue resolving[2];
+        JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+        if (JS_IsException(promise)) {
+            return promise;
+        }
+        // 受理失败 (或主程序没提供网络能力): 立即 resolve 错误对象
+        const auto resolveNow = [&](JSValue out) {
+            JSValue argv[1] = {out};
+            JSValue rc      = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, argv);
+            JS_FreeValue(ctx, rc);
+            JS_FreeValue(ctx, out);
+            JS_FreeValue(ctx, resolving[0]);
+            JS_FreeValue(ctx, resolving[1]);
+        };
+        if (!net || !net->call_async) {
+            resolveNow(netOutcomeToValue(ctx, PLUGINXX_RESULT_ERR_STATE, std::string{}));
+            return promise;
+        }
+        auto* bridge    = new JsNetBridge{engine, ctx};
+        bridge->resolve = resolving[0];
+        bridge->reject  = resolving[1];
+        auto           opSv   = agentxx::plugin::PluginStringView::from(op.data(), op.size());
+        auto           argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+        PluginxxOperatorNotify notify{&JsEngine::onNetCallDone, bridge};
+        PluginxxString         acceptedOut{nullptr, 0};
+        int64_t                requestId = 0;
+        const int32_t          code
+            = net->call_async(host, &opSv, &argsSv, &notify, &acceptedOut, &requestId);
+        std::string accepted;
+        if (acceptedOut.data) {
+            accepted.assign(acceptedOut.data, static_cast<size_t>(acceptedOut.size));
+            agentxx::plugin::PluginString::free(host, &acceptedOut);
+        }
+        if (code != PLUGINXX_RESULT_OK) {
+            bool expected = false;
+            if (bridge->settled.compare_exchange_strong(
+                    expected,
+                    true,
+                    std::memory_order_acq_rel
+                )) {
+                bridge->engine->settleNetCall(bridge, PLUGINXX_OPERATOR_FAILED, std::move(accepted));
+            }
+            return promise;
+        }
+        bridge->requestId.store(requestId, std::memory_order_release);
+        return promise;
+    };
+
+    /// 网络参数 JSON: 第一个参数可以是 url 字符串或选项对象 (字段原样保留),
+    /// 再叠加一个字符串字段 (文件名 / 不需要时传空)
+    auto netArgs = [&](JSValueConst urlOrOptions,
+                       const char*  extraKey,
+                       const std::string& extraValue) -> std::string {
+        utilxx_base::Json args = utilxx_base::Json::object();
+        std::string       url;
+        if (JS_IsString(urlOrOptions)) {
+            url = jsToCppString(ctx, urlOrOptions);
+        } else if (JS_IsObject(urlOrOptions) && !JS_IsFunction(ctx, urlOrOptions)) {
+            try {
+                auto doc = utilxx_base::Json::parse(valueToJsonString(ctx, urlOrOptions));
+                if (doc.is_object()) {
+                    args = std::move(doc);
+                    url  = args.value("url", std::string{});
+                }
+            } catch (...) {
+            }
+        }
+        if (!url.empty()) {
+            args["url"] = url;
+        }
+        if (extraKey != nullptr && !extraValue.empty()) {
+            args[extraKey] = extraValue;
+        }
+        return args.dump();
+    };
+
+    // 同步入口用于快速操作 (`ws.connect` / `ws.send` / `http.serve` / `net.info` …);
+    // 慢操作 (`http.fetch` / `http.download`) 走 Promise, 不占住 JS 线程。
+    // 注意: 同一引擎里的脚本共享一份网络资源 (归属是该插件实例), 连接 id 要自己带前缀。
+    switch (magic) {
+        case B_NET_CALL: {
+            if (argc < 1 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "netCall: op string required");
+            }
+            return netSync(
+                jsToCppString(ctx, argv[0]),
+                argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{"{}"}
+            );
+        }
+
+        case B_NET_CALL_ASYNC: {
+            if (argc < 1 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "netCallAsync: op string required");
+            }
+            return netAsync(
+                jsToCppString(ctx, argv[0]),
+                argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{"{}"}
+            );
+        }
+
+        case B_NET_FETCH:
+        case B_NET_DOWNLOAD: {
+            // netFetch(urlOrOptions) / netDownload(urlOrOptions, fileName?)
+            // - 选项对象的字段原样交给网络侧 (`method` / `headers` / `timeoutMs` …)
+            const char* op = magic == B_NET_DOWNLOAD ? pluginxx::net_op::httpDownload
+                                                     : pluginxx::net_op::httpFetch;
+            if (argc < 1) {
+                return JS_ThrowTypeError(ctx, "netFetch/netDownload: url required");
+            }
+            std::string fileName;
+            if (argc >= 2 && JS_IsString(argv[1])) {
+                fileName = jsToCppString(ctx, argv[1]);
+            }
+            return netAsync(op, netArgs(argv[0], "fileName", fileName));
+        }
+
+        case B_NET_WS_CONNECT: {
+            // netWsConnect(urlOrOptions): ok 只表示已发起, 握手结果看 `ws.open` 事件
+            if (argc < 1) {
+                return JS_ThrowTypeError(ctx, "netWsConnect: url required");
+            }
+            return netSync(pluginxx::net_op::wsConnect, netArgs(argv[0], nullptr, std::string{}));
+        }
+
+        case B_NET_WS_SEND: {
+            if (argc < 2) {
+                return JS_ThrowTypeError(ctx, "netWsSend: (id, text) required");
+            }
+            utilxx_base::Json args = utilxx_base::Json::object();
+            args["id"]             = jsToCppString(ctx, argv[0]);
+            args["text"]           = jsToCppString(ctx, argv[1]);
+            return netSync(pluginxx::net_op::wsSend, args.dump());
+        }
+
+        case B_NET_WS_CLOSE: {
+            if (argc < 1) {
+                return JS_ThrowTypeError(ctx, "netWsClose: id required");
+            }
+            utilxx_base::Json args = utilxx_base::Json::object();
+            args["id"]             = jsToCppString(ctx, argv[0]);
+            int64_t closeCode      = 1000;
+            if (argc >= 2 && JS_IsNumber(argv[1])) {
+                JS_ToInt64(ctx, &closeCode, argv[1]);
+            }
+            args["code"] = closeCode;
+            if (argc >= 3) {
+                args["reason"] = jsToCppString(ctx, argv[2]);
+            }
+            return netSync(pluginxx::net_op::wsClose, args.dump());
+        }
+
+        case B_NET_HTTP_SERVE:
+        case B_NET_HTTP_RESPOND: {
+            const char* op = magic == B_NET_HTTP_SERVE ? pluginxx::net_op::httpServe
+                                                      : pluginxx::net_op::httpRespond;
+            return netSync(op, argc >= 1 ? argsJsonText(ctx, argv[0]) : std::string{"{}"});
+        }
+
+        case B_NET_INFO:
+            return netSync(pluginxx::net_op::info, "{}");
+
+        case B_NET_CANCEL: {
+            int64_t requestId = 0;
+            if (argc >= 1) {
+                JS_ToInt64(ctx, &requestId, argv[0]);
+            }
+            if (!net || !net->cancel || requestId <= 0) {
+                return netOutcomeToValue(ctx, PLUGINXX_RESULT_ERR_ARG, std::string{});
+            }
+            PluginxxString out{nullptr, 0};
+            const int32_t  code = net->cancel(host, requestId, &out);
+            std::string    json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            return netOutcomeToValue(ctx, code, json);
+        }
+
+        default:
+            return JS_ThrowInternalError(ctx, "unknown net bridge magic %d", magic);
     }
 }
 
@@ -5640,6 +5751,130 @@ JSValue JsEngine::clientBridgeCall(
                 return JS_NewArray(ctx);
             }
             return takeHostJson(out, "<keybinds>");
+        }
+
+        // ---- 网络 (`agentxx.net`: client 插件与 agent 插件同一张表) ----
+        // 同步入口用于快速操作; 慢操作走 Promise。网络服务自有线程, 不经 client
+        // io 线程 —— 命令/渲染这类同步回调里调也不会与界面互等。
+        case B_NET_CALL:
+        case B_NET_CALL_ASYNC:
+        case B_NET_CANCEL:
+        case B_NET_FETCH:
+        case B_NET_DOWNLOAD:
+        case B_NET_WS_CONNECT:
+        case B_NET_WS_SEND:
+        case B_NET_WS_CLOSE:
+        case B_NET_HTTP_SERVE:
+        case B_NET_HTTP_RESPOND:
+        case B_NET_INFO:
+            return netBridgeCall(ctx, pctx, magic, argc, argv, iface.net);
+
+        // ---- 其余通用表 (与 agent 侧同名同义, 只是数据来自客户端) ----
+        case B_GET_CONFIG: {
+            // 本插件的配置段 (yaml `plugin.list` 条目 config + args 的内容)
+            if (!iface.config || !iface.config->get_config) {
+                return JS_NULL;
+            }
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.config->get_config(host, &out);
+            if (rc != 0 || !out.data) {
+                return JS_NULL;
+            }
+            return takeHostJson(out, "<config>");
+        }
+
+        case B_LIST_PLUGINS: {
+            // 本主程序已加载的插件清单 (两侧各自的清单)
+            if (!iface.plugins || !iface.plugins->list_plugins) {
+                return JS_NewArray(ctx);
+            }
+            PluginxxString out{nullptr, 0};
+            if (iface.plugins->list_plugins(host, &out) != 0 || !out.data) {
+                return JS_NewArray(ctx);
+            }
+            return takeHostJson(out, "<plugins>");
+        }
+
+        case B_GET_PLUGIN: {
+            if (!iface.plugins || !iface.plugins->get_plugin || argc < 1
+                || !JS_IsString(argv[0])) {
+                return JS_NULL;
+            }
+            const std::string name = jsToCppString(ctx, argv[0]);
+            auto              nameSv
+                = agentxx::plugin::PluginStringView::from(name.data(), name.size());
+            PluginxxString out{nullptr, 0};
+            if (iface.plugins->get_plugin(host, &nameSv, &out) != 0 || !out.data) {
+                return JS_NULL;
+            }
+            return takeHostJson(out, "<plugin>");
+        }
+
+        case B_DECLARE_BROADCAST: {
+            if (!iface.broadcasts || !iface.broadcasts->declare_broadcast || argc < 1) {
+                return JS_FALSE;
+            }
+            const std::string decl   = argsJsonText(ctx, argv[0]);
+            auto              declSv = agentxx::plugin::PluginStringView::from(
+                decl.data(),
+                decl.size()
+            );
+            PluginxxString err{nullptr, 0};
+            const int32_t  rc = iface.broadcasts->declare_broadcast(host, &declSv, &err);
+            std::string    errText;
+            if (err.data) {
+                errText.assign(err.data, static_cast<size_t>(err.size));
+                agentxx::plugin::PluginString::free(host, &err);
+            }
+            if (rc != PLUGINXX_RESULT_OK) {
+                return throwJsError(
+                    ctx,
+                    fmt::format(
+                        "declareBroadcast: {}",
+                        errText.empty() ? std::string{"declare failed"} : errText
+                    )
+                );
+            }
+            return JS_TRUE;
+        }
+
+        case B_READ_BROADCAST: {
+            if (!iface.broadcasts || !iface.broadcasts->read_broadcast || argc < 1) {
+                return JS_NULL;
+            }
+            const std::string id   = jsToCppString(ctx, argv[0]);
+            auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+            PluginxxString    out{nullptr, 0};
+            const int32_t     rc = iface.broadcasts->read_broadcast(host, &idSv, &out);
+            std::string       json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            // 没声明 / 没当前值 / 已结束 都返回 null
+            if (rc != PLUGINXX_RESULT_OK) {
+                return JS_NULL;
+            }
+            return jsonTextToValue(ctx, json, "<broadcast>");
+        }
+
+        case B_END_BROADCAST: {
+            if (!iface.broadcasts || !iface.broadcasts->end_broadcast || argc < 1) {
+                return JS_FALSE;
+            }
+            const std::string id     = jsToCppString(ctx, argv[0]);
+            const std::string reason = argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{};
+            auto              idSv  = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+            auto              reaSv = agentxx::plugin::PluginStringView::from(
+                reason.data(),
+                reason.size()
+            );
+            PluginxxString err{nullptr, 0};
+            const int32_t  rc = iface.broadcasts->end_broadcast(host, &idSv, &reaSv, &err);
+            if (err.data) {
+                agentxx::plugin::PluginString::free(host, &err);
+            }
+            return rc == PLUGINXX_RESULT_OK ? JS_TRUE : JS_FALSE;
         }
 
         case B_SUBSCRIBE: {

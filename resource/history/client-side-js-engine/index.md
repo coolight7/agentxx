@@ -31,20 +31,34 @@
 - 示例与测试：`example_js` client 分支扩到七类面；`client_plugins` 第 34 段再增
   12 条断言
 
+第三步（同日完成，网络与通用表对齐）:
+- **`agentxx.net` 上桥**：`netCall` / `netCallAsync` / `netCancel` / `netFetch` /
+  `netDownload` / `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpServe` /
+  `netHttpRespond` / `netInfo`，与 agent 侧共用一份实现（`netBridgeCall`），
+  `ClientIfaces` 补上 `net` 表
+- 通用表：`getConfig` / `listPlugins` / `getPlugin` / `declareBroadcast` /
+  `readBroadcast` / `endBroadcast`
+- 修掉“Promise 续体从未被泵”（回调里的 `.then` 不执行）：JS 线程主循环在每个任务
+  与每次定时器后泵微任务（`drainPromiseJobs`，单次上限 10000）
+- 示例：`/jsnet` 命令 + `js.demo.net` / `js.demo.sdk` 动作；`client_plugins` 再添 12 条
+
 不做:
 - 客户端侧脚本之间的隔离策略变化（仍是一份脚本一个 JSContext）
 - “回调里 await”的异步桥（当前 150 ms 同步桥已覆盖渲染与命令这类毫秒级需求；
-  耗时活走订阅事件 + `updateToolDecor`）
+  耗时活走订阅事件 + `updateToolDecor`，或 Promise 续体）
 
 ## 状态
 
-已完成（2026-11-13）:
+已完成（2026-11）:
 - 引擎 `Side` 分流 + client 入口 + client 桥子集 + 渲染同步桥
 - 第二批桥：展示项（状态栏 / 面板 / Info 段落）、命令、动作绑定、定时器、快捷键
   + 句柄 token + 通用回调登记与同步/投递两条调用路径
-- `example_js` client 入口与脚本分支、清单声明；脚本演示了工具行渲染与其余七类面
+- 第三批：`agentxx.net` 上桥（与 agent 侧共用 `netBridgeCall`）、通用表（配置 /
+  插件清单 / 广播声明-读-结束）、Promise 微任务泵（`drainPromiseJobs`）
+- `example_js` client 入口与脚本分支、清单声明；脚本演示了工具行渲染、展示项、
+  命令、快捷键、动作、定时器、网络与通用表
 - `client_plugins` 第 34 段（真实插件加载 + 渲染回调 + 展示项/命令/快捷键/动作/定时器
-  断言 + 注销/查询入口，模块从 774 增长到 817）、`plugins` 模块回归无关
+  + 注销与查询 + 同步/异步网络 + 通用表，模块从 774 增长到 829）
 - 文档：`docs/zh-cn/design/plugins.md` §12、`AGENTS.md`
 
 ## 关键决策
@@ -77,8 +91,10 @@
 ## 结论
 
 JS 脚本现在可以作为 client 端插件运行，client 六张表（ui / session / wire / self / timer /
-keybind）的能力面都已在桥上：工具行特化渲染、状态栏项、面板、Info 段落、斜杠命令、
-按钮动作、定时器、快捷键都在脚本里注册并回调，agent 侧不参与。
+keybind）与通用表（log / json / config / plugins / broadcasts / **net**）的能力面都已在
+桥上：工具行特化渲染、状态栏项、面板、Info 段落、斜杠命令、按钮动作、定时器、快捷键、
+HTTP/WS 网络都在脚本里注册并回调，agent 侧不参与。回调里的 Promise 续体
+(`netFetch(...).then(...)`) 由 JS 线程主循环泵出，不再是“发了不回来”。
 
 剩下的可选项是“异步回调桥”（让回调里能 await）与客户端脚本之间的隔离策略变化，
 两个都不是当前需求，已记录在上面“不做”里。

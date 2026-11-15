@@ -1183,14 +1183,16 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
     - 交互：`registerCommand({name, description, execute})` / `unregisterCommand(name)`（`execute(args)` 同步返回动作 JSON，与 C++ 插件同格式：`{"action":"toast"|"send"|"none",...}`）、`bindAction(targetId, handler)` / `unbindAction(targetId)`（按钮动作，`handler({ownerId, actionId, args})`）、`registerKeybind({keys, description}, fn)` / `unregisterKeybind(h)` / `listKeybinds()`、`setClientTimer({intervalMs, repeat, pauseWhenHidden, ownerId}, fn)` / `cancelClientTimer(h)` / `isRegionVisible(ownerId)`
     - 句柄约定：client 表的句柄是不透明指针，JS 的 number 存不下 —— 桥把它们换成**整数 token**（`JsPluginCtx::clientHandles`），注销/更新用 token；类别不对或已注销一律返回 false，不报错
     - 会话与跨端：`getClientState()`、`sendUserInput(sessionId, text)`、`requestCancel(sessionId)`、`sendPluginData(topic, json)`
-    - 自身信息：`getOwnInfo()` / `getPluginArgs()` / `getPluginConfigPath()` / `getLanguage()` / `setLanguage(tag)`
-    - 广播：`subscribe` / `unsubscribe` / `publish`（client 侧事件是唯一通道，见 §20）
+    - 自身信息与通用表：`getOwnInfo()` / `getPluginArgs()` / `getPluginConfigPath()` / `getLanguage()` / `setLanguage(tag)`、`getConfig()`（本插件配置段）、`listPlugins()` / `getPlugin(name)`（客户端已加载的插件清单）
+    - 广播：`subscribe` / `unsubscribe` / `publish` / `declareBroadcast(decl)` / `readBroadcast(id)` / `endBroadcast(id, reason?)`（client 侧事件是唯一通道，见 §20）
+    - **网络（`agentxx.net`，与 agent 插件同一张表）**：`netCall(op, args)` / `netCallAsync(op, args)` / `netCancel(requestId)`、`netFetch(urlOrOptions)` / `netDownload(urlOrOptions, fileName?)`、`netWsConnect` / `netWsSend` / `netWsClose`、`netHttpServe` / `netHttpRespond`、`netInfo()`。语义与 C++ SDK / agent 侧脚本完全一致：同步入口的返回值与 Promise 的结果都以 `ok` 作为业务结论，资源归属是本插件实例（禁用/卸载整批收掉）。网络服务自有线程，**同步入口不经 client io 线程**，因此命令/渲染回调里也能直接调
     - 实例模型：client 表成员**不带** `PluginxxScopeRef`，因此一份脚本一个实例（无 agent 挂载作用域），脚本全局状态天然按进程隔离；壳只用一份 `start`/`stop`，不需要 mount 入口
-    - 不在 client 桥上：网络（`agentxx.net` 的 `netCall`/`netFetch`/WS）、后台任务、会话运行时、图与提示词 —— 这些都是 agent 侧能力；客户端脚本要取数据就用 `sendPluginData` 通知 agent 侧插件，或者写成 C++ client 插件
+    - 不在 client 桥上：后台任务 / 会话运行时 / 图 / 提示词 / session 资源（Skill/Memory/MCP）—— 这些都是 agent 侧能力；客户端脚本要取数据就用 `sendPluginData` 通知 agent 侧插件，或者写成 C++ client 插件
     - **同步回调有上限**：渲染内容回调与命令 `execute` 都在主程序 io 线程要求同步返回，而 JS 只在 JS 线程执行。引擎因此提供一条 io→JS 的同步桥：请求投到 JS 线程后最多等 `150 ms` (`kClientSyncTimeoutMs`)；超时、引擎已停、或 JS 线程正卡在“等 io 线程处理它的表调用”上一律直接放弃（渲染回退默认内容 / 命令按失败处理，不报错、不阻塞界面）。这两类回调**必须同步返回值**（返回 Promise 视为没有内容）；耗时计算请改为订阅事件后用 `updateToolDecor` 推数据。动作/定时器/快捷键回调是投递式的（fire-and-forget），不受此限
     - **回调里别再调 client 表**：client 表的注册/更新入口在 JS 线程上会同步等 io 线程做完（`ioCallSyncKeep`），而渲染/命令回调这阵 io 线程正等着 JS —— 两边互等只会等到 150 ms 上限后各自退回（渲染没内容、表调用正常完成）。需要动展示项的活放动作/定时器/快捷键回调里，它们是投递式的，io 线程不在等
+    - **Promise 续体由主循环泵**：动作/定时器/快捷键/渲染/命令回调里可以写 `netFetch(...).then(...)`，JS 线程在每个任务与每个定时器之后泵一次微任务队列（单次上限 10000 个 job，到限记一条警告）。回调本身仍然要同步返回它该返回的值（渲染内容 / 动作 JSON），Promise 只用于“结果晚些到”的后续动作
     - 一次没拿到内容的渲染会按“没有自定义内容”缓存，界面用默认渲染；同一行输入不变时不会反复请求（参数/结果变化、行重建、重新注册后会再请求）
-    - 示例：`example_js` 的 `plugin.js` 用 `agentxx.side` 分支，client 侧注册了工具行特化渲染、状态栏项、Info 段落、面板、斜杠命令 `/jsdemo`、按钮动作、快捷键 `ctrl+alt+j` 与一个 60ms×2 的定时器；另有一个 `ctrl+alt+u` 演示注销与查询（`listKeybinds` / `isRegionVisible` / `unregister*` / `cancelClientTimer`）。它的清单同时声明 agent 侧 `agentxx.agent.core` 与 client 侧 `agentxx.client.msg_decor`，两侧各自只比较自己那部分
+    - 示例：`example_js` 的 `plugin.js` 用 `agentxx.side` 分支，client 侧注册了工具行特化渲染、状态栏项、Info 段落、面板、斜杠命令 `/jsdemo`、按钮动作、快捷键 `ctrl+alt+j` 与一个 60ms×2 的定时器；另有一个 `ctrl+alt+u` 演示注销与查询（`listKeybinds` / `isRegionVisible` / `unregister*` / `cancelClientTimer`）、命令 `/jsnet` 演示同步网络入口，动作 `js.demo.net` / `js.demo.sdk` 演示回环 HTTP（`http.serve` + `http.route` → `netFetch` → `.then`）与通用表（插件清单 / 配置 / 广播声明-发布-读-结束）。它的清单同时声明 agent 侧 `agentxx.agent.core` 与 client 侧 `agentxx.client.msg_decor`，两侧各自只比较自己那部分
 - 可自研脚本JS 运行时插件 (Python/Lua 等) 替换或扩充脚本能力
 
 ---

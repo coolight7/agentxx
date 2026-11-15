@@ -179,3 +179,20 @@ client 侧插件（`agentxx.client.*`）的能力因此对脚本不可见，工�
 
 验证：`client_plugins` 817 / 0（该段两批共添 43 条断言：首批 23 + 展示项/交互 12 +
 注销与查询 8，覆盖七类面）；其余插件/配置/边界模块与第一批结果一致。
+
+## 8. 第三批（同日追加）：网络与通用表
+
+用户的反馈指出 `agentxx.net` 本来就对两侧插件都提供；查下去发现两处缺口：
+
+- `ClientIfaces` 聚合结构没查网络表（主程序 `query_interface` 早就返回 `g_clientIfaceNet`），
+  所以引擎在 client 侧拿不到 `net`
+- 回调用 Promise 时（`netFetch(...).then(...)`）续体从来没有被执行：主循环只在
+  `drivePromise`（工具/事件里等 Promise）里泵 `JS_ExecutePendingJob`
+
+设计上没有新概念：网络处理抽成 `netBridgeCall(ctx, pctx, magic, argc, argv, net)` 由两侧
+共用（各自传自己那张表）；client 桥再补上通用表的 `getConfig` / `listPlugins` /
+`getPlugin` / `declareBroadcast` / `readBroadcast` / `endBroadcast`。Promise 这边加
+`drainPromiseJobs()`，主循环在每个任务与每次定时器之后各调一次。
+
+验证：`client_plugins` 829 / 0（再添 12 条：同步网络自检、回环 HTTP 往返、通用表）；
+`plugins` 649 / 0、`plugin_net` 35 / 0，批共 3098 / 0。

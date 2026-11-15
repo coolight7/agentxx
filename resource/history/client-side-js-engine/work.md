@@ -230,6 +230,54 @@ client 表的注册/更新入口（`xx_cregister_status_item` 等）走 `onClien
 
 ### 7.8 没做的部分（有意留白）
 
-- **网络不在 client 桥上**：`agentxx.net`（HTTP/WS/TCP/UDP/服务端）只在 agent 侧与 C++ client 插件里可用。客户端脚本要拿外部数据，就用 `sendPluginData` 通知 agent 侧脚本去取，或直接写成 C++ client 插件（已写进 `plugins.md` §12）
 - **异步回调**：命令 `execute` / 渲染回调仍然只能同步返回（150 ms）；“先 pending、稍后回填”的桥没有做，因为当前没有这类需求（耗时活放到动作/定时器回调里推数据即可）
 - **`clientCbs_` 不回收**：每次注册/注销留几十字节到引擎析构（与 `retiredRenders_`、`renders_` 一致），长时间反复 enable/disable 的脚本会缓慢累积，可忽略
+
+## 八、第三批：网络与通用表对齐（客户端脚本可直接联网）
+
+用户反馈：`agentxx.net` 本来就是 agent 插件与 client 插件都提供的，client 侧脚本也应该能调。
+查下去发现两处缺口：`ClientIfaces` 聚合结构根本没查网络表（主程序 `query_interface` 早就返回
+`g_clientIfaceNet`），以及回调用 Promise 时续体永远不会执行。
+
+### 8.1 接口与引擎
+
+1. `agent/lib/include/agentxx/plugin/api/plugin_kit.h`：`ClientIfaces` 补 `net` / `config` /
+   `plugins` 三个表（`agentxx.net` / `pluginxx.config` / `pluginxx.plugins`）
+2. 引擎把 net 处理从 `bridgeCall` 里抽成静态成员
+   `netBridgeCall(ctx, pctx, magic, argc, argv, const PluginxxNetIface* net)`，
+   `netSync` / `netAsync` / `netArgs` 三个闭包随迁；agent 与 client 各自传自己那张表，
+   两边行为完全一致（包括 `netCallAsync` 的完成桥 `JsNetBridge`）
+3. client 桥新增 11 个网络方法：`netCall` / `netCallAsync` / `netCancel` / `netFetch` /
+   `netDownload` / `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpServe` /
+   `netHttpRespond` / `netInfo`；同时补齐通用表入口 `getConfig` / `listPlugins` /
+   `getPlugin` / `declareBroadcast` / `readBroadcast` / `endBroadcast`
+4. 线程约束（实测）：网络表入口**不**经 client io 线程（`xx_cnet_call` 直接调
+   `mgr->netCall`，网络服务自有线程），所以同步 `netCall` / `netInfo` 可以在命令/渲染
+   回调里直接用；`config` / `plugins` / `broadcasts` 的通用表入口仍经 `onInstanceIo`，
+   只能在投递式回调（动作/定时器/快捷键）里调
+
+### 8.2 修掉一个引擎 bug：Promise 续体从未被泵过
+
+现象：脚本里 `agentxx.netFetch(url).then((r) => {...})` 的请求确实发出去了、服务端也回了
+（日志里能看到 `http.route` 生效），但 `.then` 里的代码永远不跑。
+
+原因：主循环只在 `drivePromise`（工具执行 / 通知回调里等 Promise 结果）里调用
+`JS_ExecutePendingJob`；回调直接开会 `.then` 时没有任何人泵微任务队列，续体就一直躺着。
+
+修法：新增 `drainPromiseJobs()`（`JS_ExecutePendingJob` 循环，单次上限 `kMaxJobsPerDrain`
+= 10000，job 抛异常记日志后继续泵剩下的），JS 线程主循环在
+**每个任务之后**与**每次定时器触发之后**各调一次（仍在 `busy_ = true` 窗口内，
+因为续体同样可能调主程序 vtable）。agent 侧的“回调里 fire-and-forget 写 `.then`”也一并修好。
+
+### 8.3 示例与测试
+
+- `example_js/plugin.js`（client 分支）：命令 `/jsnet`（同步 `netInfo()` + 未知 op 的
+  `{ok:false}`）、动作 `js.demo.net`（脚本自己 `http.serve` + `http.route` → `netFetch` →
+  `.then` 回 toast → `http.stop`）、动作 `js.demo.sdk`（`listPlugins` / `getPlugin` /
+  `getConfig` / 广播声明-发布-读-结束）
+- `client_plugins` 第 34 段再添 12 条：同步 net 自检（命令回调里调）、回环 HTTP 往返
+  （Promise 续体真的执行）、通用表（插件清单 / 自身信息 / 配置 / 广播四步）
+- 验证（Windows Debug + ASan）：`client_plugins` 829 / 0；`plugins` 649 / 0；
+  `plugin_net` 35 / 0；`plugin_cleanup` / `plugin_runtime` / `plugin_sdk` / `plugin_bridge` /
+  `plugin_host_mount` / `plugin_multi_instance` / `plugin_example_runtime` /
+  `plugin_example_chatbot` / `boundaries` / `config_*` 全部通过（批共 3098 / 0）

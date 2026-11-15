@@ -4479,6 +4479,53 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(mgrJs->hasKeybind("ctrl+alt+u"));
                 }
 
+                // 网络: 同步入口 (net.info) 直接从命令回调里调
+                // - 网络服务自有线程, 不像展示项那样要回 io 线程, 所以不会互等
+                {
+                    const int before = adapterJs->toastCount();
+                    mgrJs->invokeCommand("jsnet", "{}");
+                    XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 1);
+                    XX_TEST_EXPECT_TRUE(
+                        adapterJs->lastToast().rfind("net info ok=true", 0) == 0
+                    );
+                    // 未知 op 是参数层错误, 脚本侧只看 `ok`
+                    XX_TEST_EXPECT_TRUE(
+                        adapterJs->lastToast().find("bogus ok=false") != std::string::npos
+                    );
+                }
+
+                // 网络: 回环往返 (脚本起服务 + 静态路由 → netFetch → Promise 回 JS 线程)
+                {
+                    const int before = adapterJs->toastCount();
+                    mgrJs->dispatchAction("example_js", "js.demo.net", "fetch", "{}");
+                    for (int i = 0; i < 300 && adapterJs->toastCount() == before; ++i) {
+                        co_await sleepMs(10);
+                    }
+                    XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 1);
+                    XX_TEST_EXPECT_TRUE(
+                        adapterJs->lastToast().rfind("net fetch: ok=true status=200", 0) == 0
+                    );
+                    XX_TEST_EXPECT_TRUE(
+                        adapterJs->lastToast().find("hello-from-js-client") != std::string::npos
+                    );
+                }
+
+                // 通用表: 插件清单 / 自身信息 / 配置 / 广播声明-发布-读-结束
+                {
+                    const int before = adapterJs->toastCount();
+                    mgrJs->dispatchAction("example_js", "js.demo.sdk", "probe", "{}");
+                    for (int i = 0; i < 100 && adapterJs->toastCount() == before; ++i) {
+                        co_await sleepMs(5);
+                    }
+                    XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 1);
+                    const std::string sdkToast = adapterJs->lastToast();
+                    XX_TEST_EXPECT_TRUE(sdkToast.rfind("sdk: plugins=", 0) == 0);
+                    XX_TEST_EXPECT_TRUE(sdkToast.find(" self=example_js") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(sdkToast.find(" read=true") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(sdkToast.find(" ended=true") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(sdkToast.find(" afterEnd=true") != std::string::npos);
+                }
+
                 // 禁用 → 注册项与缓存一齐摘除; 启用 → start 重跑脚本重新注册
                 mgrJs->disable("example_js");
                 {
