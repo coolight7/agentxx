@@ -29,7 +29,7 @@ namespace {
 agentxx::util::ToolResult mapPluginOpResult(pluginxx::PluginOpResult result) {
     switch (result.status) {
         case PLUGINXX_OPERATOR_OK:
-            return agentxx::util::ToolResult::ok(std::move(result.payload));
+            return agentxx::util::ToolResult::unpackEnvelope(std::move(result.payload));
         case PLUGINXX_OPERATOR_CANCELED:
             return agentxx::util::ToolResult::canceled(std::move(result.payload));
         default:

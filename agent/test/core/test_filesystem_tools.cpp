@@ -80,6 +80,14 @@ inline std::string fileReadExecute(
     return agentxx::test::displayText(::agentxx_fs_plugin::fileReadExecute(a, w, isCanceled));
 }
 
+inline ::agentxx::util::ToolResult fileReadMediaExecute(
+    const utilxx_base::Json& a,
+    const std::string&       w,
+    const ::agentxx_fs_plugin::IsCanceledFn& isCanceled = nullptr
+) {
+    return ::agentxx_fs_plugin::fileReadMediaExecute(a, w, isCanceled);
+}
+
 inline std::string fileWriteExecute(
     const utilxx_base::Json& a,
     const std::string&       w,
@@ -136,6 +144,31 @@ inline asio::awaitable<std::string>
 }
 
 } // namespace agentxx_fs_test
+
+namespace {
+
+/// 删除路径 (存在才删, 忽略错误): 用例起点清理用
+void removeQuiet(const std::string& path) {
+    std::error_code ec;
+    std::filesystem::remove_all(std::filesystem::path{path}, ec);
+}
+
+/// 路径是否存在 (悬空的符号链接也算)
+bool fsPathExists(const std::string& path) {
+    std::error_code ec;
+    auto            p = std::filesystem::path{path};
+    return std::filesystem::exists(p, ec) || std::filesystem::is_symlink(p, ec);
+}
+
+/// 写文本文件 (父目录缺失时创建)
+void writeTextFileQuiet(const std::string& path, const std::string& text) {
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path{path}.parent_path(), ec);
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f << text;
+}
+
+} // namespace
 
 namespace agentxx {
 namespace tools {
@@ -3255,10 +3288,11 @@ asio::awaitable<void> test_plugin_real_link() {
         co_return;
     }
 
-    // 六工具全部注册
+    // 七工具全部注册
     for (const char* name :
          {"agentxx_filesystem_list",
           "agentxx_filesystem_read",
+          "agentxx_filesystem_read_media",
           "agentxx_filesystem_write",
           "agentxx_filesystem_edit",
           "agentxx_filesystem_glob",
@@ -3304,11 +3338,12 @@ asio::awaitable<void> test_plugin_real_link() {
     }
 
     // 重复调用检查 (repeatCallCheck; 对应注册 flags 里的
-    // AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK): list/read/glob/grep/write 启用
+    // AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK): list/read/read_media/glob/grep/write 启用
     // (主程序在连续同名同参调用达阈值时询问用户), edit 不启用
     for (const char* name :
          {"agentxx_filesystem_list",
           "agentxx_filesystem_read",
+          "agentxx_filesystem_read_media",
           "agentxx_filesystem_glob",
           "agentxx_filesystem_grep",
           "agentxx_filesystem_write"}) {
@@ -3478,6 +3513,21 @@ asio::awaitable<void> test_plugin_real_link() {
         XX_TEST_EXPECT_TRUE(outG.find("中文文件.txt") != std::string::npos);
 
         fs::remove_all(utilxx_base::utf8ToPath(testDir + "/中文目录_真实流程"), ec);
+    }
+
+    // read_media (blocking): 读取测试图片并验证返回结果包含正确信息
+    {
+        auto imgPath = testDir + "/media_smoke.png";
+        writeTextFileQuiet(imgPath, "fake png content\n");
+        auto out = co_await callTool(
+            "agentxx_filesystem_read_media",
+            utilxx_base::Json{
+                {"path", "media_smoke.png"}
+            }
+        );
+        XX_TEST_EXPECT_TRUE(out.find("Loaded image media file") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("media_smoke.png") != std::string::npos);
+        removeQuiet(imgPath);
     }
 
     // 卸载 (寄生 loop)
@@ -4059,27 +4109,6 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
 // move / copy / remove (写类工具)
 // =====================================================================
 
-/// 删除路径 (存在才删, 忽略错误): 用例起点清理用
-static void removeQuiet(const std::string& path) {
-    std::error_code ec;
-    std::filesystem::remove_all(std::filesystem::path{path}, ec);
-}
-
-/// 路径是否存在 (悬空的符号链接也算)
-static bool fsPathExists(const std::string& path) {
-    std::error_code ec;
-    auto            p = std::filesystem::path{path};
-    return std::filesystem::exists(p, ec) || std::filesystem::is_symlink(p, ec);
-}
-
-/// 写文本文件 (父目录缺失时创建)
-static void writeTextFileQuiet(const std::string& path, const std::string& text) {
-    std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path{path}.parent_path(), ec);
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    f << text;
-}
-
 /// 移动文件: 源消失、目标出现且内容一致
 asio::awaitable<void> test_move_file_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
@@ -4597,6 +4626,187 @@ asio::awaitable<void>
     co_return;
 }
 
+/// ToolResult 多模态信封打包与解包往返测试
+asio::awaitable<void>
+    test_tool_result_envelope_pack_unpack(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    (void)agentContext;
+    // 1) 带有附件的结果打包与解包
+    agentxx::agent::MediaAttachment att;
+    att.type        = agentxx::agent::MediaType::Image;
+    att.displayName = "photo.png";
+    att.mimeType    = "image/png";
+    att.pathOrUrl   = "/tmp/photo.png";
+    att.sizeBytes   = 12345;
+
+    auto original = agentxx::util::ToolResult::withAttachments(
+        "Loaded image successfully.",
+        {att}
+    );
+    XX_TEST_EXPECT_TRUE(original.hasAttachments());
+    XX_TEST_EXPECT_EQ(original.attachments.size(), 1);
+
+    auto packed = original.packEnvelope();
+    XX_TEST_EXPECT_TRUE(packed.find(agentxx::util::kToolMediaEnvelopeKey) != std::string::npos);
+
+    auto unpacked = agentxx::util::ToolResult::unpackEnvelope(packed);
+    XX_TEST_EXPECT_TRUE(unpacked.hasAttachments());
+    XX_TEST_EXPECT_EQ(unpacked.attachments.size(), 1);
+    XX_TEST_EXPECT_EQ(unpacked.text, "Loaded image successfully.");
+    XX_TEST_EXPECT_EQ(unpacked.attachments[0].displayName, "photo.png");
+    XX_TEST_EXPECT_EQ(unpacked.attachments[0].mimeType, "image/png");
+    XX_TEST_EXPECT_EQ(unpacked.attachments[0].pathOrUrl, "/tmp/photo.png");
+    XX_TEST_EXPECT_EQ(unpacked.attachments[0].sizeBytes, 12345);
+
+    // 2) 普通纯文本不产生多模态信封
+    auto plain = agentxx::util::ToolResult::ok("Plain text result");
+    XX_TEST_EXPECT_FALSE(plain.hasAttachments());
+    XX_TEST_EXPECT_EQ(plain.packEnvelope(), "Plain text result");
+    auto unpackedPlain = agentxx::util::ToolResult::unpackEnvelope("Plain text result");
+    XX_TEST_EXPECT_FALSE(unpackedPlain.hasAttachments());
+    XX_TEST_EXPECT_EQ(unpackedPlain.text, "Plain text result");
+
+    g_fs_passed++;
+    TEST_PASS << "ToolResult envelope pack and unpack works correctly" << std::endl;
+    co_return;
+}
+
+/// read_media: 基本功能测试 (图片, 音频, 视频)
+asio::awaitable<void>
+    test_read_media_tool_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    const auto dir = testDir + "/read_media_basic";
+    removeQuiet(dir);
+    writeTextFileQuiet(dir + "/sample.png", "fake png data\n");
+    writeTextFileQuiet(dir + "/audio.mp3", "fake mp3 data\n");
+    writeTextFileQuiet(dir + "/video.mp4", "fake mp4 data\n");
+
+    const auto workDir = agentxx::tools::testResolvedWorkDir(agentContext);
+
+    // 1) 读取图片
+    {
+        auto res = agentxx_fs_test::fileReadMediaExecute(
+            utilxx_base::Json{{"path", dir + "/sample.png"}},
+            workDir
+        );
+        XX_TEST_EXPECT_TRUE(res.isOk());
+        XX_TEST_EXPECT_EQ(res.attachments.size(), 1);
+        XX_TEST_EXPECT_EQ(res.attachments[0].type, agentxx::agent::MediaType::Image);
+        XX_TEST_EXPECT_EQ(res.attachments[0].mimeType, "image/png");
+        XX_TEST_EXPECT_EQ(res.attachments[0].displayName, "sample.png");
+        XX_TEST_EXPECT_TRUE(res.text.find("Loaded image media file") != std::string::npos);
+    }
+
+    // 2) 读取音频
+    {
+        auto res = agentxx_fs_test::fileReadMediaExecute(
+            utilxx_base::Json{{"path", dir + "/audio.mp3"}},
+            workDir
+        );
+        XX_TEST_EXPECT_TRUE(res.isOk());
+        XX_TEST_EXPECT_EQ(res.attachments.size(), 1);
+        XX_TEST_EXPECT_EQ(res.attachments[0].type, agentxx::agent::MediaType::Audio);
+        XX_TEST_EXPECT_EQ(res.attachments[0].mimeType, "audio/mpeg");
+        XX_TEST_EXPECT_EQ(res.attachments[0].displayName, "audio.mp3");
+    }
+
+    // 3) 读取视频
+    {
+        auto res = agentxx_fs_test::fileReadMediaExecute(
+            utilxx_base::Json{{"path", dir + "/video.mp4"}},
+            workDir
+        );
+        XX_TEST_EXPECT_TRUE(res.isOk());
+        XX_TEST_EXPECT_EQ(res.attachments.size(), 1);
+        XX_TEST_EXPECT_EQ(res.attachments[0].type, agentxx::agent::MediaType::Video);
+        XX_TEST_EXPECT_EQ(res.attachments[0].mimeType, "video/mp4");
+        XX_TEST_EXPECT_EQ(res.attachments[0].displayName, "video.mp4");
+    }
+
+    g_fs_passed++;
+    TEST_PASS << "filesystem_read_media correctly reads images, audio, and video files" << std::endl;
+    removeQuiet(dir);
+    co_return;
+}
+
+/// read_media: 异常与边界情况测试
+asio::awaitable<void>
+    test_read_media_tool_errors(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    const auto dir = testDir + "/read_media_err";
+    removeQuiet(dir);
+    writeTextFileQuiet(dir + "/test.txt", "text content\n");
+    writeTextFileQuiet(dir + "/binary.exe", "exe binary\n");
+
+    const auto workDir = agentxx::tools::testResolvedWorkDir(agentContext);
+
+    // 1) 空路径
+    {
+        auto res = agentxx_fs_test::fileReadMediaExecute(
+            utilxx_base::Json{{"path", ""}},
+            workDir
+        );
+        XX_TEST_EXPECT_FALSE(res.isOk());
+        XX_TEST_EXPECT_TRUE(res.text.find("Arg `path` is empty") != std::string::npos);
+    }
+
+    // 2) 不存在的文件
+    {
+        auto res = agentxx_fs_test::fileReadMediaExecute(
+            utilxx_base::Json{{"path", dir + "/no_such.png"}},
+            workDir
+        );
+        XX_TEST_EXPECT_FALSE(res.isOk());
+        XX_TEST_EXPECT_TRUE(res.text.find("File does not exist") != std::string::npos);
+    }
+
+    // 3) 路径是目录
+    {
+        auto res = agentxx_fs_test::fileReadMediaExecute(
+            utilxx_base::Json{{"path", dir}},
+            workDir
+        );
+        XX_TEST_EXPECT_FALSE(res.isOk());
+        XX_TEST_EXPECT_TRUE(res.text.find("Path is a directory") != std::string::npos);
+    }
+
+    // 4) 不支持的扩展名 (如 .txt, .exe)
+    {
+        auto res = agentxx_fs_test::fileReadMediaExecute(
+            utilxx_base::Json{{"path", dir + "/binary.exe"}},
+            workDir
+        );
+        XX_TEST_EXPECT_FALSE(res.isOk());
+        XX_TEST_EXPECT_TRUE(res.text.find("Unsupported media file extension") != std::string::npos);
+    }
+
+    g_fs_passed++;
+    TEST_PASS << "filesystem_read_media correctly handles invalid path, non-existent file, and unsupported extensions" << std::endl;
+    removeQuiet(dir);
+    co_return;
+}
+
+/// read_media: 相对会话工作目录展开
+asio::awaitable<void>
+    test_read_media_relative_workdir(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    const auto dir = testDir + "/read_media_rel";
+    removeQuiet(dir);
+    writeTextFileQuiet(dir + "/rel_pic.jpg", "jpeg content\n");
+
+    // 以 dir 作为工作目录传入相对路径
+    auto res = agentxx_fs_test::fileReadMediaExecute(
+        utilxx_base::Json{{"path", "rel_pic.jpg"}},
+        dir
+    );
+    XX_TEST_EXPECT_TRUE(res.isOk());
+    XX_TEST_EXPECT_EQ(res.attachments.size(), 1);
+    XX_TEST_EXPECT_EQ(res.attachments[0].type, agentxx::agent::MediaType::Image);
+    XX_TEST_EXPECT_EQ(res.attachments[0].mimeType, "image/jpeg");
+    XX_TEST_EXPECT_EQ(res.attachments[0].displayName, "rel_pic.jpg");
+
+    g_fs_passed++;
+    TEST_PASS << "filesystem_read_media resolves relative path against workDir" << std::endl;
+    removeQuiet(dir);
+    co_return;
+}
+
 asio::awaitable<TestResult>
     run_filesystem_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     setupTestDir();
@@ -4726,12 +4936,18 @@ asio::awaitable<TestResult>
     co_await run(test_remove_directory);
     co_await run(test_remove_missing_path);
 
-    // read 输出上限 / grep count 模式 / glob type 数组 / write overwrite 容错
+    // read 输出上限 / grep count模式 / glob type 数组 / write overwrite 容错
     co_await run(test_read_output_limit_lines);
     co_await run(test_read_output_limit_single_long_line);
     co_await run(test_grep_count_mode);
     co_await run(test_glob_type_array);
     co_await run(test_write_overwrite_omitted);
+
+    // 多模态信封与 read_media 工具测试
+    co_await run(test_tool_result_envelope_pack_unpack);
+    co_await run(test_read_media_tool_basic);
+    co_await run(test_read_media_tool_errors);
+    co_await run(test_read_media_relative_workdir);
 
     // 插件真实调用基本功能检查 (dlopen + 主程序 op_driver 完整流程; 插件未构建时跳过)
     // - 无 agentContext 形参, 不经 run 适配器直调 (异常默认语义一致)

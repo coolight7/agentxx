@@ -993,6 +993,75 @@ inline ToolResult fileReadExecuteImpl(
 }
 
 // =====================================================================
+// agentxx_filesystem_read_media 执行体
+// =====================================================================
+inline ToolResult fileReadMediaExecuteImpl(
+    const utilxx_base::Json& arguments,
+    const std::string&       workDir,
+    const IsCanceledFn&     isCanceled = nullptr
+) {
+    (void)isCanceled;
+    auto rawPath = arguments.value("path", std::string{});
+    if (rawPath.empty()) {
+        throw std::invalid_argument{"Arg `path` is empty"};
+    }
+    auto            filepath = detail::wsAbs(workDir, rawPath);
+    auto            fsPath   = utilxx_base::utf8ToPath(filepath);
+    std::error_code ec;
+    bool            exists = std::filesystem::exists(fsPath, ec);
+    if (ec) {
+        throw std::runtime_error{fmt::format("Can not access file: {}", ec.message())};
+    }
+    if (!exists) {
+        throw std::runtime_error{fmt::format("File does not exist: {}", rawPath)};
+    }
+    if (std::filesystem::is_directory(fsPath, ec)) {
+        throw std::runtime_error{fmt::format("Path is a directory, not a media file: {}", rawPath)};
+    }
+
+    auto ext       = utilxx_base::toLower(utilxx_base::pathToUtf8Generic(fsPath.extension()));
+    auto mediaType = agentxx::agent::mediaTypeFromExtension(ext);
+    if (!mediaType.has_value()) {
+        throw std::runtime_error{fmt::format(
+            "Unsupported media file extension '{}'. Supported extensions: images (.png, .jpg, "
+            ".jpeg, .webp, .gif, .bmp), audio (.wav, .mp3, .ogg, .m4a, .aac, .flac), video (.mp4, "
+            ".mov, .webm, .mkv)",
+            ext
+        )};
+    }
+
+    auto fileSize = std::filesystem::file_size(fsPath, ec);
+    if (ec) {
+        throw std::runtime_error{fmt::format("Can not get file size: {}", ec.message())};
+    }
+    auto maxSize = agentxx::agent::maxBytesForMediaType(*mediaType);
+    if (fileSize > maxSize) {
+        throw std::runtime_error{fmt::format(
+            "Media file too large: {} bytes exceeds maximum allowed limit of {} bytes for {}",
+            fileSize,
+            maxSize,
+            agentxx::agent::mediaTypeToString(*mediaType)
+        )};
+    }
+
+    agentxx::agent::MediaAttachment att;
+    att.type        = *mediaType;
+    att.displayName = utilxx_base::pathToUtf8Generic(fsPath.filename());
+    att.mimeType    = std::string(agentxx::agent::mimeTypeFromExtension(ext));
+    att.pathOrUrl   = filepath;
+    att.sizeBytes   = fileSize;
+
+    std::string infoText = fmt::format(
+        "Loaded {} media file \"{}\" successfully ({} bytes, MIME: {}).",
+        agentxx::agent::mediaTypeToString(att.type),
+        att.displayName,
+        att.sizeBytes,
+        att.mimeType
+    );
+    return ToolResult::withAttachments(std::move(infoText), {std::move(att)});
+}
+
+// =====================================================================
 // agentxx_filesystem_write 执行体 (原 FilesystemWriteFileTool::execute_async)
 // =====================================================================
 inline ToolResult fileWriteExecuteImpl(
@@ -2333,6 +2402,16 @@ inline ToolResult fileReadExecute(
 ) {
     return detail::asErrorText([&] {
         return fileReadExecuteImpl(arguments, workDir, isCanceled);
+    });
+}
+
+inline ToolResult fileReadMediaExecute(
+    const utilxx_base::Json& arguments,
+    const std::string&       workDir,
+    const IsCanceledFn&     isCanceled = nullptr
+) {
+    return detail::asErrorText([&] {
+        return fileReadMediaExecuteImpl(arguments, workDir, isCanceled);
     });
 }
 

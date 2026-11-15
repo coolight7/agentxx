@@ -1,5 +1,6 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/conversation_types.h"
+#include "agentxx/agent/media_attachment_loader.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/agent/agent_host.h"
@@ -21,8 +22,8 @@
 #include "agentxx/nodes/graph_conditions.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/provider_common.h"
-#include "agentxx/tools/async_tools.h"
 #include "agentxx/tools/async_emit.h"
+#include "agentxx/tools/async_tools.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/observability.h"
 #include "agentxx/util/share_store_offload.h"
@@ -445,8 +446,8 @@ asio::awaitable<void> BaseAgent::init() {
             // 排序/过滤/合并; 管理器还没建时弱引用取不到, 等于没有插件层
             std::weak_ptr<agentxx::agent::AgentContext> weakCtx = agentContext;
             agentContext->features->setPluginEmitter(
-                [weakCtx](std::string_view pointId,
-                          std::string_view payloadJson) -> asio::awaitable<std::optional<std::string>> {
+                [weakCtx](std::string_view pointId, std::string_view payloadJson)
+                    -> asio::awaitable<std::optional<std::string>> {
                     auto ctx = weakCtx.lock();
                     if (nullptr == ctx || nullptr == ctx->pluginManager) {
                         co_return std::nullopt;
@@ -823,7 +824,7 @@ asio::awaitable<void> BaseAgent::init() {
             // - 必须在 own_tools 之前收集: own_tools 会把 tools 元素 move 成空
             //   unique_ptr, 之后遍历将解引用空指针
             if (agentContext->toolRegistry) {
-                std::vector<std::string> staticNames;
+                std::vector<std::string>                               staticNames;
                 std::vector<std::pair<std::string, utilxx_base::Json>> staticSchemas;
                 staticNames.reserve(tools.size());
                 staticSchemas.reserve(tools.size());
@@ -842,9 +843,11 @@ asio::awaitable<void> BaseAgent::init() {
             // 展示历史里的工具行参数自愈: 加载尾窗/分页读取时按 schema 修正, 让特化渲染器
             // 与实时路径看到同一套参数类型 (无 schema 的工具原样保留)
             if (agentContext->sessions) {
-                auto registry = agentContext->toolRegistry;
-                agentContext->sessions->toolArgsNormalizer =
-                    [registry](std::string_view toolName, std::string_view argsJson) -> std::string {
+                auto registry                              = agentContext->toolRegistry;
+                agentContext->sessions->toolArgsNormalizer = [registry](
+                                                                 std::string_view toolName,
+                                                                 std::string_view argsJson
+                                                             ) -> std::string {
                     if (!registry || argsJson.empty()) {
                         return std::string{argsJson};
                     }
@@ -1075,8 +1078,7 @@ void BaseAgent::initModelRegistry() {
         if (!preferred.empty() && registry->hasModel(preferred)) {
             registry->setDefaultModel(preferred);
         }
-    } else if (!config->currentModelName.empty()
-               && !registry->hasModel(config->currentModelName)) {
+    } else if (!config->currentModelName.empty() && !registry->hasModel(config->currentModelName)) {
         // 指定了不存在的模型: 共享表里也没有
         XX_LOGE("指定使用的模型不存在: `{}`", config->currentModelName);
     }
@@ -1092,7 +1094,7 @@ void BaseAgent::initEventBus() {
 }
 
 void BaseAgent::initEventHub(asio::any_io_executor executor) {
-    const auto& config = agentContext->agentConfig;
+    const auto&                       config = agentContext->agentConfig;
     agentxx::events::EventHub::Config hubConfig;
     if (config) {
         // 内容压缩阈值: 与工具输出压缩同一规则 (见 AgentConfig::eventContentLimitLength)
@@ -1119,10 +1121,11 @@ void BaseAgent::initEventHub(asio::any_io_executor executor) {
                                                 : self->ioCtx->get_executor();
         asio::co_spawn(
             executor,
-            [self, sessionId = std::move(sessionId), text = std::move(text), source = std::move(source)](
-            ) -> asio::awaitable<void> {
-                auto result
-                    = co_await self->runTurnAsync(sessionId, text, nullptr, {}, {}, source);
+            [self,
+             sessionId = std::move(sessionId),
+             text      = std::move(text),
+             source    = std::move(source)]() -> asio::awaitable<void> {
+                auto result = co_await self->runTurnAsync(sessionId, text, nullptr, {}, {}, source);
                 XX_LOGD(
                     "[event_hub] headless turn finished: session={} hasError={}",
                     sessionId,
@@ -1536,7 +1539,8 @@ void BaseAgent::collectAppendComponentInfo(std::vector<AppendComponentNotificati
 
     // Agent 侧加载的插件 (数量 + 列表; success 反映 enabled 状态)
     if (agentContext->pluginManager && agentContext->pluginMount) {
-        for (const auto& plugin : agentContext->pluginManager->listForMount(*agentContext->pluginMount)) {
+        for (const auto& plugin :
+             agentContext->pluginManager->listForMount(*agentContext->pluginMount)) {
             notifications.push_back(AppendComponentNotification{
                 .name         = plugin.name,
                 .errorMessage = plugin.enabled ? "" : "disabled",
@@ -1604,11 +1608,11 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 内建事件源: turn.start (给"等某一轮开始"的场景; 没人等就不建记录)
     {
         auto turnStartValue = utilxx_base::Json{
-            {"sessionId", std::string{sessionId}},
-            {"agentName", agentContext->agentConfig
-                              ? agentContext->agentConfig->agentName
-                              : std::string{"Agentxx"}},
-            {"startedAtMs", startTimeMs},
+            {"sessionId",   std::string{sessionId}             },
+            {"agentName",
+             agentContext->agentConfig ? agentContext->agentConfig->agentName
+                                       : std::string{"Agentxx"}},
+            {"startedAtMs", startTimeMs                        },
         };
         publishHubValueIfWanted(
             agentContext,
@@ -1617,13 +1621,14 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             std::move(turnStartValue)
         );
         if (agentContext->bus
-            && agentContext->bus->hasListeners<events::EventAgentTurnStart>(events::Topic::AgentTurnStart)) {
+            && agentContext->bus->hasListeners<events::EventAgentTurnStart>(
+                events::Topic::AgentTurnStart
+            )) {
             co_await agentContext->bus->publish(
                 events::Topic::AgentTurnStart,
                 events::EventAgentTurnStart{
-                    .agentName = agentContext->agentConfig
-                                     ? agentContext->agentConfig->agentName
-                                     : std::string{"Agentxx"},
+                    .agentName = agentContext->agentConfig ? agentContext->agentConfig->agentName
+                                                           : std::string{"Agentxx"},
                     .sessionId = std::string{sessionId},
                     .userInput = std::string{userInput},
                 }
@@ -1747,14 +1752,10 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             }
         }
         if (skipped.total() > 0) {
-            const std::string what = describeSkippedMedia(skipped);
-            llmInput += fmt::format(
-                "\n[附件未传给模型] {}: 当前模型未声明对应的多模态输入能力, "
-                "只保留文件名与路径",
-                what
-            );
+            const std::string what  = describeSkippedMedia(skipped);
+            llmInput               += fmt::format("\n[Unsupport media] {}", what);
             XX_LOGW(
-                "[base_agent] 会话 {} 收到 {} 个未声明支持的媒体附件, 未投递给模型: {}",
+                "[base_agent] 会话 {} 收到 {} 个未声明支持的媒体附件, 已跳过: {}",
                 sessionId,
                 skipped.total(),
                 what
@@ -1769,76 +1770,10 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     if (!attachments.empty()) {
         // 服务端附件自主加载: 若 dataUrl 为空且 pathOrUrl 为服务端本地路径,
         // 服务端直接读取并转为 Base64 Data URL, 免除客户端二次下载上传中转
-        // - 读文件与 base64 都是阻塞/CPU 操作 (单附件可达数 MB): 经线程池卸载,
-        //   避免在 io 线程上执行导致同一时刻所有会话的 LLM 流/工具执行停摆
-        // - 路径字符串来自客户端 (UTF-8; Windows 客户端的中文路径即在此列),
-        //   访问文件系统前经 [utf8ToPath] 转换
         auto loadServerAttachmentAsync
             = [&](MediaAttachment att) -> asio::awaitable<MediaAttachment> {
-            auto doLoad = [att = std::move(att)]() mutable -> MediaAttachment {
-                std::error_code ec;
-                auto            filePath = utilxx_base::utf8ToPath(att.pathOrUrl);
-                auto            fileSize = std::filesystem::file_size(filePath, ec);
-                if (ec) {
-                    XX_LOGW(
-                        "[base_agent] cannot get file size for server attachment: {}, err: {}",
-                        att.pathOrUrl,
-                        ec.message()
-                    );
-                    return att;
-                }
-                uint64_t maxSize = maxBytesForMediaType(att.type);
-                if (fileSize > maxSize) {
-                    XX_LOGW(
-                        "[base_agent] server attachment too large: {} bytes > max {} bytes, path: {}",
-                        fileSize,
-                        maxSize,
-                        att.pathOrUrl
-                    );
-                    return att;
-                }
-                std::ifstream ifs(filePath, std::ios::binary);
-                if (!ifs) {
-                    XX_LOGW("[base_agent] cannot open server attachment: {}", att.pathOrUrl);
-                    return att;
-                }
-                std::string fileData(
-                    (std::istreambuf_iterator<char>(ifs)),
-                    std::istreambuf_iterator<char>()
-                );
-                ifs.close();
-                if (att.mimeType.empty()) {
-                    auto ext
-                        = utilxx_base::toLower(utilxx_base::pathToUtf8Generic(filePath.extension())
-                        );
-                    att.mimeType = std::string(mimeTypeFromExtension(ext));
-                }
-                att.dataUrl = fmt::format(
-                    "data:{};base64,{}",
-                    att.mimeType,
-                    utilxx_base::base64Encode(fileData)
-                );
-                att.sizeBytes = fileSize;
-                XX_LOGD(
-                    "[base_agent] server attachment loaded: {} ({} bytes, {})",
-                    att.pathOrUrl,
-                    fileSize,
-                    att.mimeType
-                );
-                return att;
-            };
-
             auto* pool = agentContext->threadPool.get();
-            if (nullptr == pool) {
-                // 无线程池 (测试/嵌入式): 直接同步执行
-                co_return doLoad();
-            }
-            co_return co_await utilxx::offloadAsync<MediaAttachment>(
-                *pool,
-                [doLoad = std::move(doLoad)]() mutable -> asio::awaitable<MediaAttachment> {
-                    co_return doLoad();
-                }
-            );
+            co_return co_await loadLocalMediaAttachmentAsync(std::move(att), pool);
         };
 
         for (auto& att : attachments) {
@@ -1867,8 +1802,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             // 而这条路正是"本地文件读取失败"的落点 (文件不存在/太大/无权限),
             // 此时应当跳过这个附件, 让文字说明继续可用。
             const bool hasDataUrl = !att.dataUrl.empty();
-            const bool isRemote   = att.pathOrUrl.starts_with("http://")
-                                  || att.pathOrUrl.starts_with("https://");
+            const bool isRemote
+                = att.pathOrUrl.starts_with("http://") || att.pathOrUrl.starts_with("https://");
             if (!hasDataUrl && !isRemote) {
                 if (!att.pathOrUrl.empty()) {
                     XX_LOGW(
@@ -1916,7 +1851,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     userViewMsg.attachments = attachments;
     // 来源标记 (事件中枢投递的事件输入): 角色随之变成 Role::Event (折叠展示),
     // 在 LLM 上下文里它仍是 user 消息 (下方 appendMessages 不变)
-    userViewMsg.source = std::string{inputSource};
+    userViewMsg.source   = std::string{inputSource};
     const auto userMsgId = session->appendViewMessage(userViewMsg);
     userViewMsg.id       = userMsgId;
     {
@@ -2123,17 +2058,17 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // - 轮末兜底: 落在最后一次 modelcall 之后的 next-step 输入提升为下一轮输入,
     //   否则它会一直躺在待注入队列里等人开轮 (见 rolloverLeftoverNextStepInputs)
     {
-        std::string closeReason = turnResult.hasError
-                                      ? (turnResult.errorMessage.find("Canceled") != std::string::npos
-                                             ? "Canceled"
-                                             : "failed")
-                                      : (turnResult.interrupted ? "interrupted" : "completed");
+        std::string closeReason
+            = turnResult.hasError
+                  ? (turnResult.errorMessage.find("Canceled") != std::string::npos ? "Canceled"
+                                                                                   : "failed")
+                  : (turnResult.interrupted ? "interrupted" : "completed");
         auto turnEndValue = utilxx_base::Json{
-            {"sessionId", std::string{sessionId}},
-            {"hasError", turnResult.hasError},
+            {"sessionId",   std::string{sessionId}},
+            {"hasError",    turnResult.hasError   },
             {"interrupted", turnResult.interrupted},
-            {"durationMs", durationMs},
-            {"reason", std::move(closeReason)},
+            {"durationMs",  durationMs            },
+            {"reason",      std::move(closeReason)},
         };
         publishHubValueIfWanted(
             agentContext,
@@ -2142,13 +2077,14 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             std::move(turnEndValue)
         );
         if (agentContext->bus
-            && agentContext->bus->hasListeners<events::EventAgentTurnEnd>(events::Topic::AgentTurnEnd)) {
+            && agentContext->bus->hasListeners<events::EventAgentTurnEnd>(
+                events::Topic::AgentTurnEnd
+            )) {
             co_await agentContext->bus->publish(
                 events::Topic::AgentTurnEnd,
                 events::EventAgentTurnEnd{
-                    .agentName = agentContext->agentConfig
-                                     ? agentContext->agentConfig->agentName
-                                     : std::string{"Agentxx"},
+                    .agentName    = agentContext->agentConfig ? agentContext->agentConfig->agentName
+                                                              : std::string{"Agentxx"},
                     .sessionId    = std::string{sessionId},
                     .hasError     = turnResult.hasError,
                     .errorMessage = turnResult.errorMessage,
@@ -2241,7 +2177,7 @@ asio::awaitable<bool> BaseAgent::shutdownAsync(std::chrono::milliseconds timeout
     // ---- ② 取消并等待后台任务结束 ----
     if (agentContext->taskScope) {
         const size_t pendingBefore = agentContext->taskScope->pending();
-        const size_t Canceled     = agentContext->taskScope->cancelAll();
+        const size_t Canceled      = agentContext->taskScope->cancelAll();
         bool         idle          = true;
         if (pendingBefore > 0) {
             // awaitIdle 用当前协程的 executor 轮询等待 (任务本身跑在 agent io 线程上)

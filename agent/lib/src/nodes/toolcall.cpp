@@ -1,4 +1,5 @@
 #include "agentxx/nodes/toolcall.h"
+#include "agentxx/agent/media_attachment_loader.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/util/observability.h"
@@ -110,11 +111,11 @@ asio::awaitable<void> publishToolEvent(
                     if (!ctx->eventHub->publishValue(
                             hubEvent,
                             utilxx_base::Json{
-                                {"toolCallId",  std::string{toolCallId}},
-                                {"sessionId",   std::string{sessionId}},
+                                {"toolCallId",  std::string{toolCallId}                           },
+                                {"sessionId",   std::string{sessionId}                            },
                                 {"status",      std::string{agentxx::util::toolStatusName(status)}},
-                                {"resultBytes", resultBytes      },
-                            },
+                                {"resultBytes", resultBytes                                       },
+                    },
                             "tool",
                             &err
                         )) {
@@ -355,12 +356,10 @@ void insertAbortedToolResults(
         for (const auto& tool : toolCalls) {
             // 正文与终态走同一套排版 (与执行路径同一实现), 不手写 `[Error: ...]`
             auto msg = neograph::ChatMessage{
-                .role = "tool",
-                .content = formatToolResultText(agentxx::util::ToolResult::fail(fmt::format(
-                    "{} (tool call aborted at {} phase)",
-                    exceptionStr,
-                    phasePrefix
-                ))),
+                .role         = "tool",
+                .content      = formatToolResultText(agentxx::util::ToolResult::fail(
+                    fmt::format("{} (tool call aborted at {} phase)", exceptionStr, phasePrefix)
+                )),
                 .tool_call_id = tool.id,
                 .tool_name    = tool.name,
                 .flags        = neograph::MessageFlag::AutoInserted,
@@ -671,9 +670,9 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
                 tc.id,
                 resp->reason
             );
-            out.shortCircuit = formattedShortCircuit(agentxx::util::ToolResult::fail(
-                fmt::format("permission denied: {}", resp->reason)
-            ));
+            out.shortCircuit = formattedShortCircuit(
+                agentxx::util::ToolResult::fail(fmt::format("permission denied: {}", resp->reason))
+            );
             co_return false;
         }
     }
@@ -703,7 +702,7 @@ asio::awaitable<agentxx::util::ToolResult>
     }
 
     agentxx::util::ToolResult result;
-    size_t                     retry = 0;
+    size_t                    retry = 0;
     do {
         bool               isCancel = false;
         std::string        errInfo;
@@ -716,7 +715,7 @@ asio::awaitable<agentxx::util::ToolResult>
                 // 原生 neograph::Tool (如未包装的 MCP 原样转发工具): 经桥接调用
                 // 原生工具没有状态通道, 文本一律按成功
                 auto neoArgs = agentxx::util::toNeographJson(args);
-                result = agentxx::util::ToolResult::ok(co_await tool->execute_async(neoArgs));
+                result       = agentxx::util::ToolResult::ok(co_await tool->execute_async(neoArgs));
             }
             break;
         } catch (const neograph::graph::CancelledException&) {
@@ -748,8 +747,8 @@ asio::awaitable<agentxx::util::ToolResult>
 }
 
 asio::awaitable<agentxx::util::ToolResult> ToolcallWrapNode::finalizeToolCall(
-    const PreparedToolCall&          prepared,
-    agentxx::util::ToolResult        rawResult
+    const PreparedToolCall&   prepared,
+    agentxx::util::ToolResult rawResult
 ) const {
     auto agentCtxPtr = agentContext.lock();
     if (!agentCtxPtr || !agentCtxPtr->agentConfig) {
@@ -812,7 +811,7 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
         co_return tool_msg;
     }
 
-    bool                      ok     = false;
+    bool                      ok = false;
     agentxx::util::ToolResult result;
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
@@ -837,8 +836,8 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
                 if (outInterrupted) {
                     *outInterrupted = true;
                 }
-                tool_msg.flags   |= neograph::MessageFlag::Interrupt;
-                result            = agentxx::util::ToolResult::interrupted();
+                tool_msg.flags |= neograph::MessageFlag::Interrupt;
+                result          = agentxx::util::ToolResult::interrupted();
                 if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
                     ctx->metrics->noteToolCall(agentxx::util::KeyMetrics::ToolOutcome::Interrupted);
                 }
@@ -874,6 +873,13 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
     // - 中断/取消占位在 `text` 为空时由 [formatToolResultText] 补 `[Interrupt]` / `[Canceled]`
     tool_msg.content = formatToolResultText(result);
     markToolStatus(tool_msg, result.status);
+    if (!result.attachments.empty()) {
+        auto attsJson = utilxx_base::Json::array();
+        for (const auto& att : result.attachments) {
+            attsJson.push_back(att.toJson());
+        }
+        tool_msg.extra["attachments"] = agentxx::util::toNeographJson(attsJson);
+    }
     if (ok) {
         // 关键指标: 按终态统计 (失败/取消/中断不再算成功)
         if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
@@ -924,13 +930,13 @@ asio::awaitable<void> ToolcallWrapNode::runPreparedToolCallGuarded(
         // 中断逃逸到此 (内层已按中断语义处理大部分情况): 保持中断语义
         outInterrupted = true;
         neograph::ChatMessage msg;
-        msg.role                 = "tool";
-        msg.tool_call_id         = prepared.id;
-        msg.tool_name            = prepared.name;
-        msg.content              = "[Interrupt]";
-        msg.flags               |= neograph::MessageFlag::Interrupt;
-        msg.extra["startTimeMs"] = prepared.startMs;
-        msg.extra["durationMs"]  = 0;
+        msg.role                  = "tool";
+        msg.tool_call_id          = prepared.id;
+        msg.tool_name             = prepared.name;
+        msg.content               = "[Interrupt]";
+        msg.flags                |= neograph::MessageFlag::Interrupt;
+        msg.extra["startTimeMs"]  = prepared.startMs;
+        msg.extra["durationMs"]   = 0;
         markToolStatus(msg, agentxx::util::ToolStatus::Interrupted);
         outMsg = std::move(msg);
     } catch (...) {
@@ -946,14 +952,13 @@ asio::awaitable<void> ToolcallWrapNode::runPreparedToolCallGuarded(
     // - 只带元信息 (终态 + 结果字节数), 不带结果正文: 一个工具的完整输出可能
     //   很大, 需要正文就让它自己 emit 到指定事件
     if (auto ctx = agentContext.lock()) {
-        auto                                status = agentxx::util::ToolStatus::Ok;
-        size_t                              bytes  = 0;
+        auto   status = agentxx::util::ToolStatus::Ok;
+        size_t bytes  = 0;
         if (outMsg.has_value()) {
             bytes = outMsg->content.size();
             if (outMsg->extra.is_object() && outMsg->extra.contains("status")) {
-                status = agentxx::util::toolStatusFromName(
-                    outMsg->extra["status"].get<std::string>()
-                );
+                status
+                    = agentxx::util::toolStatusFromName(outMsg->extra["status"].get<std::string>());
             }
         } else {
             // 没有结果 = 取消/中断路径
@@ -1326,12 +1331,10 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             break;
         }
         if (prepInterrupted) {
-            prepared.interrupted  = true;
+            prepared.interrupted = true;
             // 中断占位也要排版: 空文本会被补成 `[Interrupt]`, 让中断缓存里的这条
             // 消息结构完整 (内容非空) 且一眼能看出是哪一条
-            prepared.shortCircuit = formattedShortCircuit(
-                agentxx::util::ToolResult::interrupted()
-            );
+            prepared.shortCircuit = formattedShortCircuit(agentxx::util::ToolResult::interrupted());
             isInterrupt           = true;
         }
         preparedCalls.push_back(std::move(prepared));
@@ -1393,10 +1396,10 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             },
             [&](std::string errinfo) -> asio::awaitable<bool> {
                 // 普通异常同样按取消收尾: 上下文完整性优先 (已抛出的错误在下面重新抛出)
-                isCancel       = true;
-                cancelErrorPtr = std::make_exception_ptr(
-                    neograph::graph::CancelledException(std::move(errinfo))
-                );
+                isCancel = true;
+                cancelErrorPtr
+                    = std::make_exception_ptr(neograph::graph::CancelledException(std::move(errinfo)
+                    ));
                 co_return true;
             },
             [&](std::string errinfo) -> std::optional<bool> {
@@ -1404,10 +1407,10 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                     // 中断: 保持中断语义, 原异常原样重抛 (结果已进中断缓存, 恢复时复用)
                     return std::optional<bool>{};
                 }
-                isCancel       = true;
-                cancelErrorPtr = std::make_exception_ptr(
-                    neograph::graph::CancelledException(std::move(errinfo))
-                );
+                isCancel = true;
+                cancelErrorPtr
+                    = std::make_exception_ptr(neograph::graph::CancelledException(std::move(errinfo)
+                    ));
                 return std::optional<bool>{true};
             },
             in.ctx.cancel_token
@@ -1454,6 +1457,103 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         // 重新抛出异常 (中断恢复不靠上下文快照: 会话是唯一权威, 节点已写入
         // 的结果与消息都留在会话里)
         agentCtxPtr->middlewareHandleContext->throwNodeInterruptBase(in.ctx.thread_id);
+    }
+
+    // 收集本批工具调用的多模态附件 (若有工具产出图片/音频/视频):
+    // 转换为观察型 role: user 消息安全注入 LLM 上下文, 避开上游 OpenAI 兼容协议
+    // 对 role: tool 消息只认 string 的 400 校验限制
+    std::vector<agent::MediaAttachment> pendingAttachments;
+    for (const auto& msg : typedResults) {
+        if (!msg.extra.is_object() || !msg.extra.contains("attachments")) {
+            continue;
+        }
+        auto attsJson = agentxx::util::fromNeographJson(msg.extra["attachments"]);
+        if (!attsJson.is_array()) {
+            continue;
+        }
+        for (const auto& item : attsJson) {
+            pendingAttachments.push_back(agent::MediaAttachment::fromJson(item));
+        }
+    }
+
+    if (!pendingAttachments.empty()) {
+        bool takesImage = false;
+        bool takesAudio = false;
+        bool takesVideo = false;
+        if (agentCtxPtr) {
+            const auto& mc = agentCtxPtr->getSessionCurrentModelConfig(in.ctx.thread_id);
+            takesImage     = mc.imageInput;
+            takesAudio     = mc.audioInput;
+            takesVideo     = mc.videoInput;
+        }
+        auto takesMedia = [takesImage, takesAudio, takesVideo](agent::MediaType type) {
+            return agent::mediaInputEnabled(type, takesImage, takesAudio, takesVideo);
+        };
+
+        agent::MediaSkipCounts              skipped;
+        std::vector<agent::MediaAttachment> loadedAttachments;
+        asio::thread_pool* pool = agentCtxPtr ? agentCtxPtr->threadPool.get() : nullptr;
+
+        for (auto& att : pendingAttachments) {
+            if (!takesMedia(att.type)) {
+                switch (att.type) {
+                    case agent::MediaType::Image:
+                        ++skipped.image;
+                        break;
+                    case agent::MediaType::Audio:
+                        ++skipped.audio;
+                        break;
+                    case agent::MediaType::Video:
+                        ++skipped.video;
+                        break;
+                }
+                continue;
+            }
+            if (att.dataUrl.empty() && !att.pathOrUrl.empty()
+                && !att.pathOrUrl.starts_with("http://")
+                && !att.pathOrUrl.starts_with("https://")) {
+                att = co_await agent::loadLocalMediaAttachmentAsync(std::move(att), pool);
+            }
+            if (!att.dataUrl.empty() || att.pathOrUrl.starts_with("http://")
+                || att.pathOrUrl.starts_with("https://")) {
+                loadedAttachments.push_back(std::move(att));
+            }
+        }
+
+        if (!loadedAttachments.empty() || skipped.total() > 0) {
+            neograph::ChatMessage obsMsg;
+            obsMsg.role   = "user";
+            obsMsg.flags |= neograph::MessageFlag::AutoInserted;
+
+            std::string obsText = "[Event] Attached media file(s) from tool execution:";
+            for (const auto& att : loadedAttachments) {
+                obsText += fmt::format(
+                    "\n- {} ({}, {} bytes)",
+                    att.displayName.empty() ? att.pathOrUrl : att.displayName,
+                    att.mimeType,
+                    att.sizeBytes
+                );
+                const auto& url = !att.dataUrl.empty() ? att.dataUrl : att.pathOrUrl;
+                switch (att.type) {
+                    case agent::MediaType::Image:
+                        obsMsg.image_urls.push_back(url);
+                        break;
+                    case agent::MediaType::Audio:
+                        obsMsg.audio_urls.push_back(url);
+                        break;
+                    case agent::MediaType::Video:
+                        obsMsg.video_urls.push_back(url);
+                        break;
+                }
+            }
+            if (skipped.total() > 0) {
+                // 不应写入上下文污染
+                obsText
+                    += fmt::format("\n[Unsupport media] {}", agent::describeSkippedMedia(skipped));
+            }
+            obsMsg.content = std::move(obsText);
+            typedResults.push_back(std::move(obsMsg));
+        }
     }
 
     // 工具结果定稿: 追加到会话上下文并发出与旧 messages 通道写入同形的事件

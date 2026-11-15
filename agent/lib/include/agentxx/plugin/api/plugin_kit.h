@@ -2682,7 +2682,11 @@ template<typename T>
 inline void toolBodyResultTo(T&& value, std::string& outText, ToolStatus& outStatus) {
     if constexpr (std::is_same_v<std::decay_t<T>, ToolResult>) {
         outStatus = value.status;
-        outText   = std::move(value.text);
+        if (value.hasAttachments()) {
+            outText = value.packEnvelope();
+        } else {
+            outText = std::move(value.text);
+        }
     } else {
         outStatus = ToolStatus::Ok;
         outText   = std::string(std::forward<T>(value));

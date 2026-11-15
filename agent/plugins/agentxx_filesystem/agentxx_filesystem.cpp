@@ -23,9 +23,10 @@ using namespace agentxx::plugin;
 
 namespace {
 
-constexpr std::string_view kNameList   = "agentxx_filesystem_list";
-constexpr std::string_view kNameRead   = "agentxx_filesystem_read";
-constexpr std::string_view kNameWrite  = "agentxx_filesystem_write";
+constexpr std::string_view kNameList      = "agentxx_filesystem_list";
+constexpr std::string_view kNameRead      = "agentxx_filesystem_read";
+constexpr std::string_view kNameReadMedia = "agentxx_filesystem_read_media";
+constexpr std::string_view kNameWrite     = "agentxx_filesystem_write";
 constexpr std::string_view kNameEdit   = "agentxx_filesystem_edit";
 constexpr std::string_view kNameGlob   = "agentxx_filesystem_glob";
 constexpr std::string_view kNameGrep   = "agentxx_filesystem_grep";
@@ -43,6 +44,10 @@ constexpr std::string_view kDepictRead
     = R"_(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents.
 Supports `offset`/`limit` (both counted in lines) for reading portions of large files: `offset` lines are skipped from the beginning, then at most `limit` lines are returned. Both are optional; omitting them reads the whole file.
 One call returns at most 2000 lines / 256 KiB: a larger result is refused with an error (never silently truncated) -- read such files in parts with `offset`/`limit`, and use `agentxx_filesystem_grep` to locate the wanted lines first.)_";
+constexpr std::string_view kDepictReadMedia
+    = R"_(Read a local media file (image, audio, or video) by path and attach it to the conversation for multi-modal model analysis.
+Supported formats include images (.png, .jpg, .jpeg, .webp, .gif, .bmp), audio (.wav, .mp3, .ogg, .m4a, .aac, .flac), and video (.mp4, .mov, .webm, .mkv).
+File size limits: images up to 10MB, audio up to 25MB, video up to 50MB.)_";
 constexpr std::string_view kDepictWrite
     = "Create a new file or overwrite an existing file with the given content.";
 constexpr std::string_view kDepictEdit
@@ -65,6 +70,8 @@ A directory (together with everything inside) is deleted only when `recursive` i
 
 constexpr std::string_view kPathDesc
     = R"_(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.)_";
+constexpr std::string_view kPathDescMedia
+    = R"_(Path to the media file (image, audio, or video). Relative paths are resolved against the current working directory; `~` expands to the home directory.)_";
 constexpr std::string_view kPathDescList
     = R"_(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.
 Shell wildcards are supported (`*`, `?`, `[...]`, and `**` for any directory depth), e.g. `src/*.cpp`; matching entries are listed instead of expanding their contents.)_";
@@ -394,6 +401,37 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
         );
     }
     registerReadPathPermission(ctx, ref, kNameRead, "path");
+
+    // 2.1 Read Media
+    auto readMediaSchema
+        = ctx.schema(kNameReadMedia)
+              .string("path", kPathDescMedia, /*required=*/true)
+              .build();
+
+    blocking_tool(
+        ctx,
+        ref,
+        kNameReadMedia,
+        kDepictReadMedia,
+        readMediaSchema,
+        [ref](FsPluginCtx&               c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel) {
+            ArgReader args(args_json);
+            auto      path = args.require<std::string>("path");
+            if (!args.ok()) {
+                return ToolResult::fail(args.errorMessage());
+            }
+            return fileReadMediaExecute(args.raw(), std::string(workDir), [&] {
+                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+            });
+        },
+        0,
+        kReadOnlyFlags
+    );
+    registerReadPathPermission(ctx, ref, kNameReadMedia, "path");
 
     // 3. Write
     auto writeSchema

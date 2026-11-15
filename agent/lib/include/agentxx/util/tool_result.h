@@ -19,12 +19,18 @@
 /// `agent/lib/include`, 见各插件 `CMakeLists.txt` 的 `AGENTXX_LIB_INCLUDE_DIR`)。
 #pragma once
 
+#include "agentxx/agent/media_attachment.h"
+#include "utilxx_base/json.h"
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace agentxx {
 namespace util {
+
+/// 跨 C ABI 传输多模态附件时的信封标记键
+inline constexpr std::string_view kToolMediaEnvelopeKey = "__agentxx_tool_media__";
 
 /// 一次工具调用的终态
 enum class ToolStatus {
@@ -70,34 +76,92 @@ inline ToolStatus toolStatusFromName(std::string_view name) noexcept {
     return ToolStatus::Ok;
 }
 
-/// 工具执行结果: 状态位 + 给模型读的正文
+/// 工具执行结果: 状态位 + 给模型读的正文 + 可选多模态附件
 struct ToolResult {
     /// 给模型读的正文 (成功时的结果文本; 失败时的**错误内容**, 不带 `[Error: ]` 这类包裹)
     std::string text;
     ToolStatus  status = ToolStatus::Ok;
+    /// 工具产出的多模态附件 (图片/音频/视频)
+    std::vector<agentxx::agent::MediaAttachment> attachments;
 
     /// 成功结果
     static ToolResult ok(std::string text) {
-        return ToolResult{std::move(text), ToolStatus::Ok};
+        return ToolResult{std::move(text), ToolStatus::Ok, {}};
+    }
+
+    /// 成功结果 (带多模态附件)
+    static ToolResult ok(std::string text, std::vector<agentxx::agent::MediaAttachment> atts) {
+        return ToolResult{std::move(text), ToolStatus::Ok, std::move(atts)};
+    }
+
+    /// 快捷方法: 携带附件的成功结果
+    static ToolResult withAttachments(
+        std::string                                  text,
+        std::vector<agentxx::agent::MediaAttachment> atts
+    ) {
+        return ToolResult{std::move(text), ToolStatus::Ok, std::move(atts)};
     }
 
     /// 失败结果 (参数错 / 预期内的失败 / 超时 ...); [errorText] 只写错误内容
     static ToolResult fail(std::string errorText) {
-        return ToolResult{std::move(errorText), ToolStatus::Failed};
+        return ToolResult{std::move(errorText), ToolStatus::Failed, {}};
     }
 
     /// 中断占位 (仅为消息结构完整; 语义由 `MessageFlag::Interrupt` 表示)
     static ToolResult interrupted(std::string text = {}) {
-        return ToolResult{std::move(text), ToolStatus::Interrupted};
+        return ToolResult{std::move(text), ToolStatus::Interrupted, {}};
     }
 
     /// 取消 (会话取消 / 客户端断开)
     static ToolResult canceled(std::string text = {}) {
-        return ToolResult{std::move(text), ToolStatus::Canceled};
+        return ToolResult{std::move(text), ToolStatus::Canceled, {}};
     }
 
     bool isOk() const noexcept {
         return status == ToolStatus::Ok;
+    }
+
+    bool hasAttachments() const noexcept {
+        return !attachments.empty();
+    }
+
+    /// 将带有附件的结果打包为跨 C ABI 的信封 JSON 字符串 (无附件时返回原始文本)
+    std::string packEnvelope() const {
+        if (attachments.empty()) {
+            return text;
+        }
+        utilxx_base::Json j                  = utilxx_base::Json::object();
+        j[std::string(kToolMediaEnvelopeKey)] = true;
+        j["text"]                            = text;
+        auto arr                             = utilxx_base::Json::array();
+        for (const auto& att : attachments) {
+            arr.push_back(att.toJson());
+        }
+        j["attachments"] = std::move(arr);
+        return j.dump();
+    }
+
+    /// 从 C ABI 接收到的 payload 拆包 (若为信封 JSON 则还原附件; 否则原样返回文本)
+    static ToolResult unpackEnvelope(std::string payload) {
+        if (payload.empty() || payload.front() != '{'
+            || payload.find(kToolMediaEnvelopeKey) == std::string::npos) {
+            return ToolResult::ok(std::move(payload));
+        }
+        try {
+            auto j = utilxx_base::Json::parse(payload);
+            if (j.is_object() && j.value(std::string(kToolMediaEnvelopeKey), false)) {
+                std::string                                  t = j.value("text", std::string{});
+                std::vector<agentxx::agent::MediaAttachment> atts;
+                if (j.contains("attachments") && j["attachments"].is_array()) {
+                    for (const auto& item : j["attachments"]) {
+                        atts.push_back(agentxx::agent::MediaAttachment::fromJson(item));
+                    }
+                }
+                return ToolResult::ok(std::move(t), std::move(atts));
+            }
+        } catch (...) {
+        }
+        return ToolResult::ok(std::move(payload));
     }
 };
 

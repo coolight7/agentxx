@@ -724,6 +724,15 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 row.tool->toolFinished = true;
                 row.tool->status       = toolStatus;
                 row.collapsed          = true;
+                if (jm.contains("extra") && jm["extra"].is_object()
+                    && jm["extra"].contains("attachments")
+                    && jm["extra"]["attachments"].is_array()) {
+                    std::vector<agentxx::agent::MediaAttachment> atts;
+                    for (const auto& item : jm["extra"]["attachments"]) {
+                        atts.push_back(agentxx::agent::MediaAttachment::fromJson(item));
+                    }
+                    row.attachments = std::move(atts);
+                }
                 if (toolDurationMs > 0) {
                     row.durationMs = toolDurationMs;
                 } else if (row.startTimeMs > 0) {
