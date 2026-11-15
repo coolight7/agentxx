@@ -986,18 +986,30 @@ path/to/agentxx_test --log-level warn string_util regex
   "插件 API 版本过低" 或加载被拒):
 ```bash
 # Windows (pwsh): 全部插件 / 只编指定插件 / 只看可编目标
-pwsh -File agent/script/build_plugins.ps1
-pwsh -File agent/script/build_plugins.ps1 agentxx_filesystem agentxx_math
-pwsh -File agent/script/build_plugins.ps1 -List
+# - 自动化/无人值守请带 -NoProfile: 用户 profile 里的东西会拖慢启动 (不影响脚本本身)
+# - 全部插件从零编译约 4~8 分钟, 单个通常 10~90 秒; 自动化调用的超时给到 15 分钟以上
+pwsh -NoProfile -File agent/script/build_plugins.ps1
+pwsh -NoProfile -File agent/script/build_plugins.ps1 agentxx_filesystem agentxx_math
+pwsh -NoProfile -File agent/script/build_plugins.ps1 -List
+pwsh -NoProfile -File agent/script/build_plugins.ps1 -KeepGoing   # 某个失败也继续编剩下的
 
 # Linux / macOS
 agent/script/build_plugins.sh
 agent/script/build_plugins.sh agentxx_filesystem agentxx_math
 agent/script/build_plugins.sh --config Release --jobs 8 --list
 ```
-    - 脚本做的事就是 `cmake --build <build>/agentxx_lib_repo-prefix/src/agentxx_lib_repo-build
-      --config <CFG> --target <插件名...>` (内层目录才有 CMakeCache.txt 与插件目标),
-      并在结束时打印 `exec/plugins/<插件名>` 下最新的库文件时间戳, 确认产物真的被替换
+    - 两种模式: 指定了插件名 (或 `-PerTarget`) 时**逐个目标**调 `cmake --build
+      <build>/agentxx_lib_repo-prefix/src/agentxx_lib_repo-build --config <CFG> --target
+      <插件名>` (内层目录才有 CMakeCache.txt 与插件目标), 每个目标一行 `(i/n) <名字> ok
+      (12.5s)` 进度、失败点名、`-KeepGoing` 时继续编剩下的; 不指定目标时一次把全部目标
+      交给 cmake (由构建系统并行, 总耗时最短), 失败时用 outputs 里的 `(未重新链接)` 定位
+      未编成的插件
+    - 结束时打印 `exec/plugins/<插件名>` 下最新的库文件时间戳; 时间戳早于本次开始的目标标
+      `(未重新链接)` (增量构建没有重新链接它, 不是错误)
+    - **同一构建目录只允许一个构建在跑**: 脚本用 `<lib-build>/.build_plugins.lock`
+      (Windows 是文件、Linux/macOS 是 `.build_plugins.lock.d/` 目录) 记录 pid;
+      检测到别的构建在跑直接退出码 `3` 并提示等它结束, 不再两个 MSBuild 在同一个
+      工程文件上互等 (那看起来就是"卡住")
     - 只按插件名选目标时目标名 = `agent/plugins/` 下的目录名; 当前平台不支持的插件
       (见 plugins.md 平台支持矩阵) 不会出现在列表里
 - LTO (Release 默认开启, 开关 `AGENTXX_ENABLE_LTO`): MSVC 用 `/GL`(编译)+`/LTCG`(链接),
