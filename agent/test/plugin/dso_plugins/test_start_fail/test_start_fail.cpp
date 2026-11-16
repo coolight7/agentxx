@@ -278,7 +278,11 @@ static void* probeMount(
         return nullptr;
     }
     const auto promptJson = sv(R"({"appendSystemPrompts":{"dso_rollback":"probe"}})");
-    if (prompt->set_prompt(host, &ref, &promptJson) != 0) {
+    // 表成员是异步契约: 本插件在 `start` 里跑 (主程序 IO 线程), 主程序会内联完成
+    RegProbe promptReg{};
+    PluginxxString promptErr{nullptr, 0};
+    auto* promptOp = prompt->set_prompt(host, &ref, &promptJson, &regToolDone, &promptReg, &promptErr);
+    if (promptOp == nullptr || !promptReg.done || promptReg.status != PLUGINXX_OPERATOR_OK) {
         setError(host, error_out, failStep(host, "prompt"));
         return nullptr;
     }

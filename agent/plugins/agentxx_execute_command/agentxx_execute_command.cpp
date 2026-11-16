@@ -74,9 +74,8 @@ static void
     patch["toolPrompt"]     = std::move(tools);
 
     const std::string js   = patch.dump();
-    const auto        jsSv = PluginStringView::from(js.data(), js.size());
     auto              agentRef = ref.raw();
-    if (ctx.iface.prompt->set_prompt(ctx.host, &agentRef, &jsSv) != 0) {
+    if (setPromptJson(ctx.host, ctx.iface, &agentRef, js) != 0) {
         pluginLog(&ctx, 3, fmt::format("agentxx_execute_command: set_prompt({}) failed", toolName));
         return;
     }

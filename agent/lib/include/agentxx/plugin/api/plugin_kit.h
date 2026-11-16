@@ -379,6 +379,72 @@ struct ClientIfaces {
     }
 };
 
+/* ==================== 业务表便捷入口 (插件侧) ====================
+ *
+ * 表成员是异步契约, 这几个便捷函数用阻塞形态取结果, 给生命周期回调与工具体里的
+ * 同步写法用: 调用方本来就在主程序 IO 线程时主程序是**内联完成**的, 不产生等待;
+ * 在插件自己的线程上则真等到完成。
+ */
+
+/// 读当前完整提示词 JSON (主程序未提供该表或查询失败时返回空串)
+inline std::string
+    promptJson(const PluginxxHost* host, const AgentIfaces& iface, const PluginxxScopeRef* agent) {
+    if (!host || !iface.prompt || !iface.prompt->get_prompt) {
+        return {};
+    }
+    auto res = pluginxx::tableOpBlockingRaw(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.prompt->get_prompt(host, agent, cb, ud, err);
+        }
+    );
+    return res.ok() ? std::string(res.text()) : std::string{};
+}
+
+/// 写回本插件贡献的提示词段 (返回 `AGENTXX_RESULT_OK` 表示成功)
+inline int32_t setPromptJson(
+    const PluginxxHost*     host,
+    const AgentIfaces&      iface,
+    const PluginxxScopeRef* agent,
+    std::string_view        json
+) {
+    if (!host || !iface.prompt || !iface.prompt->set_prompt) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    auto payloadSv = PluginStringView::from(json.data(), json.size());
+    auto res       = pluginxx::tableOpBlockingRaw(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.prompt->set_prompt(host, agent, &payloadSv, cb, ud, err);
+        }
+    );
+    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
+}
+
+/// 读该 agent 的主模型及关联配置 JSON (未加载时返回空串)
+inline std::string modelConfigJson(
+    const PluginxxHost*     host,
+    const AgentIfaces&      iface,
+    const PluginxxScopeRef* agent
+) {
+    if (!host || !iface.model || !iface.model->get_config) {
+        return {};
+    }
+    auto res = pluginxx::tableOpBlockingRaw(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.model->get_config(host, agent, cb, ud, err);
+        }
+    );
+    return res.ok() ? std::string(res.text()) : std::string{};
+}
+
 /* ==================== 网络便捷入口 (插件侧) ====================
  *
  * 插件不自己建连接: HTTP / TCP / WebSocket / UDP 一律经主程序的 `<应用名>.net` 表
@@ -1493,13 +1559,19 @@ public:
             return res;
         }
         auto           toolSv = PluginStringView::from(tool.data(), tool.size());
-        PluginxxString s{nullptr, 0};
-        iface.prompt->get_tool_prompt(host, &toolSv, &s);
-        if (!s.data) {
+        // 表成员是异步契约: 生命周期/工具体里的同步取值走阻塞形态
+        auto op = pluginxx::tableOpBlockingRaw(
+            host,
+            iface.cancel,
+            iface.scheduler,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.prompt->get_tool_prompt(host, &toolSv, cb, ud, err);
+            }
+        );
+        if (!op.ok()) {
             return res;
         }
-        std::string jsonStr(s.data, static_cast<size_t>(s.size));
-        PluginString::free(host, &s);
+        std::string jsonStr(op.text());
         try {
             auto j = utilxx_base::Json::parse(jsonStr);
             if (j.contains("depict") && j["depict"].is_string()) {
@@ -1636,13 +1708,16 @@ public:
         }
         auto           ref   = agent.raw();
         auto           tidSv = PluginStringView::from(tid.data(), tid.size());
-        PluginxxString out{nullptr, 0};
-        if (iface.context->get_messages(host, &ref, &tidSv, &out) != 0 || !out.data) {
-            return {};
-        }
-        std::string text{out.data, static_cast<size_t>(out.size)};
-        PluginString::free(host, &out);
-        return text;
+        // 表成员是异步契约: 这里用阻塞形态等结果 (调用方在 IO 线程时是内联完成)
+        auto res = pluginxx::tableOpBlockingRaw(
+            host,
+            iface.cancel,
+            iface.scheduler,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.context->get_messages(host, &ref, &tidSv, cb, ud, err);
+            }
+        );
+        return res.ok() ? std::string(res.text()) : std::string{};
     }
 
     /// 会话 LLM 上下文条数 (主程序未实现该能力时返回 -1)
@@ -1652,7 +1727,15 @@ public:
         }
         auto ref   = agent.raw();
         auto tidSv = PluginStringView::from(tid.data(), tid.size());
-        return iface.context->messages_count(host, &ref, &tidSv);
+        auto res   = pluginxx::tableOpBlockingRaw(
+            host,
+            iface.cancel,
+            iface.scheduler,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.context->messages_count(host, &ref, &tidSv, cb, ud, err);
+            }
+        );
+        return res.ok() ? res.integer(-1) : int64_t{-1};
     }
 
 protected:
@@ -3965,7 +4048,17 @@ inline int32_t registerToolPermission(
     abiSpec.target_arg  = PluginStringView::from(spec.targetArg);
     abiSpec.struct_size = sizeof(AgentxxPluginToolPermissionSpec);
     abiSpec.category    = PluginStringView::from(spec.category);
-    return iface->register_tool_permission(host, agent, &abiSpec);
+    // 表成员是异步契约: 这里没有实例上下文可查 cancel/scheduler, 直接等完成
+    // (调用方本来就在主程序 IO 线程时是内联完成, 不会真等)
+    auto res = pluginxx::tableOpBlockingRaw(
+        host,
+        nullptr,
+        nullptr,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface->register_tool_permission(host, agent, &abiSpec, cb, ud, err);
+        }
+    );
+    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
 }
 
 /// 声明工具权限 (从插件实例上下文取主程序与接口表)
@@ -4076,14 +4169,36 @@ inline std::vector<PathDecision> checkPathDecisions(
     query.session_id  = PluginStringView::from(sessionId);
     query.paths       = views.data();
 
-    std::vector<int32_t> decisions(views.size(), AGENTXX_PLUGIN_PERMISSION_DECISION_ASK);
-    if (iface->check_paths(host, agent, &query, decisions.data()) != AGENTXX_RESULT_OK) {
+    std::vector<PathDecision> out;
+    // 表成员是异步契约: 这里没有实例上下文可查 cancel/scheduler, 直接等完成
+    // (调用方本来就在主程序 IO 线程时是内联完成, 不会真等)
+    auto res = pluginxx::tableOpBlockingRaw(
+        host,
+        nullptr,
+        nullptr,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface->check_paths(host, agent, &query, cb, ud, err);
+        }
+    );
+    if (!res.ok()) {
+        return out;
+    }
+    // 完成时 payload 是判定数组的 JSON 文本 (与入参 paths 等长、顺序一致)
+    try {
+        auto arr = utilxx_base::Json::parse(std::string(res.text()));
+        if (arr.is_array()) {
+            out.reserve(arr.size());
+            for (const auto& item : arr) {
+                if (item.is_number_integer()) {
+                    out.push_back(static_cast<PathDecision>(item.get<int>()));
+                }
+            }
+        }
+    } catch (...) {
         return {};
     }
-    std::vector<PathDecision> out;
-    out.reserve(decisions.size());
-    for (auto decision : decisions) {
-        out.push_back(static_cast<PathDecision>(decision));
+    if (out.size() != views.size()) {
+        return {};
     }
     return out;
 }

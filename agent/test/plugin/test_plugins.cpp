@@ -251,14 +251,25 @@ asio::awaitable<TestResult> run_plugin_tests() {
         if (ifacePrompt) {
             XX_TEST_EXPECT_EQ(ifacePrompt->version, AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION);
             XX_TEST_EXPECT_TRUE(ifacePrompt->get_tool_prompt != nullptr);
-            // 未配置的工具 → AGENTXX_RESULT_ERR_NOT_FOUND 且不分配
+            // 未配置的工具 → 完成回调给失败 (表成员是异步契约, 这里阻塞等结果)
             auto unknownSv = makeSv("no_such_tool");
-            PluginxxString noneOut{nullptr, 0};
-            XX_TEST_EXPECT_EQ(
-                ifacePrompt->get_tool_prompt(inst->hostView(), &unknownSv, &noneOut),
-                AGENTXX_RESULT_ERR_NOT_FOUND
+            auto promptOp  = agentxx::plugin::tableOpBlockingRaw(
+                inst->hostView(),
+                nullptr,
+                nullptr,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return ifacePrompt->get_tool_prompt(
+                        inst->hostView(),
+                        &unknownSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                },
+                5000
             );
-            XX_TEST_EXPECT_TRUE(noneOut.data == nullptr);
+            XX_TEST_EXPECT_TRUE(promptOp.accepted());
+            XX_TEST_EXPECT_FALSE(promptOp.ok());
         }
     }
 
@@ -3222,27 +3233,32 @@ throw new Error("top-level rollback probe");
 
                 // 非本插件工具 (内置工具名)
                 spec.tool_name = agentxx::plugin::PluginStringView::fromCstr("agentxx_share_store");
-                XX_TEST_EXPECT_TRUE(
-                    ifacePermission->register_tool_permission(
+                // 表成员是异步契约: 用阻塞形态在同一栈上等结果
+                auto permOp = [&]() {
+                    return agentxx::plugin::tableOpBlockingRaw(
                         fsInst->hostView(),
-                        permRef.ptr(),
-                        &spec
-                    )
-                    != 0
-                );
+                        nullptr,
+                        nullptr,
+                        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                            return ifacePermission->register_tool_permission(
+                                fsInst->hostView(),
+                                permRef.ptr(),
+                                &spec,
+                                cb,
+                                ud,
+                                err
+                            );
+                        },
+                        5000
+                    );
+                };
+                XX_TEST_EXPECT_FALSE(permOp().ok());
 
                 // 本插件工具 + 未知作用域取值
                 spec.tool_name
                     = agentxx::plugin::PluginStringView::fromCstr("agentxx_filesystem_write");
                 spec.scope = 999;
-                XX_TEST_EXPECT_TRUE(
-                    ifacePermission->register_tool_permission(
-                        fsInst->hostView(),
-                        permRef.ptr(),
-                        &spec
-                    )
-                    != 0
-                );
+                XX_TEST_EXPECT_FALSE(permOp().ok());
                 // 非法声明不得改变已生效的声明 (作用域仍为写)
                 const auto* specAfterBad = permission->toolPermission("agentxx_filesystem_write");
                 XX_TEST_EXPECT_TRUE(specAfterBad != nullptr);
@@ -3410,35 +3426,65 @@ throw new Error("top-level rollback probe");
                     query.scope       = AGENTXX_PLUGIN_PERMISSION_SCOPE_READ;
                     query.path_count  = static_cast<int32_t>(views.size());
                     query.paths       = views.data();
-                    std::vector<int32_t> decisions(views.size(), -1);
+                    std::vector<int32_t> decisions;
                     const auto           pathRef = scopeRefOf(*ctx->pluginManager);
-                    XX_TEST_EXPECT_EQ(
-                        ifacePermission
-                            ->check_paths(
+                    // 表成员是异步契约: 用阻塞形态在同一栈上等结果
+                    auto pathOp = agentxx::plugin::tableOpBlockingRaw(
+                        fsInst->hostView(),
+                        nullptr,
+                        nullptr,
+                        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                            return ifacePermission->check_paths(
                                 fsInst->hostView(),
                                 pathRef.ptr(),
                                 &query,
-                                decisions.data()
-                            ),
-                        0
+                                cb,
+                                ud,
+                                err
+                            );
+                        },
+                        5000
                     );
+                    XX_TEST_EXPECT_TRUE(pathOp.ok());
+                    // 完成时 payload 是判定数组的 JSON 文本
+                    {
+                        auto arr = utilxx_base::Json::parse(std::string(pathOp.text()));
+                        for (const auto& item : arr) {
+                            decisions.push_back(item.get<int32_t>());
+                        }
+                    }
+                    XX_TEST_EXPECT_EQ(decisions.size(), views.size());
                     XX_TEST_EXPECT_EQ(decisions[0], AGENTXX_PLUGIN_PERMISSION_DECISION_ALLOW);
                     XX_TEST_EXPECT_EQ(decisions[1], AGENTXX_PLUGIN_PERMISSION_DECISION_DENY);
                     // 未命中任何规则 + noRuleOperator=ALLOW → 已明确允许
                     XX_TEST_EXPECT_EQ(decisions[2], AGENTXX_PLUGIN_PERMISSION_DECISION_ALLOW);
 
-                    // 非法入参: 空数组 / 空指针 → 失败 (调用方跳过过滤)
+                    // 非法入参: 空数组 / 空指针 → 未受理 (调用方跳过过滤)
+                    auto pathOpOf = [&]() {
+                        return agentxx::plugin::tableOpBlockingRaw(
+                            fsInst->hostView(),
+                            nullptr,
+                            nullptr,
+                            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                                return ifacePermission->check_paths(
+                                    fsInst->hostView(),
+                                    pathRef.ptr(),
+                                    &query,
+                                    cb,
+                                    ud,
+                                    err
+                                );
+                            },
+                            5000
+                        );
+                    };
                     query.path_count = 0;
-                    XX_TEST_EXPECT_TRUE(
-                        ifacePermission
-                            ->check_paths(
-                                fsInst->hostView(),
-                                pathRef.ptr(),
-                                &query,
-                                decisions.data()
-                            )
-                        != 0
-                    );
+                    XX_TEST_EXPECT_FALSE(pathOpOf().accepted());
+
+                    // 空指针路径数组同样未受理
+                    query.paths      = nullptr;
+                    query.path_count = 1;
+                    XX_TEST_EXPECT_FALSE(pathOpOf().accepted());
                 }
             }
 
@@ -3480,13 +3526,25 @@ throw new Error("top-level rollback probe");
                     query.scope       = AGENTXX_PLUGIN_PERMISSION_SCOPE_READ;
                     query.path_count  = 1;
                     query.paths       = views.data();
-                    int32_t    decision = -1;
-                    const auto pathRef  = scopeRefOf(*ctx->pluginManager);
-                    XX_TEST_EXPECT_TRUE(
-                        ifacePermission
-                            ->check_paths(fsInst->hostView(), pathRef.ptr(), &query, &decision)
-                        != 0
+                    const auto pathRef = scopeRefOf(*ctx->pluginManager);
+                    // 表成员是异步契约: 权限中间件未加载时完成回调给失败
+                    auto pathOp = agentxx::plugin::tableOpBlockingRaw(
+                        fsInst->hostView(),
+                        nullptr,
+                        nullptr,
+                        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                            return ifacePermission->check_paths(
+                                fsInst->hostView(),
+                                pathRef.ptr(),
+                                &query,
+                                cb,
+                                ud,
+                                err
+                            );
+                        },
+                        5000
                     );
+                    XX_TEST_EXPECT_FALSE(pathOp.ok());
                 }
             }
 

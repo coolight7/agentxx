@@ -324,8 +324,10 @@ typedef struct AgentxxPluginToolsIface {
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION             PLUGINXX_APP_ID("agent.permission")
 /// v2: 全部成员增加 `agent` 参数 (权限中间件与工作区都是 per-agent)
-#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION     2
-#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_MIN_VERSION 2
+/// v3: 全部成员改成异步操作契约 (`check_paths` 的判定数组经 `payload` 以 JSON 数组交回);
+///     基线与最低版本重置
+#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION     3
+#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_MIN_VERSION 3
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_BASELINE_SIZE sizeof(AgentxxPluginPermissionIface)
 
@@ -387,45 +389,46 @@ typedef struct AgentxxPluginPermissionIface {
     int32_t version;      ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION
     uint32_t struct_size; ///< 主程序填 sizeof(AgentxxPluginPermissionIface) 或更大的已知表长
 
-    /// 声明工具权限限制 (工具注册后调用; 同工具重复声明为覆盖)
+    /// 声明工具权限限制 (**异步**; 工具注册后调用, 同工具重复声明为覆盖)
     /// - 未声明的工具不参与权限判定 (直接放行); 声明后由主程序按权限规则
     ///   (白/黑名单、permission.mode、记住的选择、工作区隔离) 统一判定
-    /// - 权限声明属于附加能力: 主程序未加载权限中间件时返回非 0, 插件可忽略
-    /// `return`: `AGENTXX_RESULT_OK`; 未加载权限中间件 `ERR_UNSUPPORTED`; 参数非法 `ERR_ARG`;
-    /// 工具不属于本实例 `ERR_NOT_OWNER`
-    int32_t(PLUGINXX_CALL* register_tool_permission)(
+    /// - 权限声明属于附加能力: 主程序未加载权限中间件时完成回调给失败, 插件可忽略
+    PluginxxOperatorHandle*(PLUGINXX_CALL* register_tool_permission)(
         const PluginxxHost*                    host,
         const PluginxxScopeRef*                agent,
-        const AgentxxPluginToolPermissionSpec* spec
+        const AgentxxPluginToolPermissionSpec* spec,
+        PluginxxOperatorCallback               cb,
+        void*                                  ud,
+        PluginxxString*                        error_out
     );
-    /// 撤销工具权限声明 (工具注销/插件禁用/卸载时由主程序自动撤销, 一般无需手动调用)
-    /// `return`: `AGENTXX_RESULT_OK`; 没有这条声明 `ERR_NOT_FOUND`; 别人的 `ERR_NOT_OWNER`
-    int32_t(PLUGINXX_CALL* unregister_tool_permission)(
+    /// 撤销工具权限声明 (**异步**; 工具注销/插件禁用/卸载时由主程序自动撤销, 一般无需手动调用)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_tool_permission)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* tool_name
+        const PluginxxStringView* tool_name,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 
-    /// 批量查询路径权限判定 (advisory; 只读已生效规则)
+    /// 批量查询路径权限判定 (**异步**; advisory, 只读已生效规则)
     /// - **不发起权限询问、不产生中断、不弹任何界面、不做阻塞等待**: 纯只读判定,
     ///   用于支持模式/前缀参数的插件工具 (如 glob/grep) 在枚举出实际路径后逐项过滤
     /// - 判定规则与工具调用权限检查一致 (工作区隔离 → 配置拒绝 → 完全授权 →
     ///   规则表 → noRuleOperator); 区别仅在于"应询问(INTERRUPT)"以 ASK 返回而不询问
     /// - 工具侧建议: DENY 丢弃; ASK 表示"未获批准"同样不应访问 (按未批准处理)
-    /// - 线程: 任意线程可调用 (非 io 线程由主程序投递到 io 线程同步等待);
-    ///   单次批量不宜过大 (主程序在 io 线程执行), 建议按需分批 (如 512 项)
+    /// - 单次批量不宜过大, 建议按需分批 (如 512 项)
     ///
-    /// - `args`:
-    ///     - [query] 查询入参 (路径数组/作用域/会话)
-    ///     - [out_decisions] 调用方提供的等长出参数组 (path_count 项)
-    ///
-    /// `return`: `AGENTXX_RESULT_OK`; 未加载权限中间件 `ERR_UNSUPPORTED`;
-    /// 失败时调用方应跳过过滤, 按原行为处理
-    int32_t(PLUGINXX_CALL* check_paths)(
+    /// 完成时 `payload` 是**判定数组的 JSON 文本** (与 `paths` 等长、顺序一致),
+    /// 元素为 `AGENTXX_PLUGIN_PERMISSION_DECISION_*` 的十进制值, 如 `[1,0,2]`。
+    /// `status` 非 OK 时调用方应跳过过滤, 按原行为处理
+    PluginxxOperatorHandle*(PLUGINXX_CALL* check_paths)(
         const PluginxxHost*                     host,
         const PluginxxScopeRef*                 agent,
         const AgentxxPluginPermissionPathQuery* query,
-        int32_t*                                out_decisions
+        PluginxxOperatorCallback                cb,
+        void*                                   ud,
+        PluginxxString*                         error_out
     );
 } AgentxxPluginPermissionIface;
 
@@ -511,8 +514,9 @@ typedef struct AgentxxPluginSessionIface {
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT             PLUGINXX_APP_ID("agent.context")
 /// v2: 全部成员增加 `agent` 参数
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION     2
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_MIN_VERSION 2
+/// v3: 全部成员改成异步操作契约 (结果经 `payload` 交回)
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION     3
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_MIN_VERSION 3
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_BASELINE_SIZE sizeof(AgentxxPluginContextIface)
 
@@ -525,21 +529,26 @@ typedef struct AgentxxPluginContextIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION
     uint32_t struct_size;
 
-    /// 读取会话 LLM 上下文 (JSON 数组文本; 主程序 alloc, 需 host->vtable->free 释放)
-    /// - 返回 0 成功 (out 为 ChatMessage JSON 数组文本), -1 失败/会话不存在
-    int32_t(PLUGINXX_CALL* get_messages)(
+    /// 读取会话 LLM 上下文 (**异步**)
+    /// - 完成时 `payload` 是 ChatMessage JSON 数组文本; 会话不存在按失败交回
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id,
-        PluginxxString*           out
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 
-    /// 会话 LLM 上下文条数 (会话不存在返回 -1)
-    /// - 仅取数量时用它, 避免为读一个数字拉取整段上下文
-    int64_t(PLUGINXX_CALL* messages_count)(
+    /// 会话 LLM 上下文条数 (**异步**; 只取数量时用它, 避免为读一个数字拉取整段上下文)
+    /// - 完成时 `payload` 是十进制整数文本
+    PluginxxOperatorHandle*(PLUGINXX_CALL* messages_count)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* session_id
+        const PluginxxStringView* session_id,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 } AgentxxPluginContextIface;
 
@@ -547,19 +556,22 @@ typedef struct AgentxxPluginContextIface {
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_MODEL             PLUGINXX_APP_ID("agent.model")
 /// v2: `get_config` 增加 `agent` 参数
-#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION     2
-#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_MIN_VERSION 2
+/// v3: `get_config` 改成异步操作契约
+#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION     3
+#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_MIN_VERSION 3
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_BASELINE_SIZE sizeof(AgentxxPluginModelIface)
 
 typedef struct AgentxxPluginModelIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION
     uint32_t struct_size;
-    /// 该 agent 的主模型及关联配置 JSON (io 线程; host->alloc; 未加载返回空串):
-    int32_t(PLUGINXX_CALL* get_config)(
-        const PluginxxHost*     host,
-        const PluginxxScopeRef* agent,
-        PluginxxString*         out
+    /// 该 agent 的主模型及关联配置 JSON (**异步**; 未加载时 `payload` 为空串)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_config)(
+        const PluginxxHost*      host,
+        const PluginxxScopeRef*  agent,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
     );
 } AgentxxPluginModelIface;
 
@@ -569,8 +581,9 @@ typedef struct AgentxxPluginModelIface {
 /// v2: 全部成员增加 `agent` 参数 (提示词按 agent 贡献/合成)
 /// v3: 表尾追加工具提示词查询 (原在插件框架通用表里的业务成员);
 ///     基线随本代重置为完整布局
-#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION     3
-#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_MIN_VERSION 3
+/// v4: 全部成员改成异步操作契约
+#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION     4
+#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_MIN_VERSION 4
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_BASELINE_SIZE sizeof(AgentxxPluginPromptIface)
 
@@ -578,23 +591,32 @@ typedef struct AgentxxPluginPromptIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION
     uint32_t struct_size;
 
-    int32_t(PLUGINXX_CALL* get_prompt)(
-        const PluginxxHost*     host,
-        const PluginxxScopeRef* agent,
-        PluginxxString*         out
+    /// 读当前完整提示词 JSON (**异步**; `payload` = 提示词 JSON 文本)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_prompt)(
+        const PluginxxHost*      host,
+        const PluginxxScopeRef*  agent,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
     );
-    int32_t(PLUGINXX_CALL* set_prompt)(
+    /// 写回本插件贡献的提示词段 (**异步**; 完成时已生效)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* set_prompt)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* prompt_json
+        const PluginxxStringView* prompt_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    /// (v3) 指定工具的提示词配置 JSON (主程序级配置; io 线程; host->alloc):
-    /// {"depict": "...", "args": {"参数名": "参数说明", ...}}
-    /// - 未配置该工具时返回 `AGENTXX_RESULT_ERR_NOT_FOUND` (不分配 out)
-    int32_t(PLUGINXX_CALL* get_tool_prompt)(
+    /// 指定工具的提示词配置 JSON (**异步**)
+    /// - `payload`: {"depict": "...", "args": {"参数名": "参数说明", ...}}
+    /// - 未配置该工具时按失败交回 (`payload` 给原因)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_tool_prompt)(
         const PluginxxHost*       host,
         const PluginxxStringView* tool_name,
-        PluginxxString*           out
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 } AgentxxPluginPromptIface;
 

@@ -466,8 +466,9 @@ C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
 | 回调 | `tableOpCallback(ctx, start, done)` | 任意线程; `done` 在 IO 线程恰好一次 |
 | 阻塞 | `tableOpBlocking(ctx, start, timeoutMs)` / `tableOpBlockingRaw(host, cancel, scheduler, start)` | 非 IO 线程真等待; IO 线程上先看是否已内联完成, 没完成就返回 `accepted() == false` (不会死锁) |
 
-> 当前进度: 阶段 A 的骨架 + `agentxx.agent.session` (v4) 与阶段 B 的
-> `agentxx.agent.tools` (v5) 已切到这套契约; 其余表仍是一条条同步签名, 迁移按
+> 当前进度: 阶段 A 的骨架与 `agentxx.agent.session` (v4), 以及阶段 B 的
+> `agentxx.agent.tools` (v5) / `permission` (v3) / `context` (v3) / `model` (v3) /
+> `prompt` (v4) 已切到这套契约; 其余表仍是一条条同步签名, 迁移按
 > `resource/history/plugin-api-async/plan.md` 的阶段推进。
 >
 > 作用域引用的两种失败要分开看: 引用的**形状**无效 (空指针 / `id` 为空 /
@@ -486,11 +487,11 @@ C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
 | IID | 版本 | 能力 |
 |-----|------|------|
 | `agentxx.agent.tools` | 5 | `register_tool/unregister_tool`, `call_tool` (插件互调, cb 保证 IO 线程 post; 取消统一用 `agentxx.cancel.op_cancel`); v3 = 工具成败只由最终通知的状态位表达，结果文本不带 `[Error]` 前缀; v4 = 工具结果改成**两段上报** (正文原样字节 + 元数据 JSON), 完成通知器换成 `AgentxxPluginToolNotify`, 互调回调换成 `AgentxxPluginToolCallback` (见 §8.4); v5 = `register_tool`/`unregister_tool` 改成异步操作契约，`call_tool_async` 更名为 `call_tool` (见 §8.0) |
-| `agentxx.agent.permission` | 2 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 见下方说明) |
+| `agentxx.agent.permission` | 3 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 完成时判定数组按 JSON 数组文本交回; 见下方说明)。v3 = 全部成员改成异步操作契约 (见 §8.0) |
 | `agentxx.agent.session` | 4 | `get_share_store/add_share_store/emit_message_tip` (v4 起异步, 见 §8.0) + `get_session_work_dir(agent, session_id)` (会话生效工作目录: worktree 绑定优先, session_id 为空返回默认工作目录) + `is_canceled(agent, thread_id)` (advisory 查询, 权威通知仍是取消回调)。后两项 v3 从插件框架通用表迁入 |
-| `agentxx.agent.context` | 2 | 会话 LLM 上下文查询: `get_messages/messages_count` (IO 线程)。上下文由会话持有 (图状态不含 `messages` 通道), 插件需要上下文内容时经此按需查询; 只要数量用 `messages_count`, 避免拉取整段上下文 |
-| `agentxx.agent.model` | 2 | `get_config(agent)` (该 agent 的主模型及关联配置 JSON) |
-| `agentxx.agent.prompt` | 3 | `get_prompt/set_prompt` (主程序提示词读写) + `get_tool_prompt(tool_name)` (工具提示词配置 JSON `{depict, args}`, 主程序级配置; v3 从插件框架通用表迁入) |
+| `agentxx.agent.context` | 3 | 会话 LLM 上下文查询: `get_messages/messages_count` (完成时正文与十进制条数经 `payload` 交回)。上下文由会话持有 (图状态不含 `messages` 通道), 插件需要上下文内容时经此按需查询; 只要数量用 `messages_count`, 避免拉取整段上下文。v3 = 改成异步操作契约 (见 §8.0) |
+| `agentxx.agent.model` | 3 | `get_config(agent)` (该 agent 的主模型及关联配置 JSON, 经 `payload` 交回)。v3 = 改成异步操作契约 (见 §8.0) |
+| `agentxx.agent.prompt` | 4 | `get_prompt/set_prompt` (主程序提示词读写) + `get_tool_prompt(tool_name)` (工具提示词配置 JSON `{depict, args}`, 主程序级配置; v3 从插件框架通用表迁入)。v4 = 全部成员改成异步操作契约 (见 §8.0) |
 | `agentxx.agent.resources` | 2 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变) |
 | `agentxx.agent.graph` | 2 | 执行图扩展: `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改主程序执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 主程序构建 engine 前处理)。**图状态不含对话上下文**: `state_json` 里没有 `messages` 通道 (LLM 上下文由会话持有), 只有控制类通道与只读影子通道 `xx_messagesMeta` (条数/版本/角色分布/末尾消息摘要, 载荷与上下文大小无关); 需要上下文内容用 `agentxx.agent.context` 查询。插件写 `{"channel":"messages", ...}` 的 writes 会被主程序改写成会话上下文写入 (默认 append, `"mode":"overwrite"` 整体替换; 空列表的 overwrite 忽略), 因此按旧契约写 `messages` 的插件仍可用。**条件边用 `xx_has_tool_calls`** (agentxx 注册, 语义 = 最后一条 assistant 是否带 tool_calls; 读 `xx_messagesMeta.last_assistant_tool_calls`, 缺该通道时回退扫描 `messages` 通道), 内置 `has_tool_calls` 在新架构下恒为 false, 不要使用 |
 | `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 `AGENTXX_RESULT_ERR_NOT_FOUND`) |

@@ -85,14 +85,10 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
         ));
         return 0;
     }
-    auto           modelRef = st.ref.raw();
-    PluginxxString json{nullptr, 0};
-    ctx.iface.model->get_config(ctx.host, &modelRef, &json);
+    std::string    cfgJson = modelConfigJson(ctx.host, ctx.iface, st.ref.ptr());
     utilxx_base::Json cfg;
     bool              hasCfg = false;
-    if (json.data) {
-        std::string cfgJson(json.data, static_cast<size_t>(json.size));
-        PluginString::free(ctx.host, &json);
+    if (!cfgJson.empty()) {
         try {
             cfg    = utilxx_base::Json::parse(cfgJson);
             hasCfg = true;

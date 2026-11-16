@@ -10,7 +10,7 @@
 | A | 全局 API 版本 / 异步表调用骨架 / kit 三形态 / `agentxx.agent.session` 试点 | 完成（编译通过、相关测试全绿） |
 | C2-槽位清理 | 删 `scheduler.post_to_io` / `scheduler.op_cancel` / `capabilities.op_cancel`；`coroutine_runtime` 整张表并回 `scheduler`（通用表 10 → 9） | 完成（编译通过、全量插件测试全绿） |
 | A2 | agent 侧 `dlopen` + `create` 挪到加载线程池 | 完成（编译通过、插件测试全绿） |
-| B | `agentxx.agent` 业务表全部成员 | 进行中（`tools` 完成，其余 7 张待做） |
+| B | `agentxx.agent` 业务表全部成员 | 进行中（`tools` / `permission` / `context` / `model` / `prompt` 完成，`resources` / `graph` / `mount` 待做） |
 | C | `agentxx.agent.runtime` 全部成员 | 待做 |
 | C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 待做 |
 | D | `agentxx.client.*` 六张表 + 三个回答型回调 | 待做 |
@@ -232,6 +232,48 @@ IO 线程。
   `plugin_cleanup` 90、`plugin_runtime`、`plugin_sdk`、`plugin_bridge` → 2067 通过；
 - `client_plugins` 835、`plugin_feature` 34、`plugin_point` 68、`plugin_broadcast` 90、
   `plugin_dispatch` 112、`plugin_agent_runtime` 221、`plugin_example_runtime` 50 → 2117 通过。
+
+### 第 5 步：阶段 B 第二批 —— `permission` / `context` / `model` / `prompt`
+
+改动：
+
+- `plugin_api.h`：四张表抬版并改成异步操作契约
+    - `agentxx.agent.permission` v2 → v3（三个成员；`check_paths` 的判定数组经
+      `payload` 以 JSON 数组文本交回，如 `[1,0,2]`）；
+    - `agentxx.agent.context` v2 → v3（`get_messages` 给 JSON 数组文本，
+      `messages_count` 给十进制整数文本）；
+    - `agentxx.agent.model` v2 → v3（`get_config` 给配置 JSON）；
+    - `agentxx.agent.prompt` v3 → v4（`get_prompt` / `set_prompt` / `get_tool_prompt`）。
+- `plugin_manager_vtable.cpp`
+    - 新增 `asyncQueryCall`（只读查询：允许关闭中调用，空结果按失败交回，与旧
+      `ERR_NOT_FOUND` 一致）与 `asyncScopedTableCall<AllowClosing>`；
+    - `check_paths` 的入参（路径数组 + 会话）在受理阶段就拷成本地副本，工作体拼 JSON 数组；
+    - 新增 `ToolPermissionSpecKeep`（三个借用字符串视图的自持拷贝，同 `ToolSpecKeep`）。
+- `plugin_kit.h`
+    - 新增业务表便捷入口 `promptJson` / `setPromptJson` / `modelConfigJson`
+      （阻塞形态，给生命周期与工具体里的同步写法用）；
+    - `toolPrompt` / `getSessionMessages` / `sessionMessagesCount` 改走阻塞形态；
+    - `registerToolPermission` / `checkPathDecisions` 改走阻塞形态，
+      `checkPathDecisions` 改为解析 `payload` 的 JSON 数组。
+- 插件迁移：`agentxx_codegraph` / `agentxx_execute_command` / `agentxx_llm_uncensored` /
+  `agentxx_planning` / `agentxx_rag_search` / `agentxx_websearch` / `example_plugin`
+  改为调用 kit 便捷入口（提示词读写与模型配置）；JS 引擎的 `getPrompt` / `setPrompt` /
+  `getToolPrompt` / `getMessages` / `messagesCount` / `getModelConfig` / 工具权限声明与
+  路径查询改走阻塞形态（脚本线程不是主程序 IO 线程）。
+- 测试：`test_plugins.cpp` 的提示词/权限用例改成阻塞形态断言（`check_paths` 解析 JSON 数组）；
+  `test_plugin_abi_c17.c` 的 permission 版本断言 2 → 3。
+- 文档：`plugins.md` §8.1 四张表抬版、§8.0 的当前进度。
+
+验证：
+
+- 内层 lib / test / client 三个构建目录编译通过，25 个插件全部重编（其中
+  `example_plugin` 的一处替换脚本写坏了引号转义，修好后通过）；
+- `boundaries` 19、`plugins` 709、`plugin_runtime` 730、`plugin_sdk` 134、
+  `plugin_bridge` 193、`plugin_cleanup` 90、`plugin_host_mount` 147、
+  `plugin_multi_mount` 47 → 2069 通过（首轮 `plugin_runtime` 有 1 条失败：
+  `test_plugin_abi_c17.c` 里 permission 版本还写死 2，改后通过）；
+- `client_plugins` 835、`plugin_feature` 34、`plugin_point` 68、`plugin_broadcast` 90、
+  `plugin_dispatch` 112、`plugin_agent_runtime` 221、`plugin_example_runtime` 50 → 2140 通过。
 
 ## 与计划的偏差
 

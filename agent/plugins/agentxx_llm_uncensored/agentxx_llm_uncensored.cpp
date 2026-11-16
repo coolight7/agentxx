@@ -97,9 +97,8 @@ static int uncensoredSetup(UncensoredCtx& ctx, const agentxx::plugin::ScopeRef& 
     payload["appendSystemPrompts"] = std::move(append);
 
     const std::string js       = payload.dump();
-    const auto        promptSv = PluginStringView::from(js.data(), js.size());
     auto              agentRef = ref.raw();
-    if (ctx.iface.prompt->set_prompt(ctx.host, &agentRef, &promptSv) != 0) {
+    if (setPromptJson(ctx.host, ctx.iface, &agentRef, js) != 0) {
         ctx.log.error(prefix + "set_prompt(appendSystemPrompts) rejected by host");
         return -1;
     }

@@ -96,12 +96,8 @@ static HttpResult netHttpExecute(WebsearchPluginCtx& ctx, const HttpRequestSpec&
 /// 等待期间只占一个工作线程, 不在主程序 io 线程上阻塞。
 static int32_t websearchSetup(WebsearchPluginCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     if (ctx.iface.model && ctx.iface.model->get_config) {
-        auto           modelRef = ref.raw();
-        PluginxxString json{nullptr, 0};
-        ctx.iface.model->get_config(ctx.host, &modelRef, &json);
-        if (json.data) {
-            std::string cfgJson(json.data, static_cast<size_t>(json.size));
-            PluginString::free(ctx.host, &json);
+        std::string cfgJson = modelConfigJson(ctx.host, ctx.iface, ref.ptr());
+        if (!cfgJson.empty()) {
             try {
                 auto cfg                  = utilxx_base::Json::parse(cfgJson);
                 ctx.convert_html2markdown = cfg.value("websearchConvertHtml2markdown", true);

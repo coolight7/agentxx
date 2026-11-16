@@ -5617,18 +5617,53 @@ JSValue JsEngine::bridgeCall(
                 = agentxx::plugin::PluginStringView::from(targetArg.data(), targetArg.size());
             spec.category
                 = agentxx::plugin::PluginStringView::from(category.data(), category.size());
-            if (iface.permission->register_tool_permission(host, pctx->scope(), &spec) != 0) {
+            // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
+            auto permRes = agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.permission->register_tool_permission(
+                        host,
+                        pctx->scope(),
+                        &spec,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
+            if (!permRes.ok()) {
                 return JS_FALSE;
             }
             // 实例卸下时撤销声明 (主程序也会按挂载记录撤销, 这里保持两侧一致)
             pctx->rollbackActions.push_back(
-                [host, permIface = iface.permission, pctxRaw = pctx, toolName]() {
+                [host,
+                 permIface   = iface.permission,
+                 cancelIface = iface.cancel,
+                 schedIface  = iface.scheduler,
+                 pctxRaw     = pctx,
+                 toolName]() {
                     if (!permIface || !permIface->unregister_tool_permission) {
                         return;
                     }
                     auto nameSv
                         = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-                    permIface->unregister_tool_permission(host, pctxRaw->scope(), &nameSv);
+                    agentxx::plugin::tableOpBlockingRaw(
+                        host,
+                        cancelIface,
+                        schedIface,
+                        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                            return permIface->unregister_tool_permission(
+                                host,
+                                pctxRaw->scope(),
+                                &nameSv,
+                                cb,
+                                ud,
+                                err
+                            );
+                        }
+                    );
                 }
             );
             return JS_TRUE;
@@ -5644,9 +5679,22 @@ JSValue JsEngine::bridgeCall(
             std::string toolName = jsToCppString(ctx, argv[0]);
             auto        nameSv
                 = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-            return iface.permission->unregister_tool_permission(host, pctx->scope(), &nameSv) == 0
-                       ? JS_TRUE
-                       : JS_FALSE;
+            auto permRes = agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.permission->unregister_tool_permission(
+                        host,
+                        pctx->scope(),
+                        &nameSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
+            return permRes.ok() ? JS_TRUE : JS_FALSE;
         }
 
         // ---- 网络 (`agentxx.net`): agent 与 client 两侧同一份实现 ----
@@ -5846,14 +5894,8 @@ JSValue JsEngine::bridgeCall(
             if (!iface.prompt || !iface.prompt->get_prompt) {
                 return JS_NULL;
             }
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.prompt->get_prompt(host, pctx->scope(), &out);
-            std::string    json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != AGENTXX_RESULT_OK) {
+            std::string json = agentxx::plugin::promptJson(host, iface, pctx->scope());
+            if (json.empty()) {
                 return JS_NULL;
             }
             return jsonTextToValue(ctx, json, "<prompt>");
@@ -5863,12 +5905,9 @@ JSValue JsEngine::bridgeCall(
             if (!iface.prompt || !iface.prompt->set_prompt || argc < 1) {
                 return JS_FALSE;
             }
-            const std::string json   = argsJsonText(ctx, argv[0]);
-            auto              jsonSv = agentxx::plugin::PluginStringView::from(
-                json.data(),
-                json.size()
-            );
-            return iface.prompt->set_prompt(host, pctx->scope(), &jsonSv) == AGENTXX_RESULT_OK
+            const std::string json = argsJsonText(ctx, argv[0]);
+            return agentxx::plugin::setPromptJson(host, iface, pctx->scope(), json)
+                           == AGENTXX_RESULT_OK
                        ? JS_TRUE
                        : JS_FALSE;
         }
@@ -5879,17 +5918,18 @@ JSValue JsEngine::bridgeCall(
             }
             const std::string tool = jsToCppString(ctx, argv[0]);
             auto toolSv = agentxx::plugin::PluginStringView::from(tool.data(), tool.size());
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.prompt->get_tool_prompt(host, &toolSv, &out);
-            std::string    json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != AGENTXX_RESULT_OK || json.empty()) {
+            auto op = agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.prompt->get_tool_prompt(host, &toolSv, cb, ud, err);
+                }
+            );
+            if (!op.ok() || op.text().empty()) {
                 return JS_NULL;
             }
-            return jsonTextToValue(ctx, json, "<tool_prompt>");
+            return jsonTextToValue(ctx, std::string(op.text()), "<tool_prompt>");
         }
 
         case B_GET_SESSION_WORK_DIR: {
@@ -5946,17 +5986,18 @@ JSValue JsEngine::bridgeCall(
                 sessionId.data(),
                 sessionId.size()
             );
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc
-                = iface.context->get_messages(host, pctx->scope(), &sidSv, &out);
-            std::string json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != 0) {
+            auto op = agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.context->get_messages(host, pctx->scope(), &sidSv, cb, ud, err);
+                }
+            );
+            if (!op.ok()) {
                 return JS_NewArray(ctx);
             }
+            std::string json(op.text());
             JSValue arr = jsonTextToValue(ctx, json, "<messages>");
             if (!JS_IsArray(arr)) {
                 JS_FreeValue(ctx, arr);
@@ -5974,10 +6015,22 @@ JSValue JsEngine::bridgeCall(
                 sessionId.data(),
                 sessionId.size()
             );
-            return JS_NewInt64(
-                ctx,
-                iface.context->messages_count(host, pctx->scope(), &sidSv)
+            auto op = agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.context->messages_count(
+                        host,
+                        pctx->scope(),
+                        &sidSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
             );
+            return JS_NewInt64(ctx, op.ok() ? op.integer(-1) : int64_t{-1});
         }
 
         case B_GET_GRAPH_JSON: {
@@ -6572,14 +6625,8 @@ JSValue JsEngine::bridgeCall(
             if (!iface.model || !iface.model->get_config) {
                 return JS_NULL;
             }
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.model->get_config(host, pctx->scope(), &out);
-            std::string    json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != AGENTXX_RESULT_OK || json.empty()) {
+            std::string json = agentxx::plugin::modelConfigJson(host, iface, pctx->scope());
+            if (json.empty()) {
                 return JS_NULL;
             }
             return jsonTextToValue(ctx, json, "<model_config>");
@@ -6664,15 +6711,43 @@ JSValue JsEngine::bridgeCall(
                 query.path_count  = static_cast<int32_t>(count);
                 query.session_id  = sidSv;
                 query.paths       = views.data();
-                std::vector<int32_t> batch(count, AGENTXX_PLUGIN_PERMISSION_DECISION_ASK);
-                const int32_t        rc = iface.permission->check_paths(
+                // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
+                auto op = agentxx::plugin::tableOpBlockingRaw(
                     host,
-                    pctx->scope(),
-                    &query,
-                    batch.data()
+                    iface.cancel,
+                    iface.scheduler,
+                    [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return iface.permission->check_paths(
+                            host,
+                            pctx->scope(),
+                            &query,
+                            cb,
+                            ud,
+                            err
+                        );
+                    }
                 );
-                if (rc != AGENTXX_RESULT_OK) {
+                if (!op.ok()) {
                     return JS_NULL; ///< 查询不可用: 调用方按"不过滤"处理
+                }
+                // 完成时 payload 是判定数组的 JSON 文本 (与入参等长、顺序一致)
+                std::vector<int32_t> batch;
+                try {
+                    auto arr = utilxx_base::Json::parse(std::string(op.text()));
+                    if (!arr.is_array()) {
+                        return JS_NULL;
+                    }
+                    batch.reserve(arr.size());
+                    for (const auto& item : arr) {
+                        batch.push_back(item.is_number_integer()
+                                            ? item.get<int32_t>()
+                                            : AGENTXX_PLUGIN_PERMISSION_DECISION_ASK);
+                    }
+                } catch (const utilxx_base::Json::exception&) {
+                    return JS_NULL;
+                }
+                if (batch.size() != count) {
+                    return JS_NULL;
                 }
                 for (size_t i = 0; i < count; ++i) {
                     decisions[start + i] = batch[i];

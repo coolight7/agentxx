@@ -177,7 +177,7 @@ struct ScopeRefKeep {
 ///   只检查字段, 任意线程都能判, 所以同步返回 NULL + `error_out`;
 /// - 引用指向的挂载是否存在、序号是否过期, 要读本管理器的挂载表, 只能在 IO 线程上判,
 ///   因此这两种情况按"受理后失败"交回 (`payload` 给原因), 调用方从 `status` 看结论。
-template<typename Fn>
+template<bool AllowClosing = false, typename Fn>
 static PluginxxOperatorHandle* asyncScopedTableCall(
     const PluginxxHost*      host,
     const PluginxxScopeRef*  agent,
@@ -192,7 +192,7 @@ static PluginxxOperatorHandle* asyncScopedTableCall(
         setTableOpError(error_out, "agent reference is invalid");
         return nullptr;
     }
-    return asyncTableCall(
+    return asyncTableCall<AllowClosing>(
         host,
         cb,
         ud,
@@ -207,6 +207,41 @@ static PluginxxOperatorHandle* asyncScopedTableCall(
                 throw TableOpError("agent reference is invalid");
             }
             return work(inst, mgr, static_cast<const PluginxxScopeRef&>(ref));
+        }
+    );
+}
+
+/// 只读查询类异步入口: 工作体返回文本, 作为 `payload` 交回
+///
+/// 旧版用"返回值 + 出参串"表达的两件事在这里统一: 空文本 = 没有结果,
+/// 按失败交回 (与旧 `ERR_NOT_FOUND` 一致)。查询允许实例关闭中调用 (收尾时工具仍可能在跑)。
+template<typename Fn>
+static PluginxxOperatorHandle* asyncQueryCall(
+    const PluginxxHost*      host,
+    const PluginxxScopeRef*  agent,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out,
+    std::string              label,
+    Fn&&                     work
+) {
+    return asyncScopedTableCall</*AllowClosing=*/true>(
+        host,
+        agent,
+        cb,
+        ud,
+        error_out,
+        std::move(label),
+        [work = std::forward<Fn>(work)](
+            PluginInstance*         inst,
+            PluginManager*          mgr,
+            const PluginxxScopeRef& ref
+        ) -> std::string {
+            auto text = work(inst, mgr, ref);
+            if (text.empty()) {
+                throw TableOpError("no result");
+            }
+            return text;
         }
     );
 }
@@ -424,69 +459,109 @@ static PluginxxOperatorHandle* PLUGINXX_CALL xx_unregister_tool(
     });
 }
 
-static int32_t PLUGINXX_CALL xx_register_tool_permission(
+/// 工具权限声明的自持拷贝 (跨线程投递用)
+///
+/// 三个字符串视图都是借用视图: 投递前拷成自有字符串并把视图指回它们。
+struct ToolPermissionSpecKeep {
+    AgentxxPluginToolPermissionSpec spec{};
+    std::string                     toolName;
+    std::string                     targetArg;
+    std::string                     category;
+
+    explicit ToolPermissionSpecKeep(const AgentxxPluginToolPermissionSpec& src) :
+        spec(src),
+        toolName(svToStr(&src.tool_name)),
+        targetArg(svToStr(&src.target_arg)),
+        category(svToStr(&src.category)) {
+        spec.tool_name  = agentxx::plugin::PluginStringView::from(toolName);
+        spec.target_arg = agentxx::plugin::PluginStringView::from(targetArg);
+        spec.category   = agentxx::plugin::PluginStringView::from(category);
+    }
+};
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_register_tool_permission(
     const PluginxxHost*                    host,
     const PluginxxScopeRef*                agent,
-    const AgentxxPluginToolPermissionSpec* spec
+    const AgentxxPluginToolPermissionSpec* spec,
+    PluginxxOperatorCallback               cb,
+    void*                                  ud,
+    PluginxxString*                        error_out
 ) {
-    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
-        auto call = enterHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
-            return AGENTXX_RESULT_ERR_ARG;
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (spec == nullptr || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
+            setTableOpError(error_out, "register_tool_permission: spec and tool name are required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        if (!scopeOk(mgr, agent)) {
-            return AGENTXX_RESULT_ERR_NO_AGENT;
+        if (!specSizeOk<AgentxxPluginToolPermissionSpec>(spec->struct_size)) {
+            setTableOpError(
+                error_out,
+                "register_tool_permission: spec struct_size is too small"
+            );
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        auto mgrPtr  = mgr;
-        auto instPtr = inst;
-        // 声明内容按值复制: 跨边界视图只在本次调用期间有效, 复制为自有字符串后
-        // 再交给 IO 线程执行 (视图指向闭包持有的字符串)
-        AgentxxPluginToolPermissionSpec specCopy = *spec;
-        auto                            toolName = std::make_shared<std::string>(
-            spec->tool_name.data ? spec->tool_name.data : "",
-            static_cast<size_t>(spec->tool_name.size)
-        );
-        auto targetArg = std::make_shared<std::string>(
-            spec->target_arg.data ? spec->target_arg.data : "",
-            static_cast<size_t>(spec->target_arg.size)
-        );
-        auto category = std::make_shared<std::string>(
-            spec->category.data ? spec->category.data : "",
-            static_cast<size_t>(spec->category.size)
-        );
-        specCopy.tool_name  = agentxx::plugin::PluginStringView::from(*toolName);
-        specCopy.target_arg = agentxx::plugin::PluginStringView::from(*targetArg);
-        specCopy.category   = agentxx::plugin::PluginStringView::from(*category);
-        return ioCallSyncKeep<int32_t>(
-            call,
-            mgrPtr,
-            [mgrPtr, instPtr, specCopy, toolName, targetArg, category, agent]() {
-                return mountCall(mgrPtr, agent, noAgent, [instPtr, specCopy](PluginMount& mount) {
-                    return mount.registerToolPermission(instPtr, &specCopy);
+        auto keep = std::make_shared<ToolPermissionSpecKeep>(*spec);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "permission.register_tool_permission",
+            [keep](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                auto rc = mountCall(mgr, &ref, noAgent, [inst, keep](PluginMount& mount) {
+                    return mount.registerToolPermission(inst, &keep->spec);
                 });
+                if (rc != AGENTXX_RESULT_OK) {
+                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
+                }
+                return std::string{};
             }
         );
     });
 }
 
-static int32_t PLUGINXX_CALL xx_unregister_tool_permission(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_unregister_tool_permission(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
-    const PluginxxStringView* tool_name
+    const PluginxxStringView* tool_name,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(tool_name)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto nameValCopy = *tool_name;
-    return onInstanceIo(host, [nameValCopy, agent](PluginInstance* inst, PluginManager* mgr) {
-        if (!scopeOk(mgr, agent)) {
-            return static_cast<int32_t>(AGENTXX_RESULT_ERR_NO_AGENT);
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(tool_name)) {
+            setTableOpError(error_out, "unregister_tool_permission: tool name is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        return mountCall(mgr, agent, noAgent, [inst, nameValCopy](PluginMount& mount) {
-            return mount.unregisterToolPermission(inst, nameValCopy);
-        });
+        auto nameKeep = svToStr(tool_name);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "permission.unregister_tool_permission",
+            [nameKeep](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                const PluginxxStringView view{
+                    nameKeep.data(), static_cast<uint64_t>(nameKeep.size())
+                };
+                auto rc = mountCall(mgr, &ref, noAgent, [inst, view](PluginMount& mount) {
+                    return mount.unregisterToolPermission(inst, view);
+                });
+                if (rc != AGENTXX_RESULT_OK) {
+                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
+                }
+                return std::string{};
+            }
+        );
     });
 }
 
@@ -494,68 +569,85 @@ static int32_t PLUGINXX_CALL xx_unregister_tool_permission(
 /// (插件侧建议按 512 项分批; 上限仅作为异常调用的保护)
 static constexpr int32_t kPermissionCheckPathsMax = 16384;
 
-static int32_t PLUGINXX_CALL xx_check_paths(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_check_paths(
     const PluginxxHost*                     host,
     const PluginxxScopeRef*                 agent,
     const AgentxxPluginPermissionPathQuery* query,
-    int32_t*                                out_decisions
+    PluginxxOperatorCallback                cb,
+    void*                                   ud,
+    PluginxxString*                         error_out
 ) {
-    if (!query || !out_decisions || !query->paths || query->path_count <= 0) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    if (query->path_count > kPermissionCheckPathsMax) {
-        return AGENTXX_RESULT_ERR_LIMIT;
-    }
-    // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
-    if (!agentxx::plugin::specSizeOk<AgentxxPluginPermissionPathQuery>(query->struct_size)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    // 入参按值复制后交给 io 线程执行 (跨边界视图只在本次调用期间有效)
-    auto paths = std::make_shared<std::vector<std::string>>();
-    paths->reserve(static_cast<size_t>(query->path_count));
-    for (int32_t i = 0; i < query->path_count; ++i) {
-        const auto& item = query->paths[i];
-        paths->emplace_back(item.data ? item.data : "", static_cast<size_t>(item.size));
-    }
-    auto sessionId = std::make_shared<std::string>(
-        query->session_id.data ? query->session_id.data : "",
-        static_cast<size_t>(query->session_id.size)
-    );
-    const int32_t scope = query->scope;
-    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (query == nullptr || query->paths == nullptr || query->path_count <= 0) {
+            setTableOpError(error_out, "check_paths: query and paths are required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
+        }
+        if (query->path_count > kPermissionCheckPathsMax) {
+            setTableOpError(error_out, "check_paths: too many paths in one call");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
+        }
+        // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
+        if (!agentxx::plugin::specSizeOk<AgentxxPluginPermissionPathQuery>(query->struct_size)) {
+            setTableOpError(error_out, "check_paths: query struct_size is too small");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
+        }
+        // 入参按值复制后交给 io 线程执行 (跨边界视图只在本次调用期间有效)
+        auto paths = std::make_shared<std::vector<std::string>>();
+        paths->reserve(static_cast<size_t>(query->path_count));
+        for (int32_t i = 0; i < query->path_count; ++i) {
+            const auto& item = query->paths[i];
+            paths->emplace_back(item.data ? item.data : "", static_cast<size_t>(item.size));
+        }
+        auto          sessionId = std::make_shared<std::string>(svToStr(&query->session_id));
+        const int32_t scope     = query->scope;
         // 只读查询: 允许关闭中调用 (实例收尾时其工具仍可能在执行)
-        auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst) {
-            return AGENTXX_RESULT_ERR_STATE;
-        }
-        if (!scopeOk(mgr, agent)) {
-            return AGENTXX_RESULT_ERR_NO_AGENT;
-        }
-        auto                 mgrPtr  = mgr;
-        auto                 instPtr = inst;
-        std::vector<int32_t> decisions;
-        auto                 rc = ioCallSyncKeep<int32_t>(
-            call,
-            mgrPtr,
-            [mgrPtr, instPtr, scope, sessionId, paths, agent, &decisions]() {
-                return mountCall(mgrPtr, agent, noAgent, [&](PluginMount& mount) {
-                    return mount.checkPermissionPaths(
-                        instPtr,
-                        scope,
-                        *sessionId,
-                        *paths,
-                        decisions
-                    );
-                });
+        return asyncScopedTableCall</*AllowClosing=*/true>(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "permission.check_paths",
+            [paths, sessionId, scope](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                std::vector<int32_t> decisions;
+                auto                 rc = mountCall(
+                    mgr,
+                    &ref,
+                    noAgent,
+                    [&](PluginMount& mount) {
+                        return mount.checkPermissionPaths(
+                            inst,
+                            scope,
+                            *sessionId,
+                            *paths,
+                            decisions
+                        );
+                    }
+                );
+                if (rc != AGENTXX_RESULT_OK) {
+                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
+                }
+                if (decisions.size() != paths->size()) {
+                    throw TableOpError("check_paths: decision count mismatch");
+                }
+                // 判定数组按 JSON 数组文本交回 (与入参 paths 等长、顺序一致)
+                std::string out;
+                out.reserve(decisions.size() * 2 + 2);
+                out.push_back('[');
+                for (size_t i = 0; i < decisions.size(); ++i) {
+                    if (i > 0) {
+                        out.push_back(',');
+                    }
+                    out += std::to_string(decisions[i]);
+                }
+                out.push_back(']');
+                return out;
             }
         );
-        if (rc != AGENTXX_RESULT_OK || decisions.size() != paths->size()) {
-            return rc != AGENTXX_RESULT_OK ? rc : AGENTXX_RESULT_ERR_INTERNAL;
-        }
-        std::copy(decisions.begin(), decisions.end(), out_decisions);
-        return AGENTXX_RESULT_OK;
     });
 }
 
@@ -802,64 +894,90 @@ static int32_t PLUGINXX_CALL xx_session_Canceled(
 // 接口表: 会话上下文查询 (agentxx.agent.context)
 // =====================================================================
 
-static int32_t PLUGINXX_CALL xx_context_get_messages(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_context_get_messages(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
-    PluginxxString*           out
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
-        if (!out) {
-            return AGENTXX_RESULT_ERR_ARG;
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(session_id)) {
+            setTableOpError(error_out, "get_messages: session id is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(session_id)) {
-            return AGENTXX_RESULT_ERR_ARG;
-        }
-        if (!scopeOk(mgr, agent)) {
-            return AGENTXX_RESULT_ERR_NO_AGENT;
-        }
-        auto mgrPtr = mgr;
-        auto sid    = *session_id;
-        *out = ioCallSyncKeep<PluginxxString>(call, mgrPtr, [mgrPtr, sid, agent]() -> PluginxxString {
-            return mountCall(
-                mgrPtr,
-                agent,
-                [] { return PluginxxString{}; },
-                [sid](PluginMount& mount) { return mount.getSessionMessages(sid); }
-            );
-        });
-        return (out->data != nullptr) ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_NOT_FOUND;
+        auto sid = svToStr(session_id);
+        return asyncQueryCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "context.get_messages",
+            [sid](
+                PluginInstance*,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                const PluginxxStringView view{
+                    sid.data(), static_cast<uint64_t>(sid.size())
+                };
+                PluginxxString raw{};
+                auto           rc = mountCall(mgr, &ref, noAgent, [&](PluginMount& mount) {
+                    raw = mount.getSessionMessages(view);
+                    return AGENTXX_RESULT_OK;
+                });
+                if (rc != AGENTXX_RESULT_OK) {
+                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
+                }
+                return takePluginString(raw);
+            }
+        );
     });
 }
 
-static int64_t PLUGINXX_CALL xx_context_messages_count(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_context_messages_count(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
-    const PluginxxStringView* session_id
+    const PluginxxStringView* session_id,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    return agentxx::plugin::guardVtableCall<int64_t>(-1, [&]() -> int64_t {
-        auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(session_id)) {
-            return -1;
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(session_id)) {
+            setTableOpError(error_out, "messages_count: session id is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        if (!scopeOk(mgr, agent)) {
-            return -1;
-        }
-        auto mgrPtr = mgr;
-        auto sid    = *session_id;
-        return ioCallSyncKeep<int64_t>(call, mgrPtr, [mgrPtr, sid, agent]() -> int64_t {
-            return mountCall(
-                mgrPtr,
-                agent,
-                [] { return int64_t{-1}; },
-                [sid](PluginMount& mount) { return mount.sessionMessagesCount(sid); }
-            );
-        });
+        auto sid = svToStr(session_id);
+        return asyncQueryCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "context.messages_count",
+            [sid](
+                PluginInstance*,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                const PluginxxStringView view{
+                    sid.data(), static_cast<uint64_t>(sid.size())
+                };
+                auto count = mountCall(
+                    mgr,
+                    &ref,
+                    [] { return int64_t{-1}; },
+                    [&view](PluginMount& mount) { return mount.sessionMessagesCount(view); }
+                );
+                if (count < 0) {
+                    throw TableOpError("session context is not available");
+                }
+                return std::to_string(count);
+            }
+        );
     });
 }
 
@@ -1055,49 +1173,123 @@ static int32_t PLUGINXX_CALL xx_set_graph_json(
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_get_prompt(const PluginxxHost* host, const PluginxxScopeRef* agent, PluginxxString* out) {
-    return queryScopedStringIo(host, agent, out, [agent](PluginInstance* inst, PluginManager* mgr) {
-        auto* mount = mountIn(mgr, agent);
-        return mount != nullptr ? mount->getPromptJson() : std::string{};
+static PluginxxOperatorHandle* PLUGINXX_CALL
+    xx_get_prompt(const PluginxxHost*      host,
+                  const PluginxxScopeRef*  agent,
+                  PluginxxOperatorCallback cb,
+                  void*                    ud,
+                  PluginxxString*          error_out) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        return asyncQueryCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "prompt.get_prompt",
+            [](PluginInstance*, PluginManager* mgr, const PluginxxScopeRef& ref) -> std::string {
+                return mountCall(
+                    mgr,
+                    &ref,
+                    [] { return std::string{}; },
+                    [](PluginMount& mount) { return mount.getPromptJson(); }
+                );
+            }
+        );
     });
 }
 
-static int32_t PLUGINXX_CALL xx_set_prompt(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_set_prompt(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
-    const PluginxxStringView* prompt_json
+    const PluginxxStringView* prompt_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(prompt_json)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto pJsonCopy = *prompt_json;
-    return onScopedInstanceIo(host, agent, [agent, pJsonCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mountCall(mgr, agent, noAgent, [inst, pJsonCopy](PluginMount& mount) {
-            return mount.setPromptJson(inst, pJsonCopy);
-        });
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(prompt_json)) {
+            setTableOpError(error_out, "set_prompt: prompt_json is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
+        }
+        auto pJson = svToStr(prompt_json);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "prompt.set_prompt",
+            [pJson](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                const PluginxxStringView view{
+                    pJson.data(), static_cast<uint64_t>(pJson.size())
+                };
+                auto rc = mountCall(mgr, &ref, noAgent, [inst, view](PluginMount& mount) {
+                    return mount.setPromptJson(inst, view);
+                });
+                if (rc != AGENTXX_RESULT_OK) {
+                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
+                }
+                return std::string{};
+            }
+        );
     });
 }
 
-static int32_t PLUGINXX_CALL xx_prompt_tool(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_prompt_tool(
     const PluginxxHost*       host,
     const PluginxxStringView* tool_name,
-    PluginxxString*           out
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(tool_name)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    // 工具提示词是主程序级配置 (与具体 agent 无关), 不取作用域引用
-    auto name = svToStr(tool_name);
-    return queryStringIo(host, out, [name](PluginInstance*, PluginManager* mgr) -> std::string {
-        return mgr->toolPromptJson(name);
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(tool_name)) {
+            setTableOpError(error_out, "get_tool_prompt: tool name is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
+        }
+        // 工具提示词是主程序级配置 (与具体 agent 无关), 不取作用域引用
+        auto name = svToStr(tool_name);
+        return asyncTableCall</*AllowClosing=*/true>(
+            host,
+            cb,
+            ud,
+            error_out,
+            "prompt.get_tool_prompt",
+            [name](PluginInstance*, PluginManager* mgr) -> std::string {
+                auto text = mgr->toolPromptJson(name);
+                if (text.empty()) {
+                    throw TableOpError("tool prompt is not configured");
+                }
+                return text;
+            }
+        );
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_model_get_config(const PluginxxHost* host, const PluginxxScopeRef* agent, PluginxxString* out) {
-    return queryScopedStringIo(host, agent, out, [agent](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->getModelConfigJson();
+static PluginxxOperatorHandle* PLUGINXX_CALL
+    xx_model_get_config(const PluginxxHost*      host,
+                        const PluginxxScopeRef*  agent,
+                        PluginxxOperatorCallback cb,
+                        void*                    ud,
+                        PluginxxString*          error_out) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        return asyncScopedTableCall</*AllowClosing=*/true>(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "model.get_config",
+            [](PluginInstance*, PluginManager* mgr, const PluginxxScopeRef&) -> std::string {
+                // 未加载模型时旧行为是返回空串, 这里空结果是正常情况, 不算失败
+                return mgr->getModelConfigJson();
+            }
+        );
     });
 }
 

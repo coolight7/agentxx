@@ -155,8 +155,7 @@ static void injectCodegraphSystemPrompt(
     append["codegraph"]      = std::string(kSystemCodegraphPrompt);
     j["appendSystemPrompts"] = append;
     std::string payload      = j.dump();
-    auto        payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-    if (iface.prompt->set_prompt(host, agent, &payloadSv) != 0) {
+    if (agentxx::plugin::setPromptJson(host, iface, agent, payload) != 0) {
         pluginLog(
             host,
             iface.log,
@@ -182,13 +181,10 @@ static void
     if (!host || !iface.prompt || !iface.prompt->get_prompt || !iface.prompt->set_prompt) {
         return;
     }
-    PluginxxString json{nullptr, 0};
-    iface.prompt->get_prompt(host, agent, &json);
-    if (!json.data) {
+    std::string s = agentxx::plugin::promptJson(host, iface, agent);
+    if (s.empty()) {
         return;
     }
-    std::string s{json.data, static_cast<size_t>(json.size)};
-    agentxx::plugin::PluginString::free(host, &json);
     agentxx::plugin::ArgReader promptArgs(s);
     static const char*         kToolNames[] = {
         "agentxx_codegraph_search",
@@ -242,8 +238,7 @@ static void
     }
     patch["toolPrompt"]   = tools;
     std::string payload   = patch.dump();
-    auto        payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-    if (iface.prompt->set_prompt(host, agent, &payloadSv) != 0) {
+    if (agentxx::plugin::setPromptJson(host, iface, agent, payload) != 0) {
         pluginLog(host, iface.log, 3, "agentxx_codegraph: set_prompt failed");
     }
 }

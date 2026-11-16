@@ -397,8 +397,7 @@ static int planningSetup(PluginCtx* ctx, const agentxx::plugin::ScopeRef& ref) {
         j["toolPrompt"]                        = std::move(toolPrompt);
 
         std::string js       = j.dump();
-        auto        promptSv = agentxx::plugin::PluginStringView::from(js.data(), js.size());
-        if (ctx->iface.prompt->set_prompt(host, ref.ptr(), &promptSv) != 0) {
+        if (agentxx::plugin::setPromptJson(host, ctx->iface, ref.ptr(), js) != 0) {
             pluginLog(ctx, 3, "agentxx_planning: set prompts failed");
         } else {
             pluginLog(

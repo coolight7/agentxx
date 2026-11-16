@@ -432,16 +432,12 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
 
     // 5. 提示词读写
     if (ctx.iface.prompt && ctx.iface.prompt->get_prompt && ctx.iface.prompt->set_prompt) {
-        PluginxxString full{nullptr, 0};
-        ctx.iface.prompt->get_prompt(host, ref.ptr(), &full);
-        if (full.data) {
-            std::string prompt(full.data, static_cast<size_t>(full.size));
-            agentxx::plugin::PluginString::free(host, &full);
+        std::string prompt = agentxx::plugin::promptJson(host, ctx.iface, ref.ptr());
+        if (!prompt.empty()) {
             if (prompt.find("\"example_echo\"") == std::string::npos) {
                 const char* promptJson
                     = R"_({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})_";
-                auto promptSv = agentxx::plugin::PluginStringView::fromCstr(promptJson);
-                ctx.iface.prompt->set_prompt(host, ref.ptr(), &promptSv);
+                agentxx::plugin::setPromptJson(host, ctx.iface, ref.ptr(), promptJson);
             }
         }
     }

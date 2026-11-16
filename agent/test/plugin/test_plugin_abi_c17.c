@@ -238,7 +238,7 @@ int32_t agentxx_test_abi_c_probe(void) {
     }
     /* 协程驱动表: 版本/大小/函数指针齐备 */
     /* 工具权限声明: 结构体 8 字节对齐 + 版本 2 (v2 起全部成员带 agent 引用) */
-    if (AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION != 2) {
+    if (AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION != 3) {
         return 92;
     }
     if (sizeof(AgentxxPluginToolPermissionSpec) % 8 != 0
