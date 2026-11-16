@@ -1477,26 +1477,29 @@ TestResult testPluginRuntime() {
         const auto ifaces = AgentIfaces::query(host);
         XX_TEST_EXPECT_TRUE(ifaces.config != nullptr);
 
-        PluginxxString out{};
-        XX_TEST_EXPECT_EQ(ifaces.config->get_plugin_args(host, &out), 0);
-        hostMemoryFree(out.data);
+        // config.get_plugin_args 是异步操作契约: 受理 + 完成回调, 这里阻塞等结果
+        auto argsOf = [&](const PluginxxHost* target) {
+            return pluginxx::tableOpBlockingRaw(
+                target,
+                ifaces.cancel,
+                ifaces.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return ifaces.config->get_plugin_args(target, cb, ud, err);
+                }
+            );
+        };
+        XX_TEST_EXPECT_TRUE(argsOf(host).ok());
 
         // 真实路径里由 destroyPlugin 退休控制块；这里直接触发同一动作。
         f.provider->retireHostControl();
-        out = {};
-        XX_TEST_EXPECT_TRUE(ifaces.config->get_plugin_args(host, &out) != 0);
-        XX_TEST_EXPECT_TRUE(out.data == nullptr);
+        XX_TEST_EXPECT_FALSE(argsOf(host).ok());
 
         // 卸载后重新加载同名实例：旧 host 指针保持失效，不会命中新实例。
         auto fresh = f.instance("provider", 77);
         XX_TEST_EXPECT_TRUE(fresh->hostView() != host);
         XX_TEST_EXPECT_TRUE(fresh->hostView()->opaque != host->opaque);
-        out = {};
-        XX_TEST_EXPECT_TRUE(ifaces.config->get_plugin_args(host, &out) != 0);
-        XX_TEST_EXPECT_TRUE(out.data == nullptr);
-        out = {};
-        XX_TEST_EXPECT_EQ(ifaces.config->get_plugin_args(fresh->hostView(), &out), 0);
-        hostMemoryFree(out.data);
+        XX_TEST_EXPECT_FALSE(argsOf(host).ok());
+        XX_TEST_EXPECT_TRUE(argsOf(fresh->hostView()).ok());
     }
 
     /// prompt 贡献模型 —— 多 owner 叠加、卸载只移除自己的贡献、不把

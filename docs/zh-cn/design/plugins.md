@@ -468,10 +468,11 @@ C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
 
 > 当前进度: 阶段 A 的骨架与 `agentxx.agent.session` (v4), 阶段 B 的
 > `agentxx.agent.tools` (v5) / `permission` (v3) / `context` (v3) / `model` (v3) /
-> `prompt` (v4) / `resources` (v3) / `graph` (v3) / `mount` (v2), 以及阶段 C 的
-> `agentxx.agent.runtime` (v3) 已切到这套契约; 其余表 (`agentxx.client.*` 六张与
-> 框架通用表) 仍是一条条同步签名, 迁移按 `resource/history/plugin-api-async/plan.md`
-> 的阶段推进。
+> `prompt` (v4) / `resources` (v3) / `graph` (v3) / `mount` (v2), 阶段 C 的
+> `agentxx.agent.runtime` (v3), 以及阶段 C2 的第一批通用表 `agentxx.config` (v4) /
+> `agentxx.plugins` (v2) 已切到这套契约; 其余通用表 (`broadcasts` / `capabilities` 登记 /
+> `net.call`) 与 `agentxx.client.*` 六张仍是一条条同步签名, 迁移按
+> `resource/history/plugin-api-async/plan.md` 的阶段推进。
 >
 > 作用域引用的两种失败要分开看: 引用的**形状**无效 (空指针 / `id` 为空 /
 > `struct_size` 越界) 是**未受理** —— 只需检查字段, 任意线程都能判, 同步返回 `NULL`;
@@ -510,8 +511,8 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 | `agentxx.broadcasts` | 3 | 广播: `declare_broadcast` (声明频道: 缓存/发布权限/订阅补当前值/限频/scope) + `publish_broadcast` + `subscribe_broadcast(_ex)` (带流结束回调) + `read_broadcast` + `unsubscribe_broadcast` + `end_broadcast`。插件的通知面与跨端数据都走它, 见 §20。v3 = 加 `end_broadcast` 与 `subscribe_broadcast_ex` (订阅侧收 `on_end`) |
 | `agentxx.capabilities` | 7 | `register_capability/unregister_capability/invoke_capability/capability_info/list_capabilities` (另有 `invoke_capability_ex` / `unregister_capability_ex`; v7 删掉 `op_cancel`, 取消统一走 `agentxx.cancel`)。能力行按 **scope** 隔离 (同一个插件挂在多个 agent 上时各一行), 一个能力可以由多家登记实现行, 取值链按 `(priority 升序, 登记序号)` 排序后取首行 —— **功能埋点的实现行就是能力行** (见 §21.4) |
 | `agentxx.scheduler` | 2 | 调度与驱动: `is_io_thread` / `sleep` / `offload` / `request_driver` / `cancel_driver` (driver ticket/wake 协议, 见 §16; 早期的 `post_to_io` 与 `op_cancel` 已删, 独立的 `coroutine_runtime` 表已并入) |
-| `agentxx.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上) |
-| `agentxx.config` | 3 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言)。v3 起不再含业务成员 (`get_tool_prompt`/`get_session_work_dir` 已分别迁到 `agentxx.agent.prompt` / `agentxx.agent.session`) |
+| `agentxx.plugins` | 2 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上)。v2 = 三个成员改成异步操作契约 (清单经 `payload` 交回, `get_plugin` 找不到按 `not_found` 失败) |
+| `agentxx.config` | 4 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言)。v3 起不再含业务成员 (`get_tool_prompt`/`get_session_work_dir` 已分别迁到 `agentxx.agent.prompt` / `agentxx.agent.session`); v4 = 五个成员改成异步操作契约 (配置 JSON / 语言码经 `payload` 交回) |
 | `agentxx.cancel` | 3 | `op_cancel` (取消一个操作句柄; 原先分散在 tools/feature 的同名成员已收拢到这里)。v3 起 `is_canceled` 迁到 `agentxx.agent.session` (会话是业务概念, 框架表只管通用取消句柄) |
 | `agentxx.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |

@@ -192,15 +192,19 @@ std::string hostDataDir(const PluginCtx& ctx) {
     if (!ctx.host || !ctx.iface.config || !ctx.iface.config->get_config) {
         return {};
     }
-    PluginxxString j{nullptr, 0};
-    ctx.iface.config->get_config(ctx.host, &j);
-    if (!j.data) {
+    const auto j = agentxx::plugin::detail::tableOpText(
+        ctx.host,
+        ctx.iface.cancel,
+        ctx.iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ctx.iface.config->get_config(ctx.host, cb, ud, err);
+        }
+    );
+    if (j.empty()) {
         return {};
     }
-    std::string s(j.data, static_cast<size_t>(j.size));
-    agentxx::plugin::PluginString::free(ctx.host, &j);
     try {
-        auto o = utilxx_base::Json::parse(s);
+        auto o = utilxx_base::Json::parse(j);
         return o.value("dataDir", std::string{});
     } catch (...) {
         return {};

@@ -115,6 +115,10 @@ using pluginxx::yield;
 
 namespace detail {
 
+// 通用表的阻塞调用形态 (定义在 pluginxx/kit/kit.h): 只取正文 / 只看成败
+using pluginxx::detail::tableOpOk;
+using pluginxx::detail::tableOpText;
+
 /// 取一个 host 分配的字符串出参 (用完释放)
 template<typename Fn>
 inline std::string takeHostString(const PluginxxHost* host, Fn&& fn) {
@@ -355,6 +359,10 @@ struct ClientIfaces {
     const PluginxxConfigIface* config = nullptr; ///< "pluginxx.config"
     /// 本主程序已加载的插件清单 (自描述查询)
     const PluginxxPluginsIface* plugins = nullptr; ///< "pluginxx.plugins"
+    /// 取消 (通用表): 每个异步操作句柄都能在这里取消
+    const PluginxxCancelIface* cancel = nullptr; ///< "pluginxx.cancel"
+    /// 调度 (通用表): 睡眠 / 卸载 / io 线程判定
+    const PluginxxSchedulerIface* scheduler = nullptr; ///< "pluginxx.scheduler"
 
     /// 从主程序查询全部已知 client 侧接口表 (host 为空时返回全 NULL 聚合)
     static ClientIfaces query(const PluginxxHost* host) {
@@ -375,6 +383,8 @@ struct ClientIfaces {
         f.net      = queryInterface<PluginxxNetIface>(host, PLUGINXX_IFACE_NET);
         f.config   = queryInterface<PluginxxConfigIface>(host, PLUGINXX_IFACE_CONFIG);
         f.plugins  = queryInterface<PluginxxPluginsIface>(host, PLUGINXX_IFACE_PLUGINS);
+        f.cancel    = queryInterface<PluginxxCancelIface>(host, PLUGINXX_IFACE_CANCEL);
+        f.scheduler = queryInterface<PluginxxSchedulerIface>(host, PLUGINXX_IFACE_SCHEDULER);
         return f;
     }
 };

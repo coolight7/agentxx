@@ -56,21 +56,30 @@ static std::string ownInfoString(
         || !iface.json->json_get_string) {
         return {};
     }
-    PluginxxString info{nullptr, 0};
-    iface.plugins->get_own_info(host, &info);
-    if (!info.data) {
+    // 表成员是异步操作契约: 这里用阻塞形态取回清单 JSON
+    const auto infoJson = agentxx::plugin::detail::tableOpText(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.plugins->get_own_info(host, cb, ud, err);
+        }
+    );
+    if (infoJson.empty()) {
         return {};
     }
     std::string    out;
     PluginxxString val{nullptr, 0};
-    auto           infoSv = agentxx::plugin::PluginStringView::toSv(&info);
-    auto           keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
+    auto           infoSv = agentxx::plugin::PluginStringView::from(
+        infoJson.data(),
+        infoJson.size()
+    );
+    auto keySv = agentxx::plugin::PluginStringView::fromCstr(key);
     iface.json->json_get_string(host, &infoSv, &keySv, &val);
     if (val.data) {
         out.assign(val.data, static_cast<size_t>(val.size));
         agentxx::plugin::PluginString::free(host, &val);
     }
-    agentxx::plugin::PluginString::free(host, &info);
     return out;
 }
 

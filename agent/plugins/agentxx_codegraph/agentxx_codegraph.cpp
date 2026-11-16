@@ -41,23 +41,32 @@ static HostConfig
     if (!host || !iface.config) {
         return cfg;
     }
+    // 表成员是异步操作契约, 这里用阻塞形态 (start 里本来就在主程序 IO 线程, 内联完成)
     if (iface.config->get_config) {
-        PluginxxString json{nullptr, 0};
-        iface.config->get_config(host, &json);
-        if (json.data) {
-            std::string s{json.data, static_cast<size_t>(json.size)};
-            agentxx::plugin::PluginString::free(host, &json);
+        const auto s = agentxx::plugin::detail::tableOpText(
+            host,
+            iface.cancel,
+            iface.scheduler,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.config->get_config(host, cb, ud, err);
+            }
+        );
+        if (!s.empty()) {
             agentxx::plugin::ArgReader args(s);
             cfg.dataDir     = args.value<std::string>("dataDir", std::string{});
             cfg.projectRoot = args.value<std::string>("projectRoot", std::string{});
         }
     }
     if (iface.config->get_plugin_args) {
-        PluginxxString json{nullptr, 0};
-        iface.config->get_plugin_args(host, &json);
-        if (json.data) {
-            std::string s{json.data, static_cast<size_t>(json.size)};
-            agentxx::plugin::PluginString::free(host, &json);
+        const auto s = agentxx::plugin::detail::tableOpText(
+            host,
+            iface.cancel,
+            iface.scheduler,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.config->get_plugin_args(host, cb, ud, err);
+            }
+        );
+        if (!s.empty()) {
             agentxx::plugin::ArgReader args(s);
             cfg.loadPaths    = args.value<std::vector<std::string>>("paths", {});
             cfg.ignorePaths  = args.value<std::vector<std::string>>("ignore_paths", {});

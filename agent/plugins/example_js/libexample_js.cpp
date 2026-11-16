@@ -226,17 +226,35 @@ int createShell(const PluginxxHost* host, bool clientSide, void** plugin_ctx) {
         ctx->log->log(host, 4, &sv);
     };
 
-    PluginxxString info{nullptr, 0};
-    const int32_t  infoRc = clientSide ? ctx->client.self->get_own_info(host, &info)
-                                       : ctx->agent.plugins->get_own_info(host, &info);
-    if (infoRc != 0 || !info.data) {
-        logE("example_js: get_own_info failed");
-        return -1;
+    // agent 侧 `plugins.get_own_info` 是异步操作契约: 用阻塞形态取回清单 JSON
+    // (client 侧的 `self.get_own_info` 仍是同步入口, 这里保持原样)
+    std::string infoJson;
+    if (clientSide) {
+        PluginxxString info{nullptr, 0};
+        if (ctx->client.self->get_own_info(host, &info) != 0 || !info.data) {
+            logE("example_js: get_own_info failed");
+            return -1;
+        }
+        infoJson.assign(info.data, static_cast<size_t>(info.size));
+        agentxx::plugin::PluginString::free(host, &info);
+    } else {
+        infoJson = agentxx::plugin::detail::tableOpText(
+            host,
+            ctx->agent.cancel,
+            ctx->agent.scheduler,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ctx->agent.plugins->get_own_info(host, cb, ud, err);
+            }
+        );
+        if (infoJson.empty()) {
+            logE("example_js: get_own_info failed");
+            return -1;
+        }
     }
-    auto field = [&](const char* key) -> std::string {
+    auto infoSv = agentxx::plugin::PluginStringView::from(infoJson.data(), infoJson.size());
+    auto field  = [&](const char* key) -> std::string {
         PluginxxString v{nullptr, 0};
-        auto           infoSv = agentxx::plugin::PluginStringView::toSv(&info);
-        auto           keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
+        auto           keySv = agentxx::plugin::PluginStringView::fromCstr(key);
         ctx->json->json_get_string(host, &infoSv, &keySv, &v);
         if (!v.data) {
             return {};
@@ -247,7 +265,6 @@ int createShell(const PluginxxHost* host, bool clientSide, void** plugin_ctx) {
     };
     std::string libPath = field("path");
     ctx->name           = field("name");
-    agentxx::plugin::PluginString::free(host, &info);
     if (ctx->name.empty() || libPath.empty()) {
         logE("example_js: own info invalid");
         return -1;

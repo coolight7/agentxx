@@ -138,6 +138,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
     );
 
     // ---- 2.5 接口表: agentxx.agent.config get_language / set_language ----
+    // 两个成员都是异步操作契约 (受理即返回, 结果经完成回调): 测试里用阻塞形态,
+    // 用例本来就在主程序 IO 线程上, 主程序内联完成, 不产生等待。
     {
         auto ifaceConfig = agentxx::plugin::queryInterface<PluginxxConfigIface>(
             inst->hostView(),
@@ -146,36 +148,45 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(ifaceConfig != nullptr);
         if (ifaceConfig) {
             XX_TEST_EXPECT_EQ(ifaceConfig->version, PLUGINXX_IFACE_CONFIG_VERSION);
+            const auto caps    = agentxx::plugin::AgentIfaces::query(inst->hostView());
+            auto       langOf  = [&]() {
+                return pluginxx::tableOpBlockingRaw(
+                    inst->hostView(),
+                    caps.cancel,
+                    caps.scheduler,
+                    [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return ifaceConfig->get_language(inst->hostView(), cb, ud, err);
+                    }
+                );
+            };
+            auto setLang = [&](const PluginxxStringView* lang) {
+                return pluginxx::tableOpBlockingRaw(
+                           inst->hostView(),
+                           caps.cancel,
+                           caps.scheduler,
+                           [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                               return ifaceConfig->set_language(inst->hostView(), lang, cb, ud, err);
+                           }
+                )
+                    .ok();
+            };
+
             // 默认语言为 "en"
-            PluginxxString langOut{};
-            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(inst->hostView(), &langOut), 0);
-            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
-            if (langOut.data) {
-                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
+            {
+                const auto lang = langOf();
+                XX_TEST_EXPECT_TRUE(lang.ok());
+                XX_TEST_EXPECT_EQ(std::string(lang.text()), std::string("en"));
             }
-            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
 
             // 切换语言为 "zh-cn"
             PluginxxStringView zhSv{"zh-cn", 5};
-            XX_TEST_EXPECT_EQ(ifaceConfig->set_language(inst->hostView(), &zhSv), 0);
-
-            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(inst->hostView(), &langOut), 0);
-            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
-            if (langOut.data) {
-                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("zh-cn"));
-            }
-            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
+            XX_TEST_EXPECT_TRUE(setLang(&zhSv));
+            XX_TEST_EXPECT_EQ(std::string(langOf().text()), std::string("zh-cn"));
 
             // 不支持 auto, 传 auto 回退为 en
             PluginxxStringView autoSv{"auto", 4};
-            XX_TEST_EXPECT_EQ(ifaceConfig->set_language(inst->hostView(), &autoSv), 0);
-
-            XX_TEST_EXPECT_EQ(ifaceConfig->get_language(inst->hostView(), &langOut), 0);
-            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
-            if (langOut.data) {
-                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
-            }
-            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
+            XX_TEST_EXPECT_TRUE(setLang(&autoSv));
+            XX_TEST_EXPECT_EQ(std::string(langOf().text()), std::string("en"));
         }
     }
 

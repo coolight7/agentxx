@@ -235,16 +235,26 @@ extern "C" PLUGINXX_EXPORT int
                 s_if.log->log(host, 4, &sv);
             };
 
-            PluginxxString info{nullptr, 0};
-            s_if.plugins->get_own_info(host, &info);
-            if (!info.data) {
+            // 表成员是异步操作契约: 这里用阻塞形态取回本插件清单 JSON
+            const auto infoJson = agentxx::plugin::detail::tableOpText(
+                host,
+                s_if.cancel,
+                s_if.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return s_if.plugins->get_own_info(host, cb, ud, err);
+                }
+            );
+            if (infoJson.empty()) {
                 logE("example_js_execute_command: get_own_info failed");
                 return -1;
             }
+            auto infoSv = agentxx::plugin::PluginStringView::from(
+                infoJson.data(),
+                infoJson.size()
+            );
             auto field = [&](const char* key) -> std::string {
                 PluginxxString v{nullptr, 0};
-                auto           infoSv = agentxx::plugin::PluginStringView::toSv(&info);
-                auto           keySv  = agentxx::plugin::PluginStringView::fromCstr(key);
+                auto           keySv = agentxx::plugin::PluginStringView::fromCstr(key);
                 s_if.json->json_get_string(host, &infoSv, &keySv, &v);
                 if (!v.data) {
                     return {};
@@ -255,7 +265,6 @@ extern "C" PLUGINXX_EXPORT int
             };
             std::string libPath = field("path");
             ctx->name           = field("name");
-            agentxx::plugin::PluginString::free(host, &info);
             if (ctx->name.empty() || libPath.empty()) {
                 logE("example_js_execute_command: own info invalid");
                 return -1;

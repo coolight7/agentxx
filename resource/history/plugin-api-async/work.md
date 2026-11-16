@@ -12,7 +12,7 @@
 | A2 | agent 侧 `dlopen` + `create` 挪到加载线程池 | 完成（编译通过、插件测试全绿） |
 | B | `agentxx.agent` 业务表全部成员 | 完成（9 张表全部改异步操作契约） |
 | C | `agentxx.agent.runtime` 全部成员 | 完成（21 个成员改异步；lib / test / client / 25 个插件编译通过，插件相关测试 3983 条全绿） |
-| C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 待做 |
+| C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 进行中（第一批 `config` v4 / `plugins` v2 完成；`broadcasts` / `capabilities` 登记 / `net.call` 待做） |
 | D | `agentxx.client.*` 六张表 + 三个回答型回调 | 待做 |
 | E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 部分完成（接口表数量与 §8.0 调用模型文档已同步） |
 
@@ -398,6 +398,71 @@ IO 线程。
   `not_found`，否则空 `payload` 被当成成功；
   ④ 禁用后 `list_runtime` 也不再生效（未受理），不能再按"空清单"断言。
 
+### 第 8 步：阶段 C2 第一批 —— 框架表 `config` / `plugins`
+
+改动：
+
+- `pluginxx/api/tables.h`：`config` v3 → v4（5 个成员）、`plugins` v1 → v2（3 个成员），
+  `MIN_VERSION` 一起抬，基线重置为整表长度；成员签名改成
+  `PluginxxOperatorHandle*(host, ..., cb, ud, error_out)`，配置 JSON / 语言码 /
+  插件清单经完成回调的 `payload` 交回。
+- `pluginxx/host/tables_impl.h`
+    - 新增 `detail::asyncTableOp`（受理 + 投递 + 交回，与主程序业务表同一套骨架）与
+      `detail::asyncQueryOp`（只读查询，空结果按 `not_found` 交回）；
+    - 8 个入口重写：`config.get_config/get_plugin_args/get_plugin_config_path/get_language/
+      set_language`、`plugins.list_plugins/get_plugin/get_own_info`；
+    - `get_plugin` 在受理阶段检查名字（空名字 = 未受理）。
+- `pluginxx/kit/kit.h`
+    - 新增 `detail::tableOpText`（只取结果正文）与 `detail::tableOpOk`（只看成败），
+      在实例上下文基类之前先声明、文件后半定义（`tableOpBlockingRaw` 同名前置声明放
+      `namespace pluginxx`，不能放 `detail`，否则与真实定义构成两个重载）；
+    - `PluginBaseT` 的 `config` / `argsJson` / `configPath` / `language` / `setLanguage`
+      改走这两个助手（对外签名不变，插件源码零改动）。
+- `agentxx` 侧
+    - `plugin_kit.h`：`ClientIfaces` 补 `cancel` / `scheduler` 两个成员（client 侧脚本
+      也要能按阻塞形态调表）；把 `tableOpText` / `tableOpOk` 引进 `agentxx::plugin::detail`；
+    - JS 引擎：新增 `callTableText`（模板化，agent / client 两侧的接口表聚合都能用），
+      14 个调用点（`listPlugins` / `getPlugin` / `getConfig` / `getPluginArgs` /
+      `getLanguage` / `setLanguage` / `getOwnInfo` / `getConfigPath`，两侧各一套）改用它；
+    - `agentxx_codegraph` / `agentxx_llm_uncensored` / `agentxx_planning` /
+      `example_js` / `example_js_execute_command` / `example_resources` 里 9 个直接调用点改走
+      `detail::tableOpText`。
+- 测试：`test_plugins.cpp`（`config.get_language` / `set_language` 改阻塞形态）、
+  `test_plugin_runtime.cpp`（`config.get_plugin_args` 改阻塞形态，失效实例断言改成
+  "未受理/失败"而不是返回非 0 码）。
+- 文档：`plugins.md` §8.2 两张表抬版、§8.0 当前进度。
+
+**顺带修掉的框架 bug**（ASan 抓到，非本次改动引入）：`PluginHostLifecycle::
+clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清空，而那份
+句柄的契约是"随实例析构释放"。插件在 stop/disable 之后（或自己的线程上）对旧句柄调
+`unsubscribe_broadcast` 就成了 use-after-free —— `client_plugins` 里 JS 脚本回滚路径
+实测崩在 `PluginxxSubscription::alive.compare_exchange_strong`。现在只清
+`subscriptions`（注册表侧簿记，撤销时已置 `alive=false`），句柄本体留到实例析构；
+再传旧句柄进来走幂等空操作分支。
+
+验证：
+
+- 框架库 / 内层 lib / client / 25 个插件全部编译通过（`[build_plugins] done in 471.6s`）；
+- `boundaries` 19、`plugins` 704、`plugin_runtime` 728、`plugin_sdk` 134、
+  `plugin_bridge` 193、`plugin_cleanup` 90、`plugin_host_mount` 147、
+  `plugin_multi_mount` 47、`plugin_resources` 101、`plugin_agent_runtime` 221、
+  `plugin_example_runtime` 50、`client_plugins` 835、`plugin_feature` 34、
+  `plugin_point` 68、`plugin_broadcast` 90、`plugin_dispatch` 112、`chatbot_task` 138
+  → **3711 通过、0 失败**。
+
+遇到的问题（已解决）：
+
+- `tableOpBlockingRaw` 的定义在 `namespace pluginxx`、返回 `detail::TableOpResult`：
+  我最初把前置声明放进 `detail`，于是同一调用点上出现两个重载（`detail::` 与 `pluginxx::`）
+  → C2668 调用不明确。改成"前置声明放 `pluginxx`、`detail` 里的助手显式限定
+  `pluginxx::tableOpBlockingRaw`"。
+- `ClientIfaces` 原本没有 `cancel` / `scheduler`：client 侧脚本的阻塞形态拿不到这两张表，
+  在聚合里补上（同一个 `query()` 里按 IID 查）。
+- 插件 DLL 与框架表布局不匹配时症状是**运行期崩溃**（旧签名调用新 vtable）：抬高
+  通用表版本后必须重编全部插件，不能只编测试。
+- `libagentxx_staticd.lib` 出现过一次 `LNK1243: COMDAT ... 关联`：删掉对应
+  `.obj` 重编即可（增量构建产物不一致，与代码无关）。
+
 ## 与计划的偏差
 
 - 计划 §7.3 写"全局版本 5 → 6"：实际第 6 代已被占用，改为 6 → 7。
@@ -412,8 +477,9 @@ IO 线程。
 
 ## 剩余事项
 
-- 阶段 C2-表异步化（框架表 `broadcasts` / `capabilities` 登记 / `config` / `plugins` /
-  `net.call`）与阶段 D（`agentxx.client.*` 六张 + 三个回答型回调）待做。
+- 阶段 C2 还剩框架表 `broadcasts`（含 `subscribe` 的句柄如何经 `payload` 交回）、
+  `capabilities` 登记、`net.call` 合并 `call_async`；阶段 D（`agentxx.client.*` 六张 +
+  三个回答型回调）待做。
 - 阶段 E 还剩：删残留同步实现路径、client 侧 150 ms 同步桥改 Promise、
   `AGENTS.md` 的调用模型说明。
 - `KeyMetrics` 的表调用耗时统计（计划 §10）尚未加。

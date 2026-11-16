@@ -59,12 +59,17 @@ void readArgs(UncensoredCtx& ctx) {
     if (!host || !ctx.iface.config || !ctx.iface.config->get_plugin_args) {
         return;
     }
-    PluginxxString json{nullptr, 0};
-    if (ctx.iface.config->get_plugin_args(host, &json) != 0 || !json.data) {
+    const std::string raw = agentxx::plugin::detail::tableOpText(
+        host,
+        ctx.iface.cancel,
+        ctx.iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ctx.iface.config->get_plugin_args(host, cb, ud, err);
+        }
+    );
+    if (raw.empty()) {
         return;
     }
-    const std::string raw{json.data, static_cast<size_t>(json.size)};
-    agentxx::plugin::PluginString::free(host, &json);
 
     agentxx::plugin::ArgReader args(raw);
     ctx.sectionKey = args.value<std::string>("key", ctx.sectionKey);

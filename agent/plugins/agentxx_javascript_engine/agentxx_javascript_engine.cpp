@@ -4807,6 +4807,21 @@ static auto callRuntimeOp(
     );
 }
 
+/// 调一次通用表 (config / plugins / ...) 并取回结果正文 (阻塞形态)
+///
+/// 表成员是异步操作契约; 脚本线程不是主程序 io 线程, 这里等到完成回调后返回。
+/// 失败 (未受理 / 执行期错误) 返回空串, 与旧的"空 out 出参"同义。
+/// `Ifaces` 是 agent 侧或 client 侧的接口表聚合 (两者都带 `cancel` / `scheduler`)。
+template<typename Ifaces, typename StartFn>
+static std::string callTableText(const PluginxxHost* host, const Ifaces& iface, StartFn&& start) {
+    return agentxx::plugin::detail::tableOpText(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        std::forward<StartFn>(start)
+    );
+}
+
 JSValue JsEngine::bridgeCall(
     JSContext*    ctx,
     JSValueConst  this_val,
@@ -5427,17 +5442,21 @@ JSValue JsEngine::bridgeCall(
         }
 
         case B_LIST_PLUGINS: {
-            PluginxxString json{nullptr, 0};
-            iface.plugins->list_plugins(host, &json);
-            if (!json.data) {
+            const auto json = callTableText(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.plugins->list_plugins(host, cb, ud, err);
+                }
+            );
+            if (json.empty()) {
                 return JS_NewArray(ctx);
             }
-            JSValue out = JS_ParseJSON(ctx, json.data, static_cast<size_t>(json.size), "<plugins>");
+            JSValue out = JS_ParseJSON(ctx, json.data(), json.size(), "<plugins>");
             if (JS_IsException(out)) {
                 JS_FreeValue(ctx, out);
-                out = JS_NewStringLen(ctx, json.data, static_cast<size_t>(json.size));
+                out = JS_NewStringLen(ctx, json.data(), json.size());
             }
-            agentxx::plugin::PluginString::free(host, &json);
             return out;
         }
 
@@ -5445,19 +5464,23 @@ JSValue JsEngine::bridgeCall(
             if (argc < 1 || !JS_IsString(argv[0])) {
                 return JS_ThrowTypeError(ctx, "getPlugin: name required");
             }
-            std::string    name = jsToCppString(ctx, argv[0]);
-            PluginxxString json{nullptr, 0};
-            auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-            iface.plugins->get_plugin(host, &nameSv, &json);
-            if (!json.data) {
+            std::string name   = jsToCppString(ctx, argv[0]);
+            auto        nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
+            const auto  json   = callTableText(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.plugins->get_plugin(host, &nameSv, cb, ud, err);
+                }
+            );
+            if (json.empty()) {
                 return JS_NULL; // 未安装
             }
-            JSValue out = JS_ParseJSON(ctx, json.data, static_cast<size_t>(json.size), "<plugin>");
+            JSValue out = JS_ParseJSON(ctx, json.data(), json.size(), "<plugin>");
             if (JS_IsException(out)) {
                 JS_FreeValue(ctx, out);
-                out = JS_NewStringLen(ctx, json.data, static_cast<size_t>(json.size));
+                out = JS_NewStringLen(ctx, json.data(), json.size());
             }
-            agentxx::plugin::PluginString::free(host, &json);
             return out;
         }
 
@@ -5598,29 +5621,27 @@ JSValue JsEngine::bridgeCall(
             if (!iface.config) {
                 return JS_NULL;
             }
-            PluginxxString out{nullptr, 0};
-            int32_t        rc = -1;
-            if (magic == B_GET_CONFIG) {
-                rc = iface.config->get_config(host, &out);
-            } else if (magic == B_GET_PLUGIN_ARGS) {
-                rc = iface.config->get_plugin_args(host, &out);
-            } else {
-                rc = iface.config->get_language(host, &out);
-            }
-            if (rc != 0 || !out.data) {
+            const auto text = callTableText(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    if (magic == B_GET_CONFIG) {
+                        return iface.config->get_config(host, cb, ud, err);
+                    }
+                    if (magic == B_GET_PLUGIN_ARGS) {
+                        return iface.config->get_plugin_args(host, cb, ud, err);
+                    }
+                    return iface.config->get_language(host, cb, ud, err);
+                }
+            );
+            if (text.empty()) {
                 return JS_NULL;
             }
-            JSValue result = JS_ParseJSON(
-                ctx,
-                out.data,
-                static_cast<size_t>(out.size),
-                "<config>"
-            );
+            JSValue result = JS_ParseJSON(ctx, text.data(), text.size(), "<config>");
             if (JS_IsException(result)) {
                 JS_FreeValue(ctx, result);
-                result = JS_NewStringLen(ctx, out.data, static_cast<size_t>(out.size));
+                result = JS_NewStringLen(ctx, text.data(), text.size());
             }
-            agentxx::plugin::PluginString::free(host, &out);
             return result;
         }
 
@@ -5628,9 +5649,17 @@ JSValue JsEngine::bridgeCall(
             if (!iface.config || argc < 1 || !JS_IsString(argv[0])) {
                 return JS_FALSE;
             }
-            std::string lang  = jsToCppString(ctx, argv[0]);
+            std::string lang   = jsToCppString(ctx, argv[0]);
             auto        langSv = agentxx::plugin::PluginStringView::from(lang.data(), lang.size());
-            return iface.config->set_language(host, &langSv) == 0 ? JS_TRUE : JS_FALSE;
+            const bool ok = agentxx::plugin::detail::tableOpOk(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.config->set_language(host, &langSv, cb, ud, err);
+                }
+            );
+            return ok ? JS_TRUE : JS_FALSE;
         }
 
         case B_REGISTER_TOOL_PERMISSION:
@@ -6775,14 +6804,14 @@ JSValue JsEngine::bridgeCall(
             if (!iface.plugins || !iface.plugins->get_own_info) {
                 return JS_NULL;
             }
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.plugins->get_own_info(host, &out);
-            std::string    json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != PLUGINXX_RESULT_OK || json.empty()) {
+            const auto json = callTableText(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.plugins->get_own_info(host, cb, ud, err);
+                }
+            );
+            if (json.empty()) {
                 return JS_NULL;
             }
             return jsonTextToValue(ctx, json, "<own_info>");
@@ -6793,14 +6822,17 @@ JSValue JsEngine::bridgeCall(
             if (!iface.config || !iface.config->get_plugin_config_path) {
                 return JS_NewString(ctx, "");
             }
-            PluginxxString out{nullptr, 0};
-            if (iface.config->get_plugin_config_path(host, &out) != PLUGINXX_RESULT_OK
-                || !out.data) {
+            const auto text = callTableText(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.config->get_plugin_config_path(host, cb, ud, err);
+                }
+            );
+            if (text.empty()) {
                 return JS_NewString(ctx, "");
             }
-            JSValue path = JS_NewStringLen(ctx, out.data, static_cast<size_t>(out.size));
-            agentxx::plugin::PluginString::free(host, &out);
-            return path;
+            return JS_NewStringLen(ctx, text.data(), text.size());
         }
 
         case B_CHECK_PATHS:
@@ -8141,12 +8173,17 @@ JSValue JsEngine::clientBridgeCall(
             if (!iface.config || !iface.config->get_config) {
                 return JS_NULL;
             }
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.config->get_config(host, &out);
-            if (rc != 0 || !out.data) {
+            const auto text = callTableText(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.config->get_config(host, cb, ud, err);
+                }
+            );
+            if (text.empty()) {
                 return JS_NULL;
             }
-            return takeHostJson(out, "<config>");
+            return jsonTextToValue(ctx, text, "<config>");
         }
 
         case B_LIST_PLUGINS: {
@@ -8154,11 +8191,17 @@ JSValue JsEngine::clientBridgeCall(
             if (!iface.plugins || !iface.plugins->list_plugins) {
                 return JS_NewArray(ctx);
             }
-            PluginxxString out{nullptr, 0};
-            if (iface.plugins->list_plugins(host, &out) != 0 || !out.data) {
+            const auto text = callTableText(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.plugins->list_plugins(host, cb, ud, err);
+                }
+            );
+            if (text.empty()) {
                 return JS_NewArray(ctx);
             }
-            return takeHostJson(out, "<plugins>");
+            return jsonTextToValue(ctx, text, "<plugins>");
         }
 
         case B_GET_PLUGIN: {
@@ -8169,11 +8212,17 @@ JSValue JsEngine::clientBridgeCall(
             const std::string name = jsToCppString(ctx, argv[0]);
             auto              nameSv
                 = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-            PluginxxString out{nullptr, 0};
-            if (iface.plugins->get_plugin(host, &nameSv, &out) != 0 || !out.data) {
+            const auto text = callTableText(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.plugins->get_plugin(host, &nameSv, cb, ud, err);
+                }
+            );
+            if (text.empty()) {
                 return JS_NULL;
             }
-            return takeHostJson(out, "<plugin>");
+            return jsonTextToValue(ctx, text, "<plugin>");
         }
 
         case B_DECLARE_BROADCAST: {
