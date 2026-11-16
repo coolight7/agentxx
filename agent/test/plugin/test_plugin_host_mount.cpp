@@ -330,13 +330,21 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             spec.user_data   = nullptr;
 
             // 只挂在 A 上
+            // 表成员是异步契约: 用例跑在主程序 IO 线程上, 主程序内联完成
             auto refA = scopeRefOf("agent_a", seqA);
-            PluginxxString err{nullptr, 0};
-            const int32_t  rc = caps->register_capability(hostView, &refA, &spec, &err);
-            if (err.data != nullptr) {
-                hostView->vtable->free(err.data);
-            }
-            XX_TEST_EXPECT_EQ(rc, int32_t{0});
+            const auto regOp = pluginxx::tableOpBlockingRaw(
+                hostView,
+                static_cast<const PluginxxCancelIface*>(
+                    queryTable(hostView, PLUGINXX_IFACE_CANCEL)
+                ),
+                static_cast<const PluginxxSchedulerIface*>(
+                    queryTable(hostView, PLUGINXX_IFACE_SCHEDULER)
+                ),
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return caps->register_capability(hostView, &refA, &spec, cb, ud, err);
+                }
+            );
+            XX_TEST_EXPECT_TRUE(regOp.ok());
 
             const auto pointIdSv = agentxx::plugin::points::ToolEnd;
             // A 上: 实现行给出结果
@@ -347,10 +355,19 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             XX_TEST_EXPECT_FALSE(valueB.has_value());
 
             // 收尾: 注销后 A 上也拿不到结果 (证明上面拿到的结果确实来自这行)
-            XX_TEST_EXPECT_EQ(
-                caps->unregister_capability(hostView, &pointId, nullptr),
-                int32_t{0}
+            const auto unregOp = pluginxx::tableOpBlockingRaw(
+                hostView,
+                static_cast<const PluginxxCancelIface*>(
+                    queryTable(hostView, PLUGINXX_IFACE_CANCEL)
+                ),
+                static_cast<const PluginxxSchedulerIface*>(
+                    queryTable(hostView, PLUGINXX_IFACE_SCHEDULER)
+                ),
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return caps->unregister_capability(hostView, &pointId, nullptr, cb, ud, err);
+                }
             );
+            XX_TEST_EXPECT_TRUE(unregOp.ok());
             const auto valueAfter = co_await host->emitPoint("agent_a", pointIdSv, "{}");
             XX_TEST_EXPECT_FALSE(valueAfter.has_value());
         }

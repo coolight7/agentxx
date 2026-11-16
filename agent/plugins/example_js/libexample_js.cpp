@@ -312,13 +312,19 @@ void* shellStart(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxSt
         || !ctx.capabilities->invoke_capability) {
         return setErr("example_js start: host lacks capabilities interface");
     }
-    auto           capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
-    PluginxxString capInfo{nullptr, 0};
-    const bool     hasCap
-        = ctx.capabilities->capability_info(ctx.host, &capSv, &capInfo) == 0;
-    if (capInfo.data) {
-        agentxx::plugin::PluginString::free(ctx.host, &capInfo);
-    }
+    auto capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
+    // 表成员是异步契约: start 事务在主程序 IO 线程上, 主程序内联完成
+    // 两侧的取消/调度表在各自的聚合里 (壳按 side 选用)
+    const bool hasCap
+        = pluginxx::tableOpBlockingRaw(
+              ctx.host,
+              ctx.clientSide ? ctx.client.cancel : ctx.agent.cancel,
+              ctx.clientSide ? ctx.client.scheduler : ctx.agent.scheduler,
+              [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                  return ctx.capabilities->capability_info(ctx.host, &capSv, cb, ud, err);
+              }
+          )
+              .ok();
     if (!hasCap) {
         return setErr("example_js start: interpreter.js capability not available");
     }

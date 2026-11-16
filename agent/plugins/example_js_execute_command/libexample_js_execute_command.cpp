@@ -317,12 +317,17 @@ static void*
         return setErr("example_js_execute_command start: host lacks capabilities interface");
     }
     auto capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
-    PluginxxString capInfo{nullptr, 0};
-    const bool     hasCap
-        = ctx.iface.capabilities->capability_info(ctx.host, &capSv, &capInfo) == 0;
-    if (capInfo.data) {
-        agentxx::plugin::PluginString::free(ctx.host, &capInfo);
-    }
+    // 表成员是异步契约: start 事务在主程序 IO 线程上, 主程序内联完成
+    const bool hasCap
+        = agentxx::plugin::tableOpBlockingRaw(
+              ctx.host,
+              ctx.iface.cancel,
+              ctx.iface.scheduler,
+              [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                  return ctx.iface.capabilities->capability_info(ctx.host, &capSv, cb, ud, err);
+              }
+          )
+              .ok();
     if (!hasCap) {
         return setErr("example_js_execute_command start: interpreter.js capability not available "
                       "(need agentxx_javascript_engine)");

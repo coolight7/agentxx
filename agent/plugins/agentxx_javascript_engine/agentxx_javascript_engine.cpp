@@ -4227,6 +4227,14 @@ void JsEngine::unregisterGraphNodeRow(
     }
 }
 
+/// 能力表的一次阻塞调用 (定义在本文件后半; 这里先用)
+///
+/// 能力表的四个成员 (登记 / 注销 / 自省两道) 是异步操作契约, 脚本线程不是主程序 io
+/// 线程, 这里等到完成回调后返回。取消与调度表按 host 现查 (两侧都有, 是通用表)。
+template<typename StartFn>
+static pluginxx::detail::TableOpResult
+    capabilityOpBlocking(const PluginxxHost* host, StartFn&& start);
+
 void JsEngine::unprovideCapabilityRow(
     JSContext*                       ctx,
     JsPluginCtx*                     pctx,
@@ -4260,7 +4268,20 @@ void JsEngine::unprovideCapabilityRow(
         auto idSv  = agentxx::plugin::PluginStringView::from(id.data(), id.size());
         auto tagSv = agentxx::plugin::PluginStringView::from(ownerTag.data(), ownerTag.size());
         // 用**脚本实例**的主程序句柄: 行归属于脚本所在插件 (不能落到引擎实例名下)
-        caps->unregister_capability(pctx->host, &idSv, &tagSv);
+        // 表成员是异步契约: 撤销是就地完成的, 这里等完成回调 (失败只记日志)
+        (void)capabilityOpBlocking(
+            pctx->host,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return caps->unregister_capability(
+                    pctx->host,
+                    &idSv,
+                    &tagSv,
+                    cb,
+                    ud,
+                    err
+                );
+            }
+        );
     }
 }
 
@@ -4323,22 +4344,34 @@ int32_t JsEngine::provideCapabilityRow(
     spec.cancel     = &JsEngine::capImplCancel;
     spec.user_data  = impl.get();
 
-    PluginxxString errOut{nullptr, 0};
     // 行归属于**脚本实例**的插件 (pctx->host), 不是引擎实例: 声明/注销/归属
     // 都跟着脚本所在插件的挂载走 (引擎自己只拥有 `interpreter.js` 能力行)
     const PluginxxHost* instanceHost = pctx->host != nullptr ? pctx->host : engineHost_;
-    const int32_t       rc = caps->register_capability(
+    // 表成员是异步契约: 登记结论经完成回调交回 (脚本线程等它)
+    auto regOp = capabilityOpBlocking(
         instanceHost,
-        pctx->scope(),
-        &spec,
-        &errOut
-    );
-    if (errOut.data) {
-        if (error != nullptr) {
-            error->assign(errOut.data, static_cast<size_t>(errOut.size));
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return caps->register_capability(
+                instanceHost,
+                pctx->scope(),
+                &spec,
+                cb,
+                ud,
+                err
+            );
         }
-        agentxx::plugin::PluginString::free(instanceHost, &errOut);
+    );
+    if (error != nullptr) {
+        if (regOp.ok()) {
+            error->clear();
+        } else {
+            error->assign(regOp.text());
+            if (error->empty()) {
+                error->assign(regOp.startError);
+            }
+        }
     }
+    const int32_t rc = regOp.ok() ? 0 : -1;
     if (rc != PLUGINXX_RESULT_OK) {
         // 登记失败: 收回回调 token 与行标记 (不留半截状态)
         impl->dead.store(true);
@@ -4369,7 +4402,19 @@ int32_t JsEngine::provideCapabilityRow(
         }
         auto idSv2  = agentxx::plugin::PluginStringView::from(id.data(), id.size());
         auto tagSv2 = agentxx::plugin::PluginStringView::from(ownerTag.data(), ownerTag.size());
-        caps->unregister_capability(rawCtx->host, &idSv2, &tagSv2);
+        (void)capabilityOpBlocking(
+            rawCtx->host,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return caps->unregister_capability(
+                    rawCtx->host,
+                    &idSv2,
+                    &tagSv2,
+                    cb,
+                    ud,
+                    err
+                );
+            }
+        );
     });
     return 0;
 }
@@ -4622,13 +4667,16 @@ JSValue JsEngine::capabilityListValue(
     if (caps == nullptr || caps->list_capabilities == nullptr) {
         return JS_NewArray(ctx);
     }
-    PluginxxString out{nullptr, 0};
-    if (caps->list_capabilities(host, &out) != PLUGINXX_RESULT_OK || out.data == nullptr) {
+    const auto  op = capabilityOpBlocking(
+        host,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return caps->list_capabilities(host, cb, ud, err);
+        }
+    );
+    if (!op.ok()) {
         return JS_NewArray(ctx);
     }
-    std::string json(out.data, static_cast<size_t>(out.size));
-    agentxx::plugin::PluginString::free(host, &out);
-    return jsonTextToValue(ctx, json, "<capabilities>");
+    return jsonTextToValue(ctx, std::string{op.text()}, "<capabilities>");
 }
 
 /// 一条能力的声明与实现行 (`capabilityInfo`); 未声明给 null
@@ -4646,13 +4694,16 @@ JSValue JsEngine::capabilityInfoValue(
     }
     const std::string id   = jsToCppString(ctx, argv[0]);
     auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-    PluginxxString    out{nullptr, 0};
-    if (caps->capability_info(host, &idSv, &out) != PLUGINXX_RESULT_OK || out.data == nullptr) {
+    const auto        op   = capabilityOpBlocking(
+        host,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return caps->capability_info(host, &idSv, cb, ud, err);
+        }
+    );
+    if (!op.ok()) {
         return JS_NULL; ///< 未声明 / 没有任何实现行
     }
-    std::string json(out.data, static_cast<size_t>(out.size));
-    agentxx::plugin::PluginString::free(host, &out);
-    return jsonTextToValue(ctx, json, "<capability>");
+    return jsonTextToValue(ctx, std::string{op.text()}, "<capability>");
 }
 
 /// 调用一条能力 (`invokeCapability`): 始终返回 Promise, 结算成 `{ok, status, value|error}`
@@ -4861,6 +4912,17 @@ static bool broadcastDeclareOp(
         errText->assign(op.text());
     }
     return op.ok();
+}
+
+/// 能力表的一次阻塞调用 (agent / client 两侧通用; 声明在本文件前半)
+template<typename StartFn>
+static pluginxx::detail::TableOpResult capabilityOpBlocking(const PluginxxHost* host, StartFn&& start) {
+    return agentxx::plugin::tableOpBlockingRaw(
+        host,
+        agentxx::plugin::queryInterface<PluginxxCancelIface>(host, PLUGINXX_IFACE_CANCEL),
+        agentxx::plugin::queryInterface<PluginxxSchedulerIface>(host, PLUGINXX_IFACE_SCHEDULER),
+        std::forward<StartFn>(start)
+    );
 }
 
 /// 结束一条流 (阻塞形态): 返回是否成功 (重复结束按成功处理)
@@ -9355,12 +9417,21 @@ static void* PLUGINXX_CALL jsEngineStart(
             spec.run_start   = &jsCapStart;
             spec.cancel      = nullptr;
             spec.user_data   = engine;
-            PluginxxString regErr{nullptr, 0};
-            int            rc = iface.capabilities->register_capability(host, nullptr, &spec, &regErr);
-            if (regErr.data) {
-                agentxx::plugin::PluginString::free(host, &regErr);
-            }
-            if (rc != 0) {
+            // 表成员是异步契约: 本入口在 start 事务里跑 (主程序 IO 线程), 主程序内联完成
+            const auto regOp = capabilityOpBlocking(
+                host,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.capabilities->register_capability(
+                        host,
+                        nullptr,
+                        &spec,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
+            if (!regOp.ok()) {
                 // start 事务失败: 撤销本事务已启动的引擎线程 (destroy 随后会
                 // 等待收尾完成, 不留线程/运行时残留)
                 engine->requestStop(nullptr);

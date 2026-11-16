@@ -66,20 +66,28 @@ PluginxxOperatorHandle* PLUGINXX_CALL fakeRegisterTool(
 }
 
 /// 能力登记 (spec 里带开始/取消处理器与上下文)
-int32_t PLUGINXX_CALL fakeRegisterCapability(
+///
+/// 表成员是异步操作契约: 记下 spec 后立刻用完成回调交回成功 (假主程序)。
+PluginxxOperatorHandle* PLUGINXX_CALL fakeRegisterCapability(
     const PluginxxHost*,
     const PluginxxScopeRef*,
     const PluginxxCapabilitySpec* spec,
-    PluginxxString*
+    PluginxxOperatorCallback      cb,
+    void*                         cb_ud,
+    PluginxxString*               error_out
 ) {
+    (void)error_out;
     if (!spec) {
-        return -1;
+        return nullptr;
     }
     g_captured.capStart      = spec->run_start;
     g_captured.capCancel     = spec->cancel;
     g_captured.capUd         = spec->user_data;
     g_captured.hasCapability = true;
-    return 0;
+    if (cb) {
+        cb(cb_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    return reinterpret_cast<PluginxxOperatorHandle*>(1);
 }
 
 PluginxxOperatorHandle* PLUGINXX_CALL fakeRegisterGraphNodeType(

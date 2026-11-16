@@ -344,16 +344,23 @@ static void* probeMount(
     capSpec.sync        = 0;
     capSpec.run_start   = &probeCapabilityStart;
     capSpec.user_data   = ctx;
+    // 表成员是异步契约: 本插件在 `start` 里跑 (主程序 IO 线程), 会内联完成
+    RegProbe       capReg{};
     PluginxxString capErr{nullptr, 0};
-    if (capabilities->register_capability(host, &ref, &capSpec, &capErr) != 0) {
-        if (capErr.data) {
-            host->vtable->free(capErr.data);
-        }
-        setError(host, error_out, failStep(host, "capability"));
-        return nullptr;
-    }
+    auto*          capOp = capabilities->register_capability(
+        host,
+        &ref,
+        &capSpec,
+        &regToolDone,
+        &capReg,
+        &capErr
+    );
     if (capErr.data) {
         host->vtable->free(capErr.data);
+    }
+    if (capOp == nullptr || !capReg.done || capReg.status != PLUGINXX_OPERATOR_OK) {
+        setError(host, error_out, failStep(host, "capability"));
+        return nullptr;
     }
 
     // 7. 资源注册 (skill 扫描目录; 所有权归本插件, 卸载/回滚时摘除)

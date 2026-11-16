@@ -470,9 +470,9 @@ C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
 > `agentxx.agent.tools` (v5) / `permission` (v3) / `context` (v3) / `model` (v3) /
 > `prompt` (v4) / `resources` (v3) / `graph` (v3) / `mount` (v2), 阶段 C 的
 > `agentxx.agent.runtime` (v3), 以及阶段 C2 的通用表 `agentxx.config` (v4) /
-> `agentxx.plugins` (v2) / `agentxx.broadcasts` (v4) 已切到这套契约; 其余通用表
-> (`capabilities` 登记 / `net.call`) 与 `agentxx.client.*` 六张仍是一条条同步签名, 迁移按
-> `resource/history/plugin-api-async/plan.md` 的阶段推进。
+> `agentxx.plugins` (v2) / `agentxx.broadcasts` (v4) / `agentxx.capabilities` (v8)
+> 已切到这套契约; 剩下的通用表 `net.call` 与 `agentxx.client.*` 六张仍是一条条同步签名,
+> 迁移按 `resource/history/plugin-api-async/plan.md` 的阶段推进。
 >
 > 作用域引用的两种失败要分开看: 引用的**形状**无效 (空指针 / `id` 为空 /
 > `struct_size` 越界) 是**未受理** —— 只需检查字段, 任意线程都能判, 同步返回 `NULL`;
@@ -509,7 +509,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 | IID | 版本 | 能力 |
 |-----|------|------|
 | `agentxx.broadcasts` | 4 | 广播: `declare_broadcast` (声明频道: 缓存/发布权限/订阅补当前值/限频/scope) + `publish_broadcast` + `subscribe_broadcast(_ex)` (带流结束回调) + `read_broadcast` + `unsubscribe_broadcast` + `end_broadcast`。插件的通知面与跨端数据都走它, 见 §20。v3 = 加 `end_broadcast` 与 `subscribe_broadcast_ex` (订阅侧收 `on_end`); v4 = 7 个成员改成异步操作契约 (见 §8.0): **订阅句柄以十进制文本放在 `payload` 里交回** (插件侧用 `pluginxx::pluginxxSubscriptionFromText` 转回), `unsubscribe_broadcast` 多一个 `host` 参数 (原来只能从入参推), 基线重置为整表长度 |
-| `agentxx.capabilities` | 7 | `register_capability/unregister_capability/invoke_capability/capability_info/list_capabilities` (另有 `invoke_capability_ex` / `unregister_capability_ex`; v7 删掉 `op_cancel`, 取消统一走 `agentxx.cancel`)。能力行按 **scope** 隔离 (同一个插件挂在多个 agent 上时各一行), 一个能力可以由多家登记实现行, 取值链按 `(priority 升序, 登记序号)` 排序后取首行 —— **功能埋点的实现行就是能力行** (见 §21.4) |
+| `agentxx.capabilities` | 8 | `register_capability/unregister_capability/invoke_capability/capability_info/list_capabilities` (另有 `invoke_capability_ex` / `unregister_capability_ex`; v7 删掉 `op_cancel`, 取消统一走 `agentxx.cancel`)。能力行按 **scope** 隔离 (同一个插件挂在多个 agent 上时各一行), 一个能力可以由多家登记实现行, 取值链按 `(priority 升序, 登记序号)` 排序后取首行 —— **功能埋点的实现行就是能力行** (见 §21.4)。v8 = 登记 / 注销 / 两道自省改成异步操作契约 (`invoke_capability(_ex)` 本来就是操作契约, 不变); 清单 JSON 与登记结论经 `payload` 交回, 未声明按 `not_declared` 失败 |
 | `agentxx.scheduler` | 2 | 调度与驱动: `is_io_thread` / `sleep` / `offload` / `request_driver` / `cancel_driver` (driver ticket/wake 协议, 见 §16; 早期的 `post_to_io` 与 `op_cancel` 已删, 独立的 `coroutine_runtime` 表已并入) |
 | `agentxx.plugins` | 2 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上)。v2 = 三个成员改成异步操作契约 (清单经 `payload` 交回, `get_plugin` 找不到按 `not_found` 失败) |
 | `agentxx.config` | 4 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言)。v3 起不再含业务成员 (`get_tool_prompt`/`get_session_work_dir` 已分别迁到 `agentxx.agent.prompt` / `agentxx.agent.session`); v4 = 五个成员改成异步操作契约 (配置 JSON / 语言码经 `payload` 交回) |

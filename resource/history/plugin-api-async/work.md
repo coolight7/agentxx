@@ -12,7 +12,7 @@
 | A2 | agent 侧 `dlopen` + `create` 挪到加载线程池 | 完成（编译通过、插件测试全绿） |
 | B | `agentxx.agent` 业务表全部成员 | 完成（9 张表全部改异步操作契约） |
 | C | `agentxx.agent.runtime` 全部成员 | 完成（21 个成员改异步；lib / test / client / 25 个插件编译通过，插件相关测试 3983 条全绿） |
-| C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 进行中（`config` v4 / `plugins` v2 / `broadcasts` v4 完成；`capabilities` 登记 / `net.call` 待做） |
+| C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 进行中（`config` v4 / `plugins` v2 / `broadcasts` v4 / `capabilities` v8 完成；`net.call` 待做） |
 | D | `agentxx.client.*` 六张表 + 三个回答型回调 | 待做 |
 | E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 部分完成（接口表数量与 §8.0 调用模型文档已同步） |
 
@@ -545,6 +545,61 @@ clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清�
   但插件侧也要用：建单独的 `api/broadcast_handle.h`（C++ 头，与 `api/iface_meta.h` 同类），
   两侧都包含它。
 
+### 第 10 步：阶段 C2 第三批 —— `agentxx.capabilities` v8
+
+这张表只改签名、不改成员顺序（`invoke_capability(_ex)` 本来就是操作契约，保留原样），
+所以基线仍是整表长度，改动的面集中在四个成员：
+
+- `register_capability` / `unregister_capability` / `capability_info` / `list_capabilities` /
+  `unregister_capability_ex` 改成异步操作契约；参数形状错（`spec` 缺失或过短、`id` 为空、
+  `spec->id` 为空）仍是**未受理**（返回 NULL + `error_out`），业务结论（登记被拒、行不存在、
+  能力未声明）经完成回调交回，细分原因（`not_declared` 等）在 `payload` 文本里；
+- `host_core.h` 新增 `capabilityInfoText` / `listCapabilitiesText`（完成回调只带结果正文，
+  自省两道因此直接给字符串），原来的 `PluginxxString` 版本保留给 C++ 侧调用；
+- 版本 7 → 8（基线不动）。
+
+调用点：
+
+- kit 的 `capability()`（`pluginxx/kit/kit.h`）内部改走 `tableOpBlocking`，返回值语义变成
+  `0 = 成功` / `-1 = 未受理或登记被拒`（原因仍在 `error`）；`providePoint` / `provideCapability`
+  这些上层入口因此不用改；
+- `agentxx_javascript_engine`：新增 `capabilityOpBlocking(host, start)`（取消/调度表按 host
+  现查，agent 与 client 两侧通用；用**前置声明 + 显式返回类型**避免出现两个同名重载），
+  登记 / 两道注销（含回滚 action）/ 两道自省 6 处改用它；engine 自己的 `interpreter.js`
+  登记同样改成阻塞形态；
+- 插件：`example_plugin`（挂载里登记能力，结果不影响加载）、`example_js` 与
+  `example_js_execute_command`（启动时查 `capability_info` 判断引擎在不在；`example_js` 的
+  `ShellCtx` 没有 `iface` 聚合，按 side 取 `client.cancel/scheduler` 或 `agent.cancel/scheduler`）；
+  `example_feature` 走 kit 的 `providePoint`，不用改；
+- 测试：`test_plugin_sdk`（假主程序的 `register_capability` 改成回调形态，返回非空假句柄）、
+  `test_plugin_host_mount`（登记 / 注销改阻塞形态）、`dso_plugins/test_start_fail`（用
+  `RegProbe` 看状态位）。
+
+验证：
+
+- 框架库 / 内层 lib / test 编译通过，25 个插件重编（首轮 `agentxx_javascript_engine` 与
+  `example_js` 报错：前者是助手定义在首次使用之后 + 重载歧义，后者是 `ShellCtx` 没有 `iface`；
+  改正后单编通过）；
+- 插件相关 19 个模块（含 `feature_points` / `plugin_net`）：`boundaries` 19、`plugins` 704、
+  `plugin_runtime` 730、`plugin_sdk` 134、`plugin_bridge` 193、`plugin_cleanup` 90、
+  `plugin_host_mount` 147、`plugin_multi_mount` 47、`plugin_resources` 101、
+  `plugin_agent_runtime` 221、`plugin_example_runtime` 50、`client_plugins` 840、
+  `plugin_feature` 34、`plugin_point` 68、`plugin_broadcast` 96、`plugin_dispatch` 112、
+  `chatbot_task` 138、`feature_points` 129、`plugin_net` 35 → **3888 通过、0 失败**；
+- **全量回归**（15 分钟）：`Total: passed=43038 failed=1` —— 仍是 `ui_snapshot` 的
+  `diff_json` 基线（用户改 diff 渲染未重生成快照），没有新增失败。
+
+遇到的问题（已解决）：
+
+- **改了框架头之后必须按 fw → lib → **test（含 copy exe）** → 插件 的顺序全量重建**。
+  这次漏了重建 test：`agentxx_test.exe` 静态链接 `agentxx_static`，里面还是上一代的
+  capability 表入口（同步 4 参），而插件已按 v8 头编译 —— 现象是插件"登记成功"但
+  `capabilities()->has()` 恒为 false（插件把同步返回值当句柄看，读成 NULL 就当未受理），
+  且 `plugins` 模块断言数从 704 掉到 68。教训写进上面的重建顺序。
+- `capabilityOpBlocking` 放在文件后半，首次使用在它之前：先用 `auto` 返回类型的模板定义，
+  加了前置声明后变成两个不同签名 → C2668 重载不明确。改成"前置声明 + 定义都用显式返回类型
+  `pluginxx::detail::TableOpResult`"。
+
 ## 与计划的偏差
 
 - 计划 §7.3 写"全局版本 5 → 6"：实际第 6 代已被占用，改为 6 → 7。
@@ -559,8 +614,12 @@ clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清�
 
 ## 剩余事项
 
-- 阶段 C2 还剩框架表 `capabilities` 登记（`register/unregister/capability_info/list_capabilities`）
-  与 `net.call` 合并 `call_async`；阶段 D（`agentxx.client.*` 六张 + 三个回答型回调）待做。
+- 阶段 C2 只剩 `agentxx.net` 的 `call` 合并 `call_async`。这一项不是纯机械替换：
+  `net.call` 现在是**同步**入口，插件在 io 线程上直接调它做 `ws.send` / `http.respond`
+  这类"快操作"；合并成异步后，"快操作"就没有非协程入口了（`netCallBlocking` 明确拒绝在
+  io 线程跑）。要先定下这件事怎么办（给快操作留一条 `call_blocking` 形态，还是要求插件
+  全部改成 `co_await`），再动代码，否则会把 4 个网络插件的主路径一起改坏。
+- 阶段 D（`agentxx.client.*` 六张 + 三个回答型回调）待做。
 - 阶段 E 还剩：删残留同步实现路径、client 侧 150 ms 同步桥改 Promise、
   `AGENTS.md` 的调用模型说明。
 - `KeyMetrics` 的表调用耗时统计（计划 §10）尚未加。

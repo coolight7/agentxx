@@ -425,7 +425,22 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
         spec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
         spec.run_start   = &on_demo_capability;
         // 作用域: 挂载引用 = 这一行只对该作用域生效 (空 = 进程级)
-        ctx.iface.capabilities->register_capability(host, ref.ptr(), &spec, nullptr);
+        // 表成员是异步契约: 挂载事务在主程序 IO 线程上, 内联完成 (结果不影响加载)
+        (void)agentxx::plugin::tableOpBlockingRaw(
+            host,
+            ctx.iface.cancel,
+            ctx.iface.scheduler,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ctx.iface.capabilities->register_capability(
+                    host,
+                    ref.ptr(),
+                    &spec,
+                    cb,
+                    ud,
+                    err
+                );
+            }
+        );
     }
 
     // 5. 提示词读写
