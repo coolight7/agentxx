@@ -1227,9 +1227,9 @@ TestResult testPluginRuntime() {
             {15, PLUGINXX_API_VERSION},
             {16, AGENTXX_CLIENT_PLUGIN_API_VERSION},
             {17, AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION},
-            {18, sizeof(PluginxxCoroutineRuntimeIface)},
-            {19, offsetof(PluginxxCoroutineRuntimeIface, struct_size)},
-            {20, PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION},
+            {18, offsetof(PluginxxSchedulerIface, request_driver)},
+            {19, offsetof(PluginxxSchedulerIface, cancel_driver)},
+            {20, PLUGINXX_IFACE_CAPABILITIES_VERSION},
             {21, sizeof(AgentxxPluginToolPermissionSpec)},
             {22, offsetof(AgentxxPluginToolPermissionSpec, target_arg)},
             {23, sizeof(AgentxxPluginPermissionIface)},
@@ -2218,23 +2218,21 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(handlerCalls, 1);
     }
 
-    /// 协程驱动请求 (`agentxx.agent.coroutine_runtime`) 的主程序语义：
-    /// 恒异步、每张至多一次、取消后不再执行、排队期间持有实例 lease、关闭后拒绝。
+    /// 协程驱动请求 (`agentxx.agent.scheduler` 的 request_driver/cancel_driver)
+    /// 的主程序语义：恒异步、每张至多一次、取消后不再执行、排队期间持有实例 lease、
+    /// 关闭后拒绝。
     {
         RuntimeFixture f;
         auto*          host = f.provider->hostView();
         XX_TEST_EXPECT_TRUE(host != nullptr);
 
-        PluginxxStringView iid = PluginStringView::fromCstr(PLUGINXX_IFACE_COROUTINE_RUNTIME);
+        PluginxxStringView iid = PluginStringView::fromCstr(PLUGINXX_IFACE_SCHEDULER);
         const auto*        runtime
-            = static_cast<const PluginxxCoroutineRuntimeIface*>(xx_query_interface(host, &iid));
+            = static_cast<const PluginxxSchedulerIface*>(xx_query_interface(host, &iid));
         XX_TEST_EXPECT_TRUE(runtime != nullptr);
         if (runtime) {
-            XX_TEST_EXPECT_EQ(runtime->version, PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION);
-            XX_TEST_EXPECT_EQ(
-                runtime->struct_size,
-                uint32_t{sizeof(PluginxxCoroutineRuntimeIface)}
-            );
+            XX_TEST_EXPECT_EQ(runtime->version, PLUGINXX_IFACE_SCHEDULER_VERSION);
+            XX_TEST_EXPECT_EQ(runtime->struct_size, uint32_t{sizeof(PluginxxSchedulerIface)});
             XX_TEST_EXPECT_TRUE(runtime->request_driver != nullptr);
             XX_TEST_EXPECT_TRUE(runtime->cancel_driver != nullptr);
             XX_TEST_EXPECT_TRUE(runtime->is_io_thread != nullptr);

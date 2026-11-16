@@ -3,7 +3,7 @@
 #include "agentxx-test/test_framework.h"
 
 namespace agentxx::test {
-/// 插件协程驱动桥测试（PollOneBridge / BridgeRoot / coroutine_runtime 协议）。
+/// 插件协程驱动桥测试（PollOneBridge / BridgeRoot / scheduler 驱动协议）。
 ///
 /// 覆盖设计文档第 10 节中与 kit 相关的完成条件：
 /// - request_driver 永不内联回调；

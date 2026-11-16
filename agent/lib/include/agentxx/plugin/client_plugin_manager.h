@@ -542,13 +542,13 @@ class ClientPluginManager : public agentxx::agent::ClientEventSink,
 public:
 
     /// 主程序向客户端插件提供的接口表数量 (文档里的数字有常量可校验)
-    /// - 11 张通用表 (由插件框架实现: log/json/config/plugins/broadcasts/
-    ///   scheduler/coroutine_runtime/tasks/cancel/capabilities; 两侧同一套)
+    /// - 10 张通用表 (由插件框架实现: log/json/config/plugins/broadcasts/
+    ///   scheduler/tasks/cancel/capabilities; 两侧同一套)
     /// - 6 张自有表 (`agentxx.client.*`: ui/session/wire/self/timer/keybind)
     /// - `net` 由本主程序实现, 单独一张 (`agentxx.net`), 不计入上面两组
     /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §9 与根 `AGENTS.md`
     ///   (测试模块 `boundaries` 会校验三者一致)
-    inline static constexpr size_t kInterfaceTableCount = 11 + 6;
+    inline static constexpr size_t kInterfaceTableCount = 10 + 6;
 
     struct PluginListView {
         std::string              name;
@@ -1252,7 +1252,7 @@ public:
 
     // ==================== pluginxx::DomainServices ====================
     //
-    // 通用表 (log/json/config/plugins/broadcasts/scheduler/coroutine_runtime/
+    // 通用表 (log/json/config/plugins/broadcasts/scheduler/
     // tasks/cancel/capabilities) 的实现位于 cxx_pluginxx；其中需要主程序数据的
     // 入口经本接口取数。与 agent 侧 `PluginManager` 同一套约定，数据源是 client
     // 自己的配置/插件清单。

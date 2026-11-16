@@ -437,7 +437,7 @@ void checkTuiBlockNames(const fs::path& root, Violations& v) {
 /// 同时要求 16 张 agent/client 业务表名都写进 `docs/zh-cn/design/plugins.md`
 /// (文档漏写新表等于插件作者查不到 IID)。
 ///
-/// 数量约定: 10 张通用表 + 10 张 agent 业务表 = 20 (与 `PluginManager::kInterfaceTableCount`
+/// 数量约定: 9 张通用表 + 10 张 agent 业务表 = 19 (与 `PluginManager::kInterfaceTableCount`
 /// 一致); 6 张 client 自有表 (ui / session / wire / self / timer / keybind)。
 void checkInterfaceTableNames(const fs::path& root, Violations& v) {
     const auto genericHeader
@@ -458,7 +458,7 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
 
     // 通用表的 IID 由 `<应用名>.` + 表名拼出 (`PLUGINXX_APP_ID`), agentxx 下即 `agentxx.`
     const Group groups[] = {
-        {&genericHeader, "PLUGINXX_IFACE_",             10, "agentxx.",       false},
+        {&genericHeader, "PLUGINXX_IFACE_",             9,  "agentxx.",       false},
         {&agentHeader,   "AGENTXX_PLUGIN_IFACE_AGENT_", 10, "agentxx.agent.",  true },
         {&clientHeader,  "AGENTXX_IFACE_CLIENT_",       6,  "agentxx.client.", true },
     };
@@ -549,7 +549,7 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
 /// - 每张表在 `plugin_iface_meta.h` / `pluginxx/api/iface_meta.h` 里恰有一条
 ///   `IfaceMeta` 特化 (漏加特化不会编译失败, 只会让该表退化为"必须完整", 因此必须查)。
 ///
-/// 数量: 通用 10 + agent 业务 10 + client 业务 6 = 26 张。
+/// 数量: 通用 9 + agent 业务 10 + client 业务 6 = 25 张。
 void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
     struct Group {
         const fs::path* file;
@@ -570,7 +570,7 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
         = root / "lib" / "include" / "agentxx" / "plugin" / "api" / "plugin_iface_meta.h";
 
     const Group groups[] = {
-        {&genericHeader, "PLUGINXX_IFACE_",             "通用",        10},
+        {&genericHeader, "PLUGINXX_IFACE_",             "通用",        9},
         {&agentHeader,   "AGENTXX_PLUGIN_IFACE_AGENT_", "agent 业务",  10},
         {&clientHeader,  "AGENTXX_IFACE_CLIENT_",       "client 业务", 6 },
     };
@@ -754,10 +754,10 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
             + std::to_string(tableTotal) + " (每张表恰一条特化)"
         );
     }
-    if (tableTotal != 26) {
+    if (tableTotal != 25) {
         v.push_back(
             "接口表合计为 " + std::to_string(tableTotal)
-            + ", 期望 26 (通用 10 + agent 10 + client 6)"
+            + ", 期望 25 (通用 9 + agent 10 + client 6)"
         );
     }
 }
@@ -806,18 +806,17 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
         {"AgentxxPluginToolsIface",       "register_tool|unregister_tool|call_tool_async"                                                                                                                                                                                                                                                                           },
         {"PluginxxCancelIface",           "op_cancel"                                                                                                                                                                                                                                                                                              },
         {"PluginxxCapabilitiesIface",
-         "register_capability|unregister_capability|invoke_capability|capability_info|list_capabilities|op_cancel|invoke_capability_ex|unregister_capability_ex"
+         "register_capability|unregister_capability|invoke_capability|capability_info|list_capabilities|invoke_capability_ex|unregister_capability_ex"
         },
         {"PluginxxConfigIface",
          "get_config|get_plugin_args|get_plugin_config_path|get_language|set_language"
         },
-        {"PluginxxCoroutineRuntimeIface", "request_driver|cancel_driver|is_io_thread"                                                                                                                                                                                                                                                                                         },
         {"PluginxxBroadcastsIface",
          "declare_broadcast|publish_broadcast|subscribe_broadcast|read_broadcast|unsubscribe_broadcast|end_broadcast|subscribe_broadcast_ex"},
         {"PluginxxJsonIface",             "json_get_string|json_escape"                                                                                                                                                                                                                                                                                                       },
         {"PluginxxLogIface",              "log"                                                                                                                                                                                                                                                                                                                               },
         {"PluginxxPluginsIface",          "list_plugins|get_plugin|get_own_info"                                                                                                                                                                                                                                                                                              },
-        {"PluginxxSchedulerIface",        "is_io_thread|post_to_io|sleep|op_cancel|offload"                                                                                                                                                                                                                                                                                   },
+        {"PluginxxSchedulerIface",        "is_io_thread|sleep|offload|request_driver|cancel_driver"                                                                                                                                                                                                                                                                                   },
         {"PluginxxTasksIface",            "register_task|cancel_task"                                                                                                                                                                                                                                                                                                         },
     };
 
@@ -1301,16 +1300,16 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
     const size_t agentCount  = agentxx::plugin::PluginManager::kInterfaceTableCount;
     const size_t clientCount = agentxx::plugin::ClientPluginManager::kInterfaceTableCount;
 
-    // 数量本身: 10 张通用表 + 10 张 agent 业务表 / 11 张通用表 + 6 张 client 自有表
-    if (agentCount != 20) {
+    // 数量本身: 9 张通用表 + 10 张 agent 业务表 / 10 张通用表 + 6 张 client 自有表
+    if (agentCount != 19) {
         v.push_back(
-            "PluginManager::kInterfaceTableCount 应为 20 (10 通用 + 10 业务), 实际 "
+            "PluginManager::kInterfaceTableCount 应为 19 (9 通用 + 10 业务), 实际 "
             + std::to_string(agentCount)
         );
     }
-    if (clientCount != 17) {
+    if (clientCount != 16) {
         v.push_back(
-            "ClientPluginManager::kInterfaceTableCount 应为 17 (11 通用 + 6 自有), 实际 "
+            "ClientPluginManager::kInterfaceTableCount 应为 16 (10 通用 + 6 自有), 实际 "
             + std::to_string(clientCount)
         );
     }

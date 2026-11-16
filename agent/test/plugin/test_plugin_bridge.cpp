@@ -1,6 +1,6 @@
 /// 插件协程驱动桥测试（设计文档第 10 节的 kit 侧完成条件）。
 ///
-/// 测试形态: 用**伪主程序**直接实现 `agentxx.agent.coroutine_runtime` 表：
+/// 测试形态: 用**伪主程序**直接实现 `agentxx.agent.scheduler` 表 (含协程驱动)：
 /// - `request_driver` 只把回调入队并返回请求 (永不内联), 由用例在"主程序 IO 线程"
 ///   上按需调用 [Harness::runOne], 从而精确观察"一次请求 = 一次 poll_one";
 /// - `cancel_driver` 记录取消 (只对尚未执行的请求生效, 与主程序实现语义一致);
@@ -281,28 +281,20 @@ int32_t PLUGINXX_CALL fakeRegisterTool(
     const PluginxxHost*, const PluginxxScopeRef*, const AgentxxPluginToolSpec* spec
 );
 
-const PluginxxCoroutineRuntimeIface g_fakeRuntime = {
-    /* version */ PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION,
-    /* struct_size */ sizeof(PluginxxCoroutineRuntimeIface),
-    /* request_driver */ fakeRequestDriver,
-    /* cancel_driver */ fakeCancelDriver,
-    /* is_io_thread */ fakeIsIoThread,
-};
-
 const PluginxxSchedulerIface g_fakeScheduler = {
     /* version */ PLUGINXX_IFACE_SCHEDULER_VERSION,
     /* struct_size */ sizeof(PluginxxSchedulerIface),
     /* is_io_thread */ fakeIsIoThread,
-    /* post_to_io */ nullptr,
     /* sleep */ fakeSleep,
-    /* op_cancel */ fakeOpCancel,
     /* offload */ fakeOffload,
+    /* request_driver */ fakeRequestDriver,
+    /* cancel_driver */ fakeCancelDriver,
 };
 
 const PluginxxCancelIface g_fakeCancel = {
     /* version */ PLUGINXX_IFACE_CANCEL_VERSION,
     /* struct_size */ sizeof(PluginxxCancelIface),
-    /* op_cancel */ nullptr,
+    /* op_cancel */ fakeOpCancel,
 };
 
 const PluginxxLogIface g_fakeLog = {
@@ -320,18 +312,15 @@ const AgentxxPluginToolsIface g_fakeTools = {
 };
 
 /// 用例可临时置空来验证"主程序不提供驱动时"的回退路径。
-const PluginxxCoroutineRuntimeIface* g_runtimeForTest = &g_fakeRuntime;
+const PluginxxSchedulerIface* g_schedulerForTest = &g_fakeScheduler;
 
 const void* PLUGINXX_CALL fakeQueryInterface(const PluginxxHost*, const PluginxxStringView* iid) {
     if (!iid || !iid->data) {
         return nullptr;
     }
     const std::string_view name{iid->data, static_cast<size_t>(iid->size)};
-    if (name == PLUGINXX_IFACE_COROUTINE_RUNTIME) {
-        return g_runtimeForTest;
-    }
     if (name == PLUGINXX_IFACE_SCHEDULER) {
-        return &g_fakeScheduler;
+        return g_schedulerForTest;
     }
     if (name == PLUGINXX_IFACE_CANCEL) {
         return &g_fakeCancel;

@@ -794,8 +794,8 @@ path/to/agentxx_test --log-level warn string_util regex
   容器 io 线程、实例释放后不再进入插件代码。
   注: 提示词只按 **agent 级** 支持修改 (根 `config_json` 的 `prompt`), **不做**会话级
   提示词来源 —— 一个 agent 管理的会话、提示词、插件等保持一致
-- 接口表数量: agent 侧 20 张 (10 张通用表 `<应用名>.*` 即 `agentxx.*`: broadcasts/capabilities/
-  scheduler/coroutine_runtime/tasks/cancel/plugins/config/json/log + 10 张业务表 `agentxx.agent.*`,
+- 接口表数量: agent 侧 19 张 (9 张通用表 `<应用名>.*` 即 `agentxx.*`: broadcasts/capabilities/
+  scheduler/tasks/cancel/plugins/config/json/log + 10 张业务表 `agentxx.agent.*`,
   不含两侧都有的 `agentxx.net`;
   业务表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`、
   `agentxx.agent.mount` 挂载查询 `list`/`get`,
@@ -810,7 +810,7 @@ path/to/agentxx_test --log-level warn string_util regex
   追加了 `tool_name`/`tool_args_json` 支撑 `kind=tool`、再追加 `delay_ms`/`queue_timeout_ms`
   支撑起跑延时与排队时限, 基线停在 `offsetof(tool_name)`, 读侧用 `specHas` 判定), 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §19,
-  client 侧 17 张 (10 张框架通用表 + `agentxx.net` + 6 张自有表 `agentxx.client.*`:
+  client 侧 16 张 (9 张框架通用表 + `agentxx.net` + 6 张自有表 `agentxx.client.*`:
   ui/session/wire/self/timer/keybind)
 - **网络能力 `agentxx.net` 是通用表** (两侧都提供, 不计入上面的 10 张业务表):
   插件不自己建连接 —— HTTP / WebSocket / TCP / UDP / HTTP 服务端都经这张表转给

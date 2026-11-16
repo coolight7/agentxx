@@ -199,10 +199,17 @@ asio::awaitable<TestResult> run_plugin_tests() {
             // 会话工作目录: 空 session_id = 默认会话工作目录 (经 AgentContext 解析)
             auto scopeRaw   = ref.raw();
             auto emptyKeySv = makeSv("");
+            // 表成员是异步契约: 这里在测试线程上等结果 (测试线程不是主程序 IO 线程)
             auto workDirRes = agentxx::plugin::tableOpBlockingRaw(
                 inst->hostView(),
-                nullptr,
-                nullptr,
+                agentxx::plugin::queryInterface<PluginxxCancelIface>(
+                    inst->hostView(),
+                    PLUGINXX_IFACE_CANCEL
+                ),
+                agentxx::plugin::queryInterface<PluginxxSchedulerIface>(
+                    inst->hostView(),
+                    PLUGINXX_IFACE_SCHEDULER
+                ),
                 [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                     return ifaceSession->get_session_work_dir(
                         inst->hostView(),
@@ -215,6 +222,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 }
             );
             XX_TEST_EXPECT_TRUE(workDirRes.ok());
+            if (!workDirRes.ok()) {
+                XX_LOGW(
+                    "[plugins] workDir accepted={} status={} startError={}",
+                    workDirRes.accepted(),
+                    workDirRes.status,
+                    workDirRes.startError
+                );
+            }
             if (workDirRes.ok()) {
                 XX_TEST_EXPECT_EQ(std::string{workDirRes.text()}, ctx->getSessionWorkDir(""));
             }

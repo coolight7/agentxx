@@ -144,7 +144,7 @@ private:
 
 /// 插件管理器 (agent 侧主程序, 进程一份)
 ///
-/// - 通用部分 (broadcasts/capabilities/scheduler/coroutine_runtime/tasks/cancel/
+/// - 通用部分 (broadcasts/capabilities/scheduler/tasks/cancel/
 ///   plugins/config/json/log 十张通用表的状态与实现) 继承自
 ///   [pluginxx::PluginHostCore], 主程序数据经 [pluginxx::DomainServices] 提供;
 /// - 加载/启停/禁用启用/卸载/级联依赖骨架继承自
@@ -163,13 +163,13 @@ public:
 
     /// 本主程序向插件提供的接口表数量 (文档里的数字有常量可校验)
     /// - 10 张通用表 (由插件框架实现: log/json/config/plugins/broadcasts/
-    ///   scheduler/coroutine_runtime/tasks/cancel/capabilities)
+    ///   scheduler/tasks/cancel/capabilities)
     /// - 10 张 agent 业务表 (`agentxx.agent.*`: tools/permission/session/
     ///   context/model/prompt/resources/graph/mount/runtime)
     /// - `net` 由本主程序实现, 单独一张 (`agentxx.net`), 不计入上面两组
     /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §8 与根 `AGENTS.md`
     ///   (测试模块 `boundaries` 会校验三者一致)
-    inline static constexpr size_t kInterfaceTableCount = 10 + 10;
+    inline static constexpr size_t kInterfaceTableCount = 9 + 10;
 
     /// 清单行 (诊断与界面展示; 主程序视图)
     struct PluginListView {
@@ -384,7 +384,7 @@ public:
     std::string getModelConfigJson();
 
     // ==================== pluginxx::DomainServices 实现 ====================
-    // 通用表 (log/json/config/plugins/broadcasts/scheduler/coroutine_runtime/tasks/
+    // 通用表 (log/json/config/plugins/broadcasts/scheduler/tasks/
     // cancel/capabilities) 的实现位于 cxx_pluginxx, 需要主程序数据的入口经这些方法取数
     // (见 pluginxx/host/domain_services.h)。实现体在 plugin_manager_domain_services.cpp。
 

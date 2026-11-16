@@ -7,13 +7,14 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| A | 全局 API 版本 / 异步表调用骨架 / kit 三形态 / `agentxx.agent.session` 试点 | 进行中（`session` 表 4 个成员已改完并编译通过、相关测试全绿） |
+| A | 全局 API 版本 / 异步表调用骨架 / kit 三形态 / `agentxx.agent.session` 试点 | 完成（编译通过、相关测试全绿） |
+| C2-槽位清理 | 删 `scheduler.post_to_io` / `scheduler.op_cancel` / `capabilities.op_cancel`；`coroutine_runtime` 整张表并回 `scheduler`（通用表 10 → 9） | 完成（编译通过、全量插件测试全绿） |
 | A2 | agent 侧 `dlopen` + `create` 挪到加载线程池 | 待做 |
 | B | `agentxx.agent` 业务表全部成员 | 待做 |
 | C | `agentxx.agent.runtime` 全部成员 | 待做 |
-| C2 | 框架表（`cxx_pluginxx`）：`coroutine_runtime` 并回 `scheduler`、删 `post_to_io`、`op_cancel` 合并、`net.call` 统一异步、其余通用表异步 | 待做 |
+| C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 待做 |
 | D | `agentxx.client.*` 六张表 + 三个回答型回调 | 待做 |
-| E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 待做 |
+| E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 部分完成（接口表数量文档已同步，见下） |
 
 ## 关键实现决定（与计划一致，落在代码里）
 
@@ -89,6 +90,64 @@
   快速迭代时手工把改过的头拷进 `{build}/agentxx-project-install/include/`，
   正式构建时由 `cxx_pluginxx_repo` 的 ExternalProject 重新安装。
 - `test_plugin_abi_c17.c` 里的 `_Static_assert` 固定了代次，抬版本时必须同步。
+
+### 第 2 步：槽位清理（`post_to_io` 删除、`coroutine_runtime` 并回 `scheduler`、`op_cancel` 合并）
+
+计划 §5.6 / §5.7。改动：
+
+- `cxx_pluginxx/include/pluginxx/api/tables.h`
+  - `scheduler` v1 → v2：删 `post_to_io`、`op_cancel`，加入 `request_driver` / `cancel_driver`；
+    基线随签名变化重置为 `sizeof`；驱动协议注释搬到本表头部；
+  - 删除整段 `coroutine_runtime` 表（IID / 宏 / 结构体）；
+  - `capabilities` v6 → v7：删 `op_cancel`（并入 `cancel.op_cancel`），基线重置；
+  - 文件头注释：通用表 10 → 9 张、各表版本说明。
+- `api/iface_meta.h`：删 `IfaceMeta<PluginxxCoroutineRuntimeIface>`。
+- `api/abi.h`：`PluginxxDriver` 注释里的表名改成 `pluginxx.scheduler`。
+- `host/tables_impl.h`：删 `postToIoEntry`；scheduler 入口按新成员顺序重排；删
+  `coroutineRuntimeIface()` 与 `query_interface` 分派；`kGenericTableNames` 去掉
+  `coroutine_runtime`；`opCancelEntry` 只留给 `cancel`（`tasks` 复用）。
+- `kit/kit.h`：`PluginIfaceCore` 去掉 `coroutineRuntime`；`PollOneBridge` 改成
+  `(host, scheduler, cancel)`，驱动两成员读 `sched_`、取消读 `cancel_`；
+  `SleepAwaiter` / `OffloadAwaiter` / `InvokeCapAwaiter` 的取消改走
+  `cancel.op_cancel`；`spawn` 不再借 `post_to_io`（`startBridgedRoot` 自己会排队）。
+- agentxx 侧：`plugin_kit.h` / `plugin_interfaces.h` / `plugin_manager.h` /
+  `client_plugin_manager.h` / 两个 domain_services / `plugin_manager_vtable.cpp`
+  去掉 `coroutineRuntime` 与 `coroutine_runtime` 相关文字与成员。
+- 插件：`agentxx_chatbot`（面板驱动票改用 `iface.scheduler->request_driver` /
+  `cancel_driver`）、`example_plugin`（降级注释）。
+- 测试：`boundaries`（成员顺序清单、通用表 9 / 合计 25、两个 `kInterfaceTableCount`
+  期望值 19 / 16、文档数字）、`test_plugin_bridge.cpp` / `test_plugin_sdk.cpp`
+  （伪主程序把驱动两成员挂在 scheduler 上）、`test_plugin_runtime.cpp`
+  （驱动用例改查 scheduler；C17 值表换成 `request_driver` / `cancel_driver` 偏移）、
+  `test_plugin_host_mount.cpp`（IID 清单少一项、期望 19）、`test_plugin_abi_c17.c`。
+- 文档：`plugins.md` / `index.md` / 根 `AGENTS.md` 的接口表数量与列表。
+- `cxx_pluginxx/src/api_abi_check.c`：capabilities / scheduler 重置基线后不再有追加段，
+  把"必须真的追加了成员"改成"基线不得超过完整布局"。
+
+验证：`windows_debug_build.bat` 全量通过（含 configure，API 代次 7 已重新下发到内层构建），
+随后 `agentxx_test --log-level warn` 跑：
+
+- `boundaries` 19/0、`plugin_runtime` 730/0、`plugin_sdk` 134/0、`plugin_bridge` 193/0、
+  `plugin_cleanup` 90/0、`plugin_host_mount` 145/0、`plugin_multi_mount` 47/0、
+  `plugins` 707/0 → 合计 2065 通过；
+- `client_plugins` 835/0、`plugin_feature` 34/0、`plugin_point` 68/0、
+  `plugin_broadcast` 90/0、`plugin_dispatch` 112/0、`plugin_agent_runtime` 221/0、
+  `plugin_example_runtime` 50/0、`plugin_example_chatbot` 265/0 → 合计 1675 通过。
+
+遇到的问题（已解决）：
+
+- **"内联快路径"一开始不成立**：`OpCore::onDoneCore` 把提交排到 executor 上，因此即使
+  工作体在 IO 线程上当场执行，`cb` 也要等下一个 executor 轮次。于是
+  `tableOpBlocking` 在"自己就是 IO 线程"的调用方上拿不到结果，`plugins` 用例直接卡住。
+  修法：`startTableOp` 在 `mgr->isIoThread()` 时**自己**当场回调（`cb` 不交给 OpCore），
+  OpCore 只做记账；非 IO 线程仍由 OpCore 在 IO 线程派发。`cb` 依旧恰好一次。
+- `test_plugins` 里那句 `tableOpBlockingRaw(..., nullptr, nullptr, ...)` 无法判断
+  "我是不是 IO 线程"，改成从接口表查出 `cancel` / `scheduler` 再传进去。
+- 内层构建目录的 `CMAKE_CXX_FLAGS` 缓存着上一代 `-DPLUGINXX_API_VERSION=6`：
+  只改顶层默认值不会传导，必须重跑顶层 configure（跑一次 `windows_debug_build.bat`）。
+- 增量刷新安装前缀（手拷头文件）能加快迭代，但**测试可执行文件**在
+  `agentxx_test_repo-build/Debug/` 下，`exec/` 里那份要等顶层 install 才更新 ——
+  曾经因此对着旧二进制排查了很久。
 
 ## 与计划的偏差
 

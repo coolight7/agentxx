@@ -27,7 +27,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ session     │ broadcasts   │ scheduler   │  ...20 张 agent + 17 张 client
+         │ tools       │ session     │ broadcasts   │ scheduler   │  ...19 张 agent + 16 张 client
          │ register/   │ 会话上下文  │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │ 与取消      │ subscribe    │ offload     │  plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
@@ -129,13 +129,13 @@ auto b64 = utilxx_base::base64Encode(data);
 
 | 路径 | 命名空间 | 内容 |
 |---|---|---|
-| `pluginxx/api/` | 纯 C (`Agentxx*`) | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/主程序 vtable/入口符号)、`tables.h` (通用接口表: broadcasts/capabilities/scheduler/coroutine_runtime/tasks/cancel/plugins/config/json/log) |
+| `pluginxx/api/` | 纯 C (`Agentxx*`) | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/主程序 vtable/入口符号)、`tables.h` (通用接口表: broadcasts/capabilities/scheduler/tasks/cancel/plugins/config/json/log) |
 | `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK (header-only): `kit.h` (通用部分: 跨边界字符串工具 `PluginStringView`/`PluginString`、通用接口表聚合 `PluginIfaceCore`、实例级 `Logger`、`Task<T>` 锚定协程与锚定原语 `sleep`/`yield`/`offload`/`invoke_cap`、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏)、`guard.h` (C ABI 边界异常守卫 `guardCall`/`guardCallVoid`/`logTo`) |
 | `pluginxx/runtime/` | `pluginxx` | 主程序侧运行时: `runtime.h` (实例状态机/执行 lease/投递通道)、`driver.h` (协程驱动 ticket)、`instance_base.h` (实例基类 + 主程序控制块 + C ABI 内存 + 通用表相关登记: 事件订阅/睡眠句柄/能力声明)、`manager_base.h` (管理器基类 + vtable 入口上下文)、`op_driver.h` (统一 Operation 驱动器) |
 | `pluginxx/host/` | `pluginxx` | 主程序侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常保护/io 线程同步投递)、`capability_registry.h` + `capability_chain.h` (能力登记表与实现链: 实现行按 scope / 优先级排序后调用)、`broadcast_registry.h` (广播频道登记表: 声明 / 发布 / 订阅 / 当前值 / 结束)、`domain_services.h` (业务数据入口 `DomainServices`: 通用表需要主程序数据的入口)、`host_core.h` (主程序核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现 + 功能埋点原语 `declarePoint`/`emitPointAsync`)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`)、`lifecycle.h` (主程序生命周期骨架 `PluginHostLifecycle<InstanceT>`: 加载/启停/禁用启用/卸载/级联依赖) |
 
 - **通用表实现整体在 `cxx_pluginxx`**: broadcasts/capabilities/scheduler/
-  coroutine_runtime/tasks/cancel/plugins/config/json/log 十张表的**定义与实现**都在插件框架 ——
+  scheduler/tasks/cancel/plugins/config/json/log 九张表的**定义与实现**都在插件框架 ——
   `PluginHostCore<InstanceT>` 提供方法实现 (能力登记与实现链/广播频道/睡眠/委托/任务托管/
   取消投递), `tables_impl.h` 提供 C ABI 入口 (解析主程序控制块 → 投递 IO 线程 → 调用同名方法);
   主程序只需 `class MyManager : public pluginxx::PluginHostLifecycle<MyInstance>` +
@@ -424,11 +424,11 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ## 8. Agent 侧接口表一览
 
-> 共 20 张 agent 侧接口表: 10 张**业务表** (`agentxx.agent.*`, 主程序实现) + 10 张**通用表**
+> 共 19 张 agent 侧接口表: 10 张**业务表** (`agentxx.agent.*`, 主程序实现) + 9 张**通用表**
 > (由插件框架声明与实现, agent 侧与 client 侧各一份)。通用表的 IID 是 `<应用名>.<表名>`,
 > 本项目应用名 `agentxx`, 也就是 `agentxx.log` / `agentxx.broadcasts` 这一组 (源码里写作
 > `PLUGINXX_APP_ID("log")`, 表名部分冻结) —— **按 `pluginxx.log` 或 `agentxx.agent.log` 查询都不会命中**。
-> 另有一张 `agentxx.net` (网络, 两侧都提供, 不计入上面的 20 张), 见 §22。
+> 另有一张 `agentxx.net` (网络, 两侧都提供, 不计入上面的 19 张), 见 §22。
 
 ### 8.1 业务表 (`agentxx.agent.*`, 10 张)
 
@@ -456,7 +456,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 | `agentxx.broadcasts` | 3 | 广播: `declare_broadcast` (声明频道: 缓存/发布权限/订阅补当前值/限频/scope) + `publish_broadcast` + `subscribe_broadcast(_ex)` (带流结束回调) + `read_broadcast` + `unsubscribe_broadcast` + `end_broadcast`。插件的通知面与跨端数据都走它, 见 §20。v3 = 加 `end_broadcast` 与 `subscribe_broadcast_ex` (订阅侧收 `on_end`) |
 | `agentxx.capabilities` | 6 | `register_capability/unregister_capability/invoke_capability/capability_info/list_capabilities/op_cancel` (另有 `invoke_capability_ex` / `unregister_capability_ex`)。能力行按 **scope** 隔离 (同一个插件挂在多个 agent 上时各一行), 一个能力可以由多家登记实现行, 取值链按 `(priority 升序, 登记序号)` 排序后取首行 —— **功能埋点的实现行就是能力行** (见 §21.4) |
 | `agentxx.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=主程序计时器; offload=阻塞池委托, 需 cancel_token) |
-| `agentxx.coroutine_runtime` | 1 | 通用协程驱动: `request_driver/cancel_driver/is_io_thread` (driver ticket/wake 协议, 见 §16) |
+| `agentxx.scheduler` | 2 | 调度与驱动: `is_io_thread` / `sleep` / `offload` / `request_driver` / `cancel_driver` (driver ticket/wake 协议, 见 §16; 早期的 `post_to_io` 与 `op_cancel` 已删, 独立的 `coroutine_runtime` 表已并入) |
 | `agentxx.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上) |
 | `agentxx.config` | 3 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言)。v3 起不再含业务成员 (`get_tool_prompt`/`get_session_work_dir` 已分别迁到 `agentxx.agent.prompt` / `agentxx.agent.session`) |
 | `agentxx.cancel` | 3 | `op_cancel` (取消一个操作句柄; 原先分散在 tools/feature 的同名成员已收拢到这里)。v3 起 `is_canceled` 迁到 `agentxx.agent.session` (会话是业务概念, 框架表只管通用取消句柄) |
@@ -464,7 +464,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 | `agentxx.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |
 | `agentxx.tasks` | 1 | 后台任务主程序托管: `register_task/cancel_task` (kit `spawn` 自动注册; 主程序登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
 
-> 另一张 (不计入上面的 20 张): `agentxx.net` (v1) — `call` / `call_async` / `cancel`,
+> 另一张 (不计入上面的 19 张): `agentxx.net` (v1) — `call` / `call_async` / `cancel`,
 > HTTP / WebSocket / TCP / UDP / HTTP 服务端都转给 `utilxx::NetHub`, 详见 §22。
 
 > 表中"版本"列 = 表声明的 `X_VERSION`, 与 `X_MIN_VERSION` 一起构成版本对, 另有
@@ -707,8 +707,8 @@ SDK 侧对应关系: 工具实现体返回 `agentxx::util::ToolResult` 时,
 
 ## 9. Client 侧接口表一览
 
-client 侧共 17 张表: 10 张**框架通用表** (与 agent 侧同一套: log / json /
-config / plugins / broadcasts / capabilities / scheduler / coroutine_runtime / tasks /
+client 侧共 16 张表: 9 张**框架通用表** (与 agent 侧同一套: log / json /
+config / plugins / broadcasts / capabilities / scheduler / tasks /
 cancel) + 1 张**网络表** `agentxx.net` (两侧都提供) + 6 张自有表 (`agentxx.client.*`)。
 
 | IID | 版本 | 能力 |
@@ -2112,7 +2112,7 @@ plugin:
 
 | 用例 | 覆盖 |
 |---|---|
-| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/功能埋点实现行/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 20 张表可查, 拆挂载与关闭收尾 |
+| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/功能埋点实现行/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 19 张表可查, 拆挂载与关闭收尾 |
 | `plugin_multi_mount` | 真实示例插件 `example_multi_mount`: 计数与 `config_json` 按挂载隔离、重挂归零、旧引用失效 |
 | `plugin_multi_instance` | 多实例三铁律 (两个管理器各一实例) |
 | `plugin_runtime` / `plugin_cleanup` / `plugin_dispatch` / `plugin_feature` / `plugin_resources` | 挂载语义下的注册可逆与清单 |

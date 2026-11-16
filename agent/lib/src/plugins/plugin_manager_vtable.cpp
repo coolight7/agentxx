@@ -1958,7 +1958,7 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     if (n == "__vtable") {
         return &g_hostVtable;
     }
-    // 通用表 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/
+    // 通用表 (log/json/config/plugins/events/scheduler/tasks/
     // cancel/capabilities) 由 cxx_pluginxx 提供 (见 pluginxx/host/tables_impl.h),
     // 主程序侧的业务表在下面逐个分发。
     if (const void* generic = pluginxx::queryGenericPluginIface<PluginInstance, PluginManager>(n)) {

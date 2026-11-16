@@ -1709,7 +1709,7 @@ const void* PLUGINXX_CALL
         return nullptr;
     }
     std::string_view n{iid->data, static_cast<size_t>(iid->size)};
-    // 通用表 (log/json/config/plugins/broadcasts/scheduler/coroutine_runtime/tasks/
+    // 通用表 (log/json/config/plugins/broadcasts/scheduler/tasks/
     // cancel/capabilities) 由 cxx_pluginxx 提供 (见 pluginxx/host/tables_impl.h),
     // 主程序侧的业务表在下面逐个分发。
     if (const void* generic = pluginxx::queryGenericPluginIface<ClientPluginInstance, ClientPluginManager>(n)) {

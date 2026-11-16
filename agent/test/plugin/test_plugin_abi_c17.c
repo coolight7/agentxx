@@ -64,10 +64,6 @@ _Static_assert(sizeof(PluginxxBroadcastsIface) % 8 == 0, "BroadcastsIface 必须
 _Static_assert(sizeof(PluginxxCapabilitiesIface) % 8 == 0, "CapabilitiesIface 必须 8 字节对齐");
 _Static_assert(sizeof(PluginxxSchedulerIface) % 8 == 0, "SchedulerIface 必须 8 字节对齐");
 _Static_assert(sizeof(PluginxxTasksIface) % 8 == 0, "TasksIface 必须 8 字节对齐");
-_Static_assert(
-    sizeof(PluginxxCoroutineRuntimeIface) % 8 == 0,
-    "CoroutineRuntimeIface 必须 8 字节对齐"
-);
 _Static_assert(sizeof(AgentxxPluginGraphIface) % 8 == 0, "GraphIface 必须 8 字节对齐");
 _Static_assert(sizeof(AgentxxClientUiIface) % 8 == 0, "ClientUiIface 必须 8 字节对齐");
 
@@ -102,18 +98,6 @@ _Static_assert(
     "SchedulerIface.struct_size 紧随 version"
 );
 _Static_assert(offsetof(PluginxxTasksIface, version) == 0, "TasksIface.version 首字段");
-_Static_assert(
-    offsetof(PluginxxCoroutineRuntimeIface, version) == 0,
-    "CoroutineRuntimeIface.version 首字段"
-);
-_Static_assert(
-    offsetof(PluginxxCoroutineRuntimeIface, struct_size) == sizeof(int32_t),
-    "CoroutineRuntimeIface.struct_size 紧随 version"
-);
-_Static_assert(
-    offsetof(PluginxxCoroutineRuntimeIface, request_driver) == sizeof(int32_t) + sizeof(uint32_t),
-    "CoroutineRuntimeIface.request_driver 是第三项"
-);
 _Static_assert(offsetof(AgentxxClientUiIface, version) == 0, "ClientUiIface.version 首字段");
 _Static_assert(
     offsetof(AgentxxClientUiIface, struct_size) == sizeof(int32_t),
@@ -153,9 +137,9 @@ enum {
     AGENTXX_ABI_VALUE_AGENT_API_VERSION                   = 15,
     AGENTXX_ABI_VALUE_CLIENT_API_VERSION                  = 16,
     AGENTXX_ABI_VALUE_TOOLS_IFACE_VERSION                 = 17,
-    AGENTXX_ABI_VALUE_COROUTINE_RUNTIME_IFACE_SIZE        = 18,
-    AGENTXX_ABI_VALUE_COROUTINE_RUNTIME_IFACE_SIZE_OFFSET = 19,
-    AGENTXX_ABI_VALUE_COROUTINE_RUNTIME_IFACE_VERSION     = 20,
+    AGENTXX_ABI_VALUE_SCHEDULER_DRIVER_OFFSET             = 18,
+    AGENTXX_ABI_VALUE_SCHEDULER_DRIVER_CANCEL_OFFSET      = 19,
+    AGENTXX_ABI_VALUE_CAPABILITIES_IFACE_VERSION          = 20,
     AGENTXX_ABI_VALUE_PERMISSION_SPEC_SIZE                = 21,
     AGENTXX_ABI_VALUE_PERMISSION_SPEC_ARGS_OFFSET         = 22,
     AGENTXX_ABI_VALUE_PERMISSION_IFACE_SIZE               = 23,
@@ -206,12 +190,12 @@ uint64_t agentxx_test_abi_value(int32_t id) {
             return (uint64_t)AGENTXX_CLIENT_PLUGIN_API_VERSION;
         case AGENTXX_ABI_VALUE_TOOLS_IFACE_VERSION:
             return (uint64_t)AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION;
-        case AGENTXX_ABI_VALUE_COROUTINE_RUNTIME_IFACE_SIZE:
-            return (uint64_t)sizeof(PluginxxCoroutineRuntimeIface);
-        case AGENTXX_ABI_VALUE_COROUTINE_RUNTIME_IFACE_SIZE_OFFSET:
-            return (uint64_t)offsetof(PluginxxCoroutineRuntimeIface, struct_size);
-        case AGENTXX_ABI_VALUE_COROUTINE_RUNTIME_IFACE_VERSION:
-            return (uint64_t)PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION;
+        case AGENTXX_ABI_VALUE_SCHEDULER_DRIVER_OFFSET:
+            return (uint64_t)offsetof(PluginxxSchedulerIface, request_driver);
+        case AGENTXX_ABI_VALUE_SCHEDULER_DRIVER_CANCEL_OFFSET:
+            return (uint64_t)offsetof(PluginxxSchedulerIface, cancel_driver);
+        case AGENTXX_ABI_VALUE_CAPABILITIES_IFACE_VERSION:
+            return (uint64_t)PLUGINXX_IFACE_CAPABILITIES_VERSION;
         case AGENTXX_ABI_VALUE_PERMISSION_SPEC_SIZE:
             return (uint64_t)sizeof(AgentxxPluginToolPermissionSpec);
         case AGENTXX_ABI_VALUE_PERMISSION_SPEC_ARGS_OFFSET:
@@ -253,12 +237,6 @@ int32_t agentxx_test_abi_c_probe(void) {
         return 5; /* 未知编号必须返回哨兵值 */
     }
     /* 协程驱动表: 版本/大小/函数指针齐备 */
-    if (PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION != 1) {
-        return 90;
-    }
-    if (sizeof(PluginxxCoroutineRuntimeIface) % 8 != 0) {
-        return 91;
-    }
     /* 工具权限声明: 结构体 8 字节对齐 + 版本 2 (v2 起全部成员带 agent 引用) */
     if (AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION != 2) {
         return 92;

@@ -519,9 +519,9 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
         );
     }
 
-    // ================= 15. 20 张表可查 + 挂载表内容 =================
+    // ================= 15. 19 张表可查 + 挂载表内容 =================
     {
-        XX_TEST_EXPECT_EQ(plugin::PluginManager::kInterfaceTableCount, size_t{20});
+        XX_TEST_EXPECT_EQ(plugin::PluginManager::kInterfaceTableCount, size_t{19});
         const PluginxxHost* hostView = inst->hostView();
         const char*         iids[]   = {
             PLUGINXX_IFACE_LOG,
@@ -530,7 +530,6 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             PLUGINXX_IFACE_PLUGINS,
             PLUGINXX_IFACE_BROADCASTS,
             PLUGINXX_IFACE_SCHEDULER,
-            PLUGINXX_IFACE_COROUTINE_RUNTIME,
             PLUGINXX_IFACE_TASKS,
             PLUGINXX_IFACE_CANCEL,
             PLUGINXX_IFACE_CAPABILITIES,

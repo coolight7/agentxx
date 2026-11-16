@@ -100,7 +100,6 @@ const PluginxxCapabilitiesIface g_fakeCapabilities = {
     /* invoke_capability */ nullptr,
     /* capability_info */ nullptr,
     /* list_capabilities */ nullptr,
-    /* op_cancel */ nullptr,
     /* invoke_capability_ex */ nullptr,
     /* unregister_capability_ex */ nullptr,
 };
@@ -155,12 +154,15 @@ int32_t PLUGINXX_CALL fakeIsIoThread(const PluginxxHost*) {
     return 1;
 }
 
-const PluginxxCoroutineRuntimeIface g_fakeRuntime = {
-    /* version */ PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION,
-    /* struct_size */ sizeof(PluginxxCoroutineRuntimeIface),
+/// 伪调度表: 驱动两成员走同一份 fake 实现 (v2 起 coroutine_runtime 已并入 scheduler)
+const PluginxxSchedulerIface g_fakeScheduler = {
+    /* version */ PLUGINXX_IFACE_SCHEDULER_VERSION,
+    /* struct_size */ sizeof(PluginxxSchedulerIface),
+    /* is_io_thread */ fakeIsIoThread,
+    /* sleep */ nullptr,
+    /* offload */ nullptr,
     /* request_driver */ fakeRequestDriver,
     /* cancel_driver */ fakeCancelDriver,
-    /* is_io_thread */ fakeIsIoThread,
 };
 
 /// 伪 client UI 接口表: 捕获 SDK 便捷方法提交的 JSON (替代真实主程序注册表)
@@ -290,8 +292,8 @@ const void* PLUGINXX_CALL fakeQueryInterface(const PluginxxHost*, const Pluginxx
     if (name == AGENTXX_PLUGIN_IFACE_AGENT_GRAPH) {
         return &g_fakeGraph;
     }
-    if (name == PLUGINXX_IFACE_COROUTINE_RUNTIME) {
-        return &g_fakeRuntime;
+    if (name == PLUGINXX_IFACE_SCHEDULER) {
+        return &g_fakeScheduler;
     }
     if (name == AGENTXX_IFACE_CLIENT_UI) {
         return &g_fakeClientUi;

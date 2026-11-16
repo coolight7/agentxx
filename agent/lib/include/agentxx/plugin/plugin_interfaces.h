@@ -102,8 +102,6 @@ inline constexpr std::string_view AgentResources    = AGENTXX_PLUGIN_IFACE_AGENT
 inline constexpr std::string_view AgentModel        = AGENTXX_PLUGIN_IFACE_AGENT_MODEL;
 inline constexpr std::string_view AgentCancel  = PLUGINXX_IFACE_CANCEL;
 inline constexpr std::string_view AgentTasks   = PLUGINXX_IFACE_TASKS;
-/// 通用协程驱动表 (driver ticket / wake 协议; kit 的 PollOneBridge 依赖它)
-inline constexpr std::string_view AgentCoroutineRuntime = PLUGINXX_IFACE_COROUTINE_RUNTIME;
 
 /// ---- client 侧: 接口表名 + 细粒度能力名 (映射到 agentxx.client.ui 表的非空成员) ----
 /// 展示扩展表整体: 声明它等价于"需要 ui 表内全部子能力", 只有覆盖全部子能力的

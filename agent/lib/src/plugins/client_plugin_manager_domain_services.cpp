@@ -1,6 +1,6 @@
 /// 客户端插件主程序的业务数据入口 (pluginxx::DomainServices) + 广播发布
 ///
-/// 背景: 通用表 (log/json/config/plugins/broadcasts/scheduler/coroutine_runtime/
+/// 背景: 通用表 (log/json/config/plugins/broadcasts/scheduler/
 /// tasks/cancel/capabilities) 的实现位于 cxx_pluginxx (见 pluginxx/host/host_core.h);
 /// 其中需要主程序数据的入口经 [pluginxx::DomainServices] 取数。本文件把它们接到
 /// client 插件管理器上, 并声明/发布客户端自己的频道 (`agentxx.client.*`)。

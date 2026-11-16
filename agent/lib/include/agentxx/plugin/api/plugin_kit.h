@@ -274,8 +274,6 @@ struct AgentIfaces {
     const PluginxxCancelIface*         cancel    = nullptr; ///< "pluginxx.cancel"
     const AgentxxPluginGraphIface*     graph     = nullptr; ///< "agentxx.agent.graph"
     const PluginxxTasksIface*          tasks     = nullptr; ///< "pluginxx.tasks"
-    /// "pluginxx.coroutine_runtime": 协程驱动 (host driver/wake 协议)。
-    const PluginxxCoroutineRuntimeIface* coroutineRuntime = nullptr;
     /// "agentxx.agent.mount": 挂载查询 (诊断与自查)
     const AgentxxPluginMountIface* mount = nullptr;
     /// "agentxx.agent.runtime": 会话运行时 (挂自己的根 / 开会话通道 / 事件驱动)
@@ -322,8 +320,6 @@ struct AgentIfaces {
         f.cancel = queryInterface<PluginxxCancelIface>(host, PLUGINXX_IFACE_CANCEL);
         f.graph  = queryInterface<AgentxxPluginGraphIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_GRAPH);
         f.tasks = queryInterface<PluginxxTasksIface>(host, PLUGINXX_IFACE_TASKS);
-        f.coroutineRuntime
-            = queryInterface<PluginxxCoroutineRuntimeIface>(host, PLUGINXX_IFACE_COROUTINE_RUNTIME);
         f.mount = queryInterface<AgentxxPluginMountIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_MOUNT);
         f.runtime
             = queryInterface<AgentxxPluginRuntimeIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME);
@@ -334,7 +330,7 @@ struct AgentIfaces {
 /// client 侧接口表聚合 (一次查询; 成员为 NULL 表示主程序未实现该接口)
 ///
 /// 与 agent 侧同一套通用表 (log/json/config/plugins/broadcasts/scheduler/
-/// coroutine_runtime/tasks/cancel/capabilities), 另加 client 自有表
+/// coroutine/tasks/cancel/capabilities), 另加 client 自有表
 /// (`agentxx.client.*`: ui/session/wire/self/timer/keybind) 与网络表 (`agentxx.net`)。
 struct ClientIfaces {
     const AgentxxClientUiIface*      ui      = nullptr; ///< "agentxx.client.ui"
@@ -3381,9 +3377,9 @@ inline void blocking_tool(
             return;
         }
         auto* job = static_cast<Job*>(op);
-        if (job->offloadHandle && job->shim && job->shim->ctx && job->shim->ctx->iface.scheduler
-            && job->shim->ctx->iface.scheduler->op_cancel) {
-            job->shim->ctx->iface.scheduler->op_cancel(job->offloadHandle);
+        if (job->offloadHandle && job->shim && job->shim->ctx && job->shim->ctx->iface.cancel
+            && job->shim->ctx->iface.cancel->op_cancel) {
+            job->shim->ctx->iface.cancel->op_cancel(job->offloadHandle);
         }
         if (job->shim && job->shim->ctx && !job->tid.empty()) {
             job->shim->ctx->cancelRegistry.cancel(job->tid);

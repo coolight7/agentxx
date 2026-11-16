@@ -310,7 +310,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     // 这类等待没有"主程序可见唤醒源", 因此由桥以受控轮询推进 ——
     // - 有未完成的 polled 操作时才申请驱动请求 (空闲零开销);
     // - 有进展立刻续下一次请求, 无进展退避 10ms, 突发 256 步后强制让出;
-    // - 主程序不提供 `coroutine_runtime`/`scheduler.sleep` 时自动降级为
+    // - 主程序不提供 `scheduler.request_driver`/`scheduler.sleep` 时自动降级为
     //   offload 工作线程 + 局部 io_context 跑完 (行为对业务体透明)。
     // 返回的 pumpOnStart 证明该协程确实以"受控轮询根"身份运行。
     agentxx::plugin::polled_tool(

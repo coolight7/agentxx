@@ -374,14 +374,14 @@ void PLUGINXX_CALL onPanelDriveTicket(void* ud) {
 }
 
 void ChatbotCtx::requestPanelDrive() {
-    if (!host || !iface.coroutineRuntime || !iface.coroutineRuntime->request_driver) {
+    if (!host || !iface.scheduler || !iface.scheduler->request_driver) {
         return;
     }
     if (panelOutbox.driverPending.exchange(true, std::memory_order_acq_rel)) {
         return; // 已经有一张票: 它跑到时会取走最新一份
     }
     PluginxxString err{nullptr, 0};
-    auto* driver = iface.coroutineRuntime->request_driver(host, &onPanelDriveTicket, this, &err);
+    auto* driver = iface.scheduler->request_driver(host, &onPanelDriveTicket, this, &err);
     if (err.data != nullptr) {
         // 主程序给了失败原因: 记一次就够 (面板会停在上一份快照上)
         log.warn(
@@ -1714,8 +1714,8 @@ void* chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
     ctx.stopIo();
     // 面板驱动票收尾: 取消还没跑的票 (之后回调不会再落到本实例上)
     if (auto* driver = ctx.panelOutbox.driver.exchange(nullptr); driver != nullptr) {
-        if (ctx.iface.coroutineRuntime && ctx.iface.coroutineRuntime->cancel_driver) {
-            ctx.iface.coroutineRuntime->cancel_driver(driver);
+        if (ctx.iface.scheduler && ctx.iface.scheduler->cancel_driver) {
+            ctx.iface.scheduler->cancel_driver(driver);
         }
     }
     ctx.panelOutbox.driverPending.store(false, std::memory_order_release);
