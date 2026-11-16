@@ -10,7 +10,7 @@
 | A | 全局 API 版本 / 异步表调用骨架 / kit 三形态 / `agentxx.agent.session` 试点 | 完成（编译通过、相关测试全绿） |
 | C2-槽位清理 | 删 `scheduler.post_to_io` / `scheduler.op_cancel` / `capabilities.op_cancel`；`coroutine_runtime` 整张表并回 `scheduler`（通用表 10 → 9） | 完成（编译通过、全量插件测试全绿） |
 | A2 | agent 侧 `dlopen` + `create` 挪到加载线程池 | 完成（编译通过、插件测试全绿） |
-| B | `agentxx.agent` 业务表全部成员 | 进行中（`tools` / `permission` / `context` / `model` / `prompt` 完成，`resources` / `graph` / `mount` 待做） |
+| B | `agentxx.agent` 业务表全部成员 | 完成（9 张表全部改异步操作契约） |
 | C | `agentxx.agent.runtime` 全部成员 | 待做 |
 | C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 待做 |
 | D | `agentxx.client.*` 六张表 + 三个回答型回调 | 待做 |
@@ -274,6 +274,53 @@ IO 线程。
   `test_plugin_abi_c17.c` 里 permission 版本还写死 2，改后通过）；
 - `client_plugins` 835、`plugin_feature` 34、`plugin_point` 68、`plugin_broadcast` 90、
   `plugin_dispatch` 112、`plugin_agent_runtime` 221、`plugin_example_runtime` 50 → 2140 通过。
+
+### 第 6 步：阶段 B 第三批 —— `resources` / `graph` / `mount`
+
+改动：
+
+- `plugin_api.h`
+    - `agentxx.agent.resources` v2 → v3（7 个成员全部异步；`get_own_resources` 的清单经
+      `payload` 交回）；
+    - `agentxx.agent.graph` v2 → v3（5 个成员；注册类完成时已生效，读取类经 `payload`）；
+    - `agentxx.agent.mount` v1 → v2（`list` / `get`）。
+- `plugin_manager_vtable.cpp`
+    - 新增 `GraphNodeTypeSpecKeep`（`type` + `config_schema_json` 两个借用视图的自持拷贝）；
+    - 新增 `resourceOp(...)`：六个资源登记/注销成员只差"调哪个挂载方法"，收成一处
+      （受理阶段校验入参并拷字符串，工作体在 IO 线程执行），六个入口各三行；
+    - `mount.list` / `mount.get` 走 `asyncTableCall<AllowClosing>`，`graph.get_*` 与
+      `resources.get_own_resources` 走 `asyncQueryCall`。
+- `plugin_kit.h`
+    - 新增 `graphJson` / `graphName` / `setGraphJson` / `ownResourcesJson` /
+      `registerSkillDir` / `unregisterSkillDir` / `registerMemoryFile` /
+      `unregisterMemoryFile` / `registerMcpServer` / `unregisterMcpServer`
+      （与 `promptJson` 等同一批阻塞形态便捷入口）；
+    - `listMounts` / `mountInfoOf` 与图节点注册助手改走阻塞形态。
+- 插件迁移：`example_graph_node`（`graphJson` / `setGraphJson`）、`example_resources`
+  （`registerSkillDir`）、JS 引擎（图节点注册与撤销、技能/记忆/MCP 六处、图读写三处、
+  挂载查询两处、资源清单一处）。
+- 测试：`test_plugin_resources.cpp`（8 处登记/查询改阻塞形态断言）、
+  `test_plugin_runtime.cpp`（生命周期里的图节点注册）、`test_plugin_sdk.cpp`
+  （fake graph 表签名）。
+- 文档：`plugins.md` §8.1 三张表抬版、§8.0 的当前进度。
+
+验证：
+
+- 内层 lib / test / client 三个构建目录编译通过，25 个插件全部重编
+  （`agentxx_javascript_engine` 首轮因两处 `iface` 引用不在作用域内失败：一处改用
+  `AgentIfaces::query(instanceHost)`、一处漏改的 `unregister_mcp_server`，改后通过）；
+- `boundaries` 19、`plugins` 709、`plugin_runtime` 730、`plugin_sdk` 134、
+  `plugin_bridge` 193、`plugin_cleanup` 90、`plugin_host_mount` 147、
+  `plugin_multi_mount` 47、`plugin_resources` 101；
+- `client_plugins` 835、`plugin_feature` 34、`plugin_point` 68、`plugin_broadcast` 90、
+  `plugin_dispatch` 112、`plugin_agent_runtime` 221、`plugin_example_runtime` 50 → 1410 通过。
+
+遇到的问题（已解决）：
+
+- `plugin_resources` 在 ASan 下报 heap-use-after-free：测试里
+  `PluginStringView::fromCstr(runtimeSkill.string().c_str())` 取的是临时串的指针，
+  视图在语句结束就悬空（旧实现同样 UB，只是以前没被抓到）。改成先把
+  `path.string()` 落到具名 `std::string` 再取视图。
 
 ## 与计划的偏差
 

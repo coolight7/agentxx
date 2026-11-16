@@ -234,7 +234,11 @@ static void* probeMount(
     node.type               = sv("dso_rollback_type");
     node.run_start          = &probeNodeRunStart;
     node.config_schema_json = sv("{}");
-    if (graph->register_node_type(host, &ref, &node) != 0) {
+    // 表成员是异步契约: 本插件在 `start` 里跑 (主程序 IO 线程), 会内联完成
+    RegProbe nodeReg{};
+    PluginxxString nodeErr{nullptr, 0};
+    auto* nodeOp = graph->register_node_type(host, &ref, &node, &regToolDone, &nodeReg, &nodeErr);
+    if (nodeOp == nullptr || !nodeReg.done || nodeReg.status != PLUGINXX_OPERATOR_OK) {
         setError(host, error_out, failStep(host, "graph"));
         return nullptr;
     }
@@ -343,7 +347,10 @@ static void* probeMount(
         return nullptr;
     }
     const auto skillDir = sv("/tmp/agentxx_dso_rollback_skills");
-    if (resources->register_skill_dir(host, &ref, &skillDir) != 0) {
+    RegProbe resReg{};
+    PluginxxString resErr{nullptr, 0};
+    auto* resOp = resources->register_skill_dir(host, &ref, &skillDir, &regToolDone, &resReg, &resErr);
+    if (resOp == nullptr || !resReg.done || resReg.status != PLUGINXX_OPERATOR_OK) {
         setError(host, error_out, failStep(host, "resource"));
         return nullptr;
     }

@@ -176,11 +176,7 @@ static void* resAgentMount(
         && ctx.iface.log->log) {
         auto        base            = dirOf(ownInfoString(host, ctx.iface, "path"));
         std::string runtimeSkillDir = fmt::format("{}/skills_runtime", base);
-        auto        skillDirSv      = agentxx::plugin::PluginStringView::from(
-            runtimeSkillDir.data(),
-            runtimeSkillDir.size()
-        );
-        if (ctx.iface.resources->register_skill_dir(host, ref.ptr(), &skillDirSv) != 0) {
+        if (agentxx::plugin::registerSkillDir(host, ctx.iface, ref.ptr(), runtimeSkillDir) != 0) {
             auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
                 "[example_resources] register runtime skill dir failed"
             );

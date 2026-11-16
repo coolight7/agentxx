@@ -624,8 +624,10 @@ typedef struct AgentxxPluginPromptIface {
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES             PLUGINXX_APP_ID("agent.resources")
 /// v2: 全部成员增加 `agent` 参数 (资源按挂载应用, 每个 agent 各一份)
-#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION     2
-#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_MIN_VERSION 2
+/// v3: 全部成员改成异步操作契约 (登记类完成时已生效, `get_own_resources` 的清单经
+///     `payload` 交回)
+#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION     3
+#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_MIN_VERSION 3
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_BASELINE_SIZE sizeof(AgentxxPluginResourcesIface)
 
@@ -633,40 +635,64 @@ typedef struct AgentxxPluginResourcesIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION
     uint32_t struct_size;
 
-    int32_t(PLUGINXX_CALL* register_skill_dir)(
+    /// 登记技能目录 (**异步**; 完成时已生效: 主程序已完成目录扫描与索引)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* register_skill_dir)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* path
+        const PluginxxStringView* path,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    int32_t(PLUGINXX_CALL* unregister_skill_dir)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_skill_dir)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* path
+        const PluginxxStringView* path,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    int32_t(PLUGINXX_CALL* register_memory_file)(
+    /// 登记记忆文件 (**异步**; 完成时已读入并校验)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* register_memory_file)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* path
+        const PluginxxStringView* path,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    int32_t(PLUGINXX_CALL* unregister_memory_file)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_memory_file)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* path
+        const PluginxxStringView* path,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    int32_t(PLUGINXX_CALL* register_mcp_server)(
+    /// 登记 MCP 服务器 (**异步**; 可能要建连接/握手, 完成时已可用)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* register_mcp_server)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* spec_json
+        const PluginxxStringView* spec_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    int32_t(PLUGINXX_CALL* unregister_mcp_server)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_mcp_server)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* name_space
+        const PluginxxStringView* name_space,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    int32_t(PLUGINXX_CALL* get_own_resources)(
-        const PluginxxHost*     host,
-        const PluginxxScopeRef* agent,
-        PluginxxString*         out
+    /// 本插件向该 agent 贡献的资源清单 (**异步**; `payload` 为 JSON)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_own_resources)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 } AgentxxPluginResourcesIface;
 
@@ -720,8 +746,9 @@ typedef struct AgentxxPluginGraphNodeTypeSpec {
 ///   回退默认图并记日志)
 #define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH             PLUGINXX_APP_ID("agent.graph")
 /// v2: 全部成员增加 `agent` 参数 (图注册表与图定义都是 per-agent)
-#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION     2
-#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_MIN_VERSION 2
+/// v3: 全部成员改成异步操作契约 (注册类完成时已生效, 读取类结果经 `payload` 交回)
+#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION     3
+#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_MIN_VERSION 3
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_BASELINE_SIZE sizeof(AgentxxPluginGraphIface)
 
@@ -729,38 +756,50 @@ typedef struct AgentxxPluginGraphIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION
     uint32_t struct_size;
 
-    /// 注册节点类型 (io 线程约束, 非 io 线程由主程序投递同步等待)
-    /// `return`: 类型名冲突返回 `AGENTXX_RESULT_ERR_CONFLICT`
-    int32_t(PLUGINXX_CALL* register_node_type)(
+    /// 注册节点类型 (**异步**; 类型名冲突时完成回调给失败)
+    /// - 完成时已生效, 之后的建图能看到该类型
+    PluginxxOperatorHandle*(PLUGINXX_CALL* register_node_type)(
         const PluginxxHost*                   host,
         const PluginxxScopeRef*               agent,
-        const AgentxxPluginGraphNodeTypeSpec* spec
+        const AgentxxPluginGraphNodeTypeSpec* spec,
+        PluginxxOperatorCallback              cb,
+        void*                                 ud,
+        PluginxxString*                       error_out
     );
-    /// 注销节点类型 (按类型名; 挂载卸载时主程序自动清理)
-    /// `return`: 不存在返回 `AGENTXX_RESULT_ERR_NOT_FOUND`
-    int32_t(PLUGINXX_CALL* unregister_node_type)(
+    /// 注销节点类型 (**异步**; 按类型名, 挂载卸载时主程序自动清理)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_node_type)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* type
+        const PluginxxStringView* type,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    /// 获取该 agent 当前执行图 JSON 定义 (host->alloc; 插件可基于此判断后 set 修改)
-    int32_t(PLUGINXX_CALL* get_graph_json)(
-        const PluginxxHost*     host,
-        const PluginxxScopeRef* agent,
-        PluginxxString*         out
-    );
-    /// 获取当前执行图名称 (host->alloc; 默认 "agentxx.default")
-    int32_t(PLUGINXX_CALL* get_graph_name)(
-        const PluginxxHost*     host,
-        const PluginxxScopeRef* agent,
-        PluginxxString*         out
-    );
-    /// 设置执行图 JSON 定义 (覆盖; 主程序构建 engine 前生效)
-    /// `return`: JSON 非法返回 `AGENTXX_RESULT_ERR_JSON` (host 侧解析失败)
-    int32_t(PLUGINXX_CALL* set_graph_json)(
+    /// 获取该 agent 当前执行图 JSON 定义 (**异步**; `payload` 为图定义 JSON)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_graph_json)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* graph_json
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 获取当前执行图名称 (**异步**; 默认 "agentxx.default")
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_graph_name)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 设置执行图 JSON 定义 (**异步**; 覆盖, 主程序构建 engine 前生效)
+    /// - JSON 非法时完成回调给失败
+    PluginxxOperatorHandle*(PLUGINXX_CALL* set_graph_json)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* graph_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 } AgentxxPluginGraphIface;
 
@@ -772,8 +811,9 @@ typedef struct AgentxxPluginGraphIface {
 /// 插件自己就拿着 agent 引用 (挂载时下发), 不需要问主程序"我在谁身上";
 /// 本表的用途是诊断与自查 (例如启动日志、测试断言)。
 #define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT             PLUGINXX_APP_ID("agent.mount")
-#define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_VERSION     1
-#define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_MIN_VERSION 1
+/// v2: 两个成员改成异步操作契约 (摘要在完成回调的 `payload` 里)
+#define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_VERSION     2
+#define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_MIN_VERSION 2
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_BASELINE_SIZE sizeof(AgentxxPluginMountIface)
 
@@ -781,14 +821,21 @@ typedef struct AgentxxPluginMountIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_VERSION
     uint32_t struct_size;
 
-    /// 全部挂载的摘要 (JSON 数组; host->alloc)
+    /// 全部挂载的摘要 (**异步**; `payload` 为 JSON 数组)
     /// 每项: {"agentId","agentName","workDir","language","mountSeq","plugins":[...]}
-    int32_t(PLUGINXX_CALL* list)(const PluginxxHost* host, PluginxxString* out);
-    /// 按 agentId 查一个挂载的摘要 (host->alloc); 没有这个挂载返回 `AGENTXX_RESULT_ERR_NOT_FOUND`
-    int32_t(PLUGINXX_CALL* get)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* list)(
+        const PluginxxHost*      host,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
+    );
+    /// 按 agentId 查一个挂载的摘要 (**异步**; 没有这个挂载时完成回调给失败)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get)(
         const PluginxxHost*       host,
         const PluginxxStringView* agent_id,
-        PluginxxString*           out
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 } AgentxxPluginMountIface;
 

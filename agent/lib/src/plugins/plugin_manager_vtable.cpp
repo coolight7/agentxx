@@ -654,24 +654,58 @@ static PluginxxOperatorHandle* PLUGINXX_CALL xx_check_paths(
 /// 挂载表: 全部挂载的摘要数组 (`list`)
 ///
 /// 定位在主程序业务表的开头, 因为 `query_interface` 在这个文件的后半段引用它。
-static int32_t PLUGINXX_CALL xx_mount_list(const PluginxxHost* host, PluginxxString* out) {
-    return queryStringIo(host, out, [](PluginInstance*, PluginManager* mgr) {
-        return mgr->listMountsJson();
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_mount_list(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        return asyncTableCall</*AllowClosing=*/true>(
+            host,
+            cb,
+            ud,
+            error_out,
+            "mount.list",
+            [](PluginInstance*, PluginManager* mgr) -> std::string {
+                auto text = mgr->listMountsJson();
+                if (text.empty()) {
+                    throw TableOpError("no mount information");
+                }
+                return text;
+            }
+        );
     });
 }
 
 /// 挂载表: 按 agentId 查一个挂载的摘要 (`get`)
-static int32_t PLUGINXX_CALL xx_mount_get(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_mount_get(
     const PluginxxHost*       host,
     const PluginxxStringView* agent_id,
-    PluginxxString*           out
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(agent_id)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto idStr = std::string(agent_id->data, static_cast<size_t>(agent_id->size));
-    return queryStringIo(host, out, [idStr](PluginInstance*, PluginManager* mgr) {
-        return mgr->mountInfoJson(idStr);
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(agent_id)) {
+            setTableOpError(error_out, "mount.get: agent id is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
+        }
+        auto idStr = svToStr(agent_id);
+        return asyncTableCall</*AllowClosing=*/true>(
+            host,
+            cb,
+            ud,
+            error_out,
+            "mount.get",
+            [idStr](PluginInstance*, PluginManager* mgr) -> std::string {
+                auto text = mgr->mountInfoJson(idStr);
+                if (text.empty()) {
+                    throw TableOpError("no such mount");
+                }
+                return text;
+            }
+        );
     });
 }
 
@@ -1041,135 +1075,203 @@ static PluginxxOperatorHandle* PLUGINXX_CALL xx_emit_message_tip(
 // graph 接口表 (agentxx.agent.graph)
 // =====================================================================
 
-static int32_t PLUGINXX_CALL
-    xx_register_node_type(const PluginxxHost* host, const PluginxxScopeRef* agent, const AgentxxPluginGraphNodeTypeSpec* spec) {
-    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
-        auto call = enterHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->type)
+/// 节点类型声明的自持拷贝 (跨线程投递用)
+struct GraphNodeTypeSpecKeep {
+    AgentxxPluginGraphNodeTypeSpec spec{};
+    std::string                    type;
+    std::string                    configSchema;
+
+    explicit GraphNodeTypeSpecKeep(const AgentxxPluginGraphNodeTypeSpec& src) :
+        spec(src),
+        type(svToStr(&src.type)),
+        configSchema(svToStr(&src.config_schema_json)) {
+        spec.type               = agentxx::plugin::PluginStringView::from(type);
+        spec.config_schema_json = agentxx::plugin::PluginStringView::from(configSchema);
+    }
+};
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_register_node_type(
+    const PluginxxHost*                   host,
+    const PluginxxScopeRef*               agent,
+    const AgentxxPluginGraphNodeTypeSpec* spec,
+    PluginxxOperatorCallback              cb,
+    void*                                 ud,
+    PluginxxString*                       error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (spec == nullptr || agentxx::plugin::PluginStringView::empty(&spec->type)
             || !spec->run_start) {
-            return AGENTXX_RESULT_ERR_ARG;
-        }
-        if (!scopeOk(mgr, agent)) {
-            return AGENTXX_RESULT_ERR_NO_AGENT;
+            setTableOpError(error_out, "register_node_type: spec, type and run_start are required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
         // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
         if (!specSizeOk<AgentxxPluginGraphNodeTypeSpec>(spec->struct_size)) {
-            return AGENTXX_RESULT_ERR_ARG;
+            setTableOpError(error_out, "register_node_type: spec struct_size is too small");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        auto                           mgrPtr   = mgr;
-        auto                           instPtr  = inst;
-        AgentxxPluginGraphNodeTypeSpec specCopy = *spec;
-        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy, agent]() {
-            return mountCall(mgrPtr, agent, noAgent, [instPtr, specCopy](PluginMount& mount) {
-                return mount.registerGraphNodeType(instPtr, &specCopy);
-            });
-        });
-    });
-}
-
-
-
-static int32_t PLUGINXX_CALL xx_get_graph_json(
-    const PluginxxHost*     host,
-    const PluginxxScopeRef* agent,
-    PluginxxString*         out
-) {
-    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
-        if (!out) {
-            return AGENTXX_RESULT_ERR_ARG;
-        }
-        auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst) {
-            return AGENTXX_RESULT_ERR_STATE;
-        }
-        if (!scopeOk(mgr, agent)) {
-            return AGENTXX_RESULT_ERR_NO_AGENT;
-        }
-        auto mgrPtr = mgr;
-        auto json   = ioCallSyncKeep<std::string>(call, mgrPtr, [mgrPtr, agent]() -> std::string {
-            auto* mount = mountIn(mgrPtr, agent);
-            return mount != nullptr ? mount->getGraphJson() : std::string{};
-        });
-        if (json.empty()) {
-            return AGENTXX_RESULT_ERR_NOT_FOUND;
-        }
-        hostMemorySetString(out, json);
-        return AGENTXX_RESULT_OK;
-    });
-}
-
-static int32_t PLUGINXX_CALL xx_get_graph_name(
-    const PluginxxHost*     host,
-    const PluginxxScopeRef* agent,
-    PluginxxString*         out
-) {
-    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
-        if (!out) {
-            return AGENTXX_RESULT_ERR_ARG;
-        }
-        auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst) {
-            return AGENTXX_RESULT_ERR_STATE;
-        }
-        if (!scopeOk(mgr, agent)) {
-            return AGENTXX_RESULT_ERR_NO_AGENT;
-        }
-        auto mgrPtr = mgr;
-        auto name   = ioCallSyncKeep<std::string>(call, mgrPtr, [mgrPtr, agent]() -> std::string {
-            auto*       mount  = mountIn(mgrPtr, agent);
-            auto        json   = mount != nullptr ? mount->getGraphJson() : std::string{};
-            std::string result = "agentxx.default";
-            if (!json.empty()) {
-                try {
-                    auto j = utilxx_base::Json::parse(json);
-                    if (j.is_object() && j.contains("name") && j["name"].is_string()) {
-                        result = j["name"].get<std::string>();
-                    }
-                } catch (...) {
+        auto keep = std::make_shared<GraphNodeTypeSpecKeep>(*spec);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "graph.register_node_type",
+            [keep](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                auto rc = mountCall(mgr, &ref, noAgent, [inst, keep](PluginMount& mount) {
+                    return mount.registerGraphNodeType(inst, &keep->spec);
+                });
+                if (rc != AGENTXX_RESULT_OK) {
+                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
                 }
+                return std::string{};
             }
-            return result;
-        });
-        hostMemorySetString(out, name);
-        return AGENTXX_RESULT_OK;
+        );
     });
 }
 
-static int32_t PLUGINXX_CALL xx_unregister_node_type(
-    const PluginxxHost*       host,
-    const PluginxxScopeRef*   agent,
-    const PluginxxStringView* type
+
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_get_graph_json(
+    const PluginxxHost*      host,
+    const PluginxxScopeRef*  agent,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(type)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto typeCopy = *type;
-    return onScopedInstanceIo(host, agent, [agent, typeCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mountCall(mgr, agent, noAgent, [inst, typeCopy](PluginMount& mount) {
-            return mount.unregisterGraphNodeType(inst, typeCopy);
-        });
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        return asyncQueryCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "graph.get_graph_json",
+            [](PluginInstance*, PluginManager* mgr, const PluginxxScopeRef& ref) -> std::string {
+                auto* mount = mountIn(mgr, &ref);
+                return mount != nullptr ? mount->getGraphJson() : std::string{};
+            }
+        );
     });
 }
 
-static int32_t PLUGINXX_CALL xx_set_graph_json(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_get_graph_name(
+    const PluginxxHost*      host,
+    const PluginxxScopeRef*  agent,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        return asyncQueryCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "graph.get_graph_name",
+            [](PluginInstance*, PluginManager* mgr, const PluginxxScopeRef& ref) -> std::string {
+                auto*       mount  = mountIn(mgr, &ref);
+                auto        json   = mount != nullptr ? mount->getGraphJson() : std::string{};
+                std::string result = "agentxx.default";
+                if (!json.empty()) {
+                    try {
+                        auto j = utilxx_base::Json::parse(json);
+                        if (j.is_object() && j.contains("name") && j["name"].is_string()) {
+                            result = j["name"].get<std::string>();
+                        }
+                    } catch (...) {
+                    }
+                }
+                return result;
+            }
+        );
+    });
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_unregister_node_type(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
-    const PluginxxStringView* graph_json
+    const PluginxxStringView* type,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(graph_json)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto jsonValCopy = *graph_json;
-    return onScopedInstanceIo(host, agent, [agent, jsonValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mountCall(mgr, agent, noAgent, [inst, jsonValCopy](PluginMount& mount) {
-            return mount.setGraphJson(inst, jsonValCopy);
-        });
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(type)) {
+            setTableOpError(error_out, "unregister_node_type: type is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
+        }
+        auto typeKeep = svToStr(type);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "graph.unregister_node_type",
+            [typeKeep](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                const PluginxxStringView view{
+                    typeKeep.data(), static_cast<uint64_t>(typeKeep.size())
+                };
+                auto rc = mountCall(mgr, &ref, noAgent, [inst, view](PluginMount& mount) {
+                    return mount.unregisterGraphNodeType(inst, view);
+                });
+                if (rc != AGENTXX_RESULT_OK) {
+                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
+                }
+                return std::string{};
+            }
+        );
+    });
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_set_graph_json(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* graph_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(graph_json)) {
+            setTableOpError(error_out, "set_graph_json: graph_json is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
+        }
+        auto jsonKeep = svToStr(graph_json);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "graph.set_graph_json",
+            [jsonKeep](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                const PluginxxStringView view{
+                    jsonKeep.data(), static_cast<uint64_t>(jsonKeep.size())
+                };
+                auto rc = mountCall(mgr, &ref, noAgent, [inst, view](PluginMount& mount) {
+                    return mount.setGraphJson(inst, view);
+                });
+                if (rc != AGENTXX_RESULT_OK) {
+                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
+                }
+                return std::string{};
+            }
+        );
     });
 }
 
@@ -1293,110 +1395,206 @@ static PluginxxOperatorHandle* PLUGINXX_CALL
     });
 }
 
-static int32_t PLUGINXX_CALL xx_register_skill_dir(
+/// 资源登记类成员的公共实现 (单个字符串入参 + 一个挂载方法)
+///
+/// 六个成员只差"调哪个挂载方法", 复制六遍容易漏改一处, 因此收在这里:
+/// 受理阶段先校验入参并拷成自己的字符串, 工作体在 IO 线程上执行。
+template<typename Fn>
+static PluginxxOperatorHandle* resourceOp(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
-    const PluginxxStringView* path
+    const PluginxxStringView* arg,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out,
+    std::string               label,
+    Fn&&                      call
 ) {
-    if (agentxx::plugin::PluginStringView::empty(path)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto pathValCopy = *path;
-    return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mountCall(mgr, agent, noAgent, [inst, pathValCopy](PluginMount& mount) {
-            return mount.registerSkillDir(inst, pathValCopy);
-        });
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(arg)) {
+            setTableOpError(error_out, label + ": argument is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
+        }
+        auto keep = svToStr(arg);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            std::move(label),
+            [keep, call = std::forward<Fn>(call)](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                const PluginxxStringView view{
+                    keep.data(), static_cast<uint64_t>(keep.size())
+                };
+                auto rc = mountCall(mgr, &ref, noAgent, [inst, view, &call](PluginMount& mount) {
+                    return call(mount, inst, view);
+                });
+                if (rc != AGENTXX_RESULT_OK) {
+                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
+                }
+                return std::string{};
+            }
+        );
     });
 }
 
-static int32_t PLUGINXX_CALL xx_unregister_skill_dir(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_register_skill_dir(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
-    const PluginxxStringView* path
+    const PluginxxStringView* path,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(path)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto pathValCopy = *path;
-    return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mountCall(mgr, agent, noAgent, [inst, pathValCopy](PluginMount& mount) {
-            return mount.unregisterSkillDir(inst, pathValCopy);
-        });
-    });
+    return resourceOp(
+        host,
+        agent,
+        path,
+        cb,
+        ud,
+        error_out,
+        "resources.register_skill_dir",
+        [](PluginMount& mount, PluginInstance* inst, PluginxxStringView view) {
+            return mount.registerSkillDir(inst, view);
+        }
+    );
 }
 
-static int32_t PLUGINXX_CALL xx_register_memory_file(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_unregister_skill_dir(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
-    const PluginxxStringView* path
+    const PluginxxStringView* path,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(path)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto pathValCopy = *path;
-    return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mountCall(mgr, agent, noAgent, [inst, pathValCopy](PluginMount& mount) {
-            return mount.registerMemoryFile(inst, pathValCopy);
-        });
-    });
+    return resourceOp(
+        host,
+        agent,
+        path,
+        cb,
+        ud,
+        error_out,
+        "resources.unregister_skill_dir",
+        [](PluginMount& mount, PluginInstance* inst, PluginxxStringView view) {
+            return mount.unregisterSkillDir(inst, view);
+        }
+    );
 }
 
-static int32_t PLUGINXX_CALL xx_unregister_memory_file(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_register_memory_file(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
-    const PluginxxStringView* path
+    const PluginxxStringView* path,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(path)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto pathValCopy = *path;
-    return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mountCall(mgr, agent, noAgent, [inst, pathValCopy](PluginMount& mount) {
-            return mount.unregisterMemoryFile(inst, pathValCopy);
-        });
-    });
+    return resourceOp(
+        host,
+        agent,
+        path,
+        cb,
+        ud,
+        error_out,
+        "resources.register_memory_file",
+        [](PluginMount& mount, PluginInstance* inst, PluginxxStringView view) {
+            return mount.registerMemoryFile(inst, view);
+        }
+    );
 }
 
-static int32_t PLUGINXX_CALL xx_register_mcp_server(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_unregister_memory_file(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
-    const PluginxxStringView* spec_json
+    const PluginxxStringView* path,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(spec_json)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto specValCopy = *spec_json;
-    return onScopedInstanceIo(host, agent, [agent, specValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mountCall(mgr, agent, noAgent, [inst, specValCopy](PluginMount& mount) {
-            return mount.registerMcpServer(inst, specValCopy);
-        });
-    });
+    return resourceOp(
+        host,
+        agent,
+        path,
+        cb,
+        ud,
+        error_out,
+        "resources.unregister_memory_file",
+        [](PluginMount& mount, PluginInstance* inst, PluginxxStringView view) {
+            return mount.unregisterMemoryFile(inst, view);
+        }
+    );
 }
 
-static int32_t PLUGINXX_CALL xx_unregister_mcp_server(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_register_mcp_server(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
-    const PluginxxStringView* name_space
+    const PluginxxStringView* spec_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(name_space)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto nsValCopy = *name_space;
-    return onScopedInstanceIo(host, agent, [agent, nsValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mountCall(mgr, agent, noAgent, [inst, nsValCopy](PluginMount& mount) {
-            return mount.unregisterMcpServer(inst, nsValCopy);
-        });
-    });
+    return resourceOp(
+        host,
+        agent,
+        spec_json,
+        cb,
+        ud,
+        error_out,
+        "resources.register_mcp_server",
+        [](PluginMount& mount, PluginInstance* inst, PluginxxStringView view) {
+            return mount.registerMcpServer(inst, view);
+        }
+    );
 }
 
-static int32_t PLUGINXX_CALL xx_get_own_resources(
-    const PluginxxHost*     host,
-    const PluginxxScopeRef* agent,
-    PluginxxString*         out
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_unregister_mcp_server(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* name_space,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    return queryScopedStringIo(host, agent, out, [agent](PluginInstance* inst, PluginManager* mgr) {
-        auto* mount = mountIn(mgr, agent);
-        return mount != nullptr ? mount->ownResourcesJson(inst) : std::string{};
+    return resourceOp(
+        host,
+        agent,
+        name_space,
+        cb,
+        ud,
+        error_out,
+        "resources.unregister_mcp_server",
+        [](PluginMount& mount, PluginInstance* inst, PluginxxStringView view) {
+            return mount.unregisterMcpServer(inst, view);
+        }
+    );
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_get_own_resources(
+    const PluginxxHost*      host,
+    const PluginxxScopeRef*  agent,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        return asyncQueryCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "resources.get_own_resources",
+            [](PluginInstance* inst, PluginManager* mgr, const PluginxxScopeRef& ref) -> std::string {
+                auto* mount = mountIn(mgr, &ref);
+                return mount != nullptr ? mount->ownResourcesJson(inst) : std::string{};
+            }
+        );
     });
 }
 

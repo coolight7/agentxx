@@ -308,14 +308,12 @@ static int modifyGraphToIntentFlow(
         errOut = "graph iface not available";
         return -1;
     }
-    PluginxxString graphJson{nullptr, 0};
-    ctx.iface.graph->get_graph_json(ctx.host, agent.ptr(), &graphJson);
-    if (!graphJson.data) {
-        errOut = "get_graph_json returned null";
+    // 表成员是异步契约: 生命周期里的同步取值走阻塞形态 (IO 线程上内联完成)
+    std::string jsonStr = agentxx::plugin::graphJson(ctx.host, ctx.iface, agent.ptr());
+    if (jsonStr.empty()) {
+        errOut = "get_graph_json returned no definition";
         return -1;
     }
-    std::string jsonStr(graphJson.data, static_cast<size_t>(graphJson.size));
-    agentxx::plugin::PluginString::free(ctx.host, &graphJson);
 
     utilxx_base::Json def;
     try {
@@ -422,8 +420,7 @@ static int modifyGraphToIntentFlow(
     graph["edges"] = std::move(edges);
 
     const std::string newJson = graph.dump();
-    auto newJsonSv = agentxx::plugin::PluginStringView::from(newJson.data(), newJson.size());
-    if (ctx.iface.graph->set_graph_json(ctx.host, agent.ptr(), &newJsonSv) != 0) {
+    if (agentxx::plugin::setGraphJson(ctx.host, ctx.iface, agent.ptr(), newJson) != 0) {
         errOut = "set_graph_json failed";
         return -1;
     }

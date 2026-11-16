@@ -445,6 +445,211 @@ inline std::string modelConfigJson(
     return res.ok() ? std::string(res.text()) : std::string{};
 }
 
+/// 读该 agent 当前执行图 JSON 定义 (主程序未提供该表或读取失败时返回空串)
+inline std::string
+    graphJson(const PluginxxHost* host, const AgentIfaces& iface, const PluginxxScopeRef* agent) {
+    if (!host || !iface.graph || !iface.graph->get_graph_json) {
+        return {};
+    }
+    auto res = pluginxx::tableOpBlockingRaw(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.graph->get_graph_json(host, agent, cb, ud, err);
+        }
+    );
+    return res.ok() ? std::string(res.text()) : std::string{};
+}
+
+/// 当前执行图名称 (读取失败时返回空串)
+inline std::string
+    graphName(const PluginxxHost* host, const AgentIfaces& iface, const PluginxxScopeRef* agent) {
+    if (!host || !iface.graph || !iface.graph->get_graph_name) {
+        return {};
+    }
+    auto res = pluginxx::tableOpBlockingRaw(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.graph->get_graph_name(host, agent, cb, ud, err);
+        }
+    );
+    return res.ok() ? std::string(res.text()) : std::string{};
+}
+
+/// 写回执行图 JSON 定义 (返回 `AGENTXX_RESULT_OK` 表示受理并已生效)
+inline int32_t setGraphJson(
+    const PluginxxHost*     host,
+    const AgentIfaces&      iface,
+    const PluginxxScopeRef* agent,
+    std::string_view        json
+) {
+    if (!host || !iface.graph || !iface.graph->set_graph_json) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    auto payloadSv = PluginStringView::from(json.data(), json.size());
+    auto res       = pluginxx::tableOpBlockingRaw(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.graph->set_graph_json(host, agent, &payloadSv, cb, ud, err);
+        }
+    );
+    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
+}
+
+/// 本插件向该 agent 贡献的资源清单 JSON (读取失败时返回空串)
+inline std::string ownResourcesJson(
+    const PluginxxHost*     host,
+    const AgentIfaces&      iface,
+    const PluginxxScopeRef* agent
+) {
+    if (!host || !iface.resources || !iface.resources->get_own_resources) {
+        return {};
+    }
+    auto res = pluginxx::tableOpBlockingRaw(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.resources->get_own_resources(host, agent, cb, ud, err);
+        }
+    );
+    return res.ok() ? std::string(res.text()) : std::string{};
+}
+
+/// 资源登记/注销的公共实现 (单个字符串入参, 阻塞形态)
+template<typename Fn>
+inline int32_t resourceOpSync(
+    const PluginxxHost*     host,
+    const AgentIfaces&      iface,
+    const PluginxxScopeRef* agent,
+    std::string_view        arg,
+    Fn&&                    start
+) {
+    auto argSv = PluginStringView::from(arg.data(), arg.size());
+    auto res   = pluginxx::tableOpBlockingRaw(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return start(argSv, cb, ud, err);
+        }
+    );
+    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
+}
+
+/// 登记技能目录 (返回 `AGENTXX_RESULT_OK` 表示完成时已生效)
+inline int32_t registerSkillDir(
+    const PluginxxHost*     host,
+    const AgentIfaces&      iface,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    if (!host || !iface.resources || !iface.resources->register_skill_dir) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    return resourceOpSync(host, iface, agent, path, [&](PluginxxStringView view,
+                                                       PluginxxOperatorCallback cb,
+                                                       void* ud,
+                                                       PluginxxString* err) {
+        return iface.resources->register_skill_dir(host, agent, &view, cb, ud, err);
+    });
+}
+
+/// 撤销技能目录
+inline int32_t unregisterSkillDir(
+    const PluginxxHost*     host,
+    const AgentIfaces&      iface,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    if (!host || !iface.resources || !iface.resources->unregister_skill_dir) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    return resourceOpSync(host, iface, agent, path, [&](PluginxxStringView view,
+                                                       PluginxxOperatorCallback cb,
+                                                       void* ud,
+                                                       PluginxxString* err) {
+        return iface.resources->unregister_skill_dir(host, agent, &view, cb, ud, err);
+    });
+}
+
+/// 登记记忆文件
+inline int32_t registerMemoryFile(
+    const PluginxxHost*     host,
+    const AgentIfaces&      iface,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    if (!host || !iface.resources || !iface.resources->register_memory_file) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    return resourceOpSync(host, iface, agent, path, [&](PluginxxStringView view,
+                                                       PluginxxOperatorCallback cb,
+                                                       void* ud,
+                                                       PluginxxString* err) {
+        return iface.resources->register_memory_file(host, agent, &view, cb, ud, err);
+    });
+}
+
+/// 撤销记忆文件
+inline int32_t unregisterMemoryFile(
+    const PluginxxHost*     host,
+    const AgentIfaces&      iface,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    if (!host || !iface.resources || !iface.resources->unregister_memory_file) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    return resourceOpSync(host, iface, agent, path, [&](PluginxxStringView view,
+                                                       PluginxxOperatorCallback cb,
+                                                       void* ud,
+                                                       PluginxxString* err) {
+        return iface.resources->unregister_memory_file(host, agent, &view, cb, ud, err);
+    });
+}
+
+/// 登记 MCP 服务器 (完成时已握手)
+inline int32_t registerMcpServer(
+    const PluginxxHost*     host,
+    const AgentIfaces&      iface,
+    const PluginxxScopeRef* agent,
+    std::string_view        specJson
+) {
+    if (!host || !iface.resources || !iface.resources->register_mcp_server) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    return resourceOpSync(host, iface, agent, specJson, [&](PluginxxStringView view,
+                                                            PluginxxOperatorCallback cb,
+                                                            void* ud,
+                                                            PluginxxString* err) {
+        return iface.resources->register_mcp_server(host, agent, &view, cb, ud, err);
+    });
+}
+
+/// 撤销 MCP 服务器
+inline int32_t unregisterMcpServer(
+    const PluginxxHost*     host,
+    const AgentIfaces&      iface,
+    const PluginxxScopeRef* agent,
+    std::string_view        nameSpace
+) {
+    if (!host || !iface.resources || !iface.resources->unregister_mcp_server) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    return resourceOpSync(host, iface, agent, nameSpace, [&](PluginxxStringView view,
+                                                            PluginxxOperatorCallback cb,
+                                                            void* ud,
+                                                            PluginxxString* err) {
+        return iface.resources->unregister_mcp_server(host, agent, &view, cb, ud, err);
+    });
+}
+
 /* ==================== 网络便捷入口 (插件侧) ====================
  *
  * 插件不自己建连接: HTTP / TCP / WebSocket / UDP 一律经主程序的 `<应用名>.net` 表
@@ -1884,16 +2089,16 @@ inline std::string listMounts(const PluginBase& ctx) {
     if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->list) {
         return "[]";
     }
-    PluginxxString out{nullptr, 0};
-    if (ctx.iface.mount->list(ctx.host, &out) != 0 || !out.data) {
-        if (out.data) {
-            PluginString::free(ctx.host, &out);
+    // 表成员是异步契约: 生命周期/工具体里的同步取值走阻塞形态
+    auto op = pluginxx::tableOpBlockingRaw(
+        ctx.host,
+        ctx.iface.cancel,
+        ctx.iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ctx.iface.mount->list(ctx.host, cb, ud, err);
         }
-        return "[]";
-    }
-    std::string text{out.data, static_cast<size_t>(out.size)};
-    PluginString::free(ctx.host, &out);
-    return text;
+    );
+    return op.ok() ? std::string(op.text()) : std::string{"[]"};
 }
 
 /// 按 agentId 查一个挂载的摘要 (没有这个挂载返回空串)
@@ -1901,17 +2106,16 @@ inline std::string mountInfoOf(const PluginBase& ctx, std::string_view agentId) 
     if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->get) {
         return {};
     }
-    auto           idSv = PluginStringView::from(agentId.data(), agentId.size());
-    PluginxxString out{nullptr, 0};
-    if (ctx.iface.mount->get(ctx.host, &idSv, &out) != 0 || !out.data) {
-        if (out.data) {
-            PluginString::free(ctx.host, &out);
+    auto idSv = PluginStringView::from(agentId.data(), agentId.size());
+    auto op   = pluginxx::tableOpBlockingRaw(
+        ctx.host,
+        ctx.iface.cancel,
+        ctx.iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ctx.iface.mount->get(ctx.host, &idSv, cb, ud, err);
         }
-        return {};
-    }
-    std::string text{out.data, static_cast<size_t>(out.size)};
-    PluginString::free(ctx.host, &out);
-    return text;
+    );
+    return op.ok() ? std::string(op.text()) : std::string{};
 }
 
 /* ==================== 会话运行时 (agentxx.agent.runtime) ====================
@@ -3987,7 +4191,16 @@ inline int32_t graph_node(
     };
 
     auto ref = agent.raw();
-    return ctx.iface.graph->register_node_type(ctx.host, &ref, &spec);
+    // 表成员是异步契约: 生命周期里的同步取值走阻塞形态 (IO 线程上内联完成)
+    auto res = pluginxx::tableOpBlockingRaw(
+        ctx.host,
+        ctx.iface.cancel,
+        ctx.iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ctx.iface.graph->register_node_type(ctx.host, &ref, &spec, cb, ud, err);
+        }
+    );
+    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
 }
 /* ==================== 工具权限声明 ====================
  *

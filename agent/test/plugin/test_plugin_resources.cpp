@@ -404,56 +404,126 @@ mcp:
         XX_TEST_EXPECT_TRUE(res3 != nullptr && res3->register_skill_dir != nullptr);
 
         // ---- 运行时注册 skill 目录 (冻结后应拒绝: 仅 yaml 与初始化时追加生效) ----
+        // 表成员是异步契约: 每个调用都用阻塞形态在同一个栈上等结果
+        auto resOk = [&](auto&& start) {
+            return agentxx::plugin::tableOpBlockingRaw(
+                       inst->hostView(),
+                       nullptr,
+                       nullptr,
+                       std::forward<decltype(start)>(start),
+                       5000
+                   )
+                .ok();
+        };
         auto runtimeSkill = tmpRoot / "runtime_skills";
         fs::create_directories(runtimeSkill, ec);
-        auto skillSv = agentxx::plugin::PluginStringView::fromCstr(runtimeSkill.string().c_str());
-        int  rc      = res3 ? res3->register_skill_dir(inst->hostView(), &scopeRef, &skillSv) : -1;
-        XX_TEST_EXPECT_TRUE(rc != 0); // frozen after init
+        // 路径文本先落到具名变量: `path.string()` 返回临时串, 取 c_str() 会悬空
+        const std::string runtimeSkillText = runtimeSkill.string();
+        auto skillSv = agentxx::plugin::PluginStringView::fromCstr(runtimeSkillText.c_str());
+        bool rc      = res3
+                           && resOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                                  return res3->register_skill_dir(
+                                      inst->hostView(),
+                                      &scopeRef,
+                                      &skillSv,
+                                      cb,
+                                      ud,
+                                      err
+                                  );
+                              });
+        XX_TEST_EXPECT_FALSE(rc); // frozen after init
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
 
         // ---- 快照 JSON (get_own_resources) - 运行时 skill 未注册故不含 ----
-        PluginxxString json{nullptr, 0};
+        std::string ownJson;
         if (res3 && res3->get_own_resources) {
-            res3->get_own_resources(inst->hostView(), &scopeRef, &json);
-        }
-        XX_TEST_EXPECT_TRUE(json.data != nullptr);
-        if (json.data) {
-            XX_TEST_EXPECT_TRUE(
-                std::string_view(json.data, json.size).find("runtime_skills")
-                == std::string_view::npos
+            auto op = agentxx::plugin::tableOpBlockingRaw(
+                inst->hostView(),
+                nullptr,
+                nullptr,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return res3->get_own_resources(inst->hostView(), &scopeRef, cb, ud, err);
+                },
+                5000
             );
-            agentxx::plugin::PluginString::free(inst->hostView(), &json);
+            ownJson.assign(op.text());
         }
+        XX_TEST_EXPECT_FALSE(ownJson.empty());
+        XX_TEST_EXPECT_TRUE(ownJson.find("runtime_skills") == std::string::npos);
 
         // ---- 重复注册亦拒绝 (冻结) ----
-        rc = res3 ? res3->register_skill_dir(inst->hostView(), &scopeRef, &skillSv) : -1;
-        XX_TEST_EXPECT_TRUE(rc != 0);
+        rc = res3
+                 && resOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return res3->register_skill_dir(
+                            inst->hostView(),
+                            &scopeRef,
+                            &skillSv,
+                            cb,
+                            ud,
+                            err
+                        );
+                    });
+        XX_TEST_EXPECT_FALSE(rc);
 
         // ---- 注销亦拒绝 (冻结) ----
-        rc = res3 ? res3->unregister_skill_dir(inst->hostView(), &scopeRef, &skillSv) : -1;
-        XX_TEST_EXPECT_TRUE(rc != 0);
+        rc = res3
+             && resOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return res3->unregister_skill_dir(
+                        inst->hostView(),
+                        &scopeRef,
+                        &skillSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                });
+        XX_TEST_EXPECT_FALSE(rc);
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), runtimeSkill.string()));
-        rc = res3 ? res3->unregister_skill_dir(inst->hostView(), &scopeRef, &skillSv) : 0;
-        XX_TEST_EXPECT_TRUE(rc != 0);
+        rc = res3
+             && resOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return res3->unregister_skill_dir(
+                        inst->hostView(),
+                        &scopeRef,
+                        &skillSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                });
+        XX_TEST_EXPECT_FALSE(rc);
 
         // ---- MCP 注册亦拒绝 (冻结) ----
         const char* mcpSpec = R"({"namespace":"t_mcp","url":"http://127.0.0.1:9/sse","timeout":3})";
         auto        mcpSpecSv = agentxx::plugin::PluginStringView::fromCstr(mcpSpec);
-        rc                    = res3 ? res3->register_mcp_server(inst->hostView(), &scopeRef, &mcpSpecSv) : -1;
-        XX_TEST_EXPECT_TRUE(rc != 0);
+        rc = res3
+             && resOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return res3->register_mcp_server(
+                        inst->hostView(),
+                        &scopeRef,
+                        &mcpSpecSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                });
+        XX_TEST_EXPECT_FALSE(rc);
         co_await sleepMs(150);
         {
-            PluginxxString j2{nullptr, 0};
+            std::string j2;
             if (res3 && res3->get_own_resources) {
-                res3->get_own_resources(inst->hostView(), &scopeRef, &j2);
-            }
-            XX_TEST_EXPECT_TRUE(j2.data != nullptr);
-            if (j2.data) {
-                XX_TEST_EXPECT_TRUE(
-                    std::string_view(j2.data, j2.size).find("t_mcp") == std::string_view::npos
+                auto op = agentxx::plugin::tableOpBlockingRaw(
+                    inst->hostView(),
+                    nullptr,
+                    nullptr,
+                    [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return res3->get_own_resources(inst->hostView(), &scopeRef, cb, ud, err);
+                    },
+                    5000
                 );
-                agentxx::plugin::PluginString::free(inst->hostView(), &j2);
+                j2.assign(op.text());
             }
+            XX_TEST_EXPECT_FALSE(j2.empty());
+            XX_TEST_EXPECT_TRUE(j2.find("t_mcp") == std::string::npos);
         }
 
         // ---- 主配置命名空间冲突 → 拒绝 (冻结亦拒绝) ----
@@ -462,8 +532,18 @@ mcp:
         ctx->agentConfig->mcpServerUrls["yaml_ns2"] = ycfg;
         const char* specConflict   = R"({"namespace":"yaml_ns2","url":"https://z"})";
         auto        specConflictSv = agentxx::plugin::PluginStringView::fromCstr(specConflict);
-        rc = res3 ? res3->register_mcp_server(inst->hostView(), &scopeRef, &specConflictSv) : 0;
-        XX_TEST_EXPECT_TRUE(rc != 0);
+        rc = res3
+             && resOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return res3->register_mcp_server(
+                        inst->hostView(),
+                        &scopeRef,
+                        &specConflictSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                });
+        XX_TEST_EXPECT_FALSE(rc);
 
         // ---- 其他 owner 抢注同名命名空间: 因 t_mcp 未注册(冻结)故可成功 ----
         agentxx::agent::McpServerConfig anyCfg;
@@ -476,8 +556,18 @@ mcp:
 
         // ---- 注销亦拒绝 (未注册且冻结) ----
         auto tmcpSv = agentxx::plugin::PluginStringView::fromCstr("t_mcp");
-        rc          = res3 ? res3->unregister_mcp_server(inst->hostView(), &scopeRef, &tmcpSv) : -1;
-        XX_TEST_EXPECT_TRUE(rc != 0);
+        rc          = res3
+                          && resOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                                 return res3->unregister_mcp_server(
+                                     inst->hostView(),
+                                     &scopeRef,
+                                     &tmcpSv,
+                                     cb,
+                                     ud,
+                                     err
+                                 );
+                             });
+        XX_TEST_EXPECT_FALSE(rc);
         auto snapAfter = applier->ownedBy(ownerName);
         XX_TEST_EXPECT_FALSE(contains(snapAfter.mcpNamespaces, "t_mcp"));
 

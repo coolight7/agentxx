@@ -422,8 +422,22 @@ void* PLUGINXX_CALL
         gspec.type       = agentxx::plugin::PluginStringView::fromCstr("probe_graph_type");
         gspec.run_start  = &probeGraphRunStart;
         gspec.user_data  = &probe;
-        const int32_t rc = probe.graph->register_node_type(probe.host, &probe.ref, &gspec);
-        probe.partialGraphRegistration = (rc == 0);
+        auto gop = pluginxx::tableOpBlockingRaw(
+            probe.host,
+            probe.cancel,
+            probe.scheduler,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return probe.graph->register_node_type(
+                    probe.host,
+                    &probe.ref,
+                    &gspec,
+                    cb,
+                    ud,
+                    err
+                );
+            }
+        );
+        probe.partialGraphRegistration = gop.ok();
     }
     if (probe.failStart) {
         // 事务中途失败：主程序必须撤销这次已生效的注册（部分注册回滚）。

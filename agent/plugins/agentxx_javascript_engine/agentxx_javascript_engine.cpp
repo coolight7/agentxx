@@ -4104,7 +4104,18 @@ int32_t JsEngine::registerGraphNodeRow(
 
     // 类型归属于**脚本实例**的插件 (pctx->host), 不是引擎实例
     const PluginxxHost* instanceHost = pctx->host != nullptr ? pctx->host : engineHost_;
-    const int32_t       rc = graph->register_node_type(instanceHost, pctx->scope(), &spec);
+    // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果;
+    // 本函数没有接口表聚合, 取消/调度表按实例句柄查一次
+    const auto nodeIfaces = agentxx::plugin::AgentIfaces::query(instanceHost);
+    auto       regOp      = agentxx::plugin::tableOpBlockingRaw(
+        instanceHost,
+        nodeIfaces.cancel,
+        nodeIfaces.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return graph->register_node_type(instanceHost, pctx->scope(), &spec, cb, ud, err);
+        }
+    );
+    const int32_t rc = regOp.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
     if (rc != AGENTXX_RESULT_OK) {
         // 登记失败: 收回回调 token 与节点标记 (不留半截状态)
         node->dead.store(true);
@@ -4123,7 +4134,11 @@ int32_t JsEngine::registerGraphNodeRow(
     // 脚本卸载 / 顶层异常回滚: 撤销这个类型 (主程序通常已按挂载记录撤销, 幂等)
     JsGraphNodeType* rawNode = node.get();
     JsPluginCtx*     rawCtx  = pctx;
-    pctx->rollbackActions.push_back([graph, rawNode, rawCtx, token, typeName]() {
+    // JsPluginCtx 没有接口表聚合, 取消/调度表按本次查询结果捕获
+    const auto* nodeCancelIface = nodeIfaces.cancel;
+    const auto* nodeSchedIface  = nodeIfaces.scheduler;
+    pctx->rollbackActions.push_back(
+        [graph, rawNode, rawCtx, token, typeName, nodeCancelIface, nodeSchedIface]() {
         rawNode->dead.store(true);
         rawNode->fnToken.store(0);
         if (rawCtx->ctx != nullptr) {
@@ -4138,7 +4153,21 @@ int32_t JsEngine::registerGraphNodeRow(
                 typeName.data(),
                 typeName.size()
             );
-            graph->unregister_node_type(rawCtx->host, rawCtx->scope(), &typeSv);
+            agentxx::plugin::tableOpBlockingRaw(
+                rawCtx->host,
+                nodeCancelIface,
+                nodeSchedIface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return graph->unregister_node_type(
+                        rawCtx->host,
+                        rawCtx->scope(),
+                        &typeSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
         }
     });
     return 0;
@@ -4178,7 +4207,22 @@ void JsEngine::unregisterGraphNodeRow(
                 typeName.data(),
                 typeName.size()
             );
-            graph->unregister_node_type(pctx->host, pctx->scope(), &typeSv);
+            const auto unregIfaces = agentxx::plugin::AgentIfaces::query(pctx->host);
+            agentxx::plugin::tableOpBlockingRaw(
+                pctx->host,
+                unregIfaces.cancel,
+                unregIfaces.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return graph->unregister_node_type(
+                        pctx->host,
+                        pctx->scope(),
+                        &typeSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
         }
     }
 }
@@ -5407,10 +5451,11 @@ JSValue JsEngine::bridgeCall(
             if (argc < 1 || !JS_IsString(argv[0])) {
                 return JS_ThrowTypeError(ctx, "path string required");
             }
-            std::string p   = jsToCppString(ctx, argv[0]);
-            auto        pSv = agentxx::plugin::PluginStringView::fromCstr(p.c_str());
-            int rc = (magic == B_ADD_SKILL_DIR) ? iface.resources->register_skill_dir(host, pctx->scope(), &pSv)
-                                                : iface.resources->register_memory_file(host, pctx->scope(), &pSv);
+            std::string p = jsToCppString(ctx, argv[0]);
+            // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 便捷入口走阻塞形态
+            int rc = (magic == B_ADD_SKILL_DIR)
+                         ? agentxx::plugin::registerSkillDir(host, iface, pctx->scope(), p)
+                         : agentxx::plugin::registerMemoryFile(host, iface, pctx->scope(), p);
             if (rc != 0) {
                 return throwJsError(
                     ctx,
@@ -5418,14 +5463,25 @@ JSValue JsEngine::bridgeCall(
                 );
             }
             const bool isSkillDir = (magic == B_ADD_SKILL_DIR);
-            pctx->rollbackActions.push_back([host, resIface = iface.resources, pctxRaw = pctx, p, isSkillDir]() {
-                auto pSv2 = agentxx::plugin::PluginStringView::from(p.data(), p.size());
-                if (isSkillDir) {
-                    resIface->unregister_skill_dir(host, pctxRaw->scope(), &pSv2);
-                } else {
-                    resIface->unregister_memory_file(host, pctxRaw->scope(), &pSv2);
+            pctx->rollbackActions.push_back(
+                [host, resIfaces = iface, pctxRaw = pctx, p, isSkillDir]() {
+                    if (isSkillDir) {
+                        agentxx::plugin::unregisterSkillDir(
+                            host,
+                            resIfaces,
+                            pctxRaw->scope(),
+                            p
+                        );
+                    } else {
+                        agentxx::plugin::unregisterMemoryFile(
+                            host,
+                            resIfaces,
+                            pctxRaw->scope(),
+                            p
+                        );
+                    }
                 }
-            });
+            );
             return JS_TRUE;
         }
 
@@ -5434,11 +5490,11 @@ JSValue JsEngine::bridgeCall(
             if (argc < 1 || !JS_IsString(argv[0])) {
                 return JS_ThrowTypeError(ctx, "path string required");
             }
-            std::string p   = jsToCppString(ctx, argv[0]);
-            auto        pSv = agentxx::plugin::PluginStringView::fromCstr(p.c_str());
-            bool        ok  = (magic == B_REMOVE_SKILL_DIR)
-                                  ? (iface.resources->unregister_skill_dir(host, pctx->scope(), &pSv) == 0)
-                                  : (iface.resources->unregister_memory_file(host, pctx->scope(), &pSv) == 0);
+            std::string p = jsToCppString(ctx, argv[0]);
+            bool        ok
+                = (magic == B_REMOVE_SKILL_DIR)
+                      ? (agentxx::plugin::unregisterSkillDir(host, iface, pctx->scope(), p) == 0)
+                      : (agentxx::plugin::unregisterMemoryFile(host, iface, pctx->scope(), p) == 0);
             return ok ? JS_TRUE : JS_FALSE;
         }
 
@@ -5475,17 +5531,17 @@ JSValue JsEngine::bridgeCall(
                 agentxx::plugin::jsonEscape(host, iface.json, url),
                 t
             );
-            auto specSv = agentxx::plugin::PluginStringView::fromCstr(spec.c_str());
-            if (iface.resources->register_mcp_server(host, pctx->scope(), &specSv) != 0) {
+            if (agentxx::plugin::registerMcpServer(host, iface, pctx->scope(), spec) != 0) {
                 return throwJsError(
                     ctx,
                     fmt::format("addMcpServer register failed (conflict?): {}", ns)
                 );
             }
-            pctx->rollbackActions.push_back([host, resIface = iface.resources, pctxRaw = pctx, ns]() {
-                auto nsSv2 = agentxx::plugin::PluginStringView::from(ns.data(), ns.size());
-                resIface->unregister_mcp_server(host, pctxRaw->scope(), &nsSv2);
-            });
+            pctx->rollbackActions.push_back(
+                [host, resIfaces = iface, pctxRaw = pctx, ns]() {
+                    agentxx::plugin::unregisterMcpServer(host, resIfaces, pctxRaw->scope(), ns);
+                }
+            );
             return JS_TRUE;
         }
 
@@ -5493,9 +5549,10 @@ JSValue JsEngine::bridgeCall(
             if (argc < 1 || !JS_IsString(argv[0])) {
                 return JS_ThrowTypeError(ctx, "removeMcpServer: namespace required");
             }
-            std::string ns   = jsToCppString(ctx, argv[0]);
-            auto        nsSv = agentxx::plugin::PluginStringView::from(ns.data(), ns.size());
-            return iface.resources->unregister_mcp_server(host, pctx->scope(), &nsSv) == 0 ? JS_TRUE : JS_FALSE;
+            std::string ns = jsToCppString(ctx, argv[0]);
+            return agentxx::plugin::unregisterMcpServer(host, iface, pctx->scope(), ns) == 0
+                       ? JS_TRUE
+                       : JS_FALSE;
         }
 
         // ---- 与 C++ 插件 SDK 对齐的查询/声明接口 ----
@@ -6037,14 +6094,8 @@ JSValue JsEngine::bridgeCall(
             if (!iface.graph || !iface.graph->get_graph_json) {
                 return JS_NULL;
             }
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.graph->get_graph_json(host, pctx->scope(), &out);
-            std::string    json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != AGENTXX_RESULT_OK) {
+            std::string json = agentxx::plugin::graphJson(host, iface, pctx->scope());
+            if (json.empty()) {
                 return JS_NULL;
             }
             return jsonTextToValue(ctx, json, "<graph>");
@@ -6054,26 +6105,20 @@ JSValue JsEngine::bridgeCall(
             if (!iface.graph || !iface.graph->get_graph_name) {
                 return JS_NewString(ctx, "");
             }
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.graph->get_graph_name(host, pctx->scope(), &out);
-            if (rc != AGENTXX_RESULT_OK || !out.data) {
+            std::string name = agentxx::plugin::graphName(host, iface, pctx->scope());
+            if (name.empty()) {
                 return JS_NewString(ctx, "");
             }
-            JSValue name = JS_NewStringLen(ctx, out.data, static_cast<size_t>(out.size));
-            agentxx::plugin::PluginString::free(host, &out);
-            return name;
+            return JS_NewStringLen(ctx, name.data(), name.size());
         }
 
         case B_SET_GRAPH_JSON: {
             if (!iface.graph || !iface.graph->set_graph_json || argc < 1) {
                 return JS_FALSE;
             }
-            const std::string json   = argsJsonText(ctx, argv[0]);
-            auto              jsonSv = agentxx::plugin::PluginStringView::from(
-                json.data(),
-                json.size()
-            );
-            return iface.graph->set_graph_json(host, pctx->scope(), &jsonSv) == AGENTXX_RESULT_OK
+            const std::string json = argsJsonText(ctx, argv[0]);
+            return agentxx::plugin::setGraphJson(host, iface, pctx->scope(), json)
+                           == AGENTXX_RESULT_OK
                        ? JS_TRUE
                        : JS_FALSE;
         }
@@ -6139,13 +6184,20 @@ JSValue JsEngine::bridgeCall(
             if (!iface.mount || !iface.mount->list) {
                 return JS_NewArray(ctx);
             }
-            PluginxxString out{nullptr, 0};
-            if (iface.mount->list(host, &out) != AGENTXX_RESULT_OK || !out.data) {
+            // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
+            auto op = agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.mount->list(host, cb, ud, err);
+                }
+            );
+            if (!op.ok()) {
                 return JS_NewArray(ctx);
             }
-            std::string json(out.data, static_cast<size_t>(out.size));
-            agentxx::plugin::PluginString::free(host, &out);
-            JSValue arr = jsonTextToValue(ctx, json, "<mounts>");
+            std::string json(op.text());
+            JSValue     arr = jsonTextToValue(ctx, json, "<mounts>");
             if (!JS_IsArray(arr)) {
                 JS_FreeValue(ctx, arr);
                 return JS_NewArray(ctx);
@@ -6168,13 +6220,18 @@ JSValue JsEngine::bridgeCall(
                 agentId.data(),
                 agentId.size()
             );
-            PluginxxString out{nullptr, 0};
-            if (iface.mount->get(host, &agentSv, &out) != AGENTXX_RESULT_OK || !out.data) {
+            auto op = agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.mount->get(host, &agentSv, cb, ud, err);
+                }
+            );
+            if (!op.ok()) {
                 return JS_NULL;
             }
-            std::string json(out.data, static_cast<size_t>(out.size));
-            agentxx::plugin::PluginString::free(host, &out);
-            return jsonTextToValue(ctx, json, "<mount>");
+            return jsonTextToValue(ctx, std::string(op.text()), "<mount>");
         }
 
         // ---- 会话运行时 (`agentxx.agent.runtime`): 自建根 / 会话通道 / 触发器 / 定时器 ----
@@ -6608,14 +6665,9 @@ JSValue JsEngine::bridgeCall(
             if (!iface.resources || !iface.resources->get_own_resources) {
                 return JS_NULL;
             }
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.resources->get_own_resources(host, pctx->scope(), &out);
-            std::string    json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != AGENTXX_RESULT_OK || json.empty()) {
+            std::string json
+                = agentxx::plugin::ownResourcesJson(host, iface, pctx->scope());
+            if (json.empty()) {
                 return JS_NULL;
             }
             return jsonTextToValue(ctx, json, "<resources>");

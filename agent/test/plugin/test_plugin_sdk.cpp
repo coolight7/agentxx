@@ -82,15 +82,24 @@ int32_t PLUGINXX_CALL fakeRegisterCapability(
     return 0;
 }
 
-int32_t PLUGINXX_CALL fakeRegisterGraphNodeType(
-    const PluginxxHost*, const PluginxxScopeRef* agent, const AgentxxPluginGraphNodeTypeSpec* spec
+PluginxxOperatorHandle* PLUGINXX_CALL fakeRegisterGraphNodeType(
+    const PluginxxHost*,
+    const PluginxxScopeRef* agent,
+    const AgentxxPluginGraphNodeTypeSpec* spec,
+    PluginxxOperatorCallback cb,
+    void* ud,
+    PluginxxString* error_out
 ) {
+    (void)error_out;
     if (!agent || !spec) {
-        return -1;
+        return nullptr;
     }
     g_captured.graphNode    = *spec;
     g_captured.hasGraphNode = true;
-    return 0;
+    if (cb) {
+        cb(ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    return reinterpret_cast<PluginxxOperatorHandle*>(1);
 }
 
 const AgentxxPluginToolsIface g_fakeTools = {
