@@ -66,7 +66,10 @@
 
 ## 状态
 
-规划中（2026-11）。方案已写入 [plan.md](plan.md)，实施未开始。
+实施中（2026-11）：阶段 A（骨架 + `session` 试点）、A2（加载线程）、B（`agentxx.agent`
+九张业务表）、C（`runtime` 21 个成员）已完成，进度与验证见 [work.md](work.md)。
+剩下 C2（框架表）、D（`agentxx.client.*` 六张 + 三个回答型回调）、E（删同步路径与 client
+侧 150 ms 同步桥）。全局 API 代次实际是 **6 → 7**（第 6 代已被"工具结果两段上报"占用）。
 
 前置: 无。后续依赖它的任务: [js-runtime-singleton](../js-runtime-singleton/index.md)
 （JS 运行时单例重构建议在它之后做，可少写一半同步桥过渡代码）与

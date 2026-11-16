@@ -466,11 +466,12 @@ C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
 | 回调 | `tableOpCallback(ctx, start, done)` | 任意线程; `done` 在 IO 线程恰好一次 |
 | 阻塞 | `tableOpBlocking(ctx, start, timeoutMs)` / `tableOpBlockingRaw(host, cancel, scheduler, start)` | 非 IO 线程真等待; IO 线程上先看是否已内联完成, 没完成就返回 `accepted() == false` (不会死锁) |
 
-> 当前进度: 阶段 A 的骨架与 `agentxx.agent.session` (v4), 以及阶段 B 的
+> 当前进度: 阶段 A 的骨架与 `agentxx.agent.session` (v4), 阶段 B 的
 > `agentxx.agent.tools` (v5) / `permission` (v3) / `context` (v3) / `model` (v3) /
-> `prompt` (v4) / `resources` (v3) / `graph` (v3) / `mount` (v2) 已切到这套契约;
-> 其余表 (`runtime` 与 `agentxx.client.*`、框架通用表) 仍是一条条同步签名, 迁移按
-> `resource/history/plugin-api-async/plan.md` 的阶段推进。
+> `prompt` (v4) / `resources` (v3) / `graph` (v3) / `mount` (v2), 以及阶段 C 的
+> `agentxx.agent.runtime` (v3) 已切到这套契约; 其余表 (`agentxx.client.*` 六张与
+> 框架通用表) 仍是一条条同步签名, 迁移按 `resource/history/plugin-api-async/plan.md`
+> 的阶段推进。
 >
 > 作用域引用的两种失败要分开看: 引用的**形状**无效 (空指针 / `id` 为空 /
 > `struct_size` 越界) 是**未受理** —— 只需检查字段, 任意线程都能判, 同步返回 `NULL`;
@@ -496,7 +497,7 @@ C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
 | `agentxx.agent.resources` | 3 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变)。v3 = 全部成员改成异步操作契约 (登记类完成时已生效, 清单经 `payload` 交回, 见 §8.0) |
 | `agentxx.agent.graph` | 3 | 执行图扩展 (v3 起全部异步, 见 §8.0): `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改主程序执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 主程序构建 engine 前处理)。**图状态不含对话上下文**: `state_json` 里没有 `messages` 通道 (LLM 上下文由会话持有), 只有控制类通道与只读影子通道 `xx_messagesMeta` (条数/版本/角色分布/末尾消息摘要, 载荷与上下文大小无关); 需要上下文内容用 `agentxx.agent.context` 查询。插件写 `{"channel":"messages", ...}` 的 writes 会被主程序改写成会话上下文写入 (默认 append, `"mode":"overwrite"` 整体替换; 空列表的 overwrite 忽略), 因此按旧契约写 `messages` 的插件仍可用。**条件边用 `xx_has_tool_calls`** (agentxx 注册, 语义 = 最后一条 assistant 是否带 tool_calls; 读 `xx_messagesMeta.last_assistant_tool_calls`, 缺该通道时回退扫描 `messages` 通道), 内置 `has_tool_calls` 在新架构下恒为 false, 不要使用 |
 | `agentxx.agent.mount` | 2 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载时完成回调给失败)。v2 = 两个成员改成异步操作契约 (见 §8.0) |
-| `agentxx.agent.runtime` | 2 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调投递) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。v2 表尾追加后台任务四成员 (`submit/cancel/get/list_async_work`, 基线不变, `ifaceHas` 判定)。详见 §19 |
+| `agentxx.agent.runtime` | 3 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调投递) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。v2 表尾追加后台任务四成员 (`submit/cancel/get/list_async_work`); v3 = 21 个成员全部改成异步操作契约 (见 §8.0): 句柄 id 与查询结果经 `payload` 交回 (id 是十进制文本), 不再有 `out_*` 出参, 基线重置为整表长度。`get_async_work` 对不存在或非本实例提交的任务按 `not_found` 交回。详见 §19 |
 
 ### 8.2 通用表 (`agentxx.*`, 9 张)
 
@@ -2199,9 +2200,9 @@ plugin:
 
 | 分组 | 入口 | 说明 |
 |---|---|---|
-| 根 | `mount_root(spec, out_id)` | 建根 (异步 init; 立即返回 id); **只能在 `start` 调用** |
+| 根 | `mount_root(spec)` | 建根 (异步 init; 受理后经 `payload` 交回 root id); **只能在 `start` 调用** |
 | | `unmount_root(root_id)` | 摘根 (先关其通道) |
-| 通道 | `open_channel(spec, out_id)` | 一个 `sessionId` 一条通道; 根未就绪时自动排队 |
+| 通道 | `open_channel(spec)` | 一个 `sessionId` 一条通道; 根未就绪时自动排队; 受理后经 `payload` 交回 channel id |
 | | `close_channel(id)` | 关通道 (最后一条事件固定 `CLOSED`) |
 | 输入 | `send_input(id, input_json)` | 输入 JSON 与 FFI 同构 (`text`/`attachments`/`model`/`delivery`) |
 | | `cancel(id)` / `select_model(id, model)` | 取消当前轮次 / 换模型 |
@@ -2209,18 +2210,21 @@ plugin:
 | 查询 | `get_channel_state(id)` | 通道状态 JSON (不含消息正文) |
 | | `get_context_messages(id)` | 通道会话的 LLM 上下文 (JSON 数组文本) |
 | | `list_runtime()` | `{roots:[{rootId,name,state,configSummary,channels}], triggers, timers}` |
-| 事件驱动 | `register_trigger(spec, out_id)` | 订阅主题 → 按策略投递 |
+| 事件驱动 | `register_trigger(spec)` | 订阅主题 → 按策略投递; 受理后经 `payload` 交回 trigger id |
 | | `unregister_trigger(id)` | 注销触发器 |
 | | `emit_event(topic, payload)` | 发一条 `std::string` 事件 (任意线程, 立即返回) |
-| 定时 | `register_timer(spec, out_id)` | 一次性 / 周期 |
+| 定时 | `register_timer(spec)` | 一次性 / 周期; 受理后经 `payload` 交回 timer id |
 | | `unregister_timer(id)` | 注销定时器 |
-| 后台任务 (v2) | `submit_async_work(spec, out_id)` | 提交后台任务; 结果发到固定事件 `agentxx.agent.async.done`, 标识用返回的 `asyncId` |
-| | `cancel_async_work(id)` | 只能取消本实例提交的 (别人的任务返回 `ERR_ARG`) |
-| | `get_async_work(id, out_json)` / `list_async_work(session_id, out_json)` | 任务表查询; `session_id` 空 = 本实例提交的全部 |
+| 后台任务 (v2) | `submit_async_work(spec)` | 提交后台任务; 结果发到固定事件 `agentxx.agent.async.done`, 标识用交回的 `asyncId` |
+| | `cancel_async_work(id)` | 只能取消本实例提交的 (别人的任务按 `invalid_argument` 失败) |
+| | `get_async_work(id)` / `list_async_work(session_id)` | 任务表查询; `session_id` 空 = 本实例提交的全部; 查不到/别人的按 `not_found` 失败 |
 
-错误码 (`agentxx_result.h` 的 `AGENTXX_RESULT_*`, 与框架表同段): `OK(0)` / `ERR_ARG` /
+返回码 (`agentxx_result.h` 的 `AGENTXX_RESULT_*`, 与框架表同段): `OK(0)` / `ERR_ARG` /
 `ERR_STATE` / `ERR_NOT_FOUND` / `ERR_LIMIT` / `ERR_CONFLICT` / `ERR_UNSUPPORTED` / `ERR_FAILED`。
-具体原因写日志 (这张表的入口没有 `error_out` 参数)。
+v3 起这些码不再作为入口返回值出现: 入口只表达"受理 / 未受理", 结论走完成回调 (见 §8.0) ——
+业务失败按 `PLUGINXX_OPERATOR_FAILED` 交回, 正文是 `<成员名>: <resultName>` (如
+`open_channel: conflict`); 受理阶段的参数形状错同步返回 `NULL` 并写 `error_out`。
+句柄 id (通道 / 触发器 / 定时器 / 任务) 与查询结果都经 `payload` 交回 (id 是十进制文本)。
 
 **后台任务四成员 (v2)**:
 
@@ -2234,9 +2238,9 @@ plugin:
   同时是该任务 agent 的 `sessionId`;
 - 结果统一发 `agentxx.agent.async.done` (值里用 `asyncId` 区分); 模型侧的读取入口是
   `agentxx_async_query` / `agentxx_async_await` (不再经事件发布工具);
-- `cancel/get/list` 都**只能碰本实例提交的** (`owner = plugin:<实例名>`): 取消别人的返回
-  `ERR_ARG`, 查别人的返回空; 插件禁用/卸载时主程序按 owner 把这批未完成任务取消
-  (只置取消令牌, 终态照常记录);
+- `cancel/get/list` 都**只能碰本实例提交的** (`owner = plugin:<实例名>`): 取消别人的按
+  `invalid_argument` 失败, 查别人的按 `not_found` 失败; 插件禁用/卸载时主程序按 owner
+  把这批未完成任务取消 (只置取消令牌, 终态照常记录);
 - `on_event` 回调 (**容器 io 线程, 必须快速返回**): `QUEUED` / `STARTED` / `FINISHED` /
   `CANCELED` 四个阶段, `payload_json` 带 `asyncId` / `kind` / `name` / `queueAhead` /
   `delayMs` (仅 `QUEUED` 阶段) / `hasError` / `canceled` / `error`; 实例释放/禁用后不再进入插件代码;
@@ -2257,8 +2261,8 @@ plugin:
   参数原样转交 (执行层
   补 `sessionId` / `tool_call_id`), `message` / 派生配置 / 工具策略 / 挂载清单都不参与。
   `kind=1` 但读不到 `tool_name` (旧插件用旧布局) 或 `tool_args_json` 不是 JSON 对象时
-  返回 `ERR_ARG`。两个追加字段的基线是 `offsetof(tool_name)`, 老主程序填的短结构体
-  读不到它们。
+  按**未受理**同步返回 `NULL` (`error_out` 给原因)。两个追加字段的基线是
+  `offsetof(tool_name)`, 老主程序填的短结构体读不到它们。
 - `plugins_json` 的形状与 yaml `plugin.mount` 同构 (`mode` = `all`/`listed`/`none`、`list`、
   `args`), **另多一个 `exclude`** (字符串数组, `all` 与 `listed` 都生效): 插件提交任务时
   用它把自己排除在外。例: `{"mode":"all","exclude":["agentxx_chatbot"]}` ——

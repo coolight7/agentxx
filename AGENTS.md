@@ -804,12 +804,13 @@ path/to/agentxx_test --log-level warn string_util regex
   `send_input`/`cancel`/`select_model`/`respond_interrupt`)、查询
   (`get_channel_state`/`get_context_messages`/`list_runtime`) 与事件驱动
   (`register_trigger`/`emit_event`/`register_timer`), **v2 表尾追加后台任务四成员**
-  (`submit_async_work`/`cancel_async_work`/`get_async_work`/`list_async_work`; 基线用
-  `offsetof` 停在追加前, 插件用 `ifaceHas` 判定降级; 只能碰本实例提交的, owner =
-  `plugin:<实例名>`, 禁用/卸载按 owner 批量取消; 参数 `AgentxxPluginAsyncWorkSpec` 尾部
-  追加了 `tool_name`/`tool_args_json` 支撑 `kind=tool`、再追加 `delay_ms`/`queue_timeout_ms`
-  支撑起跑延时与排队时限, 基线停在 `offsetof(tool_name)`, 读侧用 `specHas` 判定), 详见
-  [plugins.md](docs/zh-cn/design/plugins.md) §19,
+  (`submit_async_work`/`cancel_async_work`/`get_async_work`/`list_async_work`; 只能碰本实例
+  提交的, owner = `plugin:<实例名>`, 禁用/卸载按 owner 批量取消; 参数
+  `AgentxxPluginAsyncWorkSpec` 尾部追加了 `tool_name`/`tool_args_json` 支撑 `kind=tool`、
+  再追加 `delay_ms`/`queue_timeout_ms` 支撑起跑延时与排队时限, 基线停在 `offsetof(tool_name)`,
+  读侧用 `specHas` 判定)。**v3 起 21 个成员全部改成异步操作契约**: 受理即返回, 句柄 id 与
+  查询结果经 `payload` 交回 (id 是十进制文本), 业务失败的原因文本形如
+  `open_channel: conflict`, 详见 [plugins.md](docs/zh-cn/design/plugins.md) §19,
   client 侧 16 张 (9 张框架通用表 + `agentxx.net` + 6 张自有表 `agentxx.client.*`:
   ui/session/wire/self/timer/keybind)
 - **网络能力 `agentxx.net` 是通用表** (两侧都提供, 不计入上面的 10 张业务表):

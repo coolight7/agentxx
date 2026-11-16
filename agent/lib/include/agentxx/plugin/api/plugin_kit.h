@@ -524,11 +524,10 @@ inline std::string ownResourcesJson(
 /// 资源登记/注销的公共实现 (单个字符串入参, 阻塞形态)
 template<typename Fn>
 inline int32_t resourceOpSync(
-    const PluginxxHost*     host,
-    const AgentIfaces&      iface,
-    const PluginxxScopeRef* agent,
-    std::string_view        arg,
-    Fn&&                    start
+    const PluginxxHost* host,
+    const AgentIfaces&  iface,
+    std::string_view    arg,
+    Fn&&                start
 ) {
     auto argSv = PluginStringView::from(arg.data(), arg.size());
     auto res   = pluginxx::tableOpBlockingRaw(
@@ -552,7 +551,7 @@ inline int32_t registerSkillDir(
     if (!host || !iface.resources || !iface.resources->register_skill_dir) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    return resourceOpSync(host, iface, agent, path, [&](PluginxxStringView view,
+    return resourceOpSync(host, iface, path, [&](PluginxxStringView view,
                                                        PluginxxOperatorCallback cb,
                                                        void* ud,
                                                        PluginxxString* err) {
@@ -570,7 +569,7 @@ inline int32_t unregisterSkillDir(
     if (!host || !iface.resources || !iface.resources->unregister_skill_dir) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    return resourceOpSync(host, iface, agent, path, [&](PluginxxStringView view,
+    return resourceOpSync(host, iface, path, [&](PluginxxStringView view,
                                                        PluginxxOperatorCallback cb,
                                                        void* ud,
                                                        PluginxxString* err) {
@@ -588,7 +587,7 @@ inline int32_t registerMemoryFile(
     if (!host || !iface.resources || !iface.resources->register_memory_file) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    return resourceOpSync(host, iface, agent, path, [&](PluginxxStringView view,
+    return resourceOpSync(host, iface, path, [&](PluginxxStringView view,
                                                        PluginxxOperatorCallback cb,
                                                        void* ud,
                                                        PluginxxString* err) {
@@ -606,7 +605,7 @@ inline int32_t unregisterMemoryFile(
     if (!host || !iface.resources || !iface.resources->unregister_memory_file) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    return resourceOpSync(host, iface, agent, path, [&](PluginxxStringView view,
+    return resourceOpSync(host, iface, path, [&](PluginxxStringView view,
                                                        PluginxxOperatorCallback cb,
                                                        void* ud,
                                                        PluginxxString* err) {
@@ -624,7 +623,7 @@ inline int32_t registerMcpServer(
     if (!host || !iface.resources || !iface.resources->register_mcp_server) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    return resourceOpSync(host, iface, agent, specJson, [&](PluginxxStringView view,
+    return resourceOpSync(host, iface, specJson, [&](PluginxxStringView view,
                                                             PluginxxOperatorCallback cb,
                                                             void* ud,
                                                             PluginxxString* err) {
@@ -642,7 +641,7 @@ inline int32_t unregisterMcpServer(
     if (!host || !iface.resources || !iface.resources->unregister_mcp_server) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    return resourceOpSync(host, iface, agent, nameSpace, [&](PluginxxStringView view,
+    return resourceOpSync(host, iface, nameSpace, [&](PluginxxStringView view,
                                                             PluginxxOperatorCallback cb,
                                                             void* ud,
                                                             PluginxxString* err) {
@@ -2118,6 +2117,71 @@ inline std::string mountInfoOf(const PluginBase& ctx, std::string_view agentId) 
     return op.ok() ? std::string(op.text()) : std::string{};
 }
 
+namespace detail {
+
+/// runtime 表的同步形态 (阻塞): 只关心成败
+///
+/// 表成员是异步契约; 这里的便捷层给生命周期与工具体里的同步写法用 ——
+/// 调用方本来就在主程序 IO 线程时主程序内联完成, 不产生等待。
+template<typename Ctx, typename StartFn>
+inline int32_t runtimeCall(const Ctx& ctx, StartFn&& start) {
+    auto res = pluginxx::tableOpBlockingRaw(
+        ctx.host,
+        ctx.iface.cancel,
+        ctx.iface.scheduler,
+        std::forward<StartFn>(start)
+    );
+    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
+}
+
+/// runtime 表的同步形态: 结果正文 (JSON 或句柄 id 文本) 一起给回
+template<typename Ctx, typename StartFn>
+inline int32_t runtimeCallText(const Ctx& ctx, StartFn&& start, std::string& out) {
+    auto res = pluginxx::tableOpBlockingRaw(
+        ctx.host,
+        ctx.iface.cancel,
+        ctx.iface.scheduler,
+        std::forward<StartFn>(start)
+    );
+    if (!res.ok()) {
+        return AGENTXX_RESULT_ERR_INTERNAL;
+    }
+    out.assign(res.text());
+    return AGENTXX_RESULT_OK;
+}
+
+/// runtime 表的同步形态: 句柄 id (完成时 `payload` 是十进制文本)
+template<typename Ctx, typename StartFn>
+inline int32_t runtimeCallId(const Ctx& ctx, StartFn&& start, int64_t& outId) {
+    std::string text;
+    const auto  rc = runtimeCallText(ctx, std::forward<StartFn>(start), text);
+    if (rc != AGENTXX_RESULT_OK) {
+        return rc;
+    }
+    int64_t id = 0;
+    for (char c : text) {
+        if (c >= '0' && c <= '9') {
+            id = id * 10 + (c - '0');
+        }
+    }
+    outId = id;
+    return AGENTXX_RESULT_OK;
+}
+
+/// runtime 表的同步形态: 结果正文直接给回 (失败 = 空串)
+template<typename Host, typename CancelIface, typename SchedulerIface, typename StartFn>
+inline std::string takeRuntimeText(
+    Host               host,
+    CancelIface        cancel,
+    SchedulerIface     scheduler,
+    StartFn&&          start
+) {
+    auto res = pluginxx::tableOpBlockingRaw(host, cancel, scheduler, std::forward<StartFn>(start));
+    return res.ok() ? std::string(res.text()) : std::string{};
+}
+
+} // namespace detail
+
 /* ==================== 会话运行时 (agentxx.agent.runtime) ====================
  *
  * 三层的便捷封装 (C ABI 见 plugin_api.h 的同名表):
@@ -2126,8 +2190,9 @@ inline std::string mountInfoOf(const PluginBase& ctx, std::string_view agentId) 
  * - **通道 (channel)**: 一个 `sessionId` 的驱动壳 (输入 / 事件 / 中断 / 查询);
  * - **触发器 (trigger) / 定时器 (timer)**: 把事件或时间转成通道输入。
  *
- * 全部入口是同步调用 (内部投递到主程序 io 线程后返回), 建根/开通道/关通道都只是
- * "发起", 结果经通道事件体现 (`READY` / `ERROR` / `CLOSED`)。
+ * 全部入口是**异步操作契约**的表成员, 这里的便捷层包成"调用即得结果": 调用方本来就在
+ * 主程序 IO 线程时主程序内联完成, 不产生等待。建根/开通道/关通道都只是"发起",
+ * 结果经通道事件体现 (`READY` / `ERROR` / `CLOSED`); 句柄 id 直接作为返回值。
  * 主程序没有这张表时 (老版本) 全部返回失败值, 不抛异常。
  */
 
@@ -2244,17 +2309,15 @@ inline std::string mountRoot(Ctx& ctx, const MountRootOptions& opt) {
     spec.config_json     = PluginStringView::from(configJson);
     spec.mount_plugins   = PluginStringView::from(opt.mountPlugins);
     spec.include_creator = opt.includeCreator ? 1 : 0;
-    PluginxxString out{nullptr, 0};
-    const auto     rc = ctx.iface.runtime->mount_root(ctx.host, &spec, &out);
-    if (rc != AGENTXX_RESULT_OK || !out.data) {
-        if (out.data) {
-            PluginString::free(ctx.host, &out);
-        }
-        return {};
-    }
-    std::string rootId{out.data, static_cast<size_t>(out.size)};
-    PluginString::free(ctx.host, &out);
-    return rootId;
+    std::string rootId;
+    const auto  rc = detail::runtimeCallText(
+        ctx,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ctx.iface.runtime->mount_root(ctx.host, &spec, cb, ud, err);
+        },
+        rootId
+    );
+    return rc == AGENTXX_RESULT_OK ? rootId : std::string{};
 }
 
 /// 卸载一个根 (其下通道先全部关闭)
@@ -2264,7 +2327,9 @@ inline int32_t unmountRoot(Ctx& ctx, std::string_view rootId) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto idSv = PluginStringView::from(rootId);
-    return ctx.iface.runtime->unmount_root(ctx.host, &idSv);
+    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ctx.iface.runtime->unmount_root(ctx.host, &idSv, cb, ud, err);
+    });
 }
 
 /// 打开一个会话通道; 返回通道 id, 失败返回 0
@@ -2291,8 +2356,14 @@ inline int64_t openChannel(Ctx& ctx, const ChannelOptions& opt, Fn&& onEvent) {
     spec.interrupt_timeout_ms = static_cast<int64_t>(opt.interruptTimeout.count());
     spec.on_event            = &detail::runtimeChannelEventThunk;
     spec.user_data           = shim.get();
-    int64_t channelId        = 0;
-    const auto rc            = ctx.iface.runtime->open_channel(ctx.host, &spec, &channelId);
+    int64_t    channelId = 0;
+    const auto rc        = detail::runtimeCallId(
+        ctx,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ctx.iface.runtime->open_channel(ctx.host, &spec, cb, ud, err);
+        },
+        channelId
+    );
     if (rc != AGENTXX_RESULT_OK || channelId <= 0) {
         return 0;
     }
@@ -2306,7 +2377,10 @@ inline int32_t closeChannel(Ctx& ctx, int64_t channelId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->close_channel || channelId <= 0) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    const auto rc = ctx.iface.runtime->close_channel(ctx.host, channelId);
+    const auto rc = detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud,
+                                                 PluginxxString* err) {
+        return ctx.iface.runtime->close_channel(ctx.host, channelId, cb, ud, err);
+    });
     // 通道已废弃: 回调转接对象随之释放 (主程序保证此后不再回调)
     ctx.runtimeChannelShims.erase(channelId);
     return rc;
@@ -2319,7 +2393,9 @@ inline int32_t sendInput(Ctx& ctx, int64_t channelId, std::string_view inputJson
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto jsonSv = PluginStringView::from(inputJson);
-    return ctx.iface.runtime->send_input(ctx.host, channelId, &jsonSv);
+    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ctx.iface.runtime->send_input(ctx.host, channelId, &jsonSv, cb, ud, err);
+    });
 }
 
 /// 投递一段文本 (`delivery` 空 = next-turn)
@@ -2344,7 +2420,9 @@ inline int32_t cancelChannel(Ctx& ctx, int64_t channelId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel || channelId <= 0) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    return ctx.iface.runtime->cancel(ctx.host, channelId);
+    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ctx.iface.runtime->cancel(ctx.host, channelId, cb, ud, err);
+    });
 }
 
 /// 切换通道的模型
@@ -2354,7 +2432,9 @@ inline int32_t selectChannelModel(Ctx& ctx, int64_t channelId, std::string_view 
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto modelSv = PluginStringView::from(model);
-    return ctx.iface.runtime->select_model(ctx.host, channelId, &modelSv);
+    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ctx.iface.runtime->select_model(ctx.host, channelId, &modelSv, cb, ud, err);
+    });
 }
 
 /// 应答一个中断询问 (值对象形态 `{"values":{...}}`; 空对象 = 取消)
@@ -2370,7 +2450,17 @@ inline int32_t respondInterrupt(
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto valuesSv = PluginStringView::from(valuesJson);
-    return ctx.iface.runtime->respond_interrupt(ctx.host, channelId, interruptId, &valuesSv);
+    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ctx.iface.runtime->respond_interrupt(
+            ctx.host,
+            channelId,
+            interruptId,
+            &valuesSv,
+            cb,
+            ud,
+            err
+        );
+    });
 }
 
 /// 通道状态 JSON (不含消息正文; 失败返回空串)
@@ -2379,15 +2469,17 @@ inline std::string channelStateJson(Ctx& ctx, int64_t channelId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->get_channel_state || channelId <= 0) {
         return {};
     }
-    PluginxxString out{nullptr, 0};
-    if (ctx.iface.runtime->get_channel_state(ctx.host, channelId, &out) != 0 || !out.data) {
-        if (out.data) {
-            PluginString::free(ctx.host, &out);
-        }
+    std::string text;
+    if (detail::runtimeCallText(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ctx.iface.runtime->get_channel_state(ctx.host, channelId, cb, ud, err);
+            },
+            text
+        )
+        != AGENTXX_RESULT_OK) {
         return {};
     }
-    std::string text{out.data, static_cast<size_t>(out.size)};
-    PluginString::free(ctx.host, &out);
     return text;
 }
 
@@ -2397,15 +2489,23 @@ inline std::string channelContextMessages(Ctx& ctx, int64_t channelId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->get_context_messages || channelId <= 0) {
         return {};
     }
-    PluginxxString out{nullptr, 0};
-    if (ctx.iface.runtime->get_context_messages(ctx.host, channelId, &out) != 0 || !out.data) {
-        if (out.data) {
-            PluginString::free(ctx.host, &out);
-        }
+    std::string text;
+    if (detail::runtimeCallText(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ctx.iface.runtime->get_context_messages(
+                    ctx.host,
+                    channelId,
+                    cb,
+                    ud,
+                    err
+                );
+            },
+            text
+        )
+        != AGENTXX_RESULT_OK) {
         return {};
     }
-    std::string text{out.data, static_cast<size_t>(out.size)};
-    PluginString::free(ctx.host, &out);
     return text;
 }
 
@@ -2415,15 +2515,17 @@ inline std::string listRuntimeJson(Ctx& ctx) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->list_runtime) {
         return "{}";
     }
-    PluginxxString out{nullptr, 0};
-    if (ctx.iface.runtime->list_runtime(ctx.host, &out) != 0 || !out.data) {
-        if (out.data) {
-            PluginString::free(ctx.host, &out);
-        }
+    std::string text;
+    if (detail::runtimeCallText(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ctx.iface.runtime->list_runtime(ctx.host, cb, ud, err);
+            },
+            text
+        )
+        != AGENTXX_RESULT_OK) {
         return "{}";
     }
-    std::string text{out.data, static_cast<size_t>(out.size)};
-    PluginString::free(ctx.host, &out);
     return text;
 }
 
@@ -2442,8 +2544,15 @@ inline int64_t addTrigger(Ctx& ctx, const TriggerOptions& opt) {
     spec.topic       = PluginStringView::from(opt.topic);
     spec.channel_id  = opt.channelId;
     spec.delivery    = PluginStringView::from(opt.delivery);
-    int64_t id       = 0;
-    if (ctx.iface.runtime->register_trigger(ctx.host, &spec, &id) != AGENTXX_RESULT_OK) {
+    int64_t id = 0;
+    if (detail::runtimeCallId(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ctx.iface.runtime->register_trigger(ctx.host, &spec, cb, ud, err);
+            },
+            id
+        )
+        != AGENTXX_RESULT_OK) {
         return 0;
     }
     return id;
@@ -2455,7 +2564,9 @@ inline int32_t removeTrigger(Ctx& ctx, int64_t triggerId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_trigger || triggerId <= 0) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    return ctx.iface.runtime->unregister_trigger(ctx.host, triggerId);
+    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ctx.iface.runtime->unregister_trigger(ctx.host, triggerId, cb, ud, err);
+    });
 }
 
 /// 发一条事件 (任意线程, 立即返回)
@@ -2468,7 +2579,9 @@ inline int32_t emitEvent(Ctx& ctx, std::string_view topic, std::string_view payl
     }
     auto topicSv = PluginStringView::from(topic);
     auto paySv   = PluginStringView::from(payloadJson);
-    return ctx.iface.runtime->emit_event(ctx.host, &topicSv, &paySv);
+    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ctx.iface.runtime->emit_event(ctx.host, &topicSv, &paySv, cb, ud, err);
+    });
 }
 
 /// 登记定时器 (一次性或周期); 返回定时器 id, 失败返回 0
@@ -2485,8 +2598,15 @@ inline int64_t addRuntimeTimer(Ctx& ctx, const RuntimeTimerOptions& opt) {
     spec.first_delay_ms = opt.firstDelayMs;
     spec.interval_ms    = opt.intervalMs;
     spec.input_json     = PluginStringView::from(opt.inputJson);
-    int64_t id          = 0;
-    if (ctx.iface.runtime->register_timer(ctx.host, &spec, &id) != AGENTXX_RESULT_OK) {
+    int64_t id = 0;
+    if (detail::runtimeCallId(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ctx.iface.runtime->register_timer(ctx.host, &spec, cb, ud, err);
+            },
+            id
+        )
+        != AGENTXX_RESULT_OK) {
         return 0;
     }
     return id;
@@ -2498,7 +2618,9 @@ inline int32_t removeRuntimeTimer(Ctx& ctx, int64_t timerId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_timer || timerId <= 0) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    return ctx.iface.runtime->unregister_timer(ctx.host, timerId);
+    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ctx.iface.runtime->unregister_timer(ctx.host, timerId, cb, ud, err);
+    });
 }
 
 
@@ -2619,20 +2741,18 @@ inline std::string submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt, int32_
     spec.on_event              = opt.onEvent;
     spec.user_data             = opt.userData;
 
-    PluginxxString out{nullptr, 0};
-    const auto     rc = ctx.iface.runtime->submit_async_work(ctx.host, &spec, &out);
+    std::string payload;
+    const auto  rc = detail::runtimeCallText(
+        ctx,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ctx.iface.runtime->submit_async_work(ctx.host, &spec, cb, ud, err);
+        },
+        payload
+    );
     if (outCode != nullptr) {
         *outCode = rc;
     }
-    if (rc != AGENTXX_RESULT_OK || !out.data) {
-        if (out.data) {
-            PluginString::free(ctx.host, &out);
-        }
-        return {};
-    }
-    std::string asyncId{out.data, static_cast<size_t>(out.size)};
-    PluginString::free(ctx.host, &out);
-    return asyncId;
+    return payload;
 }
 
 /// 取消一条后台任务 (只能取消本实例提交的)
@@ -2642,7 +2762,9 @@ inline int32_t cancelAsyncWork(Ctx& ctx, std::string_view asyncId) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto id = PluginStringView::from(asyncId.data(), asyncId.size());
-    return ctx.iface.runtime->cancel_async_work(ctx.host, &id);
+    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ctx.iface.runtime->cancel_async_work(ctx.host, &id, cb, ud, err);
+    });
 }
 
 /// 单条任务 JSON (不存在或不是本实例提交的返回空串)
@@ -2652,8 +2774,12 @@ inline std::string getAsyncWorkJson(Ctx& ctx, std::string_view asyncId) {
         return {};
     }
     auto id = PluginStringView::from(asyncId.data(), asyncId.size());
-    return detail::takeHostString(ctx.host, [&](PluginxxString* out) {
-        return ctx.iface.runtime->get_async_work(ctx.host, &id, out);
+    return detail::takeRuntimeText(ctx.host, ctx.iface.cancel, ctx.iface.scheduler, [&](
+                                                                                       PluginxxOperatorCallback cb,
+                                                                                       void* ud,
+                                                                                       PluginxxString* err
+                                                                                   ) {
+        return ctx.iface.runtime->get_async_work(ctx.host, &id, cb, ud, err);
     });
 }
 
@@ -2664,8 +2790,12 @@ inline std::string listAsyncWorkJson(Ctx& ctx, std::string_view sessionId = {}) 
         return {};
     }
     auto session = PluginStringView::from(sessionId.data(), sessionId.size());
-    return detail::takeHostString(ctx.host, [&](PluginxxString* out) {
-        return ctx.iface.runtime->list_async_work(ctx.host, &session, out);
+    return detail::takeRuntimeText(ctx.host, ctx.iface.cancel, ctx.iface.scheduler, [&](
+                                                                                       PluginxxOperatorCallback cb,
+                                                                                       void* ud,
+                                                                                       PluginxxString* err
+                                                                                   ) {
+        return ctx.iface.runtime->list_async_work(ctx.host, &session, cb, ud, err);
     });
 }
 

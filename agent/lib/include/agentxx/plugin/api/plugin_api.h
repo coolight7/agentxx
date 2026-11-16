@@ -857,10 +857,11 @@ typedef struct AgentxxPluginMountIface {
 /// 需要 agent 级操作 (查挂了哪些插件等) 时直接当 agentId 用。
 #define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME             PLUGINXX_APP_ID("agent.runtime")
 /// v2: 表尾追加 4 个后台任务入口 (submit/cancel/get/list_async_work)
-#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION     2
-#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_MIN_VERSION 1
+/// v3: 21 个成员全部改成异步操作契约 (受理即返回, 结果经 cb 交回; 基线重置为整表长度)
+#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION     3
+#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_MIN_VERSION 3
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
-#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_BASELINE_SIZE offsetof(AgentxxPluginRuntimeIface, submit_async_work)
+#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_BASELINE_SIZE sizeof(AgentxxPluginRuntimeIface)
 
 /* ---- 返回码 ---- */
 /*
@@ -1109,149 +1110,215 @@ typedef struct AgentxxPluginRuntimeIface {
 
     /* ---- 根 agent ---- */
 
-    /// 挂载一个带自己配置的根 (异步 init, 返回即拿到 id)
+    /// 挂载一个带自己配置的根 (异步 init, 受理后经 `payload` 交回根 id)
     ///
-    /// - 只能在 `start` (或其它容器级时机) 调用; **在 `mount` 回调里调用返回
-    ///   `ERR_STATE`** —— 否则新根又要挂载一次, 形成无限嵌套
-    /// - 配置非法返回 `ERR_ARG` (日志给出具体字段); 超根数上限返回 `ERR_BUDGET`;
-    ///   主程序没有容器 (未 attach) 返回 `ERR_UNSUPPORTED`
+    /// - 只能在 `start` (或其它容器级时机) 调用; **在 `mount` 回调里调用按
+    ///   `invalid_state` 失败** —— 否则新根又要挂载一次, 形成无限嵌套
+    /// - 配置非法 / 模型不存在 / 挂载策略非法按 `invalid_argument` 失败;
+    ///   超根数上限按 `limit_exceeded`; 主程序没有容器 (未 attach) 按 `unsupported`
     /// - 新根由主程序强注入容器那份插件管理器, 按 `mount_plugins` 策略挂载已加载的插件
     /// - init 完成前对该根 `open_channel` 会排队, 就绪后自动继续
-    /// - `out_root_id`: 框架分配的 id (= 该根的 agentId; `host->alloc`)
-    int32_t(PLUGINXX_CALL* mount_root)(
+    /// - 完成时 `payload` 是框架分配的根 id (= 该根的 agentId)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* mount_root)(
         const PluginxxHost*               host,
         const AgentxxPluginMountRootSpec* spec,
-        PluginxxString*                   out_root_id
+        PluginxxOperatorCallback          cb,
+        void*                             ud,
+        PluginxxString*                   error_out
     );
 
     /// 卸载根 (其下通道先全部关闭, 不等待收尾)
-    /// - 内置根、别的实例的根、已卸载的 id 都返回 `ERR_NOT_FOUND`
-    int32_t(PLUGINXX_CALL* unmount_root)(
+    /// - 内置根、别的实例的根、已卸载的 id 都按 `not_found` 失败
+    PluginxxOperatorHandle*(PLUGINXX_CALL* unmount_root)(
         const PluginxxHost*       host,
-        const PluginxxStringView* root_id
+        const PluginxxStringView* root_id,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 
     /* ---- 会话通道 ---- */
 
     /// 打开通道 (异步就绪; 就绪后回调收到 `EVENT_READY`)
-    /// - 同一个 `sessionId` 开两个通道返回 `ERR_CONFLICT`
-    /// - 超每根通道数上限返回 `ERR_BUDGET`
-    int32_t(PLUGINXX_CALL* open_channel)(
+    /// - 同一个 `sessionId` 开两个通道按 `conflict` 失败
+    /// - 超每根通道数上限按 `limit_exceeded` 失败
+    /// - 完成时 `payload` 是框架分配的 channel id (十进制文本)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* open_channel)(
         const PluginxxHost*             host,
         const AgentxxPluginChannelSpec* spec,
-        int64_t*                        out_channel_id
+        PluginxxOperatorCallback        cb,
+        void*                           ud,
+        PluginxxString*                 error_out
     );
 
     /// 关闭通道 (不等待; 回调最后一条是 `EVENT_CLOSED`)
-    int32_t(PLUGINXX_CALL* close_channel)(const PluginxxHost* host, int64_t channel_id);
+    PluginxxOperatorHandle*(PLUGINXX_CALL* close_channel)(
+        const PluginxxHost*      host,
+        int64_t                  channel_id,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
+    );
 
     /* ---- 输入与控制 ---- */
 
     /// 投递一条输入 (输入 JSON: `{"text","attachments","model","delivery"}`)
-    int32_t(PLUGINXX_CALL* send_input)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* send_input)(
         const PluginxxHost*       host,
         int64_t                   channel_id,
-        const PluginxxStringView* input_json
+        const PluginxxStringView* input_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 
     /// 取消通道当前轮次
-    int32_t(PLUGINXX_CALL* cancel)(const PluginxxHost* host, int64_t channel_id);
+    PluginxxOperatorHandle*(PLUGINXX_CALL* cancel)(
+        const PluginxxHost*      host,
+        int64_t                  channel_id,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
+    );
 
     /// 切换通道的模型
-    int32_t(PLUGINXX_CALL* select_model)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* select_model)(
         const PluginxxHost*       host,
         int64_t                   channel_id,
-        const PluginxxStringView* model_name
+        const PluginxxStringView* model_name,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 
     /// 应答一个中断 (values_json 必须是 `{"values":{...}}` 对象形态)
-    int32_t(PLUGINXX_CALL* respond_interrupt)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* respond_interrupt)(
         const PluginxxHost*       host,
         int64_t                   channel_id,
         int64_t                   interrupt_id,
-        const PluginxxStringView* values_json
+        const PluginxxStringView* values_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 
     /* ---- 查询 ---- */
 
     /// 通道状态 JSON (不含消息正文)
-    int32_t(PLUGINXX_CALL* get_channel_state)(
-        const PluginxxHost* host,
-        int64_t             channel_id,
-        PluginxxString*     out_json
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_channel_state)(
+        const PluginxxHost*      host,
+        int64_t                  channel_id,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
     );
 
     /// 通道会话的 LLM 上下文 (JSON 数组文本; `host->alloc`)
-    int32_t(PLUGINXX_CALL* get_context_messages)(
-        const PluginxxHost* host,
-        int64_t             channel_id,
-        PluginxxString*     out_json
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_context_messages)(
+        const PluginxxHost*      host,
+        int64_t                  channel_id,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
     );
 
     /// 运行时清单: `[{"rootId","name","state","configSummary":{...},"channels":[...]}]`
-    int32_t(PLUGINXX_CALL* list_runtime)(const PluginxxHost* host, PluginxxString* out_json);
+    PluginxxOperatorHandle*(PLUGINXX_CALL* list_runtime)(
+        const PluginxxHost*      host,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
+    );
 
     /* ---- 事件驱动 ---- */
 
     /// 登记触发器
-    int32_t(PLUGINXX_CALL* register_trigger)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* register_trigger)(
         const PluginxxHost*             host,
         const AgentxxPluginTriggerSpec* spec,
-        int64_t*                        out_trigger_id
+        PluginxxOperatorCallback        cb,
+        void*                           ud,
+        PluginxxString*                 error_out
     );
 
     /// 注销触发器
-    int32_t(PLUGINXX_CALL* unregister_trigger)(const PluginxxHost* host, int64_t trigger_id);
+    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_trigger)(
+        const PluginxxHost*      host,
+        int64_t                  trigger_id,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
+    );
 
     /// 发布一条事件 (任意线程, 立即返回)
-    int32_t(PLUGINXX_CALL* emit_event)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* emit_event)(
         const PluginxxHost*       host,
         const PluginxxStringView* topic,
-        const PluginxxStringView* payload_json
+        const PluginxxStringView* payload_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 
     /* ---- 定时触发 ---- */
 
     /// 登记定时器
-    int32_t(PLUGINXX_CALL* register_timer)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* register_timer)(
         const PluginxxHost*           host,
         const AgentxxPluginTimerSpec* spec,
-        int64_t*                      out_timer_id
+        PluginxxOperatorCallback      cb,
+        void*                         ud,
+        PluginxxString*               error_out
     );
 
     /// 注销定时器
-    int32_t(PLUGINXX_CALL* unregister_timer)(const PluginxxHost* host, int64_t timer_id);
+    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_timer)(
+        const PluginxxHost*      host,
+        int64_t                  timer_id,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
+    );
 
-    /* ---- 后台任务 (v2 尾部追加; 基线不变) ---- */
+    /* ---- 后台任务 (v2 尾部追加, v3 起改为异步操作契约) ---- */
 
     /// 提交一个后台任务 (入队即返回; 结果发到 `agentxx.agent.async.done`)
     /// - 只校验参数, 不因额度/排队被拒 (额度只影响何时起跑)
-    /// - `out_async_id`: 框架分配的 id (= 该任务 agent 的 sessionId; `host->alloc`)
+    /// - 完成时 `payload` 是框架分配的 id (= 该任务 agent 的 sessionId)
     /// - 插件禁用/卸载时本实例提交的任务会被取消 (终态照常记录)
-    int32_t(PLUGINXX_CALL* submit_async_work)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* submit_async_work)(
         const PluginxxHost*               host,
         const AgentxxPluginAsyncWorkSpec* spec,
-        PluginxxString*                   out_async_id
+        PluginxxOperatorCallback          cb,
+        void*                             ud,
+        PluginxxString*                   error_out
     );
 
     /// 取消一条后台任务 (排队中直接出队; 运行中置取消令牌)
-    int32_t(PLUGINXX_CALL* cancel_async_work)(
-        const PluginxxHost*       host,
-        const PluginxxStringView* async_id
-    );
-
-    /// 单条任务 JSON (不存在返回 `{}`)
-    int32_t(PLUGINXX_CALL* get_async_work)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* cancel_async_work)(
         const PluginxxHost*       host,
         const PluginxxStringView* async_id,
-        PluginxxString*           out_json
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+
+    /// 单条任务 JSON (不存在或不是本实例提交的按 `not_found` 失败)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_async_work)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* async_id,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 
     /// 任务清单 JSON (数组; `session_id` 空 = 本实例提交的全部)
-    int32_t(PLUGINXX_CALL* list_async_work)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* list_async_work)(
         const PluginxxHost*       host,
         const PluginxxStringView* session_id,
-        PluginxxString*           out_json
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 } AgentxxPluginRuntimeIface;
 

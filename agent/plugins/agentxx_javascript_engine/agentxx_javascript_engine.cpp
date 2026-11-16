@@ -4789,6 +4789,24 @@ JSValue JsEngine::jsonGetStringValue(
     return value;
 }
 
+/// 调一次 runtime 表的成员并取回结果 (阻塞形态)
+///
+/// 表成员是异步操作契约; 脚本线程不是主程序 io 线程, 这里等到完成回调后返回。
+/// - `return` 受理与执行结果; `!ok()` 表示没受理或执行期失败 (正文是原因)
+template<typename StartFn>
+static auto callRuntimeOp(
+    const PluginxxHost*                        host,
+    const agentxx::plugin::AgentIfaces&        iface,
+    StartFn&&                                  start
+) {
+    return agentxx::plugin::tableOpBlockingRaw(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        std::forward<StartFn>(start)
+    );
+}
+
 JSValue JsEngine::bridgeCall(
     JSContext*    ctx,
     JSValueConst  this_val,
@@ -5866,14 +5884,14 @@ JSValue JsEngine::bridgeCall(
             spec.on_event              = hook ? &JsEngine::onAsyncWorkEvent : nullptr;
             spec.user_data             = hook;
 
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.runtime->submit_async_work(host, &spec, &out);
-            std::string    asyncId;
-            if (out.data) {
-                asyncId.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != AGENTXX_RESULT_OK) {
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->submit_async_work(host, &spec, cb, ud, err);
+                }
+            );
+            if (!op.ok()) {
                 // 提交被拒: 回调不会再被调用, 当场释放登记与 JS 回调
                 if (hook) {
                     engine->releaseCallbackHook(hook);
@@ -5885,7 +5903,7 @@ JSValue JsEngine::bridgeCall(
                 }
                 return JS_NewString(ctx, "");
             }
-            return JS_NewStringLen(ctx, asyncId.data(), asyncId.size());
+            return JS_NewStringLen(ctx, op.text().data(), op.text().size());
         }
 
         case B_CANCEL_ASYNC_WORK: {
@@ -5894,8 +5912,14 @@ JSValue JsEngine::bridgeCall(
             }
             const std::string id   = jsToCppString(ctx, argv[0]);
             auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-            return iface.runtime->cancel_async_work(host, &idSv) == AGENTXX_RESULT_OK ? JS_TRUE
-                                                                                    : JS_FALSE;
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->cancel_async_work(host, &idSv, cb, ud, err);
+                }
+            );
+            return op.ok() ? JS_TRUE : JS_FALSE;
         }
 
         case B_GET_ASYNC_WORK: {
@@ -5904,17 +5928,18 @@ JSValue JsEngine::bridgeCall(
             }
             const std::string id   = jsToCppString(ctx, argv[0]);
             auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-            PluginxxString    out{nullptr, 0};
-            const int32_t     rc = iface.runtime->get_async_work(host, &idSv, &out);
-            std::string       json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->get_async_work(host, &idSv, cb, ud, err);
+                }
+            );
             // 主程序对不存在的任务返回 `{}`; 这里给 null 更直观
-            if (rc != AGENTXX_RESULT_OK || json.empty() || json == "{}") {
+            if (!op.ok() || op.text().empty() || op.text() == "{}") {
                 return JS_NULL;
             }
+            const std::string json{op.text()};
             return jsonTextToValue(ctx, json, "<async_work>");
         }
 
@@ -5928,16 +5953,17 @@ JSValue JsEngine::bridgeCall(
                 sessionId.data(),
                 sessionId.size()
             );
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.runtime->list_async_work(host, &sidSv, &out);
-            std::string    json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != AGENTXX_RESULT_OK) {
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->list_async_work(host, &sidSv, cb, ud, err);
+                }
+            );
+            if (!op.ok()) {
                 return JS_NewArray(ctx);
             }
+            const std::string json{op.text()};
             JSValue arr = jsonTextToValue(ctx, json, "<async_works>");
             if (!JS_IsArray(arr)) {
                 JS_FreeValue(ctx, arr);
@@ -6258,17 +6284,17 @@ JSValue JsEngine::bridgeCall(
             spec.config_json     = sv(configJson);
             spec.mount_plugins   = sv(mountJson);
             spec.include_creator = propBool(ctx, opt, "includeCreator", false) ? 1 : 0;
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.runtime->mount_root(host, &spec, &out);
-            std::string    rootId;
-            if (out.data) {
-                rootId.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != AGENTXX_RESULT_OK) {
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->mount_root(host, &spec, cb, ud, err);
+                }
+            );
+            if (!op.ok()) {
                 return JS_NewString(ctx, "");
             }
-            return JS_NewStringLen(ctx, rootId.data(), rootId.size());
+            return JS_NewStringLen(ctx, op.text().data(), op.text().size());
         }
 
         case B_UNMOUNT_ROOT: {
@@ -6280,8 +6306,14 @@ JSValue JsEngine::bridgeCall(
                 rootId.data(),
                 rootId.size()
             );
-            return iface.runtime->unmount_root(host, &idSv) == AGENTXX_RESULT_OK ? JS_TRUE
-                                                                                : JS_FALSE;
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->unmount_root(host, &idSv, cb, ud, err);
+                }
+            );
+            return op.ok() ? JS_TRUE : JS_FALSE;
         }
 
         case B_OPEN_CHANNEL: {
@@ -6319,9 +6351,15 @@ JSValue JsEngine::bridgeCall(
             spec.interrupt_timeout_ms = propInt64(ctx, opt, "interruptTimeoutMs", 0);
             spec.on_event             = &JsEngine::onChannelEvent;
             spec.user_data            = hook;
-            int64_t       channelId = 0;
-            const int32_t rc        = iface.runtime->open_channel(host, &spec, &channelId);
-            if (rc != AGENTXX_RESULT_OK || channelId <= 0) {
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->open_channel(host, &spec, cb, ud, err);
+                }
+            );
+            const int64_t channelId = op.ok() ? op.integer(0) : 0;
+            if (channelId <= 0) {
                 if (hook) {
                     engine->releaseCallbackHook(hook);
                     auto it = pctx->channelCallbacks.find(callbackToken);
@@ -6352,9 +6390,15 @@ JSValue JsEngine::bridgeCall(
             if (!close && !iface.runtime->cancel) {
                 return JS_FALSE;
             }
-            const int32_t rc = close ? iface.runtime->close_channel(host, channelId)
-                                     : iface.runtime->cancel(host, channelId);
-            return rc == AGENTXX_RESULT_OK ? JS_TRUE : JS_FALSE;
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return close ? iface.runtime->close_channel(host, channelId, cb, ud, err)
+                                 : iface.runtime->cancel(host, channelId, cb, ud, err);
+                }
+            );
+            return op.ok() ? JS_TRUE : JS_FALSE;
         }
 
         case B_SEND_INPUT: {
@@ -6369,9 +6413,14 @@ JSValue JsEngine::bridgeCall(
                 input.data(),
                 input.size()
             );
-            return iface.runtime->send_input(host, channelId, &inSv) == AGENTXX_RESULT_OK
-                       ? JS_TRUE
-                       : JS_FALSE;
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->send_input(host, channelId, &inSv, cb, ud, err);
+                }
+            );
+            return op.ok() ? JS_TRUE : JS_FALSE;
         }
 
         case B_SELECT_MODEL: {
@@ -6385,9 +6434,14 @@ JSValue JsEngine::bridgeCall(
                 modelName.data(),
                 modelName.size()
             );
-            return iface.runtime->select_model(host, channelId, &modelSv) == AGENTXX_RESULT_OK
-                       ? JS_TRUE
-                       : JS_FALSE;
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->select_model(host, channelId, &modelSv, cb, ud, err);
+                }
+            );
+            return op.ok() ? JS_TRUE : JS_FALSE;
         }
 
         case B_RESPOND_INTERRUPT: {
@@ -6404,10 +6458,22 @@ JSValue JsEngine::bridgeCall(
                 values.data(),
                 values.size()
             );
-            return iface.runtime->respond_interrupt(host, channelId, interruptId, &valSv)
-                           == AGENTXX_RESULT_OK
-                       ? JS_TRUE
-                       : JS_FALSE;
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->respond_interrupt(
+                        host,
+                        channelId,
+                        interruptId,
+                        &valSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
+            return op.ok() ? JS_TRUE : JS_FALSE;
         }
 
         case B_GET_CHANNEL_STATE: {
@@ -6416,17 +6482,17 @@ JSValue JsEngine::bridgeCall(
             }
             int64_t channelId = 0;
             JS_ToInt64(ctx, &channelId, argv[0]);
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.runtime->get_channel_state(host, channelId, &out);
-            std::string    json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != AGENTXX_RESULT_OK) {
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->get_channel_state(host, channelId, cb, ud, err);
+                }
+            );
+            if (!op.ok()) {
                 return JS_NULL;
             }
-            return jsonTextToValue(ctx, json, "<channel_state>");
+            return jsonTextToValue(ctx, std::string{op.text()}, "<channel_state>");
         }
 
         case B_GET_CHANNEL_MESSAGES: {
@@ -6435,16 +6501,17 @@ JSValue JsEngine::bridgeCall(
             }
             int64_t channelId = 0;
             JS_ToInt64(ctx, &channelId, argv[0]);
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc = iface.runtime->get_context_messages(host, channelId, &out);
-            std::string    json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
-            if (rc != AGENTXX_RESULT_OK) {
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->get_context_messages(host, channelId, cb, ud, err);
+                }
+            );
+            if (!op.ok()) {
                 return JS_NewArray(ctx);
             }
+            const std::string json{op.text()};
             JSValue arr = jsonTextToValue(ctx, json, "<channel_messages>");
             if (!JS_IsArray(arr)) {
                 JS_FreeValue(ctx, arr);
@@ -6457,13 +6524,17 @@ JSValue JsEngine::bridgeCall(
             if (!iface.runtime || !iface.runtime->list_runtime) {
                 return JS_NewArray(ctx);
             }
-            PluginxxString out{nullptr, 0};
-            if (iface.runtime->list_runtime(host, &out) != AGENTXX_RESULT_OK || !out.data) {
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->list_runtime(host, cb, ud, err);
+                }
+            );
+            if (!op.ok()) {
                 return JS_NewArray(ctx);
             }
-            std::string json(out.data, static_cast<size_t>(out.size));
-            agentxx::plugin::PluginString::free(host, &out);
-            return jsonTextToValue(ctx, json, "<runtime>");
+            return jsonTextToValue(ctx, std::string{op.text()}, "<runtime>");
         }
 
         case B_REGISTER_TRIGGER: {
@@ -6490,12 +6561,14 @@ JSValue JsEngine::bridgeCall(
             spec.topic       = sv(topic);
             spec.channel_id  = propInt64(ctx, opt, "channelId", 0);
             spec.delivery    = sv(delivery);
-            int64_t       triggerId = 0;
-            const int32_t rc        = iface.runtime->register_trigger(host, &spec, &triggerId);
-            if (rc != AGENTXX_RESULT_OK) {
-                return JS_NewInt64(ctx, 0);
-            }
-            return JS_NewInt64(ctx, triggerId);
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->register_trigger(host, &spec, cb, ud, err);
+                }
+            );
+            return JS_NewInt64(ctx, op.ok() ? op.integer(0) : 0);
         }
 
         case B_UNREGISTER_TRIGGER:
@@ -6513,9 +6586,15 @@ JSValue JsEngine::bridgeCall(
                         : (iface.runtime->unregister_timer == nullptr)) {
                 return JS_FALSE;
             }
-            const int32_t rc = trigger ? iface.runtime->unregister_trigger(host, id)
-                                       : iface.runtime->unregister_timer(host, id);
-            return rc == AGENTXX_RESULT_OK ? JS_TRUE : JS_FALSE;
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return trigger ? iface.runtime->unregister_trigger(host, id, cb, ud, err)
+                                   : iface.runtime->unregister_timer(host, id, cb, ud, err);
+                }
+            );
+            return op.ok() ? JS_TRUE : JS_FALSE;
         }
 
         case B_REGISTER_TIMER: {
@@ -6538,12 +6617,14 @@ JSValue JsEngine::bridgeCall(
             spec.first_delay_ms = propInt64(ctx, opt, "firstDelayMs", 0);
             spec.interval_ms    = propInt64(ctx, opt, "intervalMs", 0);
             spec.input_json     = inSv;
-            int64_t       timerId = 0;
-            const int32_t rc      = iface.runtime->register_timer(host, &spec, &timerId);
-            if (rc != AGENTXX_RESULT_OK) {
-                return JS_NewInt64(ctx, 0);
-            }
-            return JS_NewInt64(ctx, timerId);
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->register_timer(host, &spec, cb, ud, err);
+                }
+            );
+            return JS_NewInt64(ctx, op.ok() ? op.integer(0) : 0);
         }
 
         case B_EMIT_EVENT: {
@@ -6560,9 +6641,14 @@ JSValue JsEngine::bridgeCall(
                 payload.data(),
                 payload.size()
             );
-            return iface.runtime->emit_event(host, &topicSv, &paySv) == AGENTXX_RESULT_OK
-                       ? JS_TRUE
-                       : JS_FALSE;
+            const auto op = callRuntimeOp(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.runtime->emit_event(host, &topicSv, &paySv, cb, ud, err);
+                }
+            );
+            return op.ok() ? JS_TRUE : JS_FALSE;
         }
 
         // ---- 广播声明 / 读当前值 / 结束流 ----

@@ -11,7 +11,7 @@
 | C2-槽位清理 | 删 `scheduler.post_to_io` / `scheduler.op_cancel` / `capabilities.op_cancel`；`coroutine_runtime` 整张表并回 `scheduler`（通用表 10 → 9） | 完成（编译通过、全量插件测试全绿） |
 | A2 | agent 侧 `dlopen` + `create` 挪到加载线程池 | 完成（编译通过、插件测试全绿） |
 | B | `agentxx.agent` 业务表全部成员 | 完成（9 张表全部改异步操作契约） |
-| C | `agentxx.agent.runtime` 全部成员 | 待做 |
+| C | `agentxx.agent.runtime` 全部成员 | 完成（21 个成员改异步；lib / test / client / 25 个插件编译通过，插件相关测试 3983 条全绿） |
 | C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 待做 |
 | D | `agentxx.client.*` 六张表 + 三个回答型回调 | 待做 |
 | E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 部分完成（接口表数量与 §8.0 调用模型文档已同步） |
@@ -322,6 +322,82 @@ IO 线程。
   视图在语句结束就悬空（旧实现同样 UB，只是以前没被抓到）。改成先把
   `path.string()` 落到具名 `std::string` 再取视图。
 
+### 第 7 步：阶段 C —— `agentxx.agent.runtime`
+
+改动：
+
+- `plugin_api.h`
+    - `agentxx.agent.runtime` v2 → v3，`MIN_VERSION` 1 → 3，`BASELINE_SIZE` 改成
+      `sizeof(AgentxxPluginRuntimeIface)`（整表一次改完，不需要"基线停在追加前"那套了）；
+    - 21 个成员全部换成 `PluginxxOperatorHandle*(host, ..., cb, ud, error_out)`，
+      去掉 `out_root_id` / `out_channel_id` / `out_trigger_id` / `out_timer_id` /
+      `out_async_id` / `out_json` 六个出参；句柄 id 与查询结果都经完成回调的 `payload`
+      交回（id 是十进制文本）。
+- `plugin_manager_vtable.cpp`
+    - 新增 `runtimeOp(...)`（容器级入口统一入口：受理 + 投递 + 交回）、
+      `throwRuntimeFailure(what, rc, detail)`（业务失败 → `payload` 写
+      `<成员名>: <resultName>`，有细节时附在括号里）、`rejectTableOp(error_out, msg)`
+      （受理阶段参数错：同步返回 `NULL`）；
+    - 新增四个"spec + 自持字符串"结构 `MountRootSpecKeep` / `ChannelSpecKeep` /
+      `TriggerSpecKeep` / `TimerSpecKeep`：spec 里的字符串视图借用调用方内存，而工作体
+      可能排到 IO 线程才执行，必须把字符串和 spec 放进同一个对象并由工作体捕获；
+    - 21 个入口重写；`get_async_work` 对"不存在 / 非本实例提交"按 `not_found` 交回
+      （旧实现返回非 OK 码，这里保持同样的可区分性）；
+    - `submit_async_work` 补回 `kind=tool` 必须有 `tool_name` 的受理阶段检查。
+- `plugin_kit.h`
+    - 新增 `detail::runtimeCall` / `runtimeCallText` / `runtimeCallId` / `takeRuntimeText`
+      四个阻塞形态助手（生命周期与工具体里的同步写法用）；
+    - `mountRoot` / `unmountRoot` / `openChannel` / `closeChannel` / `sendInput` /
+      `cancelChannel` / `selectModel` / `respondInterrupt` / `channelStateJson` /
+      `channelContextMessages` / `listRuntimeJson` / `addTrigger` / `removeTrigger` /
+      `emitEvent` / `addRuntimeTimer` / `removeRuntimeTimer` / `submitAsyncWork` /
+      `cancelAsyncWork` / `getAsyncWorkJson` / `listAsyncWorkJson` 全部改走这些助手
+      （对外签名不变，插件源码零改动）；
+    - 顺手删掉 `resourceOpSync` 的未使用参数 `agent`（编译告警 C4100）。
+- JS 引擎（`agentxx_javascript_engine.cpp`）：新增文件级 `callRuntimeOp(host, iface, start)`
+  （`tableOpBlockingRaw` 的薄包装），19 个桥调用点（后台任务 4 个 + 运行时 15 个）全部改用它；
+  脚本侧行为不变（`mountRoot`/`registerTrigger`/`registerTimer` 仍同步返回 id，
+  `listRuntime`/`getChannelState` 仍同步返回 JSON）。`list_runtime` 一类的失败仍然降级成
+  空数组 / `null`。
+- 测试（`test_plugin_agent_runtime.cpp`）：
+    - 新增 `RuntimeReply`（`accepted` / `ok` / `text` / `error`）与
+      `callRuntime<&AgentxxPluginRuntimeIface::xxx>(host, runtime, args...)` 模板：
+      成员指针 + 原样参数，完成回调由模板补在末尾，测试里仍保持"调用即得结果"的写法；
+    - 新增 `failedWith(reply, "invalid_argument")`：业务失败的原因文本里带
+      `resultName` 的名字，用它断言"被哪一类原因拒"（原来的 `AGENTXX_RESULT_ERR_*`
+      数字在异步契约里不再作为返回值出现）；
+    - 100 处调用点按新形态重写；`list_runtime(host, nullptr)` 那条"参数错"改成
+      "没有完成回调也算受理"（`cb` 可空是契约的一部分）；
+    - 禁用插件后的查询从"受理后空结果"改成"未受理"（框架不再发放 admission lease）。
+- 文档：`plugins.md` §8.1 的 runtime 行（→ v3）、§8.0 当前进度、§19.2 入口表（去掉
+  `out_*` 出参、改述返回码语义）；`AGENTS.md` 的 runtime 段落补 v3 说明。
+
+验证：
+
+- 内层 lib / test / client 三个构建目录编译通过；25 个插件全部重编
+  （`[build_plugins] done in 480.2s (25/25 targets ok)`）；
+- `boundaries` 19、`plugins` 709、`plugin_runtime` 730、`plugin_sdk` 134、
+  `plugin_bridge` 193、`plugin_cleanup` 90、`plugin_host_mount` 147、
+  `plugin_multi_mount` 47、`plugin_resources` 101、`plugin_agent_runtime` 221、
+  `plugin_example_runtime` 50 → 2441 通过；
+- `client_plugins` 835、`plugin_feature` 34、`plugin_point` 68、`plugin_broadcast` 90、
+  `plugin_dispatch` 112、`chatbot_task` 138、`plugin_example_chatbot` 265 → 1542 通过。
+
+遇到的问题（已解决）：
+
+- **ASan 抓到 heap-use-after-free**（`plugins` 模块，JS 脚本在工具回调里调
+  `registerTrigger`）：`spec` 的字符串视图指向 `shared_ptr<string>` 里的内存，而工作体
+  lambda 只捕获了 `shared_ptr<Spec>`、没捕获那几个字符串 —— 工作体排在 IO 线程执行时
+  字符串已经释放。首轮修改是把它们一起捕获，随后改成四个 `*SpecKeep` 结构（字符串与
+  spec 同一对象，构造时重新指向），从结构上消除这个坑。`mount_root` / `open_channel` /
+  `register_timer` 三处是同一个错。
+- 首轮 `plugin_agent_runtime` 6 条失败，逐条对齐契约后通过：
+  ① 没有容器时 `mount_root` 是**受理后**失败（`unsupported`），不是未受理；
+  ② `kind=tool` 缺 `tool_name` 的检查在改异步时丢了，补回受理阶段；
+  ③ `get_async_work` 对"别人的任务"旧实现返回非 OK 码，改异步后要显式抛
+  `not_found`，否则空 `payload` 被当成成功；
+  ④ 禁用后 `list_runtime` 也不再生效（未受理），不能再按"空清单"断言。
+
 ## 与计划的偏差
 
 - 计划 §7.3 写"全局版本 5 → 6"：实际第 6 代已被占用，改为 6 → 7。
@@ -336,8 +412,8 @@ IO 线程。
 
 ## 剩余事项
 
-- 阶段 B 剩下 7 张表 (`permission` / `context` / `model` / `prompt` / `resources` /
-  `graph` / `mount`), 阶段 C / C2-表异步化 / D 全部待做: 104 个成员里已改异步的有 6 个。
+- 阶段 C2-表异步化（框架表 `broadcasts` / `capabilities` 登记 / `config` / `plugins` /
+  `net.call`）与阶段 D（`agentxx.client.*` 六张 + 三个回答型回调）待做。
 - 阶段 E 还剩：删残留同步实现路径、client 侧 150 ms 同步桥改 Promise、
   `AGENTS.md` 的调用模型说明。
 - `KeyMetrics` 的表调用耗时统计（计划 §10）尚未加。

@@ -55,6 +55,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -95,6 +96,78 @@ struct SvArg {
         return &view;
     }
 };
+
+/// 一次 runtime 表调用的结论
+///
+/// 表成员是**异步操作契约**: 受理即返回, 结论经完成回调交回。两个失败阶段要分开看:
+/// - `!accepted`: 主程序没受理 (参数形状错 / 实例不可用), `error` 是受理阶段给的原因;
+/// - `accepted && !ok`: 受理了但执行期失败, `error` 是业务原因 (形如 `<成员名>: invalid_argument`).
+struct RuntimeReply {
+    bool        accepted = false;
+    bool        ok       = false;
+    std::string text;  ///< 结果正文 (句柄 id 文本 / JSON; 失败时为空)
+    std::string error; ///< 失败原因
+
+    /// 结果正文当十进制 id 读 (通道 / 触发器 / 定时器 / 后台任务 id)
+    int64_t id() const noexcept {
+        int64_t value = 0;
+        for (const char c : text) {
+            if (c < '0' || c > '9') {
+                continue;
+            }
+            value = value * 10 + (c - '0');
+        }
+        return value;
+    }
+};
+
+/// 调一次 runtime 表成员并等到完成
+///
+/// 用例全程跑在容器 io 线程上, 主程序的表操作在调用方本来就在 IO 线程时内联完成,
+/// 因此这里是"调用即得结果"; 换到别的线程也会经 OpCore 排队后等回调。
+///
+/// - `Member` 是表成员指针 (如 `&AgentxxPluginRuntimeIface::mount_root`);
+/// - 其余参数原样转发, 完成回调由本函数补在末尾。
+template<auto Member, typename... Args>
+RuntimeReply callRuntime(
+    const PluginxxHost*               host,
+    const AgentxxPluginRuntimeIface*  rt,
+    Args&&... args
+) {
+    const auto caps  = agentxx::plugin::AgentIfaces::query(host);
+    auto       tuple = std::make_tuple(std::forward<Args>(args)...);
+    const auto res   = pluginxx::tableOpBlockingRaw(
+        host,
+        caps.cancel,
+        caps.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) -> PluginxxOperatorHandle* {
+            return std::apply(
+                [&](auto&&... unpacked) {
+                    return (rt->*Member)(host, unpacked..., cb, ud, err);
+                },
+                tuple
+            );
+        }
+    );
+
+    RuntimeReply reply;
+    reply.accepted = res.accepted();
+    reply.ok       = res.ok();
+    if (reply.ok) {
+        reply.text.assign(res.text());
+    } else if (reply.accepted) {
+        reply.error.assign(res.text());
+    } else {
+        reply.error = res.startError;
+    }
+    return reply;
+}
+
+/// 是否按某个原因失败 (`reason` 取 `agentxx::plugin::resultName` 的名字,
+/// 如 `invalid_argument` / `not_found` / `conflict` / `limit_exceeded`)
+bool failedWith(const RuntimeReply& reply, std::string_view reason) {
+    return !reply.ok && reply.error.find(reason) != std::string::npos;
+}
 
 // ===========================================================================
 // 事件收集
@@ -419,15 +492,16 @@ asio::awaitable<void> runBody(
         spec.name                 = PluginStringView::from(name);
         spec.message              = PluginStringView::from(message);
 
-        // 1) kind=tool 需要追加字段 tool_name: 只填旧字段时按参数错拒
+        // 1) kind=tool 需要追加字段 tool_name: 只填旧字段时在受理阶段被拒
         {
-            spec.kind = 1;
-            PluginxxString out{nullptr, 0};
-            XX_TEST_EXPECT_EQ(
-                runtime->submit_async_work(hostView, &spec, &out),
-                AGENTXX_RESULT_ERR_ARG
+            spec.kind        = 1;
+            const auto reply = callRuntime<&AgentxxPluginRuntimeIface::submit_async_work>(
+                hostView,
+                runtime,
+                &spec
             );
-            XX_TEST_EXPECT_TRUE(out.data == nullptr);
+            XX_TEST_EXPECT_FALSE(reply.accepted);
+            XX_TEST_EXPECT_TRUE(reply.text.empty());
             spec.kind = 0;
         }
 
@@ -440,11 +514,12 @@ asio::awaitable<void> runBody(
             toolSpec.kind           = 1;
             toolSpec.tool_name      = PluginStringView::from(toolName);
             toolSpec.tool_args_json = PluginStringView::from(badArgs);
-            PluginxxString out{nullptr, 0};
-            XX_TEST_EXPECT_EQ(
-                runtime->submit_async_work(hostView, &toolSpec, &out),
-                AGENTXX_RESULT_ERR_ARG
+            const auto reply        = callRuntime<&AgentxxPluginRuntimeIface::submit_async_work>(
+                hostView,
+                runtime,
+                &toolSpec
             );
+            XX_TEST_EXPECT_FALSE(reply.accepted);
         }
 
         // 2) 正常提交: 拿到 asyncId, 回调收到排队/起跑/终态
@@ -474,10 +549,13 @@ asio::awaitable<void> runBody(
         };
         spec.user_data = &counter;
 
-        PluginxxString out{nullptr, 0};
-        const auto     submitRc = runtime->submit_async_work(hostView, &spec, &out);
-        XX_TEST_EXPECT_EQ(submitRc, AGENTXX_RESULT_OK);
-        const auto asyncId = takeString(hostView, out);
+        const auto submitReply = callRuntime<&AgentxxPluginRuntimeIface::submit_async_work>(
+            hostView,
+            runtime,
+            &spec
+        );
+        XX_TEST_EXPECT_TRUE(submitReply.ok);
+        const auto asyncId = submitReply.text;
         XX_TEST_EXPECT_FALSE(asyncId.empty());
         spec.user_data = nullptr;
         spec.on_event  = nullptr;
@@ -495,13 +573,14 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_TRUE(done);
 
         {
-            PluginxxString json{nullptr, 0};
-            auto           id = PluginStringView::from(asyncId);
-            XX_TEST_EXPECT_EQ(
-                runtime->get_async_work(hostView, &id, &json),
-                AGENTXX_RESULT_OK
+            auto       id    = PluginStringView::from(asyncId);
+            const auto reply = callRuntime<&AgentxxPluginRuntimeIface::get_async_work>(
+                hostView,
+                runtime,
+                &id
             );
-            const auto text = takeString(hostView, json);
+            XX_TEST_EXPECT_TRUE(reply.ok);
+            const auto text = reply.text;
             XX_TEST_EXPECT_TRUE(text.find(asyncId) != std::string::npos);
             XX_TEST_EXPECT_TRUE(text.find("plugin:runtime_probe") != std::string::npos);
             XX_TEST_EXPECT_TRUE(text.find("\"done\"") != std::string::npos);
@@ -511,13 +590,14 @@ asio::awaitable<void> runBody(
 
         // 4) 清单里能查到 (按会话过滤为空时也给本实例全部)
         {
-            PluginxxString json{nullptr, 0};
-            PluginxxStringView empty{};
-            XX_TEST_EXPECT_EQ(
-                runtime->list_async_work(hostView, &empty, &json),
-                AGENTXX_RESULT_OK
+            const PluginxxStringView empty{};
+            const auto reply = callRuntime<&AgentxxPluginRuntimeIface::list_async_work>(
+                hostView,
+                runtime,
+                &empty
             );
-            const auto text = takeString(hostView, json);
+            XX_TEST_EXPECT_TRUE(reply.ok);
+            const auto text = reply.text;
             XX_TEST_EXPECT_TRUE(text.find(asyncId) != std::string::npos);
         }
 
@@ -527,26 +607,33 @@ asio::awaitable<void> runBody(
 
         // 6) 别的实例看不到也取消不了这条任务
         {
-            auto other       = makeInstance(mgr, ex, "other_probe");
-            auto otherView   = other->hostView();
-            auto id          = PluginStringView::from(asyncId);
-            XX_TEST_EXPECT_EQ(
-                runtime->cancel_async_work(otherView, &id),
-                AGENTXX_RESULT_ERR_ARG
+            auto other     = makeInstance(mgr, ex, "other_probe");
+            auto otherView = other->hostView();
+            auto id        = PluginStringView::from(asyncId);
+            const auto cancelReply
+                = callRuntime<&AgentxxPluginRuntimeIface::cancel_async_work>(
+                    otherView,
+                    runtime,
+                    &id
+                );
+            XX_TEST_EXPECT_TRUE(failedWith(cancelReply, "invalid_argument"));
+            const auto getReply = callRuntime<&AgentxxPluginRuntimeIface::get_async_work>(
+                otherView,
+                runtime,
+                &id
             );
-            PluginxxString json{nullptr, 0};
-            XX_TEST_EXPECT_TRUE(
-                runtime->get_async_work(otherView, &id, &json) != AGENTXX_RESULT_OK
-            );
+            XX_TEST_EXPECT_TRUE(failedWith(getReply, "not_found"));
         }
 
-        // 7) 自己的任务已结束: 取消返回状态错 (不是“找不到”)
+        // 7) 自己的任务已结束: 取消报状态错 (不是"找不到")
         {
-            auto id = PluginStringView::from(asyncId);
-            XX_TEST_EXPECT_EQ(
-                runtime->cancel_async_work(hostView, &id),
-                AGENTXX_RESULT_ERR_STATE
+            auto       id    = PluginStringView::from(asyncId);
+            const auto reply = callRuntime<&AgentxxPluginRuntimeIface::cancel_async_work>(
+                hostView,
+                runtime,
+                &id
             );
+            XX_TEST_EXPECT_TRUE(failedWith(reply, "invalid_state"));
         }
 
         // 7b) kind=tool: 工名不存在也能受理 (查找在运行期), 收尾按 failed 记
@@ -556,12 +643,13 @@ asio::awaitable<void> runBody(
             toolSpec.struct_size = sizeof(AgentxxPluginAsyncWorkSpec);
             toolSpec.kind        = 1;
             toolSpec.tool_name   = PluginStringView::from(toolName);
-            PluginxxString out{nullptr, 0};
-            XX_TEST_EXPECT_EQ(
-                runtime->submit_async_work(hostView, &toolSpec, &out),
-                AGENTXX_RESULT_OK
+            const auto reply     = callRuntime<&AgentxxPluginRuntimeIface::submit_async_work>(
+                hostView,
+                runtime,
+                &toolSpec
             );
-            const auto toolAsyncId = takeString(hostView, out);
+            XX_TEST_EXPECT_TRUE(reply.ok);
+            const auto toolAsyncId = reply.text;
             XX_TEST_EXPECT_FALSE(toolAsyncId.empty());
             const bool toolSettled = co_await waitUntil(
                 ex,
@@ -585,12 +673,13 @@ asio::awaitable<void> runBody(
             delaySpec.tool_name        = PluginStringView::from(toolName);
             delaySpec.delay_ms         = 60000;
             delaySpec.queue_timeout_ms = 5000;
-            PluginxxString out{nullptr, 0};
-            XX_TEST_EXPECT_EQ(
-                runtime->submit_async_work(hostView, &delaySpec, &out),
-                AGENTXX_RESULT_OK
+            const auto reply           = callRuntime<&AgentxxPluginRuntimeIface::submit_async_work>(
+                hostView,
+                runtime,
+                &delaySpec
             );
-            const auto delayedId = takeString(hostView, out);
+            XX_TEST_EXPECT_TRUE(reply.ok);
+            const auto delayedId = reply.text;
             XX_TEST_EXPECT_FALSE(delayedId.empty());
             if (!delayedId.empty()) {
                 const auto entry = mgr->runtimeGetAsyncWork(inst.get(), delayedId);
@@ -600,11 +689,13 @@ asio::awaitable<void> runBody(
                 );
                 XX_TEST_EXPECT_TRUE(entry.find("\"queued\"") != std::string::npos);
                 // 延时中取消: 立即终态, 不会等到延时结束
-                auto id = PluginStringView::from(delayedId);
-                XX_TEST_EXPECT_EQ(
-                    runtime->cancel_async_work(hostView, &id),
-                    AGENTXX_RESULT_OK
+                auto       id       = PluginStringView::from(delayedId);
+                const auto cancelRc = callRuntime<&AgentxxPluginRuntimeIface::cancel_async_work>(
+                    hostView,
+                    runtime,
+                    &id
                 );
+                XX_TEST_EXPECT_TRUE(cancelRc.ok);
                 const bool canceled = co_await waitUntil(
                     ex,
                     std::chrono::seconds{10},
@@ -666,11 +757,10 @@ asio::awaitable<void> runBody(
             AgentxxPluginMountRootSpec spec{};
             spec.struct_size = sizeof(AgentxxPluginMountRootSpec);
             spec.name        = PluginStringView::fromCstr("lonely");
-            PluginxxString out{nullptr, 0};
-            XX_TEST_EXPECT_EQ(
-                lonelyRuntime->mount_root(lonelyView, &spec, &out),
-                int32_t{AGENTXX_RESULT_ERR_UNSUPPORTED}
-            );
+            const auto reply
+                = callRuntime<&AgentxxPluginRuntimeIface::mount_root>(lonelyView, lonelyRuntime, &spec);
+            // 容器不在: 受理后由业务层报不支持 (原因里带 `unsupported`)
+            XX_TEST_EXPECT_TRUE(failedWith(reply, "unsupported"));
         }
         lonelyMgr->plugins_.erase(lonelyInst->name);
     }
@@ -684,33 +774,32 @@ asio::awaitable<void> runBody(
 
         // (a) config_json 不是合法 JSON
         spec.config_json = PluginStringView::fromCstr("{ not json");
-        PluginxxString out{nullptr, 0};
-        XX_TEST_EXPECT_EQ(
-            runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::mount_root>(hostView, runtime, &spec),
+            "invalid_argument"
+        ));
 
         // (b) 合法 JSON 但模型不在可用列表里
         spec.config_json = PluginStringView::fromCstr(R"({"model":"no-such-model"})");
-        XX_TEST_EXPECT_EQ(
-            runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::mount_root>(hostView, runtime, &spec),
+            "invalid_argument"
+        ));
 
         // (c) 挂载策略混进 config_json: 只有一个来源, 两处都给按参数错误处理
         spec.config_json = PluginStringView::fromCstr(R"({"pluginMount":"all"})");
-        XX_TEST_EXPECT_EQ(
-            runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::mount_root>(hostView, runtime, &spec),
+            "invalid_argument"
+        ));
 
         // (d) mount_plugins 的 mode 非法
-        spec.config_json  = PluginStringView::fromCstr("{}");
+        spec.config_json   = PluginStringView::fromCstr("{}");
         spec.mount_plugins = PluginStringView::fromCstr(R"({"mode":"every"})");
-        XX_TEST_EXPECT_EQ(
-            runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::mount_root>(hostView, runtime, &spec),
+            "invalid_argument"
+        ));
 
         // 全部被拒: 容器里没有留下任何根
         XX_TEST_EXPECT_EQ(host->rootCount(), size_t{0});
@@ -726,12 +815,13 @@ asio::awaitable<void> runBody(
         spec.config_json = PluginStringView::from(std::string_view{cfgA});
         // 根不挂任何插件 (只有内置工具)
         spec.mount_plugins = PluginStringView::fromCstr(R"({"mode":"none"})");
-        PluginxxString out{nullptr, 0};
-        XX_TEST_EXPECT_EQ(
-            runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_RESULT_OK}
+        const auto reply   = callRuntime<&AgentxxPluginRuntimeIface::mount_root>(
+            hostView,
+            runtime,
+            &spec
         );
-        rootA = takeString(hostView, out);
+        XX_TEST_EXPECT_TRUE(reply.ok);
+        rootA = reply.text;
         XX_TEST_EXPECT_TRUE(!rootA.empty());
         // 根 id 由运行时自己算: `ext:<插件名>:<n>` (容器登记用同一个值)
         XX_TEST_EXPECT_TRUE(rootA.starts_with("ext:runtime_probe:"));
@@ -750,10 +840,13 @@ asio::awaitable<void> runBody(
         spec.title       = PluginStringView::fromCstr("测试通道 A");
         spec.on_event    = &onChannelEvent;
         spec.user_data   = &sinkA;
-        XX_TEST_EXPECT_EQ(
-            runtime->open_channel(hostView, &spec, &channelA),
-            int32_t{AGENTXX_RESULT_OK}
+        const auto reply = callRuntime<&AgentxxPluginRuntimeIface::open_channel>(
+            hostView,
+            runtime,
+            &spec
         );
+        XX_TEST_EXPECT_TRUE(reply.ok);
+        channelA = reply.id();
         XX_TEST_EXPECT_TRUE(channelA > 0);
     }
     XX_TEST_EXPECT_TRUE(co_await waitUntil(
@@ -803,21 +896,22 @@ asio::awaitable<void> runBody(
         spec.session_id  = PluginStringView::fromCstr("rt_sess_a");
         spec.on_event    = &onChannelEvent;
         spec.user_data   = &sinkA;
-        int64_t dupId    = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->open_channel(hostView, &spec, &dupId),
-            int32_t{AGENTXX_RESULT_ERR_CONFLICT}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::open_channel>(hostView, runtime, &spec),
+            "conflict"
+        ));
         // 换个 sessionId 就能开; 用完就关 (不占会话占用)
-        spec.session_id = PluginStringView::fromCstr("rt_sess_dup_free");
-        XX_TEST_EXPECT_EQ(
-            runtime->open_channel(hostView, &spec, &dupId),
-            int32_t{AGENTXX_RESULT_OK}
+        spec.session_id  = PluginStringView::fromCstr("rt_sess_dup_free");
+        const auto dup   = callRuntime<&AgentxxPluginRuntimeIface::open_channel>(
+            hostView,
+            runtime,
+            &spec
         );
+        XX_TEST_EXPECT_TRUE(dup.ok);
+        const int64_t dupId = dup.id();
         if (dupId > 0) {
-            XX_TEST_EXPECT_EQ(
-                runtime->close_channel(hostView, dupId),
-                int32_t{AGENTXX_RESULT_OK}
+            XX_TEST_EXPECT_TRUE(
+                callRuntime<&AgentxxPluginRuntimeIface::close_channel>(hostView, runtime, dupId).ok
             );
         }
         // 缺 on_event 回调: 参数错误
@@ -825,19 +919,18 @@ asio::awaitable<void> runBody(
         bad.struct_size = sizeof(AgentxxPluginChannelSpec);
         bad.root_id     = PluginStringView::from(std::string_view{rootA});
         bad.session_id  = PluginStringView::fromCstr("rt_sess_no_cb");
-        int64_t badId   = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->open_channel(hostView, &bad, &badId),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::open_channel>(hostView, runtime, &bad),
+            "invalid_argument"
+        ));
         // 未知根: 不存在
-        bad.on_event = &onChannelEvent;
+        bad.on_event  = &onChannelEvent;
         bad.user_data = &sinkA;
         bad.root_id   = PluginStringView::fromCstr("ext:nobody:1");
-        XX_TEST_EXPECT_EQ(
-            runtime->open_channel(hostView, &bad, &badId),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::open_channel>(hostView, runtime, &bad),
+            "not_found"
+        ));
     }
 
     // ===================== 7. 输入 → 轮次事件 =====================
@@ -849,9 +942,14 @@ asio::awaitable<void> runBody(
         g_da_sim_delay_ms             = 0;
 
         const std::string input = R"({"text":"你好"})";
-        XX_TEST_EXPECT_EQ(
-            runtime->send_input(hostView, channelA, &SvArg(std::string_view{input})),
-            int32_t{AGENTXX_RESULT_OK}
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::send_input>(
+                hostView,
+                runtime,
+                channelA,
+                &SvArg(std::string_view{input})
+            )
+                .ok
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -874,41 +972,50 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_GE(sinkA.count(AGENTXX_PLUGIN_CHANNEL_EVT_INPUT_ACK), size_t{1});
 
         // 参数校验: 空文本 / 非法 JSON / 非法 delivery / 不存在的通道
-        XX_TEST_EXPECT_EQ(
-            runtime->send_input(
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::send_input>(
                 hostView,
+                runtime,
                 channelA,
                 &SvArg(R"({"text":""})")
             ),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
-        XX_TEST_EXPECT_EQ(
-            runtime->send_input(hostView, channelA, &SvArg("{")),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
-        XX_TEST_EXPECT_EQ(
-            runtime->send_input(
+            "invalid_argument"
+        ));
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::send_input>(
                 hostView,
+                runtime,
+                channelA,
+                &SvArg("{")
+            ),
+            "invalid_argument"
+        ));
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::send_input>(
+                hostView,
+                runtime,
                 channelA,
                 &SvArg(R"({"text":"x","delivery":"no-such"})")
             ),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
-        XX_TEST_EXPECT_EQ(
-            runtime->send_input(
+            "invalid_argument"
+        ));
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::send_input>(
                 hostView,
+                runtime,
                 999999,
                 &SvArg(std::string_view{input})
             ),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
-        );
+            "not_found"
+        ));
     }
 
     // ===================== 8. 清单 / 通道状态 / 上下文查询 =====================
     {
-        PluginxxString out{nullptr, 0};
-        XX_TEST_EXPECT_EQ(runtime->list_runtime(hostView, &out), int32_t{0});
-        const auto text = takeString(hostView, out);
+        const auto listReply
+            = callRuntime<&AgentxxPluginRuntimeIface::list_runtime>(hostView, runtime);
+        XX_TEST_EXPECT_TRUE(listReply.ok);
+        const auto text = listReply.text;
         XX_TEST_EXPECT_FALSE(text.empty());
         const auto state = utilxx_base::Json::parse(text);
         XX_TEST_EXPECT_TRUE(state.contains("roots"));
@@ -926,9 +1033,13 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_TRUE(state["timers"].is_array());
 
         // 通道状态
-        PluginxxString chOut{nullptr, 0};
-        XX_TEST_EXPECT_EQ(runtime->get_channel_state(hostView, channelA, &chOut), int32_t{0});
-        const auto chText = takeString(hostView, chOut);
+        const auto chReply = callRuntime<&AgentxxPluginRuntimeIface::get_channel_state>(
+            hostView,
+            runtime,
+            channelA
+        );
+        XX_TEST_EXPECT_TRUE(chReply.ok);
+        const auto chText = chReply.text;
         XX_TEST_EXPECT_FALSE(chText.empty());
         const auto chState = utilxx_base::Json::parse(chText);
         XX_TEST_EXPECT_EQ(chState.value("channelId", int64_t{0}), channelA);
@@ -938,13 +1049,19 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_FALSE(chState.value("busy", true));
         XX_TEST_EXPECT_TRUE(chState.contains("workDir"));
         // 不存在的通道: 查询失败
-        PluginxxString missing{nullptr, 0};
-        XX_TEST_EXPECT_TRUE(runtime->get_channel_state(hostView, 999999, &missing) != 0);
+        XX_TEST_EXPECT_FALSE(
+            callRuntime<&AgentxxPluginRuntimeIface::get_channel_state>(hostView, runtime, 999999).ok
+        );
 
         // 上下文: 刚跑过一轮, 至少 system + user + assistant
-        PluginxxString ctxOut{nullptr, 0};
-        XX_TEST_EXPECT_EQ(runtime->get_context_messages(hostView, channelA, &ctxOut), int32_t{0});
-        const auto ctxText = takeString(hostView, ctxOut);
+        const auto ctxReply
+            = callRuntime<&AgentxxPluginRuntimeIface::get_context_messages>(
+                hostView,
+                runtime,
+                channelA
+            );
+        XX_TEST_EXPECT_TRUE(ctxReply.ok);
+        const auto ctxText = ctxReply.text;
         XX_TEST_EXPECT_FALSE(ctxText.empty());
         const auto msgs = utilxx_base::Json::parse(ctxText);
         XX_TEST_EXPECT_TRUE(msgs.is_array());
@@ -968,12 +1085,10 @@ asio::awaitable<void> runBody(
         spec.struct_size = sizeof(AgentxxPluginMountRootSpec);
         spec.name        = PluginStringView::fromCstr("probe2");
         spec.config_json = PluginStringView::from(std::string_view{cfgB});
-        PluginxxString out{nullptr, 0};
-        XX_TEST_EXPECT_EQ(
-            runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_RESULT_OK}
-        );
-        rootB = takeString(hostView, out);
+        const auto mountB
+            = callRuntime<&AgentxxPluginRuntimeIface::mount_root>(hostView, runtime, &spec);
+        XX_TEST_EXPECT_TRUE(mountB.ok);
+        rootB = mountB.text;
         XX_TEST_EXPECT_TRUE(!rootB.empty());
         XX_TEST_EXPECT_TRUE(rootB != rootA);
 
@@ -986,10 +1101,13 @@ asio::awaitable<void> runBody(
             chSpec.session_id = PluginStringView::fromCstr("rt_sess_a");
             chSpec.on_event   = &onChannelEvent;
             chSpec.user_data  = &sinkB;
-            XX_TEST_EXPECT_EQ(
-                runtime->open_channel(hostView, &chSpec, &channelB),
-                int32_t{AGENTXX_RESULT_OK}
+            const auto channelReply = callRuntime<&AgentxxPluginRuntimeIface::open_channel>(
+                hostView,
+                runtime,
+                &chSpec
             );
+            XX_TEST_EXPECT_TRUE(channelReply.ok);
+            channelB = channelReply.id();
         }
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -1005,21 +1123,23 @@ asio::awaitable<void> runBody(
         sinkA.clear();
         sinkB.clear();
         if (channelB > 0) {
-            XX_TEST_EXPECT_EQ(
-                runtime->send_input(
+            XX_TEST_EXPECT_TRUE(
+                callRuntime<&AgentxxPluginRuntimeIface::send_input>(
                     hostView,
+                    runtime,
                     channelA,
                     &SvArg(R"({"text":"first"})")
-                ),
-                int32_t{AGENTXX_RESULT_OK}
+                )
+                    .ok
             );
-            XX_TEST_EXPECT_EQ(
-                runtime->send_input(
+            XX_TEST_EXPECT_TRUE(
+                callRuntime<&AgentxxPluginRuntimeIface::send_input>(
                     hostView,
+                    runtime,
                     channelB,
                     &SvArg(R"({"text":"second"})")
-                ),
-                int32_t{AGENTXX_RESULT_OK}
+                )
+                    .ok
             );
             XX_TEST_EXPECT_TRUE(co_await waitUntil(
                 ex,
@@ -1048,18 +1168,17 @@ asio::awaitable<void> runBody(
         spec.struct_size = sizeof(AgentxxPluginMountRootSpec);
         spec.name        = PluginStringView::fromCstr("third");
         spec.config_json = PluginStringView::from(std::string_view{cfgA});
-        PluginxxString out{nullptr, 0};
-        XX_TEST_EXPECT_EQ(
-            runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_RESULT_ERR_LIMIT}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::mount_root>(hostView, runtime, &spec),
+            "limit_exceeded"
+        ));
         XX_TEST_EXPECT_EQ(host->rootCount(), size_t{2});
 
         // 另一个实例的根与本实例无关: 关掉通道 B 后把 B 卸掉, 再用同一个 id 装回来
         if (channelB > 0) {
-            XX_TEST_EXPECT_EQ(
-                runtime->close_channel(hostView, channelB),
-                int32_t{AGENTXX_RESULT_OK}
+            XX_TEST_EXPECT_TRUE(
+                callRuntime<&AgentxxPluginRuntimeIface::close_channel>(hostView, runtime, channelB)
+                    .ok
             );
             channelB = 0;
         }
@@ -1067,7 +1186,8 @@ asio::awaitable<void> runBody(
 
     // ===================== 11. 触发器: 三种策略 =====================
     {
-        XX_TEST_EXPECT_EQ(runtime->list_runtime(hostView, nullptr), AGENTXX_RESULT_ERR_ARG);
+        // 没有完成回调也算受理 (结果无人接收), 与"未受理"用返回值区分
+        XX_TEST_EXPECT_TRUE(runtime->list_runtime(hostView, nullptr, nullptr, nullptr) != nullptr);
 
         // (a) QUEUE: 每条事件立即投递
         const std::string topic = "plugin.runtime_probe.tick";
@@ -1076,49 +1196,49 @@ asio::awaitable<void> runBody(
         spec.policy      = AGENTXX_PLUGIN_TRIGGER_POLICY_QUEUE;
         spec.topic       = PluginStringView::from(std::string_view{topic});
         spec.channel_id  = channelA;
-        int64_t queueTrigger = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_trigger(hostView, &spec, &queueTrigger),
-            int32_t{AGENTXX_RESULT_OK}
-        );
+        int64_t    queueTrigger = 0;
+        const auto queueReply
+            = callRuntime<&AgentxxPluginRuntimeIface::register_trigger>(hostView, runtime, &spec);
+        XX_TEST_EXPECT_TRUE(queueReply.ok);
+        queueTrigger = queueReply.id();
         XX_TEST_EXPECT_TRUE(queueTrigger > 0);
 
         // 参数校验: topic 必填 / policy 越界 / 通道不存在 / delivery 非法
         AgentxxPluginTriggerSpec bad = spec;
         bad.topic                    = PluginStringView::fromCstr("");
-        int64_t tmpId                = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_trigger(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
-        bad       = spec;
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::register_trigger>(hostView, runtime, &bad),
+            "invalid_argument"
+        ));
+        bad        = spec;
         bad.policy = 99;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_trigger(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::register_trigger>(hostView, runtime, &bad),
+            "invalid_argument"
+        ));
         bad            = spec;
         bad.channel_id = 999999;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_trigger(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
-        );
-        bad            = spec;
-        bad.delivery   = PluginStringView::fromCstr("no-such");
-        XX_TEST_EXPECT_EQ(
-            runtime->register_trigger(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::register_trigger>(hostView, runtime, &bad),
+            "not_found"
+        ));
+        bad          = spec;
+        bad.delivery = PluginStringView::fromCstr("no-such");
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::register_trigger>(hostView, runtime, &bad),
+            "invalid_argument"
+        ));
 
         // 发一条事件: 载荷里的 text 直接成为输入
         sinkA.clear();
-        XX_TEST_EXPECT_EQ(
-            runtime->emit_event(
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::emit_event>(
                 hostView,
+                runtime,
                 &SvArg(std::string_view{topic}),
                 &SvArg(R"({"text":"来自触发器的消息"})")
-            ),
-            int32_t{AGENTXX_RESULT_OK}
+            )
+                .ok
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -1136,20 +1256,20 @@ asio::awaitable<void> runBody(
         merge.policy                   = AGENTXX_PLUGIN_TRIGGER_POLICY_COALESCE;
         merge.debounce_ms              = 120;
         merge.topic                    = PluginStringView::fromCstr("plugin.runtime_probe.batch");
-        int64_t mergeTrigger           = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_trigger(hostView, &merge, &mergeTrigger),
-            int32_t{AGENTXX_RESULT_OK}
-        );
+        const auto mergeReply
+            = callRuntime<&AgentxxPluginRuntimeIface::register_trigger>(hostView, runtime, &merge);
+        XX_TEST_EXPECT_TRUE(mergeReply.ok);
+        const int64_t mergeTrigger = mergeReply.id();
         sinkA.clear();
         for (int i = 0; i < 3; ++i) {
-            XX_TEST_EXPECT_EQ(
-                runtime->emit_event(
+            XX_TEST_EXPECT_TRUE(
+                callRuntime<&AgentxxPluginRuntimeIface::emit_event>(
                     hostView,
+                    runtime,
                     &SvArg("plugin.runtime_probe.batch"),
                     &SvArg(std::string_view{fmt::format(R"({{"text":"batch-{}"}})", i)})
-                ),
-                int32_t{AGENTXX_RESULT_OK}
+                )
+                    .ok
             );
         }
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
@@ -1168,35 +1288,36 @@ asio::awaitable<void> runBody(
         AgentxxPluginTriggerSpec drop = spec;
         drop.policy                   = AGENTXX_PLUGIN_TRIGGER_POLICY_DROP_IF_BUSY;
         drop.topic                    = PluginStringView::fromCstr("plugin.runtime_probe.drop");
-        int64_t dropTrigger           = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_trigger(hostView, &drop, &dropTrigger),
-            int32_t{AGENTXX_RESULT_OK}
-        );
+        const auto dropReply
+            = callRuntime<&AgentxxPluginRuntimeIface::register_trigger>(hostView, runtime, &drop);
+        XX_TEST_EXPECT_TRUE(dropReply.ok);
+        const int64_t dropTrigger = dropReply.id();
         // 让这一轮慢下来: 先起一轮, 等它变忙, 再发事件 (应被丢弃)
         g_da_sim_delay_ms = 300;
         sinkA.clear();
         const int requestBefore = g_da_sim_request_count.load();
-        XX_TEST_EXPECT_EQ(
-            runtime->send_input(
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::send_input>(
                 hostView,
+                runtime,
                 channelA,
                 &SvArg(R"({"text":"slow turn"})")
-            ),
-            int32_t{AGENTXX_RESULT_OK}
+            )
+                .ok
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
             10s,
             [&]() { return sinkA.count(AGENTXX_PLUGIN_CHANNEL_EVT_TURN_START) > 0; }
         ));
-        XX_TEST_EXPECT_EQ(
-            runtime->emit_event(
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::emit_event>(
                 hostView,
+                runtime,
                 &SvArg("plugin.runtime_probe.drop"),
                 &SvArg(R"({"text":"应当被丢弃"})")
-            ),
-            int32_t{AGENTXX_RESULT_OK}
+            )
+                .ok
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -1208,9 +1329,10 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_EQ(g_da_sim_request_count.load(), requestBefore + 1);
 
         // 清单里能看到丢弃计数
-        PluginxxString listOut{nullptr, 0};
-        XX_TEST_EXPECT_EQ(runtime->list_runtime(hostView, &listOut), int32_t{0});
-        const auto listed = utilxx_base::Json::parse(takeString(hostView, listOut));
+        const auto dropList
+            = callRuntime<&AgentxxPluginRuntimeIface::list_runtime>(hostView, runtime);
+        XX_TEST_EXPECT_TRUE(dropList.ok);
+        const auto listed  = utilxx_base::Json::parse(dropList.text);
         int        dropped = 0;
         for (const auto& item : listed["triggers"]) {
             if (item.value("triggerId", int64_t{0}) == dropTrigger) {
@@ -1220,22 +1342,48 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_GE(dropped, 1);
 
         // 注销: 三个都撤掉; 再注销一次报不存在
-        XX_TEST_EXPECT_EQ(runtime->unregister_trigger(hostView, mergeTrigger), int32_t{0});
-        XX_TEST_EXPECT_EQ(runtime->unregister_trigger(hostView, dropTrigger), int32_t{0});
-        XX_TEST_EXPECT_EQ(runtime->unregister_trigger(hostView, queueTrigger), int32_t{0});
-        XX_TEST_EXPECT_EQ(
-            runtime->unregister_trigger(hostView, queueTrigger),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::unregister_trigger>(
+                hostView,
+                runtime,
+                mergeTrigger
+            )
+                .ok
         );
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::unregister_trigger>(
+                hostView,
+                runtime,
+                dropTrigger
+            )
+                .ok
+        );
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::unregister_trigger>(
+                hostView,
+                runtime,
+                queueTrigger
+            )
+                .ok
+        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::unregister_trigger>(
+                hostView,
+                runtime,
+                queueTrigger
+            ),
+            "not_found"
+        ));
         // 注销之后事件不再投递
         sinkA.clear();
-        XX_TEST_EXPECT_EQ(
-            runtime->emit_event(
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::emit_event>(
                 hostView,
+                runtime,
                 &SvArg(std::string_view{topic}),
                 &SvArg(R"({"text":"已经没有触发器了"})")
-            ),
-            int32_t{AGENTXX_RESULT_OK}
+            )
+                .ok
         );
         co_await waitUntil(ex, 300ms, [&]() {
             return sinkA.count(AGENTXX_PLUGIN_CHANNEL_EVT_TURN_START) > 0;
@@ -1252,11 +1400,10 @@ asio::awaitable<void> runBody(
         once.first_delay_ms = 20;
         once.interval_ms    = 0;
         once.input_json     = PluginStringView::fromCstr(R"({"text":"一次性提醒"})");
-        int64_t onceId      = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_timer(hostView, &once, &onceId),
-            int32_t{AGENTXX_RESULT_OK}
-        );
+        const auto onceReply
+            = callRuntime<&AgentxxPluginRuntimeIface::register_timer>(hostView, runtime, &once);
+        XX_TEST_EXPECT_TRUE(onceReply.ok);
+        const int64_t onceId = onceReply.id();
         XX_TEST_EXPECT_TRUE(onceId > 0);
         sinkA.clear();
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
@@ -1269,30 +1416,30 @@ asio::awaitable<void> runBody(
             != std::string::npos
         );
         // 一次性定时器触发后不在了
-        XX_TEST_EXPECT_EQ(
-            runtime->unregister_timer(hostView, onceId),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::unregister_timer>(hostView, runtime, onceId),
+            "not_found"
+        ));
 
         // (b) 周期: 触发多次, 注销后停止
         AgentxxPluginTimerSpec periodic = once;
         periodic.first_delay_ms         = 10;
         periodic.interval_ms            = 40;
         periodic.input_json             = PluginStringView::fromCstr(R"({"text":"周期提醒"})");
-        int64_t periodicId              = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_timer(hostView, &periodic, &periodicId),
-            int32_t{AGENTXX_RESULT_OK}
-        );
+        const auto periodicReply
+            = callRuntime<&AgentxxPluginRuntimeIface::register_timer>(hostView, runtime, &periodic);
+        XX_TEST_EXPECT_TRUE(periodicReply.ok);
+        const int64_t periodicId = periodicReply.id();
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
             30s,
             [&]() {
-                PluginxxString out{nullptr, 0};
-                if (runtime->list_runtime(hostView, &out) != 0) {
+                const auto current
+                    = callRuntime<&AgentxxPluginRuntimeIface::list_runtime>(hostView, runtime);
+                if (!current.ok) {
                     return false;
                 }
-                const auto listed = utilxx_base::Json::parse(takeString(hostView, out));
+                const auto listed = utilxx_base::Json::parse(current.text);
                 for (const auto& item : listed["timers"]) {
                     if (item.value("timerId", int64_t{0}) == periodicId) {
                         return item.value("fired", 0) >= 2;
@@ -1301,38 +1448,40 @@ asio::awaitable<void> runBody(
                 return false;
             }
         ));
-        XX_TEST_EXPECT_EQ(runtime->unregister_timer(hostView, periodicId), int32_t{0});
-        XX_TEST_EXPECT_EQ(
-            runtime->unregister_timer(hostView, periodicId),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::unregister_timer>(hostView, runtime, periodicId)
+                .ok
         );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::unregister_timer>(hostView, runtime, periodicId),
+            "not_found"
+        ));
 
         // 参数校验: input_json 必填 / 非法 JSON / 通道不存在 / 负数延迟
         AgentxxPluginTimerSpec bad = once;
         bad.input_json             = PluginStringView::fromCstr("");
-        int64_t tmpId              = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_timer(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::register_timer>(hostView, runtime, &bad),
+            "invalid_argument"
+        ));
         bad            = once;
         bad.input_json = PluginStringView::fromCstr("{");
-        XX_TEST_EXPECT_EQ(
-            runtime->register_timer(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::register_timer>(hostView, runtime, &bad),
+            "invalid_argument"
+        ));
         bad            = once;
         bad.channel_id = 999999;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_timer(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
-        );
-        bad                 = once;
-        bad.first_delay_ms  = -5;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_timer(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::register_timer>(hostView, runtime, &bad),
+            "not_found"
+        ));
+        bad                = once;
+        bad.first_delay_ms = -5;
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::register_timer>(hostView, runtime, &bad),
+            "invalid_argument"
+        ));
     }
 
     // ===================== 13. 关通道: 连带注销 + 会话占用释放 =====================
@@ -1343,26 +1492,25 @@ asio::awaitable<void> runBody(
         spec.policy      = AGENTXX_PLUGIN_TRIGGER_POLICY_QUEUE;
         spec.topic       = PluginStringView::fromCstr("plugin.runtime_probe.will-vanish");
         spec.channel_id  = channelA;
-        int64_t triggerId = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_trigger(hostView, &spec, &triggerId),
-            int32_t{AGENTXX_RESULT_OK}
-        );
+        int64_t    triggerId = 0;
+        const auto triggerReply
+            = callRuntime<&AgentxxPluginRuntimeIface::register_trigger>(hostView, runtime, &spec);
+        XX_TEST_EXPECT_TRUE(triggerReply.ok);
+        triggerId = triggerReply.id();
         AgentxxPluginTimerSpec timerSpec{};
         timerSpec.struct_size    = sizeof(AgentxxPluginTimerSpec);
         timerSpec.channel_id     = channelA;
         timerSpec.first_delay_ms = 60000; ///< 远到不会触发
         timerSpec.input_json     = PluginStringView::fromCstr(R"({"text":"不会触发"})");
-        int64_t timerId          = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->register_timer(hostView, &timerSpec, &timerId),
-            int32_t{AGENTXX_RESULT_OK}
-        );
+        int64_t    timerId = 0;
+        const auto timerReply
+            = callRuntime<&AgentxxPluginRuntimeIface::register_timer>(hostView, runtime, &timerSpec);
+        XX_TEST_EXPECT_TRUE(timerReply.ok);
+        timerId = timerReply.id();
 
         sinkA.clear();
-        XX_TEST_EXPECT_EQ(
-            runtime->close_channel(hostView, channelA),
-            int32_t{AGENTXX_RESULT_OK}
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::close_channel>(hostView, runtime, channelA).ok
         );
         // 关闭事件恰好一条, 且之后不再有事件
         XX_TEST_EXPECT_EQ(sinkA.count(AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED), size_t{1});
@@ -1370,31 +1518,37 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_EQ(closedPayload.value("reason", std::string{}), std::string{"closed"});
 
         // 关闭之后通道不可用
-        XX_TEST_EXPECT_EQ(
-            runtime->send_input(
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::send_input>(
                 hostView,
+                runtime,
                 channelA,
                 &SvArg(R"({"text":"after close"})")
             ),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
-        );
-        XX_TEST_EXPECT_EQ(
-            runtime->close_channel(hostView, channelA),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
-        );
+            "not_found"
+        ));
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::close_channel>(hostView, runtime, channelA),
+            "not_found"
+        ));
         // 连带注销: 触发器与定时器都随通道消失
-        XX_TEST_EXPECT_EQ(
-            runtime->unregister_trigger(hostView, triggerId),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
-        );
-        XX_TEST_EXPECT_EQ(
-            runtime->unregister_timer(hostView, timerId),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::unregister_trigger>(
+                hostView,
+                runtime,
+                triggerId
+            ),
+            "not_found"
+        ));
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::unregister_timer>(hostView, runtime, timerId),
+            "not_found"
+        ));
         // 根还在, 但下面已经没有通道
-        PluginxxString out{nullptr, 0};
-        XX_TEST_EXPECT_EQ(runtime->list_runtime(hostView, &out), int32_t{0});
-        const auto listed = utilxx_base::Json::parse(takeString(hostView, out));
+        const auto closedList
+            = callRuntime<&AgentxxPluginRuntimeIface::list_runtime>(hostView, runtime);
+        XX_TEST_EXPECT_TRUE(closedList.ok);
+        const auto listed   = utilxx_base::Json::parse(closedList.text);
         const auto rootJson = findRootJson(listed, rootA);
         XX_TEST_EXPECT_EQ(rootJson["channels"].size(), size_t{0});
 
@@ -1406,39 +1560,61 @@ asio::awaitable<void> runBody(
         chSpec.session_id  = PluginStringView::fromCstr("rt_sess_a");
         chSpec.on_event    = &onChannelEvent;
         chSpec.user_data   = &again;
-        int64_t reopened   = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->open_channel(hostView, &chSpec, &reopened),
-            int32_t{AGENTXX_RESULT_OK}
-        );
+        const auto reopenReply
+            = callRuntime<&AgentxxPluginRuntimeIface::open_channel>(hostView, runtime, &chSpec);
+        XX_TEST_EXPECT_TRUE(reopenReply.ok);
+        const int64_t reopened = reopenReply.id();
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
             30s,
             [&]() { return again.count(AGENTXX_PLUGIN_CHANNEL_EVT_READY) > 0; }
         ));
         // 重开时可以换模型 / 取消 (本轮没在跑, 取消只是空操作)
-        XX_TEST_EXPECT_EQ(
-            runtime->select_model(hostView, reopened, &SvArg("test-sim")),
-            int32_t{0}
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::select_model>(
+                hostView,
+                runtime,
+                reopened,
+                &SvArg("test-sim")
+            )
+                .ok
         );
-        XX_TEST_EXPECT_EQ(
-            runtime->select_model(hostView, reopened, &SvArg("no-such")),
-            int32_t{0}
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::select_model>(
+                hostView,
+                runtime,
+                reopened,
+                &SvArg("no-such")
+            )
+                .ok
         );
-        XX_TEST_EXPECT_EQ(runtime->cancel(hostView, reopened), int32_t{0});
-        XX_TEST_EXPECT_EQ(
-            runtime->select_model(hostView, reopened, &SvArg("")),
-            int32_t{AGENTXX_RESULT_ERR_ARG}
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::cancel>(hostView, runtime, reopened).ok
         );
-        XX_TEST_EXPECT_EQ(
-            runtime->cancel(hostView, 999999),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::select_model>(
+                hostView,
+                runtime,
+                reopened,
+                &SvArg("")
+            ),
+            "invalid_argument"
+        ));
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::cancel>(hostView, runtime, 999999),
+            "not_found"
+        ));
         // 谁也不能应答一个不存在的中断
-        XX_TEST_EXPECT_EQ(
-            runtime->respond_interrupt(hostView, reopened, 1, &SvArg("{}")),
-            int32_t{AGENTXX_RESULT_ERR_STATE}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::respond_interrupt>(
+                hostView,
+                runtime,
+                reopened,
+                int64_t{1},
+                &SvArg("{}")
+            ),
+            "invalid_state"
+        ));
     }
 
     // ===================== 14. 卸载根 =====================
@@ -1451,33 +1627,44 @@ asio::awaitable<void> runBody(
         chSpec.session_id  = PluginStringView::fromCstr("rt_sess_victim");
         chSpec.on_event    = &onChannelEvent;
         chSpec.user_data   = &victim;
-        int64_t victimId   = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->open_channel(hostView, &chSpec, &victimId),
-            int32_t{AGENTXX_RESULT_OK}
-        );
+        const auto victimReply
+            = callRuntime<&AgentxxPluginRuntimeIface::open_channel>(hostView, runtime, &chSpec);
+        XX_TEST_EXPECT_TRUE(victimReply.ok);
+        const int64_t victimId = victimReply.id();
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
             30s,
             [&]() { return victim.count(AGENTXX_PLUGIN_CHANNEL_EVT_READY) > 0; }
         ));
 
-        XX_TEST_EXPECT_EQ(
-            runtime->unmount_root(hostView, &SvArg(std::string_view{rootA})),
-            int32_t{AGENTXX_RESULT_OK}
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::unmount_root>(
+                hostView,
+                runtime,
+                &SvArg(std::string_view{rootA})
+            )
+                .ok
         );
         XX_TEST_EXPECT_TRUE(victim.count(AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED) >= 1);
         XX_TEST_EXPECT_EQ(host->rootCount(), size_t{1});
         XX_TEST_EXPECT_TRUE(host->findRoot(rootA) == nullptr);
         // 已卸掉的根: 再卸一次报不存在
-        XX_TEST_EXPECT_EQ(
-            runtime->unmount_root(hostView, &SvArg(std::string_view{rootA})),
-            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
-        );
+        XX_TEST_EXPECT_TRUE(failedWith(
+            callRuntime<&AgentxxPluginRuntimeIface::unmount_root>(
+                hostView,
+                runtime,
+                &SvArg(std::string_view{rootA})
+            ),
+            "not_found"
+        ));
         // 别的实例的根同样按不存在处理
-        XX_TEST_EXPECT_EQ(
-            runtime->unmount_root(hostView, &SvArg(std::string_view{rootB})),
-            int32_t{AGENTXX_RESULT_OK}
+        XX_TEST_EXPECT_TRUE(
+            callRuntime<&AgentxxPluginRuntimeIface::unmount_root>(
+                hostView,
+                runtime,
+                &SvArg(std::string_view{rootB})
+            )
+                .ok
         );
         XX_TEST_EXPECT_EQ(host->rootCount(), size_t{0});
     }
@@ -1489,13 +1676,11 @@ asio::awaitable<void> runBody(
         spec.struct_size = sizeof(AgentxxPluginMountRootSpec);
         spec.name        = PluginStringView::fromCstr("probe_disabled");
         spec.config_json = PluginStringView::from(std::string_view{cfgA});
-        PluginxxString out{nullptr, 0};
-        std::string    rootC;
-        XX_TEST_EXPECT_EQ(
-            runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_RESULT_OK}
-        );
-        rootC = takeString(hostView, out);
+        std::string rootC;
+        const auto  mountReply
+            = callRuntime<&AgentxxPluginRuntimeIface::mount_root>(hostView, runtime, &spec);
+        XX_TEST_EXPECT_TRUE(mountReply.ok);
+        rootC = mountReply.text;
         XX_TEST_EXPECT_FALSE(rootC.empty());
 
         EventSink sinkC;
@@ -1505,11 +1690,10 @@ asio::awaitable<void> runBody(
         chSpec.session_id  = PluginStringView::fromCstr("rt_sess_disabled");
         chSpec.on_event    = &onChannelEvent;
         chSpec.user_data   = &sinkC;
-        int64_t channelC   = 0;
-        XX_TEST_EXPECT_EQ(
-            runtime->open_channel(hostView, &chSpec, &channelC),
-            int32_t{AGENTXX_RESULT_OK}
-        );
+        const auto channelReply
+            = callRuntime<&AgentxxPluginRuntimeIface::open_channel>(hostView, runtime, &chSpec);
+        XX_TEST_EXPECT_TRUE(channelReply.ok);
+        const int64_t channelC = channelReply.id();
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
             30s,
@@ -1528,15 +1712,20 @@ asio::awaitable<void> runBody(
         ));
         XX_TEST_EXPECT_TRUE(host->findRoot(rootC) == nullptr);
         // 禁用后本实例的一切入口都先被框架挡下 (admission lease 不再发放), 因此这里
-        // 拿到的是"被拒"而不是"通道不存在"; 两种情况都只要求它不再受理
-        XX_TEST_EXPECT_TRUE(
-            runtime->send_input(hostView, channelC, &SvArg(R"({"text":"x"})"))
-            != int32_t{AGENTXX_RESULT_OK}
-        );
-        PluginxxString listOut{nullptr, 0};
-        XX_TEST_EXPECT_EQ(runtime->list_runtime(hostView, &listOut), int32_t{0});
-        const auto listed = utilxx_base::Json::parse(takeString(hostView, listOut));
-        XX_TEST_EXPECT_EQ(listed["roots"].size(), size_t{0});
+        // 拿到的是"未受理"而不是"通道不存在"
+        const auto afterDisable
+            = callRuntime<&AgentxxPluginRuntimeIface::send_input>(
+                hostView,
+                runtime,
+                channelC,
+                &SvArg(R"({"text":"x"})")
+            );
+        XX_TEST_EXPECT_FALSE(afterDisable.ok);
+        const auto afterDisableList
+            = callRuntime<&AgentxxPluginRuntimeIface::list_runtime>(hostView, runtime);
+        XX_TEST_EXPECT_FALSE(afterDisableList.ok);
+        // 根与通道的确已经被回收 (从主程序侧看)
+        XX_TEST_EXPECT_TRUE(host->findRoot(rootC) == nullptr);
     }
 
     // ---- 收尾: 放开实例记录, 让容器关根时不再等插件关闭 ----
