@@ -56,7 +56,7 @@ ftxui::Element renderPluginButton(const PluginButtonDesc& desc, const TUITheme& 
 ftxui::Color uiRoleColor(std::string_view tone, const TUITheme& theme);
 
 /// diff 内容渲染 (message decor 与 DiffOverlay 共用)
-/// - path 非空时首行展示 "  file: {path}"
+/// - path 非空时首行展示 "[file] {path}"
 /// - screenW<=0 时取当前终端宽度; side-by-side 门槛 100 列 (与历史实现一致)
 ftxui::Element renderPluginDiff(
     std::string_view path,

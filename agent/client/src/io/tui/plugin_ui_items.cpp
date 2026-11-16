@@ -107,7 +107,7 @@ Element renderPluginDiff(
         Elements els;
         if (!path.empty()) {
             els.push_back(hbox({
-                text("  file: ") | color(theme.hintColor),
+                text("[file] ") | color(theme.hintColor),
                 text(std::string{path}) | color(theme.toolColor) | xflex_shrink,
             }));
         }
@@ -128,7 +128,7 @@ Element renderPluginDiff(
     Elements els;
     if (!path.empty()) {
         els.push_back(hbox({
-            text("  file: ") | color(theme.hintColor),
+            text("[file] ") | color(theme.hintColor),
             text(std::string{path}) | color(theme.toolColor) | xflex_shrink,
         }));
     }
