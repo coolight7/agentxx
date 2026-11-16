@@ -265,7 +265,6 @@ enum BridgeMagic {
     B_REGISTER_WRITE_PATH_PERMISSION,
     // 网络 (`agentxx.net`): 插件不自己建连接, 一律经主程序的网络服务
     B_NET_CALL,
-    B_NET_CALL_ASYNC,
     B_NET_CANCEL,
     B_NET_FETCH,
     B_NET_DOWNLOAD,
@@ -496,7 +495,7 @@ struct JsCallBridge {
     std::atomic<bool> settled{false};
 };
 
-/// JS 内 netCallAsync 的跨线程完成桥 (与 [JsCallBridge] 同构)
+/// JS 内网络 Promise 的跨线程完成桥 (与 [JsCallBridge] 同构)
 /// - 完成回调在主程序 io 线程, 只复制结果并向 JS 线程投递 settle 任务
 /// - 网络失败不是异常: Promise 总是 resolve 成结果对象, 业务结论看 `ok`
 ///   (与 C++ 侧 `NetResult` 的用法一致)
@@ -1350,7 +1349,7 @@ public:
         }
     }
 
-    /// 【JS 线程】settle netCallAsync: 总是 resolve 成结果对象
+    /// 【JS 线程】settle 网络 Promise: 总是 resolve 成结果对象
     /// - 业务失败与传输失败同一种形状 (`ok:false`), 脚本不用挨个 catch
     /// - 受理时给出的请求号以 `requestId` 补进结果 (脚本要取消时用)
     void settleNetCall(JsNetBridge* bridge, int32_t status, std::string text) {
@@ -3123,9 +3122,9 @@ private:
             def("unregisterKeybind", B_CLIENT_UNREGISTER_KEYBIND, 1);
             def("listKeybinds", B_CLIENT_LIST_KEYBINDS, 0);
             // 网络 (`agentxx.net`): 与 agent 侧同名同义; 结果对象里 `ok` 是业务结论
-            // - 同步入口用于快速操作; netFetch / netDownload / netCallAsync 返回 Promise
+            // - netCall / netFetch / netDownload / netHttpServe / netInfo 返回 Promise
+            // - netWsConnect / netWsSend / netWsClose / netHttpRespond 提交即返回
             def("netCall", B_NET_CALL, 2);
-            def("netCallAsync", B_NET_CALL_ASYNC, 2);
             def("netCancel", B_NET_CANCEL, 1);
             def("netFetch", B_NET_FETCH, 2);
             def("netDownload", B_NET_DOWNLOAD, 2);
@@ -3184,8 +3183,9 @@ private:
             def("registerReadPathPermission", B_REGISTER_READ_PATH_PERMISSION, 2);
             def("registerWritePathPermission", B_REGISTER_WRITE_PATH_PERMISSION, 2);
             // 网络 (`agentxx.net`): 与 C++ 插件 SDK 同名; 结果对象里 `ok` 是业务结论
+            // - netCall / netFetch / netDownload / netHttpServe / netInfo 返回 Promise
+            // - netWsConnect / netWsSend / netWsClose / netHttpRespond 提交即返回
             def("netCall", B_NET_CALL, 2);
-            def("netCallAsync", B_NET_CALL_ASYNC, 2);
             def("netCancel", B_NET_CANCEL, 1);
             def("netFetch", B_NET_FETCH, 2);
             def("netDownload", B_NET_DOWNLOAD, 2);
@@ -3297,9 +3297,11 @@ private:
     );
 
     /// 网络桥 (agent / client 两侧共用; `net` 取各自的 `<应用名>.net` 表)
-    /// - 同步入口 (`netCall` / `netWsConnect` / `netHttpServe` …) 阻塞 JS 线程等结果;
-    ///   网络服务自有线程, 不经主程序 io 线程, 所以同步回调里调也不会互等
-    /// - 慢操作 (`netFetch` / `netDownload` / `netCallAsync`) 返回 Promise (总是 resolve)
+    /// - 表入口一律异步操作契约 (提交即返回), JS 侧没有阻塞等待的形态
+    /// - 要结果的动作 (`netCall` / `netFetch` / `netDownload` / `netHttpServe` /
+    ///   `netInfo`) 返回 Promise (总是 resolve 成 `{ok:...}`)
+    /// - 无结果动作 (`netWsConnect` / `netWsSend` / `netWsClose` / `netHttpRespond`)
+    ///   直接返回受理结果 `{ok, requestId}`, 业务结果靠广播事件
     static JSValue netBridgeCall(
         JSContext*              ctx,
         JsPluginCtx*            pctx,
@@ -5937,7 +5939,6 @@ JSValue JsEngine::bridgeCall(
 
         // ---- 网络 (`agentxx.net`): agent 与 client 两侧同一份实现 ----
         case B_NET_CALL:
-        case B_NET_CALL_ASYNC:
         case B_NET_CANCEL:
         case B_NET_FETCH:
         case B_NET_DOWNLOAD:
@@ -7136,26 +7137,52 @@ JSValue JsEngine::netBridgeCall(
         return JS_ThrowInternalError(ctx, "agentxx net bridge: plugin context invalid");
     }
 
-    /// 同步网络调用: 阻塞 JS 线程直到网络侧给出结果 (只用于快速操作)
-    /// - 网络服务自有线程, **不**经主程序 io 线程: 在命令/渲染这类同步回调里调
-    ///   也不会与界面线程互等
-    auto netSync = [&](const std::string& op, const std::string& argsJson) -> JSValue {
+    /// 提交一次网络调用 (异步操作契约的唯一入口)
+    /// - 网络服务自有线程 (提交即返回), 入口不占主程序 io 线程
+    /// - 返回 true = 已受理 (`cb` 非空时结果经 [onNetCallDone] 回到 JS 线程);
+    ///   false = 未受理, 原因写进 `error`
+    auto netCallOp = [&](const std::string&        op,
+                         const std::string&        argsJson,
+                         PluginxxOperatorCallback  cb,
+                         void*                     cbUd,
+                         int64_t*                  requestId,
+                         std::string&              error) -> bool {
         if (!net || !net->call) {
-            return netOutcomeToValue(ctx, PLUGINXX_RESULT_ERR_STATE, std::string{});
+            error = "主程序没有提供网络能力";
+            return false;
         }
         auto           opSv   = agentxx::plugin::PluginStringView::from(op.data(), op.size());
         auto           argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
-        PluginxxString out{nullptr, 0};
-        const int32_t  code = net->call(host, &opSv, &argsSv, &out);
-        std::string    json;
-        if (out.data) {
-            json.assign(out.data, static_cast<size_t>(out.size));
-            agentxx::plugin::PluginString::free(host, &out);
+        PluginxxString err{nullptr, 0};
+        auto*          handle = net->call(host, &opSv, &argsSv, requestId, cb, cbUd, &err);
+        if (err.data) {
+            error.assign(err.data, static_cast<size_t>(err.size));
+            agentxx::plugin::PluginString::free(host, &err);
         }
-        return netOutcomeToValue(ctx, code, json);
+        return handle != nullptr;
     };
 
-    /// 异步网络调用 (Promise): 只受理, 结果经完成回调 settle
+    /// 无结果动作 (ws.connect / ws.send / ws.close / http.respond): 提交完就返回
+    /// - 返回 `{ok:true, requestId}` (已提交) 或 `{ok:false, error, message}` (未受理)
+    /// - 业务结果靠广播事件 (`ws.open` / `ws.close` …), 不占住 JS 线程
+    auto netSubmit = [&](const std::string& op, const std::string& argsJson) -> JSValue {
+        std::string   error;
+        int64_t       requestId = 0;
+        const bool    accepted  = netCallOp(op, argsJson, nullptr, nullptr, &requestId, error);
+        if (!accepted) {
+            return netErrorObject(
+                ctx,
+                "failed",
+                error.empty() ? std::string{"net: not accepted"} : error
+            );
+        }
+        JSValue out = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, out, "ok", JS_TRUE);
+        JS_SetPropertyStr(ctx, out, "requestId", JS_NewInt64(ctx, requestId));
+        return out;
+    };
+
+    /// 要结果的网络调用 (Promise): 只受理, 结果经完成回调 settle
     /// - Promise 总是 resolve 成结果对象; 受理失败也是对象 (`ok:false`)
     auto netAsync = [&](const std::string& op, const std::string& argsJson) -> JSValue {
         JSValue resolving[2];
@@ -7163,42 +7190,31 @@ JSValue JsEngine::netBridgeCall(
         if (JS_IsException(promise)) {
             return promise;
         }
-        // 受理失败 (或主程序没提供网络能力): 立即 resolve 错误对象
-        const auto resolveNow = [&](JSValue out) {
-            JSValue argv[1] = {out};
-            JSValue rc      = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, argv);
-            JS_FreeValue(ctx, rc);
-            JS_FreeValue(ctx, out);
-            JS_FreeValue(ctx, resolving[0]);
-            JS_FreeValue(ctx, resolving[1]);
-        };
-        if (!net || !net->call_async) {
-            resolveNow(netOutcomeToValue(ctx, PLUGINXX_RESULT_ERR_STATE, std::string{}));
-            return promise;
-        }
-        auto* bridge    = new JsNetBridge{engine, ctx};
+        auto* bridge = new JsNetBridge{engine, ctx};
         bridge->resolve = resolving[0];
         bridge->reject  = resolving[1];
-        auto           opSv   = agentxx::plugin::PluginStringView::from(op.data(), op.size());
-        auto           argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
-        PluginxxOperatorNotify notify{&JsEngine::onNetCallDone, bridge};
-        PluginxxString         acceptedOut{nullptr, 0};
-        int64_t                requestId = 0;
-        const int32_t          code
-            = net->call_async(host, &opSv, &argsSv, &notify, &acceptedOut, &requestId);
-        std::string accepted;
-        if (acceptedOut.data) {
-            accepted.assign(acceptedOut.data, static_cast<size_t>(acceptedOut.size));
-            agentxx::plugin::PluginString::free(host, &acceptedOut);
-        }
-        if (code != PLUGINXX_RESULT_OK) {
+        std::string   error;
+        int64_t       requestId = 0;
+        const bool    accepted  = netCallOp(
+            op,
+            argsJson,
+            &JsEngine::onNetCallDone,
+            bridge,
+            &requestId,
+            error
+        );
+        if (!accepted) {
             bool expected = false;
             if (bridge->settled.compare_exchange_strong(
                     expected,
                     true,
                     std::memory_order_acq_rel
                 )) {
-                bridge->engine->settleNetCall(bridge, PLUGINXX_OPERATOR_FAILED, std::move(accepted));
+                bridge->engine->settleNetCall(
+                    bridge,
+                    PLUGINXX_OPERATOR_FAILED,
+                    error.empty() ? fmt::format("net.{}: rejected", op) : std::move(error)
+                );
             }
             return promise;
         }
@@ -7234,23 +7250,12 @@ JSValue JsEngine::netBridgeCall(
         return args.dump();
     };
 
-    // 同步入口用于快速操作 (`ws.connect` / `ws.send` / `http.serve` / `net.info` …);
-    // 慢操作 (`http.fetch` / `http.download`) 走 Promise, 不占住 JS 线程。
+    // 要结果的动作一律 Promise (不占住 JS 线程); 无结果动作提交即返回。
     // 注意: 同一引擎里的脚本共享一份网络资源 (归属是该插件实例), 连接 id 要自己带前缀。
     switch (magic) {
         case B_NET_CALL: {
             if (argc < 1 || !JS_IsString(argv[0])) {
                 return JS_ThrowTypeError(ctx, "netCall: op string required");
-            }
-            return netSync(
-                jsToCppString(ctx, argv[0]),
-                argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{"{}"}
-            );
-        }
-
-        case B_NET_CALL_ASYNC: {
-            if (argc < 1 || !JS_IsString(argv[0])) {
-                return JS_ThrowTypeError(ctx, "netCallAsync: op string required");
             }
             return netAsync(
                 jsToCppString(ctx, argv[0]),
@@ -7275,11 +7280,11 @@ JSValue JsEngine::netBridgeCall(
         }
 
         case B_NET_WS_CONNECT: {
-            // netWsConnect(urlOrOptions): ok 只表示已发起, 握手结果看 `ws.open` 事件
+            // netWsConnect(urlOrOptions): 提交完即返回, 握手结果看 `ws.open` 事件
             if (argc < 1) {
                 return JS_ThrowTypeError(ctx, "netWsConnect: url required");
             }
-            return netSync(pluginxx::net_op::wsConnect, netArgs(argv[0], nullptr, std::string{}));
+            return netSubmit(pluginxx::net_op::wsConnect, netArgs(argv[0], nullptr, std::string{}));
         }
 
         case B_NET_WS_SEND: {
@@ -7289,7 +7294,7 @@ JSValue JsEngine::netBridgeCall(
             utilxx_base::Json args = utilxx_base::Json::object();
             args["id"]             = jsToCppString(ctx, argv[0]);
             args["text"]           = jsToCppString(ctx, argv[1]);
-            return netSync(pluginxx::net_op::wsSend, args.dump());
+            return netSubmit(pluginxx::net_op::wsSend, args.dump());
         }
 
         case B_NET_WS_CLOSE: {
@@ -7306,18 +7311,25 @@ JSValue JsEngine::netBridgeCall(
             if (argc >= 3) {
                 args["reason"] = jsToCppString(ctx, argv[2]);
             }
-            return netSync(pluginxx::net_op::wsClose, args.dump());
+            return netSubmit(pluginxx::net_op::wsClose, args.dump());
         }
 
         case B_NET_HTTP_SERVE:
-        case B_NET_HTTP_RESPOND: {
-            const char* op = magic == B_NET_HTTP_SERVE ? pluginxx::net_op::httpServe
-                                                      : pluginxx::net_op::httpRespond;
-            return netSync(op, argc >= 1 ? argsJsonText(ctx, argv[0]) : std::string{"{}"});
-        }
+            // netHttpServe(options): 要拿到监听地址, 所以等结果
+            return netAsync(
+                pluginxx::net_op::httpServe,
+                argc >= 1 ? argsJsonText(ctx, argv[0]) : std::string{"{}"}
+            );
+
+        case B_NET_HTTP_RESPOND:
+            // netHttpRespond(options): 回字节到对端, 提交完就返回
+            return netSubmit(
+                pluginxx::net_op::httpRespond,
+                argc >= 1 ? argsJsonText(ctx, argv[0]) : std::string{"{}"}
+            );
 
         case B_NET_INFO:
-            return netSync(pluginxx::net_op::info, "{}");
+            return netAsync(pluginxx::net_op::info, "{}");
 
         case B_NET_CANCEL: {
             int64_t requestId = 0;
@@ -8271,10 +8283,9 @@ JSValue JsEngine::clientBridgeCall(
         }
 
         // ---- 网络 (`agentxx.net`: client 插件与 agent 插件同一张表) ----
-        // 同步入口用于快速操作; 慢操作走 Promise。网络服务自有线程, 不经 client
-        // io 线程 —— 命令/渲染这类同步回调里调也不会与界面互等。
+        // 要结果的动作返回 Promise, 无结果动作提交即返回 (表入口本身是异步操作契约)。
+        // 网络服务自有线程, 不经 client io 线程 —— 同步回调里调也不会与界面互等。
         case B_NET_CALL:
-        case B_NET_CALL_ASYNC:
         case B_NET_CANCEL:
         case B_NET_FETCH:
         case B_NET_DOWNLOAD:

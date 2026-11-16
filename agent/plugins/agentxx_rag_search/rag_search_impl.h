@@ -6,7 +6,7 @@
 ///   agentxx/util/tool_result.h + fmt
 /// - 与原实现的差异点:
 ///   - 原版 asio 协程接口改为同步实现 (插件 execute 回调已运行在主程序线程池,
-///     阻塞安全); embedding 请求经 `netFetchBlocking` (主程序网络服务) 完成,
+///     阻塞安全); embedding 请求经主程序网络服务完成 (`netCallWait`),
 ///     插件不再自建连接
 ///   - embedding 客户端经 EmbedFn 函数对象注入: 插件入口加载真实 HTTP 版本,
 ///     测试可注入假实现 (不依赖网络), 与 filesystem_impl.h 的 IsCanceledFn
@@ -20,12 +20,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <expected>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -636,6 +638,81 @@ protected:
 // 真实 embedding 客户端 (原 EmbeddingClient: OpenAI 兼容 /embeddings 接口)
 // =========================================================================
 
+/// 在工作线程上等一次网络调用的结果 (回调 + 条件变量)
+///
+/// - 主程序把完成回调派发在主程序 io 线程上, 所以在这里等不会自锁;
+/// - 若真的在主程序 io 线程上调用 (会卡住整个主程序), 直接按错误返回;
+/// - 协程里不要这么写, 那里用 `co_await netFetch(...)`。
+inline agentxx::plugin::NetResult netCallWait(
+    const PluginxxHost*           host,
+    const PluginxxNetIface*       net,
+    const PluginxxSchedulerIface* scheduler,
+    std::string_view              op,
+    std::string_view              argsJson
+) {
+    agentxx::plugin::NetResult result;
+    if (!host || !net || !net->call || op.empty()) {
+        return result;
+    }
+    if (scheduler && scheduler->is_io_thread && scheduler->is_io_thread(host) != 0) {
+        result.code = PLUGINXX_RESULT_ERR_STATE;
+        result.json = R"({"ok":false,"error":"wrong_thread"})";
+        return result;
+    }
+
+    struct WaitState {
+        std::mutex              mutex;
+        std::condition_variable cv;
+        bool                    done   = false;
+        int32_t                 status = PLUGINXX_OPERATOR_FAILED;
+        std::string             payload;
+    } state;
+
+    PluginxxOperatorCallback cb
+        = [](void* ud, int32_t status, const PluginxxStringView* payload) {
+        auto* s = static_cast<WaitState*>(ud);
+        {
+            std::lock_guard<std::mutex> lock(s->mutex);
+            s->done   = true;
+            s->status = status;
+            if (payload && payload->data && payload->size > 0) {
+                s->payload.assign(payload->data, static_cast<size_t>(payload->size));
+            }
+        }
+        s->cv.notify_one();
+    };
+
+    const auto     opSv   = agentxx::plugin::PluginStringView::from(op.data(), op.size());
+    const auto     argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+    PluginxxString err{nullptr, 0};
+    int64_t        requestId = 0;
+    auto*          handle = net->call(host, &opSv, &argsSv, &requestId, cb, &state, &err);
+    if (handle == nullptr) {
+        result.code = PLUGINXX_RESULT_ERR_STATE;
+        if (err.data) {
+            result.json.assign(err.data, static_cast<size_t>(err.size));
+            agentxx::plugin::PluginString::free(host, &err);
+        }
+        return result;
+    }
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        state.cv.wait(lock, [&state]() {
+            return state.done;
+        });
+    }
+    result.code = PLUGINXX_RESULT_OK;
+    if (state.status == PLUGINXX_OPERATOR_OK) {
+        result.json = std::move(state.payload);
+    } else if (state.status == PLUGINXX_OPERATOR_CANCELED) {
+        result.json = R"({"ok":false,"error":"canceled"})";
+    } else {
+        result.json = state.payload.empty() ? std::string{R"({"ok":false,"error":"failed"})"}
+                                            : std::move(state.payload);
+    }
+    return result;
+}
+
 /// 构造真实 EmbedFn (OpenAI 兼容 POST {baseUrl}/embeddings)
 ///
 /// - 网络经主程序的 `<应用名>.net` 表发 (插件不自己建连接):
@@ -674,8 +751,13 @@ inline EmbedFn makeHttpEmbedder(
         options.json      = body.dump();
         options.timeoutMs = 15000;
 
-        const agentxx::plugin::NetResult resp
-            = agentxx::plugin::netFetchBlocking(host, net, scheduler, fmt::format("{}/embeddings", baseUrl), options);
+        const agentxx::plugin::NetResult resp = netCallWait(
+            host,
+            net,
+            scheduler,
+            pluginxx::net_op::httpFetch,
+            options.toArgsJson(fmt::format("{}/embeddings", baseUrl))
+        );
         if (!resp.accepted()) {
             return std::unexpected{fmt::format("[embedding] net call failed: {}", resp.error())};
         }

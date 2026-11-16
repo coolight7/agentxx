@@ -315,9 +315,10 @@ path/to/agentxx_test --log-level warn string_util regex
     `sendPluginData`)、自身信息与通用表 (`getOwnInfo` / `getPluginArgs` / `getPluginConfigPath` /
     `getLanguage` / `setLanguage` / `getConfig` / `listPlugins` / `getPlugin`)、广播 (`subscribe` /
     `unsubscribe` / `publish` / `declareBroadcast` / `readBroadcast` / `endBroadcast`)、
-    **网络 (`agentxx.net`, 与 agent 插件同一张表: `netCall` / `netCallAsync` / `netCancel` /
-    `netFetch` / `netDownload` / `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpServe` /
-    `netHttpRespond` / `netInfo`)**。后台任务 / 会话运行时 / 图 / 提示词 / Skill-Memory-MCP
+    **网络 (`agentxx.net`, 与 agent 插件同一张表: `netCall` / `netCancel` / `netFetch` /
+    `netDownload` / `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpServe` /
+    `netHttpRespond` / `netInfo`; 要结果的动作返回 Promise, `netWs*` / `netHttpRespond` 提交即返回)**。
+    后台任务 / 会话运行时 / 图 / 提示词 / Skill-Memory-MCP
     资源不在 client 桥上 (那些是 agent 侧能力)
   - **Promise 续体由主循环泵**: 动作/定时器/快捷键/渲染/命令回调里写 `netFetch(...).then(...)`
     会执行 —— JS 线程在每个任务与每个定时器之后泵微任务 (单次上限 10000 个 job);
@@ -816,7 +817,8 @@ path/to/agentxx_test --log-level warn string_util regex
 - **网络能力 `agentxx.net` 是通用表** (两侧都提供, 不计入上面的 10 张业务表):
   插件不自己建连接 —— HTTP / WebSocket / TCP / UDP / HTTP 服务端都经这张表转给
   `utilxx::NetHub` (自有网络线程, 按插件实例记账; 禁用/卸载时 `shutdownOwner` 整批收掉)。
-  三个成员 `call` / `call_async` / `cancel`; **表入口结果码只表示受理层面**, 业务结论在
+  两个入口 `call` (异步操作契约, 没有同步版本; `cb = NULL` = 提交完不管) / `cancel`;
+  **表入口结果码只表示受理层面**, 业务结论在
   结果 JSON 的 `ok` 里 (连不上/超时是 `code=OK` + `ok:false`)。入口码取
   `pluginxx/api/result.h` 的通用段 (`PLUGINXX_RESULT_*`; 网络实现的内部错误 -99 在表入口换成
   `ERR_INTERNAL` -999), 结果 JSON 的 `error` 给**名字** (通用段名称 + 网络段
@@ -824,9 +826,11 @@ path/to/agentxx_test --log-level warn string_util regex
   `cancelled`→`canceled`、`not_running`/`closed`→`not_connected`、`no_data_dir`→`write_failed`,
   旧名不再产生)。事件发到
   `plugin.<插件 id>.net` 广播 (载荷带 `kind` + `id`; `ws.connect` 只发起, 握手完成看
-  `ws.open`)。SDK: `netCall`/`netFetchBlocking`/`netWsConnect`/`netWsSend`/`netWsClose` +
-  `co_await netFetch` / `asyncNetFetch` (asio 形态, 给自带 io_context 的插件);
-  `netFetchBlocking` **不得在主程序 io 线程调用** (完成回调投递到那条线程, 会互锁)。
+  `ws.open`)。SDK: `co_await netCall(ctx, op, args)` / `netFetch` / `netDownload` /
+  `netHttpServe` / `netInfo` (要结果), `netSubmit` 与包装 `netWsConnect` / `netWsSend` /
+  `netWsClose` / `netHttpRespond` (提交完不等), asio 形态 `netFetch(ex, host, net, url, options, token)`;
+  **不再提供阻塞等待**: 确实需要阻塞的插件自己写“回调 + 条件变量”小助手
+  (完成回调在主程序 io 线程派发), **不得在主程序 io 线程上等** (`scheduler.is_io_thread` 先问一句)。
   4 个网络插件已全部迁完 (`websearch` / `rag_search` / `text_selection_monitor` / `chatbot`),
   插件里不再出现 `utilxx/http_client.h` / `ws_client.h`; 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §22

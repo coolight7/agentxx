@@ -12,7 +12,7 @@
 | A2 | agent 侧 `dlopen` + `create` 挪到加载线程池 | 完成（编译通过、插件测试全绿） |
 | B | `agentxx.agent` 业务表全部成员 | 完成（9 张表全部改异步操作契约） |
 | C | `agentxx.agent.runtime` 全部成员 | 完成（21 个成员改异步；lib / test / client / 25 个插件编译通过，插件相关测试 3983 条全绿） |
-| C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 进行中（`config` v4 / `plugins` v2 / `broadcasts` v4 / `capabilities` v8 完成；`net.call` 待做） |
+| C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 完成（`config` v4 / `plugins` v2 / `broadcasts` v4 / `capabilities` v8 / `net` v2） |
 | D | `agentxx.client.*` 六张表 + 三个回答型回调 | 待做 |
 | E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 部分完成（接口表数量与 §8.0 调用模型文档已同步） |
 
@@ -600,9 +600,48 @@ clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清�
   加了前置声明后变成两个不同签名 → C2668 重载不明确。改成"前置声明 + 定义都用显式返回类型
   `pluginxx::detail::TableOpResult`"。
 
+### 第 11 步：阶段 C2 第四批 —— `agentxx.net` v2（`call` 合并 `call_async`）
+
+按用户定下的方案 A 实施: **只留一个 `call`, 本身就是异步操作契约**; 同时**不再提供同步阻塞**
+的 SDK 形态（`netCallBlocking` / `netFetchBlocking` 删除, 插件自己组合）。
+
+改动面:
+
+1. 框架 `pluginxx/api/net.h`: `PLUGINXX_IFACE_NET_VERSION` / `MIN` 1 → 2, 基线仍整表长;
+   `call` 改成 `(host, op, args, request_id_out, cb, cb_ud, error_out) → handle`, `call_async` 删。
+2. 两侧宿主入口: `plugin_manager_vtable.cpp` 的 `xx_net_call` 与 `client_plugin_manager.cpp` 的
+   `xx_cnet_call` 合成一个（`OpCore::createDetached` + `setCallback` + `accept` → `netCallAsync` 提交,
+   未受理 `reject()` + 写 `error_out`; `cb = NULL` 时只执行不回程）。
+3. kit (`plugin_kit.h`): 旧同步 `netCall(host, net, op, args)` 改名 `netSubmit`（`cb=nullptr`,
+   受理成功把 `{"ok":true,"requestId":N}` 放进 `json`, 所以 `.ok()` = 已提交）;
+   `co_await netCall(ctx, op, args)` 是 awaiter; `netFetch` / `netDownload` / `netHttpServe` /
+   `netInfo` 都走它; `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpRespond` 走 `netSubmit`;
+   asio 形态 `asyncNetFetch` 改名 `netFetch(ex, host, net, url, options, token)`；
+   **删除** `netCallBlocking` / `netFetchBlocking` 两个重载。
+4. 4 个网络插件各写一份私有 `netCallWait`（回调 + 条件变量, 先问 `scheduler.is_io_thread`）:
+   `websearch` / `rag_search` / `text_selection_monitor` 的工具体仍是阻塞形态, `chatbot` 的
+   `download()` 用它; `chatbot` 的 `fetch()` 改成 `co_await netFetch(ex, ...)`, `asyncReady()` 并回 `ready()`。
+5. JS 引擎: `B_NET_CALL_ASYNC` 删除, `netCall` / `netFetch` / `netDownload` / `netHttpServe` /
+   `netInfo` 返回 Promise; `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpRespond`
+   返回 `{ok:true, requestId}`（提交即返回）。`example_js/plugin.js` 的两处改成 Promise 链,
+   `test_client_plugins` 的 `jsnet` 用例改成“先回一句 + 等第二条 toast”。
+6. 测试: `test_chatbot_media_io` 的 `TestNet` 改 v2（异步完成回调 + 静态句柄占位）;
+   `test_client_plugins` 的 `net` 表段改成提交 + 轮询完成（`co_await sleepMs`）。
+7. 文档: `plugins.md` §8.2 表行 / §22.1-§22.4、`AGENTS.md` 的网络段与 client 桥清单。
+
+验证: 框架 / lib / test 重编通过, 25 个插件重编通过, 插件相关 19 个模块 + 全量回归全绿。
+
 ## 与计划的偏差
 
 - 计划 §7.3 写"全局版本 5 → 6"：实际第 6 代已被占用，改为 6 → 7。
+- 计划 §7.4 / §9 的改名表写了 `netCallBlocking` / `netFetchBlocking` **保留同名**（同步等待那份
+  只改名不改语义）。用户后来定了另一条底线：**SDK 不再提供同步阻塞**，两个函数直接删除，
+  插件要阻塞就自己用“提交 + 完成回调 + 条件变量”组合（4 个网络插件各自带一份私有
+  `netCallWait`）。
+- `net.call` 合并后，“快操作”不需要协程: 传 `cb = NULL` 提交即返回（kit 的 `netSubmit`，
+  包装 `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpRespond`）。提交结果的 `ok` 只是
+  “已提交”，业务结果靠事件，所以 `ws.send` 的 `not_connected` 这类同步拒绝不再能在调用点看到
+  （`text_selection_monitor` 因此把 connect / send 改成自己等结果）。
 - 计划 §7.1 把"作用域失效"一律算**未受理**。实现上只能拆两半: 引用的**形状**无效
   (空指针 / `id` 为空 / `struct_size` 越界) 同步返回 `NULL`; 引用指向的挂载不存在或
   序号过期要读挂载表, 只能在 IO 线程上判, 按**受理后失败**交回。这样既不跨线程读表,
@@ -614,11 +653,6 @@ clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清�
 
 ## 剩余事项
 
-- 阶段 C2 只剩 `agentxx.net` 的 `call` 合并 `call_async`。这一项不是纯机械替换：
-  `net.call` 现在是**同步**入口，插件在 io 线程上直接调它做 `ws.send` / `http.respond`
-  这类"快操作"；合并成异步后，"快操作"就没有非协程入口了（`netCallBlocking` 明确拒绝在
-  io 线程跑）。要先定下这件事怎么办（给快操作留一条 `call_blocking` 形态，还是要求插件
-  全部改成 `co_await`），再动代码，否则会把 4 个网络插件的主路径一起改坏。
 - 阶段 D（`agentxx.client.*` 六张 + 三个回答型回调）待做。
 - 阶段 E 还剩：删残留同步实现路径、client 侧 150 ms 同步桥改 Promise、
   `AGENTS.md` 的调用模型说明。
@@ -626,3 +660,7 @@ clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清�
 - **子模块改动要在 `cxx_pluginxx` 仓库里单独提交**：`agent/third_party/cxx_pluginxx`
   是子模块，父仓库只能记录指针。前两个 commit 因此不含它的改动（只含 agent/docs），
   指针在本次提交里一并对齐。
+- 插件的同步阻塞助手（`netCallWait`）现在在 3 个插件里各一份（`websearch` / `rag_search` /
+  `text_selection_monitor`）加 `chatbot` 的 `chatbot_net.cpp` 一份。它们只需要 `net.call`
+  + 条件变量；如果以后接入第三家插件库，可以考虑放进插件自己的私有头文件里复用
+  （但**不要**再回 SDK）。

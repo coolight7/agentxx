@@ -190,6 +190,36 @@ int32_t PluginNetService::callAsync(
         accepted,
         &requestId
     );
+    if (rc != utilxx::net::Ok
+        && accepted.find("\"unsupported_op\"") != std::string::npos) {
+        // 立即完成的 op (`net.info` / `http.serve` / `http.route` / `ws.send` …) 在网络层
+        // 只有同步形态; 插件面只有异步入口, 所以在这里跑一次同步调用, 再按完成回调交回。
+        // 这些 op 不碰网络, 只是把快照 / 套接字表改一笔, 等待时长在微秒级;
+        // 受不了这点等待就用后台任务 (`agentxx_async_run`) 包一层。
+        std::string   result;
+        const int32_t syncRc
+            = hub_->call(std::string{owner}, std::string{op}, std::string{argsJson}, result);
+        if (syncRc == utilxx::net::Ok && cb != nullptr) {
+            PluginxxStringView view{};
+            if (!result.empty()) {
+                view.data = result.data();
+                view.size = static_cast<uint64_t>(result.size());
+            }
+            cb(ud, PLUGINXX_OPERATOR_OK, result.empty() ? nullptr : &view);
+        }
+        if (syncRc == utilxx::net::Ok) {
+            // 立即完成: 没有可取消的请求号
+            if (outRequestId != nullptr) {
+                *outRequestId = 0;
+            }
+            if (outJson != nullptr) {
+                *outJson = std::move(result);
+            }
+        } else if (outJson != nullptr) {
+            *outJson = std::move(result);
+        }
+        return pluginNetCode(syncRc);
+    }
     if (rc == utilxx::net::Ok) {
         {
             std::lock_guard lock(state_->mutex);

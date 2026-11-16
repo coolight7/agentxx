@@ -4,7 +4,7 @@
 /// - 通用部分在 `cxx_utilxx` 的 `utilxx::NetHub`: HTTP 客户端/服务端、TCP、WebSocket、
 ///   UDP, 自有网络线程, 按**属主** (这里是插件实例名) 隔离资源;
 /// - 本类只做三件"插件面"的事: 属主 id 用插件实例名、事件发到 `plugin.<插件 id>.net`
-///   广播、完成回调映射到 `PluginxxOperatorNotify` 的状态位, 入口码换算成
+///   广播、完成状态映射到 `PluginxxOperator*` 状态位, 入口码换算成
 ///   `pluginxx/api/result.h` 的通用段 (取值与 `utilxx::net::*` 一致);
 /// - 表入口 (`<应用名>.net`) 与生命周期挂在 `PluginManager` 上 (见 plugin_manager_net.cpp)。
 ///
@@ -50,10 +50,12 @@ public:
     int32_t call(std::string_view owner, std::string_view op, std::string_view argsJson,
                  std::string* outJson);
 
-    /// 异步操作: 受理成功写 `requestId`, 结果恰好一次经 `cb` 给出
+    /// 异步操作 (插件面唯一入口): 受理成功写 `requestId`, 结果恰好一次经 `cb` 给出
     ///
     /// - `guard` 是插件实例的弱引用: 结算时实例已销毁就丢弃这次回调 (按取消处理),
     ///   避免回调落到已卸载的插件代码上;
+    /// - 立即完成的 op (`net.info` / `http.serve` / `ws.send` …) 在网络层只有同步形态,
+    ///   这里就地跑一次同步调用再回调 (这些 op 不碰网络, 等待在微秒级);
     /// - 受理失败返回负值, 不回调。
     int32_t callAsync(std::string_view            owner,
                       std::string_view            op,

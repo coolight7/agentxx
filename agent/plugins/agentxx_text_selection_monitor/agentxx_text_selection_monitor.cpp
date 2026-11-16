@@ -3,8 +3,10 @@
 #include "text_selection_monitor.h"
 #include "text_selection_monitor_plugin.h"
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
 
 using namespace agentxx_text_selection_monitor_plugin;
@@ -44,6 +46,81 @@ struct TextSelectionPluginCtx;
 
 /// 本插件 id (网络事件频道 `plugin.<插件 id>.net` 用它拼)
 constexpr std::string_view kPluginId = "agentxx_text_selection_monitor";
+
+/// 在工作线程上等一次网络调用的结果 (回调 + 条件变量)
+///
+/// - 主程序把完成回调派发在主程序 io 线程上, 所以在这里等不会自锁;
+/// - 在主程序 io 线程上等会把整个主程序卡住, 这种情况直接按错误返回;
+/// - 本插件的 CDP 交互本来就是阻塞形态 (在工作线程上等事件), 所以可以这么等。
+static NetResult netCallWait(
+    const PluginxxHost*           host,
+    const PluginxxNetIface*       net,
+    const PluginxxSchedulerIface* scheduler,
+    std::string_view              op,
+    std::string_view              argsJson
+) {
+    NetResult result;
+    if (!host || !net || !net->call || op.empty()) {
+        return result;
+    }
+    if (scheduler && scheduler->is_io_thread && scheduler->is_io_thread(host) != 0) {
+        result.code = PLUGINXX_RESULT_ERR_STATE;
+        result.json = R"({"ok":false,"error":"wrong_thread"})";
+        return result;
+    }
+
+    struct WaitState {
+        std::mutex              mutex;
+        std::condition_variable cv;
+        bool                    done   = false;
+        int32_t                 status = PLUGINXX_OPERATOR_FAILED;
+        std::string             payload;
+    } state;
+
+    PluginxxOperatorCallback cb
+        = [](void* ud, int32_t status, const PluginxxStringView* payload) {
+        auto* s = static_cast<WaitState*>(ud);
+        {
+            std::lock_guard<std::mutex> lock(s->mutex);
+            s->done   = true;
+            s->status = status;
+            if (payload && payload->data && payload->size > 0) {
+                s->payload.assign(payload->data, static_cast<size_t>(payload->size));
+            }
+        }
+        s->cv.notify_one();
+    };
+
+    const auto     opSv   = PluginStringView::from(op.data(), op.size());
+    const auto     argsSv = PluginStringView::from(argsJson.data(), argsJson.size());
+    PluginxxString err{nullptr, 0};
+    int64_t        requestId = 0;
+    auto*          handle = net->call(host, &opSv, &argsSv, &requestId, cb, &state, &err);
+    if (handle == nullptr) {
+        result.code = PLUGINXX_RESULT_ERR_STATE;
+        if (err.data) {
+            result.json.assign(err.data, static_cast<size_t>(err.size));
+            PluginString::free(host, &err);
+        }
+        return result;
+    }
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        state.cv.wait(lock, [&state]() {
+            return state.done;
+        });
+    }
+    result.code = PLUGINXX_RESULT_OK;
+    if (state.status == PLUGINXX_OPERATOR_OK) {
+        result.json = std::move(state.payload);
+    } else if (state.status == PLUGINXX_OPERATOR_CANCELED) {
+        result.json = R"({"ok":false,"error":"canceled"})";
+    } else {
+        result.json = state.payload.empty() ? std::string{R"({"ok":false,"error":"failed"})"}
+                                            : std::move(state.payload);
+    }
+    return result;
+}
 
 /// 一次 WebSocket 往返的交互状态
 ///
@@ -126,12 +203,12 @@ std::string cdpHttpGet(TextSelectionPluginCtx& ctx, std::string_view url, int ti
     agentxx::plugin::NetHttpOptions options;
     options.method    = "GET";
     options.timeoutMs = timeoutMs > 0 ? timeoutMs : 3000;
-    const auto result = netFetchBlocking(
+    const auto result = netCallWait(
         ctx.host,
         ctx.iface.net,
         ctx.iface.scheduler,
-        url,
-        options
+        pluginxx::net_op::httpFetch,
+        options.toArgsJson(url)
     );
     if (!result.ok()) {
         return {};
@@ -189,14 +266,17 @@ std::string cdpWsRoundTrip(
     };
 
     std::string out;
-    const auto  connectResult = netWsConnect(
+    // connect / send 要完整结果 (`{ok:false,error:"not_connected"}` 这类), 所以等结果
+    auto connectArgs          = utilxx_base::Json::object();
+    connectArgs["url"]        = std::string{url};
+    connectArgs["id"]         = state.connId;
+    connectArgs["timeoutMs"]  = static_cast<int64_t>(waitMs);
+    const auto connectResult = netCallWait(
         ctx.host,
         ctx.iface.net,
-        url,
-        state.connId,
-        /*headersJson=*/{},
-        /*subprotocols=*/{},
-        waitMs
+        ctx.iface.scheduler,
+        pluginxx::net_op::wsConnect,
+        connectArgs.dump()
     );
     if (!connectResult.ok()) {
         teardown();
@@ -216,10 +296,22 @@ std::string cdpWsRoundTrip(
         }
     }
 
-    if (!netWsSend(ctx.host, ctx.iface.net, state.connId, message).ok()) {
-        netWsClose(ctx.host, ctx.iface.net, state.connId, "send-failed");
-        teardown();
-        return {};
+    {
+        auto sendArgs      = utilxx_base::Json::object();
+        sendArgs["id"]     = state.connId;
+        sendArgs["text"]   = std::string{message};
+        const auto sent    = netCallWait(
+            ctx.host,
+            ctx.iface.net,
+            ctx.iface.scheduler,
+            pluginxx::net_op::wsSend,
+            sendArgs.dump()
+        );
+        if (!sent.ok()) {
+            netWsClose(ctx.host, ctx.iface.net, state.connId, "send-failed");
+            teardown();
+            return {};
+        }
     }
 
     {

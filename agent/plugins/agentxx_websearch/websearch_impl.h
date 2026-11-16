@@ -3,7 +3,7 @@
 ///     已合并, 由 `format` 参数选择 raw 或 markdown)
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 /// - 依赖: 只依赖 cxx_utilxx_base (Json / 字符串编码转换); 网络经 [HttpFn] 注入 ——
-///   插件入口用主程序 `<应用名>.net` 表 (`netFetchBlocking`), 测试注入本地实现,
+///   插件入口用主程序 `<应用名>.net` 表 (`http.fetch` + 工作线程上等结果), 测试注入本地实现,
 ///   因此本文件不建连接、不依赖 asio
 /// - 执行模型: 三个执行体都是**同步函数**, 由插件入口注册为 `blocking_tool`
 ///   (跑在主程序工作线程上, 阻塞安全)。这取代了原来的 `polled_tool` + HttpClient
@@ -64,7 +64,7 @@ struct HttpRequestSpec {
 /// HTTP 执行函数
 ///
 /// - 插件入口: 经主程序 `<应用名>.net` 表的 `http.fetch` 实现 (见
-///   `agentxx::plugin::netFetchBlocking`);
+///   入口的 `netHttpExecute`: 工作线程上等结果);
 /// - 测试: 注入本地实现, 不依赖网络。
 using HttpFn = std::function<HttpResult(const HttpRequestSpec&)>;
 

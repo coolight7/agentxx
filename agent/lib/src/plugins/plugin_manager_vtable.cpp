@@ -2553,94 +2553,77 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
 
 // ==================== 网络表 (`<应用名>.net`) ====================
 
-/// 同步网络操作: op + 参数 JSON → 结果 JSON
+/// 一次网络操作 (异步操作契约)
 ///
-/// 网络服务自有线程 (内部有界等待), 所以这里**不**占管理器的 io 线程。
-static int32_t PLUGINXX_CALL xx_net_call(
+/// 网络服务自有线程 (提交即返回), 所以入口不占管理器的 io 线程; 结果经 `OpCore` 的
+/// 完成通道交回 (`cb` 为空时只执行不回程)。返回 NULL = 未受理 (参数错 / 实例不可用)。
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_net_call(
     const PluginxxHost*       host,
     const PluginxxStringView* op,
     const PluginxxStringView* args_json,
-    PluginxxString*           out_json
+    int64_t*                  request_id_out,
+    PluginxxOperatorCallback  cb,
+    void*                     cb_ud,
+    PluginxxString*           error_out
 ) {
-    return agentxx::plugin::guardVtableCall(PLUGINXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
-        auto call = enterHost(host);
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        auto call = enterHost(host, /*allowClosing=*/true);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(op)) {
-            return PLUGINXX_RESULT_ERR_ARG;
+            agentxx::plugin::hostMemorySetString(error_out, "net.call: host or op missing");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
         const std::string opStr{op->data, static_cast<size_t>(op->size)};
         const std::string argsStr
             = args_json && args_json->data
                   ? std::string{args_json->data, static_cast<size_t>(args_json->size)}
                   : std::string{"{}"};
-        std::string       result;
-        const int32_t     rc = mgr->netCall(inst->name, opStr, argsStr, &result);
-        if (rc == PLUGINXX_RESULT_OK && out_json != nullptr) {
-            hostMemorySetString(out_json, result);
-        } else if (rc != PLUGINXX_RESULT_OK && out_json != nullptr && !result.empty()) {
-            // 失败但带了可读原因: 平台侧只看结果码, 这里顺手把原因写出来便于排查
-            hostMemorySetString(out_json, result);
-        }
-        return rc;
-    });
-}
 
-/// 异步网络操作: 受理成功写 requestId, 结果恰好一次经 `notify->done` 给出
-static int32_t PLUGINXX_CALL xx_net_call_async(
-    const PluginxxHost*           host,
-    const PluginxxStringView*     op,
-    const PluginxxStringView*     args_json,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               out_json,
-    int64_t*                      out_request_id
-) {
-    return agentxx::plugin::guardVtableCall(PLUGINXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
-        auto call = enterHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(op) || !notify
-            || !notify->done) {
-            return PLUGINXX_RESULT_ERR_ARG;
+        std::shared_ptr<pluginxx::OpCore> core;
+        try {
+            core = pluginxx::OpCore::createDetached(mgr->runtime(), "net." + opStr);
+            core->setCallback(cb, cb_ud);
+            core->accept();
+        } catch (const std::exception& e) {
+            agentxx::plugin::hostMemorySetString(error_out, e.what());
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        const std::string opStr{op->data, static_cast<size_t>(op->size)};
-        const std::string argsStr
-            = args_json && args_json->data
-                  ? std::string{args_json->data, static_cast<size_t>(args_json->size)}
-                  : std::string{"{}"};
-        // 完成通知要跨线程保管: 拷贝成自有副本 (插件侧只要求恰好一次)
-        PluginxxOperatorNotify notifyCopy = *notify;
-        std::string             accepted;
-        int64_t                 requestId = 0;
-        const int32_t           rc        = mgr->netCallAsync(
+
+        std::string accepted;
+        int64_t     requestId = 0;
+        const int32_t rc      = mgr->netCallAsync(
             inst->name,
             opStr,
             argsStr,
             [](void* ud, int32_t status, const PluginxxStringView* payload) {
-                auto* copy = static_cast<PluginxxOperatorNotify*>(ud);
-                if (copy && copy->done) {
-                    copy->done(copy->host_ud, status, payload);
-                }
-                delete copy;
+                // 完成端点的回调数据由本层保管 (网络服务只保证恰好一次)
+                std::unique_ptr<std::shared_ptr<pluginxx::OpCore>> keep(
+                    static_cast<std::shared_ptr<pluginxx::OpCore>*>(ud)
+                );
+                pluginxx::OpCore::onDoneCore(keep->get(), status, payload);
             },
-            new PluginxxOperatorNotify(notifyCopy),
+            new std::shared_ptr<pluginxx::OpCore>(core),
             &accepted,
             &requestId,
             std::weak_ptr<PluginInstance>(inst->sharedSelf<PluginInstance>())
         );
         if (rc != PLUGINXX_RESULT_OK) {
-            if (out_json != nullptr && !accepted.empty()) {
-                hostMemorySetString(out_json, accepted);
-            }
-            return rc;
+            // 未受理: 回滚登记, 不回调
+            core->reject();
+            const char* name = pluginxx::result::nameOf(rc);
+            agentxx::plugin::hostMemorySetString(
+                error_out,
+                accepted.empty()
+                    ? fmt::format("net.call: {}", name != nullptr ? name : "rejected")
+                    : accepted
+            );
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        if (out_request_id != nullptr) {
-            *out_request_id = requestId;
+        if (request_id_out != nullptr) {
+            *request_id_out = requestId;
         }
-        if (out_json != nullptr && !accepted.empty()) {
-            hostMemorySetString(out_json, accepted);
-        }
-        return rc;
+        return core->handle();
     });
 }
 
@@ -2670,7 +2653,6 @@ static const PluginxxNetIface g_ifaceNet = {
     /* version */ PLUGINXX_IFACE_NET_VERSION,
     /* struct_size */ sizeof(PluginxxNetIface),
     /* call */ xx_net_call,
-    /* call_async */ xx_net_call_async,
     /* cancel */ xx_net_cancel,
 };
 

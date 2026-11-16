@@ -2,6 +2,8 @@
 #include "agentxx_websearch_plugin.h"
 #include "utilxx_base/json.h"
 #include "websearch_impl.h"
+#include <condition_variable>
+#include <mutex>
 #include <string>
 
 using namespace agentxx_websearch_plugin;
@@ -47,6 +49,82 @@ constexpr std::string_view kSearchTimeoutDesc = "Default `20` seconds. Request t
 
 constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
+/// 在工作线程上等一次网络调用的结果 (回调 + 条件变量)
+///
+/// - 主程序把完成回调派发在**主程序 io 线程**上, 所以在这里等不会自锁;
+/// - 在主程序 io 线程上等会把整个主程序卡住, 这种情况直接按错误返回;
+/// - 工具实现体本来就是阻塞形态 (`blocking_tool`), 所以可以这么等。
+///   协程里不要用它的思路 (那是 `co_await` 的事)。
+static agentxx::plugin::NetResult netCallWait(
+    const PluginxxHost*           host,
+    const PluginxxNetIface*       net,
+    const PluginxxSchedulerIface* scheduler,
+    std::string_view              op,
+    std::string_view              argsJson
+) {
+    agentxx::plugin::NetResult result;
+    if (!host || !net || !net->call || op.empty()) {
+        return result;
+    }
+    if (scheduler && scheduler->is_io_thread && scheduler->is_io_thread(host) != 0) {
+        result.code = PLUGINXX_RESULT_ERR_STATE;
+        result.json = R"({"ok":false,"error":"wrong_thread"})";
+        return result;
+    }
+
+    struct WaitState {
+        std::mutex              mutex;
+        std::condition_variable cv;
+        bool                    done   = false;
+        int32_t                 status = PLUGINXX_OPERATOR_FAILED;
+        std::string             payload;
+    } state;
+
+    PluginxxOperatorCallback cb
+        = [](void* ud, int32_t status, const PluginxxStringView* payload) {
+        auto* s = static_cast<WaitState*>(ud);
+        {
+            std::lock_guard<std::mutex> lock(s->mutex);
+            s->done   = true;
+            s->status = status;
+            if (payload && payload->data && payload->size > 0) {
+                s->payload.assign(payload->data, static_cast<size_t>(payload->size));
+            }
+        }
+        s->cv.notify_one();
+    };
+
+    const auto     opSv   = agentxx::plugin::PluginStringView::from(op.data(), op.size());
+    const auto     argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+    PluginxxString err{nullptr, 0};
+    int64_t        requestId = 0;
+    auto*          handle = net->call(host, &opSv, &argsSv, &requestId, cb, &state, &err);
+    if (handle == nullptr) {
+        result.code = PLUGINXX_RESULT_ERR_STATE;
+        if (err.data) {
+            result.json.assign(err.data, static_cast<size_t>(err.size));
+            agentxx::plugin::PluginString::free(host, &err);
+        }
+        return result;
+    }
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        state.cv.wait(lock, [&state]() {
+            return state.done;
+        });
+    }
+    result.code = PLUGINXX_RESULT_OK;
+    if (state.status == PLUGINXX_OPERATOR_OK) {
+        result.json = std::move(state.payload);
+    } else if (state.status == PLUGINXX_OPERATOR_CANCELED) {
+        result.json = R"({"ok":false,"error":"canceled"})";
+    } else {
+        result.json = state.payload.empty() ? std::string{R"({"ok":false,"error":"failed"})"}
+                                            : std::move(state.payload);
+    }
+    return result;
+}
+
 } // namespace
 
 struct WebsearchPluginCtx : public PluginBase {
@@ -58,7 +136,7 @@ struct WebsearchPluginCtx : public PluginBase {
 
 /// 把一次请求交给主程序网络服务 (`<应用名>.net` 的 `http.fetch`)
 ///
-/// 工具实现体跑在主程序工作线程上, 所以用阻塞等结果的形态 (`netFetchBlocking`);
+/// 工具实现体跑在主程序工作线程上, 所以在那里等结果 ([netCallWait]);
 /// 结果里的 `ok` 是"请求跑完了", 状态码与正文由各自执行体判断。
 static HttpResult netHttpExecute(WebsearchPluginCtx& ctx, const HttpRequestSpec& spec) {
     HttpResult out;
@@ -73,8 +151,13 @@ static HttpResult netHttpExecute(WebsearchPluginCtx& ctx, const HttpRequestSpec&
     options.format    = spec.format;
     options.timeoutMs = spec.timeoutSeconds > 0 ? spec.timeoutSeconds * 1000 : 0;
 
-    const auto result
-        = netFetchBlocking(ctx.host, ctx.iface.net, ctx.iface.scheduler, spec.url, options);
+    const auto result = netCallWait(
+        ctx.host,
+        ctx.iface.net,
+        ctx.iface.scheduler,
+        pluginxx::net_op::httpFetch,
+        options.toArgsJson(spec.url)
+    );
     if (!result.accepted()) {
         out.error = fmt::format("net call failed: {}", result.error());
         return out;

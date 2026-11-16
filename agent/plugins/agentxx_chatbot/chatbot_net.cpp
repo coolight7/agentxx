@@ -3,7 +3,9 @@
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 
+#include <condition_variable>
 #include <filesystem>
+#include <mutex>
 #include <system_error>
 
 namespace fs = std::filesystem;
@@ -14,6 +16,81 @@ namespace chatbot {
 namespace {
 
 constexpr const char* kLogTag = "chatbot";
+
+/// 在本线程上等一次网络调用的结果 (回调 + 条件变量)
+///
+/// - 主程序把完成回调派发在主程序 io 线程上, 所以在这里等不会自锁;
+/// - 在主程序 io 线程上等会把整个主程序卡住, 这种情况直接按错误返回;
+/// - 插件自己的协程里不要这么写, 那里用 `co_await netFetch(...)`。
+agentxx::plugin::NetResult netCallWait(
+    const PluginxxHost*           host,
+    const PluginxxNetIface*       net,
+    const PluginxxSchedulerIface* scheduler,
+    std::string_view              op,
+    std::string_view              argsJson
+) {
+    agentxx::plugin::NetResult result;
+    if (!host || !net || !net->call || op.empty()) {
+        return result;
+    }
+    if (scheduler && scheduler->is_io_thread && scheduler->is_io_thread(host) != 0) {
+        result.code = PLUGINXX_RESULT_ERR_STATE;
+        result.json = R"({"ok":false,"error":"wrong_thread"})";
+        return result;
+    }
+
+    struct WaitState {
+        std::mutex              mutex;
+        std::condition_variable cv;
+        bool                    done   = false;
+        int32_t                 status = PLUGINXX_OPERATOR_FAILED;
+        std::string             payload;
+    } state;
+
+    PluginxxOperatorCallback cb
+        = [](void* ud, int32_t status, const PluginxxStringView* payload) {
+        auto* s = static_cast<WaitState*>(ud);
+        {
+            std::lock_guard<std::mutex> lock(s->mutex);
+            s->done   = true;
+            s->status = status;
+            if (payload && payload->data && payload->size > 0) {
+                s->payload.assign(payload->data, static_cast<size_t>(payload->size));
+            }
+        }
+        s->cv.notify_one();
+    };
+
+    const auto     opSv   = agentxx::plugin::PluginStringView::from(op.data(), op.size());
+    const auto     argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+    PluginxxString err{nullptr, 0};
+    int64_t        requestId = 0;
+    auto*          handle = net->call(host, &opSv, &argsSv, &requestId, cb, &state, &err);
+    if (handle == nullptr) {
+        result.code = PLUGINXX_RESULT_ERR_STATE;
+        if (err.data) {
+            result.json.assign(err.data, static_cast<size_t>(err.size));
+            agentxx::plugin::PluginString::free(host, &err);
+        }
+        return result;
+    }
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        state.cv.wait(lock, [&state]() {
+            return state.done;
+        });
+    }
+    result.code = PLUGINXX_RESULT_OK;
+    if (state.status == PLUGINXX_OPERATOR_OK) {
+        result.json = std::move(state.payload);
+    } else if (state.status == PLUGINXX_OPERATOR_CANCELED) {
+        result.json = R"({"ok":false,"error":"canceled"})";
+    } else {
+        result.json = state.payload.empty() ? std::string{R"({"ok":false,"error":"failed"})"}
+                                            : std::move(state.payload);
+    }
+    return result;
+}
 
 /// 主程序结果 JSON → 平台层结构
 ///
@@ -54,8 +131,8 @@ asio::awaitable<ChatbotHttpResult> ChatbotNet::fetch(
     const ChatbotHttpRequest& request
 ) const {
     ChatbotHttpResult out;
-    if (!asyncReady()) {
-        out.error = "主程序没有提供网络能力 (check `.net` 表的 call_async)";
+    if (!ready()) {
+        out.error = "主程序没有提供网络能力 (check `.net` 表的 call)";
         co_return out;
     }
 
@@ -70,7 +147,7 @@ asio::awaitable<ChatbotHttpResult> ChatbotNet::fetch(
     options.timeoutMs = request.timeoutMs;
     options.maxBytes  = request.maxBytes;
 
-    auto result = co_await agentxx::plugin::asyncNetFetch(
+    auto result = co_await agentxx::plugin::netFetch(
         std::move(ex),
         host,
         net,
@@ -111,7 +188,7 @@ std::string ChatbotNet::download(
         args["maxBytes"] = maxBytes;
     }
 
-    auto result = agentxx::plugin::netCallBlocking(
+    auto result = netCallWait(
         host,
         net,
         scheduler,

@@ -392,7 +392,6 @@ public:
         iface_.version     = PLUGINXX_IFACE_NET_VERSION;
         iface_.struct_size = sizeof(PluginxxNetIface);
         iface_.call        = &TestNet::callThunk;
-        iface_.call_async  = &TestNet::callAsyncThunk;
         iface_.cancel      = &TestNet::cancelThunk;
         // 附件下载落盘在 "<dataDir>/<属主>/data/downloads/"; 不设就没法下载
         hub_->setDataDir(std::move(dataDir));
@@ -456,24 +455,24 @@ private:
         return rc;
     }
 
-    /// 完成通知的副本 (notify 本身是调用方栈上的结构, 调用返回就失效)
-    struct NotifyCopy {
-        PluginxxOperatorNotify notify{};
+    /// 完成回调的副本 (回调与 user_data 是调用方栈上的东西, 调用返回就失效)
+    struct DoneCopy {
+        PluginxxOperatorCallback cb    = nullptr;
+        void*                     cbUd  = nullptr;
     };
 
-    static int32_t PLUGINXX_CALL callAsyncThunk(
-        const PluginxxHost*           host,
-        const PluginxxStringView*     op,
-        const PluginxxStringView*     args,
-        const PluginxxOperatorNotify* notify,
-        PluginxxString*               out,
-        int64_t*                      outRequestId
+    /// 一次网络操作 (v2: 异步操作契约; `cb` 为空 = 提交完不管)
+    static PluginxxOperatorHandle* PLUGINXX_CALL callThunk(
+        const PluginxxHost*       host,
+        const PluginxxStringView* op,
+        const PluginxxStringView* args,
+        int64_t*                  requestIdOut,
+        PluginxxOperatorCallback  cb,
+        void*                     cbUd,
+        PluginxxString*           errorOut
     ) {
-        if (notify == nullptr || notify->done == nullptr) {
-            return PLUGINXX_RESULT_ERR_ARG;
-        }
         auto* self = static_cast<TestNet*>(host->opaque);
-        auto* copy = new NotifyCopy{*notify};
+        auto* copy = new DoneCopy{cb, cbUd};
         std::string accepted;
         int64_t     requestId = 0;
         const int32_t rc      = self->hub_->callAsync(
@@ -487,12 +486,10 @@ private:
                 } else if (status == utilxx::NetDoneStatus::Canceled) {
                     code = PLUGINXX_OPERATOR_CANCELED;
                 }
-                PluginxxStringView view{payload.data(), payload.size()};
-                copy->notify.done(
-                    copy->notify.host_ud,
-                    code,
-                    payload.empty() ? nullptr : &view
-                );
+                if (copy->cb != nullptr) {
+                    PluginxxStringView view{payload.data(), payload.size()};
+                    copy->cb(copy->cbUd, code, payload.empty() ? nullptr : &view);
+                }
                 delete copy;
             },
             accepted,
@@ -500,18 +497,15 @@ private:
         );
         if (rc != PLUGINXX_RESULT_OK) {
             delete copy;
-            if (!accepted.empty()) {
-                setOut(host, out, accepted);
-            }
-            return rc;
+            setOut(host, errorOut, accepted);
+            return nullptr;
         }
-        if (outRequestId != nullptr) {
-            *outRequestId = requestId;
+        if (requestIdOut != nullptr) {
+            *requestIdOut = requestId;
         }
-        if (!accepted.empty()) {
-            setOut(host, out, accepted);
-        }
-        return rc;
+        // 测试里不真管句柄生命周期 (不会去取消), 给个非空值表示"已受理"
+        static char handleToken = 0;
+        return reinterpret_cast<PluginxxOperatorHandle*>(&handleToken);
     }
 
     static int32_t PLUGINXX_CALL cancelThunk(

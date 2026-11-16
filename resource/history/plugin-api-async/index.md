@@ -68,8 +68,9 @@
 
 实施中（2026-11）：阶段 A（骨架 + `session` 试点）、A2（加载线程）、B（`agentxx.agent`
 九张业务表）、C（`runtime` 21 个成员）、C2 的第一批（`config` v4 / `plugins` v2）、
-第二批（`broadcasts` v4）、第三批（`capabilities` v8）已完成，进度与验证见 [work.md](work.md)。
-剩下 C2 最后一项（`net.call` 合并 `call_async`）、D（`agentxx.client.*` 六张 + 三个回答型回调）、
+第二批（`broadcasts` v4）、第三批（`capabilities` v8）、第四批（`net` v2：`call` 合并
+`call_async`，同时删掉 SDK 的同步阻塞形态 `netCallBlocking` / `netFetchBlocking`）已完成，
+进度与验证见 [work.md](work.md)。剩下 D（`agentxx.client.*` 六张 + 三个回答型回调）、
 E（删同步路径与 client 侧 150 ms 同步桥）。全局 API 代次实际是 **6 → 7**（第 6 代已被
 "工具结果两段上报"占用）。
 
@@ -93,7 +94,9 @@ E（删同步路径与 client 侧 150 ms 同步桥）。全局 API 代次实际�
 7. **回答型回调保留同步快路径**：回调内部立刻 `notify->done` 时当帧就用这份内容，
    所以现有 C++ 插件的渲染/命令行为、缓存命中与刷新次数与改之前完全一致。
 8. **"异步"只标在真正阻塞的形态上**：默认异步、名字不带 `async`；只有 `*Blocking` 与
-   后台任务域保留这个字（那个 async 是"放后台跑"，不是回调式异步）。
+   后台任务域保留这个字（那个 async 是"放后台跑"，不是回调式异步）。**后续补充**：
+   连 `*Blocking` 也不留 —— `netCallBlocking` / `netFetchBlocking` 在 C2 第四批删除，
+   SDK 不再提供同步等待（插件自己用回调 + 条件变量组合）。
 9. **版本不发明第二套 IID**：未发布阶段直接重置 version/baseline，首次发布后再改签名
    才走"换 IID"。
 10. **不新增双胞胎类型**：完成回调直接用框架的 `PluginxxOperatorCallback`。

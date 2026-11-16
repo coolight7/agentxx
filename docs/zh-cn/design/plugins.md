@@ -518,8 +518,10 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 | `agentxx.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |
 | `agentxx.tasks` | 1 | 后台任务主程序托管: `register_task/cancel_task` (kit `spawn` 自动注册; 主程序登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
 
-> 另一张 (不计入上面的 19 张): `agentxx.net` (v1) — `call` / `call_async` / `cancel`,
+> 另一张 (不计入上面的 19 张): `agentxx.net` (v2) — `call` / `cancel`,
 > HTTP / WebSocket / TCP / UDP / HTTP 服务端都转给 `utilxx::NetHub`, 详见 §22。
+> v2 = `call_async` 删掉, `call` 本身改成异步操作契约 (返回受理句柄 + 完成回调),
+> 所以现在**没有同步版本**: 不想收结果就传 `cb = NULL`。
 
 > 表中"版本"列 = 表声明的 `X_VERSION`, 与 `X_MIN_VERSION` 一起构成版本对, 另有
 > `X_BASELINE_SIZE` (基线字节数); 需要按 agent 区分的业务表为 v2 起 (v1 只在本进程单 agent
@@ -1268,7 +1270,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 - **工具返回值可以是 `{status, text, attachments}`**：`text` 是给模型读的正文，`attachments`（数组，元素形如 `{type, display_name, mime_type, path_or_url, size_bytes}`）作为第二段元数据上报，主程序侧直接得到 `ToolResult.attachments`（多模态附件的传递流程）；不写 `text` 时整份返回值就是正文（此时附件也会出现在正文里，所以带附件就请同时给 `text`）
 - **脚本初始化是注册事务**：脚本顶层注册的工具/订阅/资源/定时器在顶层异常或脚本卸载时统一回滚（先撤销主程序注册，再释放 JSContext），不留悬垂 user_data；订阅登记与能力 `unload` 的完成通知在 JS 执行真正结束后发出。agent 卸载时**不再**执行 JS 侧注销动作 (主程序已按挂载记录撤销全部注册，再照着回滚会碰到已释放的句柄)
 - **JS SDK 与 C++ 插件 SDK 同名同义**：`registerTool` / `unregisterTool` / `callTool`、`subscribe` / `unsubscribe` / `publish`、`addSkillDir` / `addMemoryFile` / `addMcpServer` (含 remove)、`registerToolPermission` / `registerReadPathPermission` / `registerWritePathPermission` / `unregisterToolPermission`、`getConfig` / `getPluginArgs` / `getLanguage` / `setLanguage`、`log`、`scope()` (返回 `{agentId, mountSeq}`，等同 C++ 侧的 `PluginxxScopeRef`)、`setTimeout` / `clearTimeout`、`jsonEscape(text)` / `jsonGetString(jsonText, key)` (对应 `pluginxx.json` 的两个成员；`jsonEscape` 与 C++ kit 一样返回**带引号**的 JSON 字符串字面量)。注册工具时与 `kit::fast_tool` 同一组可选项：`timeoutMs`（次调用的默认超时，0 = 不限）、`autoSummary` / `parallelSafe` / `repeatCallCheck`（对应 `AGENTXX_PLUGIN_TOOL_FLAG_*`）。工具回调的 `ctx` 是 `{sessionId, toolCallId, isCanceled()}`：**协作式取消**与 C++ SDK 同语义，主程序取消（会话取消 / 超时 / 后台任务取消）只置标记，脚本在回调里轮询 `ctx.isCanceled()` 才看得到，不看就一直跑到结束（那次的终态是 `canceled`，结果不再被采用）。
-- **网络 (`agentxx.net`) 已对齐**：`netCall(op, args)` / `netCallAsync(op, args)` / `netFetch(urlOrOptions)` / `netDownload(urlOrOptions, fileName)` / `netWsConnect(urlOrOptions)` / `netWsSend(id, text)` / `netWsClose(id, code, reason)` / `netHttpServe(options)` / `netHttpRespond(options)` / `netInfo()` / `netCancel(requestId)`。返回的始终是**结果对象**，业务结论看 `ok`（连不上、超时都是 `ok:false` + `error`，不是异常）；同步入口会阻塞 JS 线程直到网络侧给出结果，慢操作 (`http.fetch` / `http.download`) 用 Promise 形态。同一引擎里的脚本共享一份网络资源（归属是引擎这个插件实例，见 §22），连接 id 请自己带脚本名前缀
+- **网络 (`agentxx.net`) 已对齐**：`netCall(op, args)` / `netFetch(urlOrOptions)` / `netDownload(urlOrOptions, fileName)` / `netHttpServe(options)` / `netInfo()` 返回 **Promise**（总是 resolve 成结果对象，业务结论看 `ok`：连不上、超时都是 `ok:false` + `error`，不是异常）；`netWsConnect(urlOrOptions)` / `netWsSend(id, text)` / `netWsClose(id, code, reason)` / `netHttpRespond(options)` 提交即返回 `{ok:true, requestId}`（`ok` 只表示已提交，业务结果看 `ws.open` / `ws.close` 这类事件）；`netCancel(requestId)` 是表里的同步成员。同引擎里的脚本共享一份网络资源（归属是引擎这个插件实例，见 §22），连接 id 请自己带脚本名前缀；命令/渲染这类**同步回调**里拿不到 Promise 结果，请改成“先回一句 + `.then` 里再 `showToast`”
 - **后台任务已对齐**：`submitAsyncWork(options)` (返回 `asyncId`，被拒时为空串) / `cancelAsyncWork(id)` / `getAsyncWork(id)` / `listAsyncWork(sessionId?)`，只能操作本实例提交的任务；`options.onEvent(phase, payload)` 的 `phase` 取 `queued` / `started` / `finished` / `canceled`，payload 是解析后的对象。主程序在容器 io 线程发事件，引擎转投 JS 线程后才调脚本回调，脚本侧无需考虑线程
 - **查询面已对齐**：`getPrompt()` / `setPrompt(objOrString)` / `getToolPrompt(name)` (提示词贡献与工具提示词)、`getSessionWorkDir(sessionId?)` / `isCanceled(sessionId?)`、`getMessages(sessionId)` / `messagesCount(sessionId)`、`getGraphJson()` / `getGraphName()` / `setGraphJson(objOrString)`、`listMounts()` / `getMount(agentId?)` (缺省查本实例所属 agent)、`addShareStore(sessionId, content)` (返回条目 id)、`getOwnResources()`、`getModelConfig()`
 - **能力行与功能埋点已对齐**（`agentxx.capabilities`，脚本侧只开 agent 侧）：`provideCapability({id, handler, ownerTag?, priority?, timeoutMs?, impls?, merge?, phases?})` 登记一行实现（返回 `true`，被拒抛异常）、`unprovideCapability(id, ownerTag?)`、`providePoint(pointId, handler, {priority?, timeoutMs?, ownerTag?})`（与 kit 的 `providePoint` 同一形状：`impls: many` + `merge: first` + 只开 `impl` 阶段，回答按 `pointAnswer` 规范化）、`listCapabilities()` / `capabilityInfo(id)`（自省，后者未声明时给 `null`）、`invokeCapability(id, args?, {phase?, timeoutMs?})`（**始终返回 Promise**，resolve 成 `{ok, status, value|error}`；失败也 resolve，结论看 `ok`）。行为约定：脚本回调跑在 JS 线程（登记的是**异步处理器**，返回 token 稍后 `notify->done`），`providePoint` 是能参与功能埋点取值链的**唯一**脚本途径（只是想知道点被触发就订阅同名频道）；行归属于**脚本所在插件**（不是引擎实例），随挂载/脚本卸载自动撤销，重复登记同一 `(id, ownerTag)` 后登记者覆盖；`invokeCapability` 不要写成同步等待（同引擎里 A 脚本调 B 脚本会自锁）。
@@ -1287,7 +1289,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
     - 自身信息与通用表：`getOwnInfo()` / `getPluginArgs()` / `getPluginConfigPath()` / `getLanguage()` / `setLanguage(tag)`、`getConfig()`（本插件配置段）、`listPlugins()` / `getPlugin(name)`（客户端已加载的插件清单）
     - 广播：`subscribe` / `unsubscribe` / `publish` / `declareBroadcast(decl)` / `readBroadcast(id)` / `endBroadcast(id, reason?)`（client 侧事件是唯一通道，见 §20）
     - 通用表补充：能力行（`provideCapability` / `unprovideCapability` / `listCapabilities` / `capabilityInfo` / `invokeCapability`，client 实例没有挂载作用域，登记的是**进程级实现行**）、`jsonEscape` / `jsonGetString`。`providePoint` 不在 client 侧（功能埋点是 agent 侧概念）；`tasks` / `cancel` / `scheduler` / `coroutine_runtime` 同 agent 侧理由不上桥
-    - **网络（`agentxx.net`，与 agent 插件同一张表）**：`netCall(op, args)` / `netCallAsync(op, args)` / `netCancel(requestId)`、`netFetch(urlOrOptions)` / `netDownload(urlOrOptions, fileName?)`、`netWsConnect` / `netWsSend` / `netWsClose`、`netHttpServe` / `netHttpRespond`、`netInfo()`。语义与 C++ SDK / agent 侧脚本完全一致：同步入口的返回值与 Promise 的结果都以 `ok` 作为业务结论，资源归属是本插件实例（禁用/卸载整批收掉）。网络服务自有线程，**同步入口不经 client io 线程**，因此命令/渲染回调里也能直接调
+    - **网络（`agentxx.net`，与 agent 插件同一张表）**：`netCall(op, args)` / `netFetch(urlOrOptions)` / `netDownload(urlOrOptions, fileName?)` / `netHttpServe` / `netInfo()` 返回 **Promise**；`netWsConnect` / `netWsSend` / `netWsClose` / `netHttpRespond` 提交即返回；`netCancel(requestId)` 是同步成员。语义与 C++ SDK / agent 侧脚本完全一致（表入口是异步操作契约，没有同步版本），资源归属是本插件实例（禁用/卸载整批收掉）
     - 实例模型：client 表成员**不带** `PluginxxScopeRef`，因此一份脚本一个实例（无 agent 挂载作用域），脚本全局状态天然按进程隔离；壳只用一份 `start`/`stop`，不需要 mount 入口
     - 不在 client 桥上：后台任务 / 会话运行时 / 图 / 提示词 / session 资源（Skill/Memory/MCP）—— 这些都是 agent 侧能力；客户端脚本要取数据就用 `sendPluginData` 通知 agent 侧插件，或者写成 C++ client 插件
     - **同步回调有上限**：渲染内容回调与命令 `execute` 都在主程序 io 线程要求同步返回，而 JS 只在 JS 线程执行。引擎因此提供一条 io→JS 的同步桥：请求投到 JS 线程后最多等 `150 ms` (`kClientSyncTimeoutMs`)；超时、引擎已停、或 JS 线程正卡在“等 io 线程处理它的表调用”上一律直接放弃（渲染回退默认内容 / 命令按失败处理，不报错、不阻塞界面）。这两类回调**必须同步返回值**（返回 Promise 视为没有内容）；耗时计算请改为订阅事件后用 `updateToolDecor` 推数据。动作/定时器/快捷键回调是投递式的（fire-and-forget），不受此限
@@ -2590,9 +2592,11 @@ v4 起这 7 个成员都是**异步操作契约**（见 §8.0）：返回 `Plugi
 
 | 成员 | 形态 | 说明 |
 |---|---|---|
-| `call` | 同步 | 结果立即可得的操作 (`ws.connect` / `ws.send` / `http.serve` / `net.info` …); 内部投递到网络线程并**有界等待** |
-| `call_async` | 异步 | `http.request` / `http.fetch` / `http.download`; 受理成功写 `requestId`, 结果**恰好一次**经 `notify->done` 给出 |
-| `cancel` | 同步 | 撤一条进行中的异步请求 |
+| `call` | 异步 | **唯一入口**: 受理返回句柄 + `requestId`, 结果恰好一次经完成回调给出; 结果立即可得的操作 (`ws.connect` / `ws.send` / `http.serve` / `net.info` …) 也是这条路, 只是回调来得快 |
+| `cancel` | 同步 | 撤一条进行中的请求 (投递即返回, 不看结果) |
+
+没有同步版本: v2 把 `call_async` 合进了 `call`。要“提交完就不管”的调用方传 `cb = NULL`
+(动作照常执行, 只是不回收结果) —— 插件 SDK 里的 [netSubmit](plugin_kit.h)。
 
 入口码取 `pluginxx/api/result.h` 的**通用段**（`PLUGINXX_RESULT_OK` / `ERR_ARG` / `ERR_STATE` /
 `ERR_JSON` / `ERR_NOT_FOUND` / `ERR_TIMEOUT` / `ERR_PERMISSION` / `ERR_BUSY` / `ERR_NO_MEMORY` /
@@ -2629,9 +2633,10 @@ v4 起这 7 个成员都是**异步操作契约**（见 §8.0）：返回 `Plugi
 
 | 场景 | 入口 |
 |---|---|
-| 同步操作 | `netCall(host, net, op, args)` / `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpServe` / `netHttpRespond` / `netInfo` |
-| 工具实现体是阻塞的 | `netFetchBlocking(ctx, url, options)` / `netCallBlocking(...)` —— **不得在主程序 io 线程调用** (完成回调投递到那条线程, 会互锁), 这种情况直接返回 `PLUGINXX_RESULT_ERR_STATE` |
-| 插件自带 `io_context` 的协程 | `co_await netFetch(ctx, url, options)` (kit 协程) 或 `co_await asyncNetFetch(ex, host, net, url, options, token)` (asio 原生形态, 完成签名 `void(NetResult)`, 回调投递回传入的执行器) |
+| 协程里要结果 (推荐) | `co_await netCall(ctx, op, args)`; 包装: `netFetch` / `netDownload` / `netHttpServe` / `netInfo` |
+| 提交完不等结果 (关连接 / 应答 / 析构与回调里) | `netSubmit(host, net, op, args)` 与它的包装 `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpRespond` —— 结果的 `ok` 只表示**已提交** |
+| 阻塞式实现体 (例如 `blocking_tool` 的工作线程) | 插件自己的“回调 + 条件变量”助手: 传 `cb` 提交 → 在本线程等回调 → 回调在主程序 io 线程派发, 所以不会两边互等。**不得在主程序 io 线程等** (`scheduler.is_io_thread` 先问一句, 例如 `agentxx_websearch` / `agentxx_rag_search` / `agentxx_chatbot` 的同名私有 `netCallWait`) |
+| 插件自带 `io_context` 的协程 | `co_await netFetch(ex, host, net, url, options, token)` (asio 原生形态, 完成签名 `void(NetResult)`, 回调投递回传入的执行器; 下面就是 `asyncNetCall`) |
 | 订阅事件 | `declarePluginBroadcast` + `subscribePluginBroadcast`, 频道 `netEventTopic(插件 id)` |
 
 `NetResult{code, json}` 把两层状态分开: `accepted()` = 表入口成功, `ok()` = 业务成功,
@@ -2643,9 +2648,9 @@ timeoutMs / maxBytes / followRedirects / maxRedirects / tlsVerify。
 
 | 插件 | 迁移前 | 迁移后 |
 |---|---|---|
-| `agentxx_websearch` | `polled_tool` + `HttpClient` 协程 | `blocking_tool` + `netFetchBlocking`, markdown 交给 `format` |
-| `agentxx_rag_search` | `HttpClient::postAsync` | `netFetchBlocking` (索引改为首次检索时建, mount 不再等网络) |
-| `agentxx_text_selection_monitor` | 手写 winsock 握手 + WinHTTP | `netFetchBlocking` + `ws.connect`/`ws.open`/`ws.message` 往返 |
+| `agentxx_websearch` | `polled_tool` + `HttpClient` 协程 | `blocking_tool` + 私有 `netCallWait` (工作线程上等 `http.fetch`), markdown 交给 `format` |
+| `agentxx_rag_search` | `HttpClient::postAsync` | 私有 `netCallWait` 等 `http.fetch` (索引改为首次检索时建, mount 不再等网络) |
+| `agentxx_text_selection_monitor` | 手写 winsock 握手 + WinHTTP | 私有 `netCallWait` 等 `http.fetch` / `ws.connect` / `ws.send`, 其余靠 `ws.open`/`ws.message` 事件往返 |
 | `agentxx_chatbot` | `HttpClient` + `utilxx::WsClient` | `co_await netFetch` (`chatbot_net.h` 的 `ChatbotNet::fetch`) + `ws.*` 事件驱动网关 (`connId` 过滤旧事件), 附件走 `http.download` 落盘 |
 
 迁移后这些插件不再 `#include "utilxx/http_client.h"` / `ws_client.h` (`cxx_utilxx` 的静态链接
@@ -2656,7 +2661,7 @@ timeoutMs / maxBytes / followRedirects / maxRedirects / tlsVerify。
 - 测试模块 `plugin_net` (35 条): `net.info` 现状 / 未知 op 参数层拒绝 / `http.serve` +
   `http.route` + `http.fetch` 回环往返 / 事件落 `plugin.<属主>.net` / `shutdownOwner` 后服务消失与
   端口释放 / 未完成请求按取消结算;
-- `chatbot_media_io` 用测试侧的 `TestNet` (把 `.net` 三个入口接到本地 `NetHub`) 直测
+- `chatbot_media_io` 用测试侧的 `TestNet` (把 `.net` 的两个入口接到本地 `NetHub`) 直测
   `QqApi` 的上传与附件下载 (含二进制正文与失败原因);
 - 限制: 服务端默认只监听回环 (`127.0.0.1`), 要同网段访问必须显式给 `host: "0.0.0.0"`;
   每个属主同时最多 16 条 HTTP 客户端请求、连接与服务数量有上限 (`net.info` 可查);

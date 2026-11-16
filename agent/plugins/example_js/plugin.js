@@ -143,47 +143,51 @@ if (SIDE === "client") {
   );
 
   // ---- client 侧: 网络 (`agentxx.net`, 与 agent 插件同一张表) ----
-  // 网络服务自有线程, 同步入口不从界面线程转一手, 所以命令回调里也能直接调。
+  // 表入口是异步操作契约: 提交就返回, 要结果的动作给 Promise (结果晚些到, 仍在 JS 线程)。
   agentxx.registerCommand({
     name: "jsnet",
     description: "example_js: 网络表自检 (net.info)",
     execute: () => {
-      const info = agentxx.netInfo();
-      const bogus = agentxx.netCall("net.no_such_op", {});
-      const servers = info && info.servers ? info.servers.length : -1;
-      return {
-        action: "toast",
-        text:
-          "net info ok=" + (info && info.ok) +
-          " servers=" + servers +
-          " bogus ok=" + (bogus && bogus.ok),
-        level: 0,
-      };
+      // 命令回调必须同步返回内容, 所以结果经 toast 补上
+      agentxx.netInfo().then((info) => {
+        const servers = info && info.servers ? info.servers.length : -1;
+        agentxx.netCall("net.no_such_op", {}).then((bogus) => {
+          agentxx.showToast(
+            "net info ok=" + (info && info.ok) +
+              " servers=" + servers +
+              " bogus ok=" + (bogus && bogus.ok),
+            0,
+          );
+        });
+      });
+      return { action: "toast", text: "net: probing", level: 0 };
     },
   });
 
   // 回环往返: 脚本自己起一个 HTTP 服务 + 静态路由, 再用 netFetch 取回
   // (Promise 完成时回到 JS 线程, 界面线程全程不等)。
   agentxx.bindAction("js.demo.net", () => {
-    const served = agentxx.netCall("http.serve", { host: "127.0.0.1", port: 0 });
-    if (!served || !served.ok || !served.port) {
-      agentxx.showToast("net: serve failed", 2);
-      return;
-    }
-    agentxx.netCall("http.route", {
-      serverId: served.id,
-      path: "/hello",
-      bytes: "hello-from-js-client",
-    });
-    agentxx.netFetch("http://127.0.0.1:" + served.port + "/hello").then((r) => {
-      const body = (r && r.body) || "";
-      agentxx.showToast(
-        "net fetch: ok=" + (r && r.ok) +
-          " status=" + (r && r.status) +
-          " body=" + body,
-        0,
-      );
-      agentxx.netCall("http.stop", { serverId: served.id });
+    agentxx.netCall("http.serve", { host: "127.0.0.1", port: 0 }).then((served) => {
+      if (!served || !served.ok || !served.port) {
+        agentxx.showToast("net: serve failed", 2);
+        return;
+      }
+      agentxx.netCall("http.route", {
+        serverId: served.id,
+        path: "/hello",
+        bytes: "hello-from-js-client",
+      }).then(() => {
+        agentxx.netFetch("http://127.0.0.1:" + served.port + "/hello").then((r) => {
+          const body = (r && r.body) || "";
+          agentxx.showToast(
+            "net fetch: ok=" + (r && r.ok) +
+              " status=" + (r && r.status) +
+              " body=" + body,
+            0,
+          );
+          agentxx.netCall("http.stop", { serverId: served.id });
+        });
+      });
     });
   });
 
@@ -365,11 +369,10 @@ if (SIDE === "client") {
       out.prompt = kindOf(agentxx.getPrompt());
       out.toolPrompt = kindOf(agentxx.getToolPrompt("no_such_tool_for_probe"));
       out.shareStore = kindOf(agentxx.getShareStore("probe-session", 0));
-      // 网络: 入口总是给出结果对象, 业务结论在 ok 里
-      const netInfo = agentxx.netInfo();
-      out.netInfoIsObject = typeof netInfo === "object" && netInfo !== null;
-      out.netInfoOkType = typeof netInfo.ok;
-      out.netCallOkType = typeof agentxx.netCall("net.info", {}).ok;
+      // 网络: 要结果的动作给 Promise (结果晚些到); `netCancel` 是同步成员, 结果对象里 `ok` 是 boolean
+      out.netInfoIsPromise = agentxx.netInfo() instanceof Promise;
+      out.netCallIsPromise = agentxx.netCall("net.info", {}) instanceof Promise;
+      out.netCancelOkType = typeof agentxx.netCancel(999999).ok;
       // 后台任务: 空参数会被拒 (空 id), 查询/取消都是纯读取
       out.submitAsyncWork = typeof agentxx.submitAsyncWork({});
       out.listAsyncWorkIsArray = Array.isArray(agentxx.listAsyncWork());

@@ -69,14 +69,9 @@ struct ChatbotNet {
     /// 本插件的网络事件频道 `plugin.<插件 id>.net` (插件入口填)
     std::string eventTopic;
 
-    /// 同步操作 (WebSocket 建连/发送/关闭) 可用
+    /// 表入口可用 (提交 / 等结果都经过它)
     bool ready() const noexcept {
         return host != nullptr && net != nullptr && net->call != nullptr;
-    }
-
-    /// 异步操作 (HTTP 请求) 可用
-    bool asyncReady() const noexcept {
-        return host != nullptr && net != nullptr && net->call_async != nullptr;
     }
 
     /// 一次 HTTP 请求 (协程; 在插件 io 线程上 `co_await`)
@@ -94,6 +89,8 @@ struct ChatbotNet {
     /// - 正文由主程序直接写到磁盘 (`http.download`), 不经 JSON, 大文件也不占内存;
     /// - 主程序先落到它给插件的数据目录, 本方法再搬到 `targetPath`
     ///   (同盘就是改名; 跨盘退化成复制 + 删源);
+    /// - 等待方式: 提交后在本线程上等完成回调 (`chatbot_net.cpp` 的 `netCallWait`),
+    ///   完成回调在主程序 io 线程派发, 所以不会两边互等;
     /// - 返回空串 = 成功, 非空 = 失败原因 (调用方保留平台地址即可)。
     std::string download(
         std::string_view url,

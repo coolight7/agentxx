@@ -635,37 +635,88 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         if (ifaceNet) {
             XX_TEST_EXPECT_EQ(ifaceNet->version, PLUGINXX_IFACE_NET_VERSION);
 
-            // net.info: 服务/连接快照, 空闲时也是合法结果
-            {
-                PluginxxStringView opSv = agentxx::plugin::PluginStringView::from("net.info", 8);
-                PluginxxStringView argsSv = agentxx::plugin::PluginStringView::from("{}", 2);
-                PluginxxString     out{};
-                const int32_t      rc = ifaceNet->call(
+            // 表入口是异步操作契约: 提交后结果经完成回调交回 (client io 线程)
+            struct WaitDone {
+                std::mutex              mutex;
+                bool                    done   = false;
+                int32_t                 status = PLUGINXX_OPERATOR_FAILED;
+                std::string             payload;
+            };
+            auto submitNet = [&](const char* opText, const char* argsText) {
+                auto               state = std::make_shared<WaitDone>();
+                PluginxxStringView opSv
+                    = agentxx::plugin::PluginStringView::from(opText, std::strlen(opText));
+                PluginxxStringView argsSv
+                    = agentxx::plugin::PluginStringView::from(argsText, std::strlen(argsText));
+                int64_t        requestId = 0;
+                PluginxxString err{};
+                auto*          handle   = ifaceNet->call(
                     inst->hostView(),
                     &opSv,
                     &argsSv,
-                    &out
+                    &requestId,
+                    [](void* ud, int32_t status, const PluginxxStringView* payload) {
+                        auto* s = static_cast<WaitDone*>(ud);
+                        std::lock_guard<std::mutex> lk(s->mutex);
+                        s->done   = true;
+                        s->status = status;
+                        if (payload && payload->data) {
+                            s->payload.assign(payload->data, static_cast<size_t>(payload->size));
+                        }
+                    },
+                    state.get(),
+                    &err
                 );
-                XX_TEST_EXPECT_EQ(rc, PLUGINXX_RESULT_OK);
-                XX_TEST_EXPECT_TRUE(out.data != nullptr);
-                if (out.data) {
-                    XX_TEST_EXPECT_TRUE(std::string(out.data, out.size).find("\"ok\":true")
-                                        != std::string::npos);
-                    agentxx::plugin::PluginString::free(inst->hostView(), &out);
+                if (handle == nullptr) {
+                    std::lock_guard<std::mutex> lk(state->mutex);
+                    state->done = true;
+                    if (err.data) {
+                        state->payload.assign(err.data, static_cast<size_t>(err.size));
+                        agentxx::plugin::PluginString::free(inst->hostView(), &err);
+                    }
                 }
+                return state;
+            };
+            auto waitNet = [&](const std::shared_ptr<WaitDone>& state) -> asio::awaitable<bool> {
+                for (int i = 0; i < 400; ++i) {
+                    {
+                        std::lock_guard<std::mutex> lk(state->mutex);
+                        if (state->done) {
+                            co_return true;
+                        }
+                    }
+                    co_await sleepMs(5);
+                }
+                co_return false;
+            };
+
+            // net.info: 服务/连接快照, 空闲时也是合法结果
+            {
+                auto state = submitNet("net.info", "{}");
+                XX_TEST_EXPECT_TRUE(co_await waitNet(state));
+                XX_TEST_EXPECT_EQ(state->status, PLUGINXX_OPERATOR_OK);
+                XX_TEST_EXPECT_TRUE(state->payload.find("\"ok\":true") != std::string::npos);
             }
 
-            // 未知 op: 参数层拒绝 (不是"业务失败")
+            // 未知 op: 参数层拒绝 (不是"业务失败"), 返回 NULL + 原因
             {
                 PluginxxStringView opSv
                     = agentxx::plugin::PluginStringView::from("net.no_such_op", 15);
                 PluginxxStringView argsSv = agentxx::plugin::PluginStringView::from("{}", 2);
-                PluginxxString     out{};
-                XX_TEST_EXPECT_TRUE(
-                    ifaceNet->call(inst->hostView(), &opSv, &argsSv, &out) != PLUGINXX_RESULT_OK
+                PluginxxString     err{};
+                int64_t            requestId = 0;
+                auto*              handle    = ifaceNet->call(
+                    inst->hostView(),
+                    &opSv,
+                    &argsSv,
+                    &requestId,
+                    nullptr,
+                    nullptr,
+                    &err
                 );
-                if (out.data) {
-                    agentxx::plugin::PluginString::free(inst->hostView(), &out);
+                XX_TEST_EXPECT_TRUE(handle == nullptr);
+                if (err.data) {
+                    agentxx::plugin::PluginString::free(inst->hostView(), &err);
                 }
             }
 
@@ -4493,12 +4544,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(mgrJs->hasKeybind("ctrl+alt+u"));
                 }
 
-                // 网络: 同步入口 (net.info) 直接从命令回调里调
-                // - 网络服务自有线程, 不像展示项那样要回 io 线程, 所以不会互等
+                // 网络: 要结果的动作给 Promise (`net.info` / `netCall`), 结果经 toast 补上
+                // - 表入口是异步操作契约: 命令回调只同步返回一句"探测中"
                 {
                     const int before = adapterJs->toastCount();
                     mgrJs->invokeCommand("jsnet", "{}");
                     XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 1);
+                    for (int i = 0; i < 300 && adapterJs->toastCount() < before + 2; ++i) {
+                        co_await sleepMs(10);
+                    }
+                    XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 2);
                     XX_TEST_EXPECT_TRUE(
                         adapterJs->lastToast().rfind("net info ok=true", 0) == 0
                     );

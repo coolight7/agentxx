@@ -809,10 +809,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(kindIs("prompt", {"null", "object", "string"}));
                 XX_TEST_EXPECT_TRUE(kindIs("toolPrompt", {"null"}));
                 XX_TEST_EXPECT_TRUE(kindIs("shareStore", {"null"}));
-                // 网络: 入口总是给结果对象 (`ok` 是 boolean)
-                XX_TEST_EXPECT_TRUE(j["netInfoIsObject"].get<bool>());
-                XX_TEST_EXPECT_TRUE(kindIs("netInfoOkType", {"boolean"}));
-                XX_TEST_EXPECT_TRUE(kindIs("netCallOkType", {"boolean"}));
+                // 网络: 要结果的入口给 Promise (结果晚些到); `netCancel` 是同步成员, `ok` 是 boolean
+                XX_TEST_EXPECT_TRUE(j["netInfoIsPromise"].get<bool>());
+                XX_TEST_EXPECT_TRUE(j["netCallIsPromise"].get<bool>());
+                XX_TEST_EXPECT_TRUE(kindIs("netCancelOkType", {"boolean"}));
                 // 后台任务: 空参数被拒 (空 id); 查询/取消都是纯读取
                 XX_TEST_EXPECT_TRUE(kindIs("submitAsyncWork", {"string"}));
                 XX_TEST_EXPECT_TRUE(j["listAsyncWorkIsArray"].get<bool>());
