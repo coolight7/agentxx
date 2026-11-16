@@ -424,6 +424,51 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ## 8. Agent 侧接口表一览
 
+### 8.0 调用模型: 表成员是异步操作契约
+
+除少数"能在调用方线程当场算完"的成员, 表成员一律是**异步操作契约**:
+
+```c
+PluginxxOperatorHandle*(PLUGINXX_CALL* member)(
+    const PluginxxHost*      host,
+    ... 业务参数 ...,
+    PluginxxOperatorCallback cb,        ///< 完成回调, 可传 NULL (不关心结果)
+    void*                    ud,        ///< 原样回传给 cb
+    PluginxxString*          error_out  ///< 未受理时写原因
+);
+```
+
+- 返回 `NULL` = **未受理** (参数错 / 作用域失效 / 实例正在关闭), 原因写进 `error_out`,
+  `cb` 不会被调用 —— 写错参数仍然立刻可见, 不用等一次往返;
+- 返回非 NULL = 已受理, 结果经 `cb` **恰好一次**交回; `payload` 就是旧版出参 `out` 的内容
+  (JSON / 纯文本 / `1` 与 `0` 标记), 语义不变;
+- `cb` 传 `NULL` 时只受理、不回程 (fire-and-forget), 适用于 `show_toast` /
+  `publish_broadcast` / `update_*` / `unregister_*` 一类不关心结果的成员;
+- 未完成的调用经 `agentxx.cancel.op_cancel` 取消 (协作式)。
+
+**为什么连"很快"的成员也要异步**: 判据不是"实现快不快", 而是"调用方的线程要不要等另一条
+线程"。一次跨执行体往返 = 两次投递 + 两次唤醒 (调度粒度 10~100 µs 起), 而"快接口"本体只是
+几百纳秒 —— 差 2~3 个数量级。能在调用方线程当场算完的只有五类, 它们保持同步:
+`agentxx.agent.session.is_canceled` (本地原子标记)、`agentxx.scheduler.is_io_thread`
+(线程本地判定)、`agentxx.cancel.op_cancel` / `tasks.cancel_task` / `net.cancel` (无结果投递)、
+`scheduler.request_driver` / `cancel_driver` (返回票不等待)、`json.*` / `log.log` (纯函数与写日志)。
+
+**顺序**: 同一实例的调用按**受理顺序**执行 (FIFO)。主程序侧的执行框架在
+`pluginxx/host/table_op.h` 的 `startTableOp`: 调用方本来就在自己的 IO 线程时**当场执行并
+当场回调** (注册类调用"登记后立刻可见"的语义与同步调用完全一致), 其它线程排队到 IO 线程。
+注册类调用必须 `co_await` (或等回调) 完成再继续。
+
+C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
+
+| 形态 | 入口 | 约束 |
+|---|---|---|
+| 协程 | `co_await tableOp(ctx, start)` → `TableOpResult{status, payload, startError}` | 生命周期入口与工具协程体可用; 业务失败不抛异常, 取消是其中一种状态 |
+| 回调 | `tableOpCallback(ctx, start, done)` | 任意线程; `done` 在 IO 线程恰好一次 |
+| 阻塞 | `tableOpBlocking(ctx, start, timeoutMs)` / `tableOpBlockingRaw(host, cancel, scheduler, start)` | 非 IO 线程真等待; IO 线程上先看是否已内联完成, 没完成就返回 `accepted() == false` (不会死锁) |
+
+> 当前进度: `agentxx.agent.session` 的四个成员已切到这套契约 (v4); 其余表仍是一条条
+> 同步签名, 迁移按 `resource/history/plugin-api-async/plan.md` 的阶段推进。
+
 > 共 19 张 agent 侧接口表: 10 张**业务表** (`agentxx.agent.*`, 主程序实现) + 9 张**通用表**
 > (由插件框架声明与实现, agent 侧与 client 侧各一份)。通用表的 IID 是 `<应用名>.<表名>`,
 > 本项目应用名 `agentxx`, 也就是 `agentxx.log` / `agentxx.broadcasts` 这一组 (源码里写作
@@ -436,7 +481,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 |-----|------|------|
 | `agentxx.agent.tools` | 4 | `register_tool/unregister_tool`, `call_tool_async` (插件互调, cb 保证 IO 线程 post; 取消统一用 `agentxx.cancel.op_cancel`); v3 = 工具成败只由最终通知的状态位表达，结果文本不带 `[Error]` 前缀; v4 = 工具结果改成**两段上报** (正文原样字节 + 元数据 JSON), 完成通知器换成 `AgentxxPluginToolNotify`, 互调回调换成 `AgentxxPluginToolCallback` (见 §8.4) |
 | `agentxx.agent.permission` | 2 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 见下方说明) |
-| `agentxx.agent.session` | 3 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) + `get_session_work_dir(agent, session_id)` (会话生效工作目录: worktree 绑定优先, session_id 为空返回默认工作目录) + `is_canceled(agent, thread_id)` (advisory 查询, 权威通知仍是取消回调)。后两项 v3 从插件框架通用表迁入 |
+| `agentxx.agent.session` | 4 | `get_share_store/add_share_store/emit_message_tip` (v4 起异步, 见 §8.0) + `get_session_work_dir(agent, session_id)` (会话生效工作目录: worktree 绑定优先, session_id 为空返回默认工作目录) + `is_canceled(agent, thread_id)` (advisory 查询, 权威通知仍是取消回调)。后两项 v3 从插件框架通用表迁入 |
 | `agentxx.agent.context` | 2 | 会话 LLM 上下文查询: `get_messages/messages_count` (IO 线程)。上下文由会话持有 (图状态不含 `messages` 通道), 插件需要上下文内容时经此按需查询; 只要数量用 `messages_count`, 避免拉取整段上下文 |
 | `agentxx.agent.model` | 2 | `get_config(agent)` (该 agent 的主模型及关联配置 JSON) |
 | `agentxx.agent.prompt` | 3 | `get_prompt/set_prompt` (主程序提示词读写) + `get_tool_prompt(tool_name)` (工具提示词配置 JSON `{depict, args}`, 主程序级配置; v3 从插件框架通用表迁入) |
@@ -445,7 +490,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 `AGENTXX_RESULT_ERR_NOT_FOUND`) |
 | `agentxx.agent.runtime` | 2 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调投递) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。v2 表尾追加后台任务四成员 (`submit/cancel/get/list_async_work`, 基线不变, `ifaceHas` 判定)。详见 §19 |
 
-### 8.2 通用表 (`agentxx.*`, 10 张)
+### 8.2 通用表 (`agentxx.*`, 9 张)
 
 由插件框架声明与实现 (`pluginxx/host/tables_impl.h` 的 C ABI 入口 → `PluginHostCore`),
 agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日志 / 后台任务这类与业务无关的
@@ -454,8 +499,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 | IID | 版本 | 能力 |
 |-----|------|------|
 | `agentxx.broadcasts` | 3 | 广播: `declare_broadcast` (声明频道: 缓存/发布权限/订阅补当前值/限频/scope) + `publish_broadcast` + `subscribe_broadcast(_ex)` (带流结束回调) + `read_broadcast` + `unsubscribe_broadcast` + `end_broadcast`。插件的通知面与跨端数据都走它, 见 §20。v3 = 加 `end_broadcast` 与 `subscribe_broadcast_ex` (订阅侧收 `on_end`) |
-| `agentxx.capabilities` | 6 | `register_capability/unregister_capability/invoke_capability/capability_info/list_capabilities/op_cancel` (另有 `invoke_capability_ex` / `unregister_capability_ex`)。能力行按 **scope** 隔离 (同一个插件挂在多个 agent 上时各一行), 一个能力可以由多家登记实现行, 取值链按 `(priority 升序, 登记序号)` 排序后取首行 —— **功能埋点的实现行就是能力行** (见 §21.4) |
-| `agentxx.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=主程序计时器; offload=阻塞池委托, 需 cancel_token) |
+| `agentxx.capabilities` | 7 | `register_capability/unregister_capability/invoke_capability/capability_info/list_capabilities` (另有 `invoke_capability_ex` / `unregister_capability_ex`; v7 删掉 `op_cancel`, 取消统一走 `agentxx.cancel`)。能力行按 **scope** 隔离 (同一个插件挂在多个 agent 上时各一行), 一个能力可以由多家登记实现行, 取值链按 `(priority 升序, 登记序号)` 排序后取首行 —— **功能埋点的实现行就是能力行** (见 §21.4) |
 | `agentxx.scheduler` | 2 | 调度与驱动: `is_io_thread` / `sleep` / `offload` / `request_driver` / `cancel_driver` (driver ticket/wake 协议, 见 §16; 早期的 `post_to_io` 与 `op_cancel` 已删, 独立的 `coroutine_runtime` 表已并入) |
 | `agentxx.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上) |
 | `agentxx.config` | 3 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言)。v3 起不再含业务成员 (`get_tool_prompt`/`get_session_work_dir` 已分别迁到 `agentxx.agent.prompt` / `agentxx.agent.session`) |

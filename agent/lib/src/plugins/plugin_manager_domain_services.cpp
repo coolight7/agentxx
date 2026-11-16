@@ -294,6 +294,41 @@ bool PluginManager::postToWorkerThread(std::function<void()> fn) {
 }
 
 // =====================================================================
+// 加载线程: dlopen / create 不占主程序 IO 线程
+// =====================================================================
+
+asio::awaitable<std::string> PluginManager::runLoaderTask(std::function<std::string()> fn) {
+    if (!fn) {
+        co_return std::string{};
+    }
+    auto ex = co_await asio::this_coro::executor;
+    // 结果与"叫醒 IO 线程"的定时器分开持有: 工作体只写结果, 不在工作线程上跑插件代码
+    auto result = std::make_shared<std::string>();    auto timer  = std::make_shared<asio::steady_timer>(
+        ex,
+        std::chrono::steady_clock::time_point::max()
+    );
+    const bool posted = postToWorkerThread([result, fn, timer, ex]() {
+        *result = fn();
+        // 完成后回到 IO 线程: 只做一次 cancel, 不在这里执行任何插件代码
+        asio::post(ex, [timer] {
+            timer->cancel();
+        });
+    });
+    if (!posted) {
+        // 没有可用线程池: 退回调用线程执行 (与框架默认行为一致)
+        XX_LOGW("Plugin load runs on the caller thread: no worker pool available");
+        co_return fn();
+    }
+    XX_LOGD(
+        "Plugin load task offloaded to a worker thread (caller on io: {})",
+        isIoThread()
+    );
+    // async_wait 被 cancel 时按 operation_aborted 结束, 结果已经写好
+    co_await timer->async_wait(asio::as_tuple(asio::use_awaitable));
+    co_return *result;
+}
+
+// =====================================================================
 // config 表
 // =====================================================================
 

@@ -9,12 +9,12 @@
 |---|---|---|
 | A | 全局 API 版本 / 异步表调用骨架 / kit 三形态 / `agentxx.agent.session` 试点 | 完成（编译通过、相关测试全绿） |
 | C2-槽位清理 | 删 `scheduler.post_to_io` / `scheduler.op_cancel` / `capabilities.op_cancel`；`coroutine_runtime` 整张表并回 `scheduler`（通用表 10 → 9） | 完成（编译通过、全量插件测试全绿） |
-| A2 | agent 侧 `dlopen` + `create` 挪到加载线程池 | 待做 |
+| A2 | agent 侧 `dlopen` + `create` 挪到加载线程池 | 完成（编译通过、插件测试全绿） |
 | B | `agentxx.agent` 业务表全部成员 | 待做 |
 | C | `agentxx.agent.runtime` 全部成员 | 待做 |
 | C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 待做 |
 | D | `agentxx.client.*` 六张表 + 三个回答型回调 | 待做 |
-| E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 部分完成（接口表数量文档已同步，见下） |
+| E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 部分完成（接口表数量与 §8.0 调用模型文档已同步） |
 
 ## 关键实现决定（与计划一致，落在代码里）
 
@@ -149,6 +149,55 @@
   `agentxx_test_repo-build/Debug/` 下，`exec/` 里那份要等顶层 install 才更新 ——
   曾经因此对着旧二进制排查了很久。
 
+### 第 3 步：加载线程（A2）+ 设计文档的调用模型说明
+
+计划 §6。改动：
+
+- `cxx_pluginxx/include/pluginxx/host/lifecycle.h`：新增扩展点
+  `virtual asio::awaitable<std::string> runLoaderTask(std::function<std::string()>)`
+  （默认实现 = 调用线程直接执行，返回错误文本，空串表示成功）。
+  `loadNativeAsync` 里把 `NativeLoader::open`（dlopen 会读盘、跑 DSO 静态构造）与
+  `createFn(...)` 各包一次 `co_await runLoaderTask`；`create` 抛出的异常与返回码
+  统一转成错误文本后走原来的 `rollbackLoad`。
+- `agent/lib/include/agentxx/plugin/plugin_manager.h`：声明覆写，并补回被误删的
+  `std::string language() override;`。
+- `agent/lib/src/plugins/plugin_manager_domain_services.cpp`：实现
+  `PluginManager::runLoaderTask` —— 用 `postToWorkerThread` 投递，
+  `asio::steady_timer(max())` + `asio::as_tuple(use_awaitable)` 在结果写回后叫醒
+  IO 线程；没有可用线程池时退回调用线程执行并 `XX_LOGW`；正常投递时
+  `XX_LOGD` 记一条「caller on io: true/false」。
+
+要点：工作线程里**只**跑 dlopen 与 `create`，插件那次调用拿不到主程序接口表
+（`create` 契约本来就不许注册），所以不会出现「工作线程上调表」的跨线程问题。
+返回的协程结果在 IO 线程上被读，之后的生命周期步骤（`start`、挂载、注册）仍在
+IO 线程。
+
+验证：
+
+- `script\windows_debug_build.bat` 全量通过（含 configure）；
+- `agentxx_test --log-level warn boundaries plugins plugin_runtime plugin_sdk
+  plugin_bridge plugin_cleanup plugin_host_mount plugin_multi_mount` →
+  `Total: passed=2065 failed=0`；
+- `client_plugins` 835/0、`plugin_feature` 34/0、`plugin_point` 68/0、
+  `plugin_broadcast` 90/0、`plugin_dispatch` 112/0、`plugin_agent_runtime` 221/0、
+  `plugin_example_runtime` 50/0、`plugin_example_chatbot` 265/0 → 合计 1675 通过；
+- A2 落地后复跑 `plugins` 707/0、`plugin_cleanup` 90/0、`plugin_host_mount` 145/0、
+  `plugin_multi_mount` 47/0、`client_plugins` 835/0 → 1824 通过。
+
+文档同步（阶段 E 的一部分，先做掉当前已成立的部分）：
+
+- `docs/zh-cn/design/plugins.md` 新增 **§8.0 调用模型: 表成员是异步操作契约**：
+  契约签名（返回值只表示受理，结果经 `PluginxxOperatorCallback` 交回，`NULL` =
+  未受理 + `error_out`，`cb` 可空）、「什么时候必须异步」的判据（要不要等另一条
+  线程/要不要读盘）、仍保持同步的五类成员（`is_io_thread` / `is_canceled` /
+  `get_config` 等纯内存查询、注册类成员的返回值本身就是受理结果、`op_cancel`、
+  广播发布）、FIFO 顺序与「调用方本来就在 IO 线程时当场回调」、kit 三形态对照表。
+- §8.1 的 `agentxx.agent.session` 行改成 v4 并标注「v4 起异步」；
+  `agentxx.capabilities` 行改成 v7（删 `op_cancel`）；删掉重复的 `agentxx.scheduler | 1` 旧行；
+  §8.2 标题的通用表数量 10 → 9。
+- `agentxx.agent.tools` 的 `call_tool_async` **没有**改名 —— 改名属于阶段 B，
+  文档先写实际名称，等实现那一步再一起改（避免文档写不实的东西）。
+
 ## 与计划的偏差
 
 - 计划 §7.3 写"全局版本 5 → 6"：实际第 6 代已被占用，改为 6 → 7。
@@ -159,6 +208,11 @@
 
 ## 剩余事项
 
-- 阶段 A2 起全部待做（见进度总表）。
+- 阶段 B / C / C2-表异步化 / D 全部待做（见进度总表），即 104 个成员里已改异步的
+  只有 4 个（`agentxx.agent.session`）+ 骨架与三形态。
+- 阶段 E 还剩：删残留同步实现路径、client 侧 150 ms 同步桥改 Promise、
+  `AGENTS.md` 的调用模型说明。
 - `KeyMetrics` 的表调用耗时统计（计划 §10）尚未加。
-- `plugins.md` / `AGENTS.md` 的接口表数量与调用模型说明尚未更新（阶段 E）。
+- **子模块改动要在 `cxx_pluginxx` 仓库里单独提交**：`agent/third_party/cxx_pluginxx`
+  是子模块，父仓库只能记录指针。前两个 commit 因此不含它的改动（只含 agent/docs），
+  指针在本次提交里一并对齐。

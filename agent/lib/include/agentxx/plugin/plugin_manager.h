@@ -570,7 +570,15 @@ public:
     ///   这样 agent 上下文未挂载/已释放/其池已停止时, 插件阻塞工作仍能执行
     void setWorkerThreadPool(std::shared_ptr<asio::thread_pool> pool);
 
+    /// 把阻塞的加载动作 (dlopen / `create`) 交给工作线程 (覆写框架默认的"调用线程执行")
+    ///
+    /// - 插件加载与 `create` 里的读盘/建索引不再占用主程序 IO 线程;
+    /// - 没有可用线程池时退回调用线程执行 (行为与框架默认一致);
+    /// - 在这条路径上插件**不得**调用主程序接口表 (`create` 契约本来就不允许注册)。
+    asio::awaitable<std::string> runLoaderTask(std::function<std::string()> fn) override;
+
     std::string configJson() override;
+
     std::string language() override;
 
     std::string pluginsJson() override;
