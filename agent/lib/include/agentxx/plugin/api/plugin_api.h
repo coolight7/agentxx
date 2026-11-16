@@ -195,7 +195,7 @@ typedef struct AgentxxPluginToolNotify {
     void* host_ud;
 } AgentxxPluginToolNotify;
 
-/// 工具调用完成回调 (插件互调 `call_tool_async` 使用; 两段含义同上)
+/// 工具调用完成回调 (插件互调 `call_tool` 使用; 两段含义同上)
 /// - 主程序保证在**调用方** io 线程派发, 且只派发一次
 /// - 字符串视图只读借用, 仅本次回调内有效
 typedef void(PLUGINXX_CALL* AgentxxPluginToolCallback)(
@@ -267,8 +267,11 @@ typedef struct AgentxxPluginToolSpec {
 ///     `PluginxxOperatorNotify` 换成 [AgentxxPluginToolNotify], 插件互调回调换成
 ///     [AgentxxPluginToolCallback]; 成员顺序不变, 但两处签名变了 = 破坏性改动
 ///     (旧插件重建后才能加载; 全局 API 代次同步 +1)
-#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION     4
-#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_MIN_VERSION 4
+/// v5: `register_tool` / `unregister_tool` 改成异步操作契约 (见 plugin_api.h 文件头);
+///     `call_tool_async` 更名为 `call_tool` (异步已是默认, 名字不再带后缀);
+///     基线与最低版本重置
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION     5
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_MIN_VERSION 5
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_BASELINE_SIZE sizeof(AgentxxPluginToolsIface)
 
@@ -276,26 +279,36 @@ typedef struct AgentxxPluginToolsIface {
     int32_t  version;     ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION
     uint32_t struct_size; ///< 主程序填 sizeof(AgentxxPluginToolsIface) 或更大的已知表长
 
-    /// 注册工具 (io 线程约束, 非 io 线程由主程序投递同步等待)
-    /// - `agent` 必须非空 (引用无效返回 `AGENTXX_RESULT_ERR_NO_AGENT`, 无副作用)
-    /// `return`: `AGENTXX_RESULT_OK`; 重名 `ERR_CONFLICT`; 参数非法 `ERR_ARG`; 没有挂载 `ERR_NO_AGENT`
-    int32_t(PLUGINXX_CALL* register_tool)(
+    /// 注册工具 (**异步**)
+    /// - `agent` 必须非空 (引用无效时不受理);
+    /// - `spec` 里的字符串视图只在本次调用期间有效, 主程序先拷贝再执行;
+    /// - 完成时工具已生效, 处于同一事件循环里的后续查询能查到它。
+    ///
+    /// `status` = `PLUGINXX_OPERATOR_OK` 表示成功; 失败时 `payload` 给原因
+    /// (重名 `ERR_CONFLICT` / 参数非法 `ERR_ARG` / 没有挂载 `ERR_NO_AGENT` 的名字)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* register_tool)(
         const PluginxxHost*          host,
         const PluginxxScopeRef*      agent,
-        const AgentxxPluginToolSpec* spec
+        const AgentxxPluginToolSpec* spec,
+        PluginxxOperatorCallback     cb,
+        void*                        ud,
+        PluginxxString*              error_out
     );
-    /// 注销工具 (按名称; 只允许注销本挂载在注册的工具)
-    /// `return`: `AGENTXX_RESULT_OK`; 没这个工具 `ERR_NOT_FOUND`; 别人的 `ERR_NOT_OWNER`
-    int32_t(PLUGINXX_CALL* unregister_tool)(
+    /// 注销工具 (**异步**; 按名称, 只允许注销本挂载注册的工具)
+    /// - 完成时工具已从注册表移除
+    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_tool)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
-        const PluginxxStringView* name
+        const PluginxxStringView* name,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
 
     /* ---- 插件互调: 完成回调形 ---- */
     /// 调用该 agent 工具表里的一个工具 (异步; 取消用 `pluginxx.cancel.op_cancel`)
     /// - 结果按两段给 `cb` (正文 + 元数据), 与工具自己的上报形状一致
-    PluginxxOperatorHandle*(PLUGINXX_CALL* call_tool_async)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* call_tool)(
         const PluginxxHost*        host,
         const PluginxxScopeRef*    agent,
         const PluginxxStringView*  name,

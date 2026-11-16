@@ -106,6 +106,123 @@ static auto mountCall(const PluginManager* mgr, const PluginxxScopeRef* agent, F
     return fn(*mount);
 }
 
+/// 异步表调用的公共骨架 (契约见 pluginxx/host/table_op.h 与 plugin_api.h 文件头)
+///
+/// - 入口只做"解析上下文 + 交给 [startTableOp]": 参数与作用域校验由 `work` 自己做
+///   (失败抛 [TableOpError], 经回调按 FAILED 交回);
+/// - `allowClosing=true` 用于只读查询 (关闭中仍可查), 写入口用默认值;
+/// - `work` 在自己的 IO 线程执行, 调用方本来就在 IO 线程时内联执行 —— 所以
+///   "注册完立刻可见"的顺序与同步调用一致。
+template<bool AllowClosing = false, typename Fn>
+static PluginxxOperatorHandle* asyncTableCall(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out,
+    std::string              label,
+    Fn&&                     work
+) {
+    auto call = enterHost(host, AllowClosing);
+    if (!call.ok()) {
+        setTableOpError(error_out, "plugin runtime is unavailable");
+        return nullptr;
+    }
+    auto keep = call;
+    return startTableOp(
+        keep.manager(),
+        cb,
+        ud,
+        error_out,
+        std::move(label),
+        [keep, work = std::forward<Fn>(work)]() mutable -> std::string {
+            return work(keep.instance(), keep.manager());
+        }
+    );
+}
+
+/// 作用域引用的自持拷贝 (跨线程投递用)
+///
+/// 插件传来的 `PluginxxScopeRef` 中 `id` 是**借用视图**, 指向调用方的内存; 请求排到
+/// 自己的 IO 线程之后那些内存可能已经不存在, 所以投递前先把 id 字节拷一份。
+struct ScopeRefKeep {
+    std::string id;
+    uint64_t    seq   = 0;
+    bool        valid = false;
+
+    explicit ScopeRefKeep(const PluginxxScopeRef* ref) {
+        if (!pluginxx_scope_ref_ok(ref)) {
+            return;
+        }
+        valid = true;
+        if (ref->id.data != nullptr && ref->id.size > 0) {
+            id.assign(ref->id.data, static_cast<size_t>(ref->id.size));
+        }
+        seq = ref->seq;
+    }
+
+    /// 重建一份引用 (指向本对象内部, 只能在本次调用期间使用)
+    PluginxxScopeRef ref() const {
+        PluginxxScopeRef out{};
+        out.struct_size = static_cast<uint32_t>(sizeof(PluginxxScopeRef));
+        out.flags       = 0;
+        out.id          = PluginxxStringView{id.data(), static_cast<uint64_t>(id.size())};
+        out.seq         = seq;
+        return out;
+    }
+};
+
+/// 带作用域校验的异步表调用
+///
+/// - 引用的**形状**无效 (空指针 / `id` 为空 / `struct_size` 越界) 属于**未受理**:
+///   只检查字段, 任意线程都能判, 所以同步返回 NULL + `error_out`;
+/// - 引用指向的挂载是否存在、序号是否过期, 要读本管理器的挂载表, 只能在 IO 线程上判,
+///   因此这两种情况按"受理后失败"交回 (`payload` 给原因), 调用方从 `status` 看结论。
+template<typename Fn>
+static PluginxxOperatorHandle* asyncScopedTableCall(
+    const PluginxxHost*      host,
+    const PluginxxScopeRef*  agent,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out,
+    std::string              label,
+    Fn&&                     work
+) {
+    ScopeRefKeep scope{agent};
+    if (!scope.valid) {
+        setTableOpError(error_out, "agent reference is invalid");
+        return nullptr;
+    }
+    return asyncTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        std::move(label),
+        [scope, work = std::forward<Fn>(work)](
+            PluginInstance* inst,
+            PluginManager*  mgr
+        ) -> std::string {
+            auto ref = scope.ref();
+            if (!scopeOk(mgr, &ref)) {
+                throw TableOpError("agent reference is invalid");
+            }
+            return work(inst, mgr, static_cast<const PluginxxScopeRef&>(ref));
+        }
+    );
+}
+
+/// 主程序堆字符串 → std::string (顺手释放)
+static std::string takePluginString(PluginxxString& s) {
+    std::string out;
+    if (s.data != nullptr) {
+        out.assign(s.data, static_cast<size_t>(s.size));
+        hostMemoryFree(s.data);
+        s = PluginxxString{};
+    }
+    return out;
+}
+
+
 /// 注册/写入类入口的公共骨架: 解析 host 上下文 → 把业务逻辑投递到 IO 线程执行。
 /// - 参数视图只在本次调用内有效, 因此闭包必须按值捕获自己需要的拷贝;
 /// - `fn` 的入参是实例与管理器 (投递期间由 `keep` 保活, 含 admission lease);
@@ -202,53 +319,108 @@ static void PLUGINXX_CALL xx_free(void* ptr) {
     agentxx::plugin::hostMemoryFree(ptr);
 }
 
-static int32_t PLUGINXX_CALL xx_register_tool(
+/// 工具注册声明的自持拷贝 (跨线程投递用)
+///
+/// `spec` 里的三个字符串视图只在本次调用期间有效; 投递前把内容拷成自有字符串,
+/// 再把视图指回这些字符串。闭包按 `shared_ptr` 持有本对象, 所以视图始终有效。
+struct ToolSpecKeep {
+    AgentxxPluginToolSpec spec{};
+    std::string           name;
+    std::string           description;
+    std::string           parameters;
+
+    explicit ToolSpecKeep(const AgentxxPluginToolSpec& src) :
+        spec(src),
+        name(svToStr(&src.name)),
+        description(svToStr(&src.description)),
+        parameters(svToStr(&src.parameters_json)) {
+        spec.name            = agentxx::plugin::PluginStringView::from(name);
+        spec.description     = agentxx::plugin::PluginStringView::from(description);
+        spec.parameters_json = agentxx::plugin::PluginStringView::from(parameters);
+    }
+};
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_register_tool(
     const PluginxxHost*          host,
     const PluginxxScopeRef*      agent,
-    const AgentxxPluginToolSpec* spec
+    const AgentxxPluginToolSpec* spec,
+    PluginxxOperatorCallback     cb,
+    void*                        ud,
+    PluginxxString*              error_out
 ) {
-    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
-        auto call = enterHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->name)) {
-            return AGENTXX_RESULT_ERR_ARG;
-        }
-        if (!scopeOk(mgr, agent)) {
-            XX_LOGW("agentxx.agent.tools.register_tool: 引用无效, 请在 mount 里注册");
-            return AGENTXX_RESULT_ERR_NO_AGENT;
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (spec == nullptr || agentxx::plugin::PluginStringView::empty(&spec->name)) {
+            setTableOpError(error_out, "register_tool: spec and tool name are required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
         // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
         if (!specSizeOk<AgentxxPluginToolSpec>(spec->struct_size)) {
-            return AGENTXX_RESULT_ERR_ARG;
+            setTableOpError(error_out, "register_tool: spec struct_size is too small");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        auto                  mgrPtr   = mgr;
-        auto                  instPtr  = inst;
-        AgentxxPluginToolSpec specCopy = *spec;
-        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy, agent]() {
-            return mountCall(mgrPtr, agent, noAgent, [instPtr, specCopy](PluginMount& mount) {
-                return mount.registerTool(instPtr, &specCopy);
-            });
-        });
+        auto keep = std::make_shared<ToolSpecKeep>(*spec);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "tools.register_tool",
+            [keep](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                auto rc = mountCall(mgr, &ref, noAgent, [inst, keep](PluginMount& mount) {
+                    return mount.registerTool(inst, &keep->spec);
+                });
+                if (rc != AGENTXX_RESULT_OK) {
+                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
+                }
+                return std::string{};
+            }
+        );
     });
 }
 
-static int32_t PLUGINXX_CALL xx_unregister_tool(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_unregister_tool(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
-    const PluginxxStringView* name
+    const PluginxxStringView* name,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(name)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto nameValCopy = *name;
-    return onInstanceIo(host, [nameValCopy, agent](PluginInstance* inst, PluginManager* mgr) {
-        if (!scopeOk(mgr, agent)) {
-            return static_cast<int32_t>(AGENTXX_RESULT_ERR_NO_AGENT);
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(name)) {
+            setTableOpError(error_out, "unregister_tool: tool name is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        return mountCall(mgr, agent, noAgent, [inst, nameValCopy](PluginMount& mount) {
-            return mount.unregisterTool(inst, nameValCopy);
-        });
+        auto nameKeep = svToStr(name);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "tools.unregister_tool",
+            [nameKeep](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                const PluginxxStringView view{
+                    nameKeep.data(), static_cast<uint64_t>(nameKeep.size())
+                };
+                auto rc = mountCall(mgr, &ref, noAgent, [inst, view](PluginMount& mount) {
+                    return mount.unregisterTool(inst, view);
+                });
+                if (rc != AGENTXX_RESULT_OK) {
+                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
+                }
+                return std::string{};
+            }
+        );
     });
 }
 
@@ -418,7 +590,7 @@ static const AgentxxPluginMountIface g_ifaceMount = {
     /* get */ xx_mount_get,
 };
 
-static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool_async(
+static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool(
     const PluginxxHost*        host,
     const PluginxxScopeRef*    agent,
     const PluginxxStringView*  name,
@@ -433,16 +605,16 @@ static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool_async(
         auto* inst = call.instance();
         auto* mgr  = call.manager();
         if (!mgr || !inst || !name) {
-            hostMemorySetString(error_out, "call_tool_async: plugin runtime unavailable");
+            hostMemorySetString(error_out, "call_tool: plugin runtime unavailable");
             return static_cast<::PluginxxOperatorHandle*>(nullptr);
         }
         if (!scopeOk(mgr, agent)) {
-            hostMemorySetString(error_out, "call_tool_async: agent reference is invalid");
+            hostMemorySetString(error_out, "call_tool: agent reference is invalid");
             return static_cast<::PluginxxOperatorHandle*>(nullptr);
         }
         auto* mount = mountIn(mgr, agent);
         if (mount == nullptr) {
-            hostMemorySetString(error_out, "call_tool_async: agent reference is invalid");
+            hostMemorySetString(error_out, "call_tool: agent reference is invalid");
             return static_cast<::PluginxxOperatorHandle*>(nullptr);
         }
         return mount->callToolAsync(
@@ -455,113 +627,6 @@ static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool_async(
             error_out
         );
     });
-}
-
-/// 异步表调用的公共骨架 (契约见 pluginxx/host/table_op.h 与 plugin_api.h 文件头)
-///
-/// - 入口只做"解析上下文 + 交给 [startTableOp]": 参数与作用域校验由 `work` 自己做
-///   (失败抛 [TableOpError], 经回调按 FAILED 交回);
-/// - `allowClosing=true` 用于只读查询 (关闭中仍可查), 写入口用默认值;
-/// - `work` 在自己的 IO 线程执行, 调用方本来就在 IO 线程时内联执行 —— 所以
-///   "注册完立刻可见"的顺序与同步调用一致。
-template<bool AllowClosing = false, typename Fn>
-static PluginxxOperatorHandle* asyncTableCall(
-    const PluginxxHost*      host,
-    PluginxxOperatorCallback cb,
-    void*                    ud,
-    PluginxxString*          error_out,
-    std::string              label,
-    Fn&&                     work
-) {
-    auto call = enterHost(host, AllowClosing);
-    if (!call.ok()) {
-        setTableOpError(error_out, "plugin runtime is unavailable");
-        return nullptr;
-    }
-    auto keep = call;
-    return startTableOp(
-        keep.manager(),
-        cb,
-        ud,
-        error_out,
-        std::move(label),
-        [keep, work = std::forward<Fn>(work)]() mutable -> std::string {
-            return work(keep.instance(), keep.manager());
-        }
-    );
-}
-
-/// 作用域引用的自持拷贝 (跨线程投递用)
-///
-/// 插件传来的 `PluginxxScopeRef` 中 `id` 是**借用视图**, 指向调用方的内存; 请求排到
-/// 自己的 IO 线程之后那些内存可能已经不存在, 所以投递前先把 id 字节拷一份。
-struct ScopeRefKeep {
-    std::string id;
-    uint64_t    seq   = 0;
-    bool        valid = false;
-
-    explicit ScopeRefKeep(const PluginxxScopeRef* ref) {
-        if (!pluginxx_scope_ref_ok(ref)) {
-            return;
-        }
-        valid = true;
-        if (ref->id.data != nullptr && ref->id.size > 0) {
-            id.assign(ref->id.data, static_cast<size_t>(ref->id.size));
-        }
-        seq = ref->seq;
-    }
-
-    /// 重建一份引用 (指向本对象内部, 只能在本次调用期间使用)
-    PluginxxScopeRef ref() const {
-        PluginxxScopeRef out{};
-        out.struct_size = static_cast<uint32_t>(sizeof(PluginxxScopeRef));
-        out.flags       = 0;
-        out.id          = PluginxxStringView{id.data(), static_cast<uint64_t>(id.size())};
-        out.seq         = seq;
-        return out;
-    }
-};
-
-/// 带作用域校验的异步表调用: 引用无效时按 [TableOpError] 抛出 (经回调交回)
-template<typename Fn>
-static PluginxxOperatorHandle* asyncScopedTableCall(
-    const PluginxxHost*      host,
-    const PluginxxScopeRef*  agent,
-    PluginxxOperatorCallback cb,
-    void*                    ud,
-    PluginxxString*          error_out,
-    std::string              label,
-    Fn&&                     work
-) {
-    ScopeRefKeep scope{agent};
-    return asyncTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        std::move(label),
-        [scope, work = std::forward<Fn>(work)](
-            PluginInstance* inst,
-            PluginManager*  mgr
-        ) -> std::string {
-            auto ref = scope.ref();
-            if (!scope.valid || !scopeOk(mgr, &ref)) {
-                throw TableOpError("agent reference is invalid");
-            }
-            return work(inst, mgr, static_cast<const PluginxxScopeRef&>(ref));
-        }
-    );
-}
-
-/// 主程序堆字符串 → std::string (顺手释放)
-static std::string takePluginString(PluginxxString& s) {
-    std::string out;
-    if (s.data != nullptr) {
-        out.assign(s.data, static_cast<size_t>(s.size));
-        hostMemoryFree(s.data);
-        s = PluginxxString{};
-    }
-    return out;
 }
 
 static PluginxxOperatorHandle* PLUGINXX_CALL xx_get_share_store(
@@ -1148,7 +1213,7 @@ static const AgentxxPluginToolsIface g_ifaceTools = {
     /* struct_size */ sizeof(AgentxxPluginToolsIface),
     /* register_tool */ xx_register_tool,
     /* unregister_tool */ xx_unregister_tool,
-    /* call_tool_async */ xx_call_tool_async,
+    /* call_tool */ xx_call_tool,
 };
 
 static const AgentxxPluginPermissionIface g_ifacePermission = {

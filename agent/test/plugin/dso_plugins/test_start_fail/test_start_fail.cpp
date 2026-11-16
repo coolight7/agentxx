@@ -136,6 +136,18 @@ struct ProbeCtx {
     const PluginxxHost* host = nullptr;
 };
 
+/// 同步等待一次表调用的完成 (本插件在 `start` 里跑, 主程序 IO 线程会内联回调)
+struct RegProbe {
+    bool    done   = false;
+    int32_t status = PLUGINXX_OPERATOR_FAILED;
+};
+
+void PLUGINXX_CALL regToolDone(void* ud, int32_t status, const PluginxxStringView*) {
+    auto* probe   = static_cast<RegProbe*>(ud);
+    probe->done   = true;
+    probe->status = status;
+}
+
 } // namespace
 
 extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
@@ -201,7 +213,11 @@ static void* probeMount(
     tool.description     = sv("rollback probe tool");
     tool.parameters_json = sv("{}");
     tool.execute_start   = &probeToolStart;
-    if (tools->register_tool(host, &ref, &tool) != 0) {
+    // 表成员是异步契约: 本插件在 `start` 里跑 (主程序 IO 线程), 主程序会内联完成
+    RegProbe reg{};
+    PluginxxString regErr{nullptr, 0};
+    auto* regOp = tools->register_tool(host, &ref, &tool, &regToolDone, &reg, &regErr);
+    if (regOp == nullptr || !reg.done || reg.status != PLUGINXX_OPERATOR_OK) {
         setError(host, error_out, failStep(host, "tool"));
         return nullptr;
     }

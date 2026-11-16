@@ -45,15 +45,24 @@ struct CapturedRegistration {
 
 CapturedRegistration g_captured;
 
-int32_t PLUGINXX_CALL fakeRegisterTool(
-    const PluginxxHost*, const PluginxxScopeRef* agent, const AgentxxPluginToolSpec* spec
+PluginxxOperatorHandle* PLUGINXX_CALL fakeRegisterTool(
+    const PluginxxHost*,
+    const PluginxxScopeRef* agent,
+    const AgentxxPluginToolSpec* spec,
+    PluginxxOperatorCallback cb,
+    void* ud,
+    PluginxxString* error_out
 ) {
+    (void)error_out;
     if (!agent || !spec) {
-        return -1;
+        return nullptr;
     }
     g_captured.tool    = *spec;
     g_captured.hasTool = true;
-    return 0;
+    if (cb) {
+        cb(ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    return reinterpret_cast<PluginxxOperatorHandle*>(1);
 }
 
 /// 能力登记 (spec 里带开始/取消处理器与上下文)
@@ -89,7 +98,7 @@ const AgentxxPluginToolsIface g_fakeTools = {
     /* struct_size */ sizeof(AgentxxPluginToolsIface),
     /* register_tool */ fakeRegisterTool,
     /* unregister_tool */ nullptr,
-    /* call_tool_async */ nullptr,
+    /* call_tool */ nullptr,
 };
 
 const PluginxxCapabilitiesIface g_fakeCapabilities = {

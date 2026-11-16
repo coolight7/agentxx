@@ -383,6 +383,9 @@ struct LifecycleProbe {
     const PluginxxHost*            host                = nullptr;
     const AgentxxPluginToolsIface* tools               = nullptr;
     const AgentxxPluginGraphIface* graph               = nullptr;
+    /// 表调用阻塞形态需要 (表成员是异步契约, 生命周期入口要用阻塞形态等完成)
+    const PluginxxCancelIface*    cancel    = nullptr;
+    const PluginxxSchedulerIface* scheduler = nullptr;
     /// start 失败前是否真的登记过图节点类型（证明图注册同样回滚）。
     bool                  partialGraphRegistration = false;
     AgentxxPluginToolSpec spec{};
@@ -396,8 +399,23 @@ void* PLUGINXX_CALL
     auto& probe = *static_cast<LifecycleProbe*>(ud);
     ++probe.starts;
     if (probe.tools && probe.host) {
-        const int32_t rc          = probe.tools->register_tool(probe.host, &probe.ref, &probe.spec);
-        probe.partialRegistration = (rc == 0);
+        // 表成员是异步契约: 生命周期入口在主程序 IO 线程上, 内联完成
+        auto res = pluginxx::tableOpBlockingRaw(
+            probe.host,
+            probe.cancel,
+            probe.scheduler,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return probe.tools->register_tool(
+                    probe.host,
+                    &probe.ref,
+                    &probe.spec,
+                    cb,
+                    ud,
+                    err
+                );
+            }
+        );
+        probe.partialRegistration = res.ok();
     }
     if (probe.graph && probe.host && probe.graph->register_node_type) {
         AgentxxPluginGraphNodeTypeSpec gspec{};
@@ -421,7 +439,21 @@ void* PLUGINXX_CALL
     auto& probe = *static_cast<LifecycleProbe*>(ud);
     ++probe.stops;
     if (probe.tools && probe.host) {
-        probe.tools->unregister_tool(probe.host, &probe.ref, &probe.spec.name);
+        pluginxx::tableOpBlockingRaw(
+            probe.host,
+            probe.cancel,
+            probe.scheduler,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return probe.tools->unregister_tool(
+                    probe.host,
+                    &probe.ref,
+                    &probe.spec.name,
+                    cb,
+                    ud,
+                    err
+                );
+            }
+        );
     }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
@@ -1539,6 +1571,8 @@ TestResult testPluginRuntime() {
         probe->host        = inst->hostView();
         probe->tools       = AgentIfaces::query(probe->host).tools;
         probe->graph       = AgentIfaces::query(probe->host).graph;
+        probe->cancel      = AgentIfaces::query(probe->host).cancel;
+        probe->scheduler   = AgentIfaces::query(probe->host).scheduler;
         probe->spec        = fakeTool(nullptr, false);
         probe->agentId     = f.manager->agentId();
         probe->ref.struct_size = sizeof(PluginxxScopeRef);
@@ -1767,7 +1801,23 @@ TestResult testPluginRuntime() {
         const agentxx::plugin::ScopeRef ref{"root", 0};
         std::thread pluginThread([host, ifaces, spec, entered, rcPromise, ref] {
             entered->set_value();
-            rcPromise->set_value(ifaces.tools->register_tool(host, ref.ptr(), spec.get()));
+            // 表成员是异步契约: 工作线程上用阻塞形态等结果 (入口拒绝或受理后失败)
+            auto res = pluginxx::tableOpBlockingRaw(
+                host,
+                ifaces.cancel,
+                ifaces.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return ifaces.tools->register_tool(
+                        host,
+                        ref.ptr(),
+                        spec.get(),
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
+            rcPromise->set_value(res.ok() ? 0 : -1);
         });
         entered->get_future().wait();
         f.provider->lifetime->requestClose();

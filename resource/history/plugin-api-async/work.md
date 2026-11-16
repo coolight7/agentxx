@@ -10,7 +10,7 @@
 | A | 全局 API 版本 / 异步表调用骨架 / kit 三形态 / `agentxx.agent.session` 试点 | 完成（编译通过、相关测试全绿） |
 | C2-槽位清理 | 删 `scheduler.post_to_io` / `scheduler.op_cancel` / `capabilities.op_cancel`；`coroutine_runtime` 整张表并回 `scheduler`（通用表 10 → 9） | 完成（编译通过、全量插件测试全绿） |
 | A2 | agent 侧 `dlopen` + `create` 挪到加载线程池 | 完成（编译通过、插件测试全绿） |
-| B | `agentxx.agent` 业务表全部成员 | 待做 |
+| B | `agentxx.agent` 业务表全部成员 | 进行中（`tools` 完成，其余 7 张待做） |
 | C | `agentxx.agent.runtime` 全部成员 | 待做 |
 | C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 待做 |
 | D | `agentxx.client.*` 六张表 + 三个回答型回调 | 待做 |
@@ -198,9 +198,48 @@ IO 线程。
 - `agentxx.agent.tools` 的 `call_tool_async` **没有**改名 —— 改名属于阶段 B，
   文档先写实际名称，等实现那一步再一起改（避免文档写不实的东西）。
 
+### 第 4 步：阶段 B 第一批 —— `agentxx.agent.tools`
+
+改动：
+
+- `plugin_api.h`：`agentxx.agent.tools` v4 → v5（`MIN_VERSION` 同步、基线重置）；
+  `register_tool` / `unregister_tool` 改成异步操作契约（尾部 `cb` / `ud` / `error_out`）；
+  `call_tool_async` 更名为 `call_tool`（签名不变，异步已是默认，§7.4）。
+- `plugin_manager_vtable.cpp`
+    - 新增 `ToolSpecKeep`: `spec` 里三个字符串视图是借用视图，投递前拷成自有字符串并把
+      视图指回它们；闭包按 `shared_ptr` 持有本对象（拷贝后视图不会指向旧对象）；
+    - 两个成员改走 `asyncScopedTableCall`，失败用 `TableOpError(resultName(rc))` 交回；
+    - **把 `asyncTableCall` / `ScopeRefKeep` / `asyncScopedTableCall` / `takePluginString`
+      整块定义上移到 `mountCall` 之后**（原在文件中部，新入口在它上方会编译不过）。
+- `asyncScopedTableCall` 的失败划分改了（见下面"与计划的偏差"）。
+- `plugin_kit.h`: 新增 `detail::registerToolSync(ctx, agent, spec)`（阻塞形态），四个
+  工具形态（`tool` / `fast_tool` / `blocking_tool` / `polled_tool`）的注册点改用它；
+  `call_tool_async` 全部改名 `call_tool`。
+- `agentxx_javascript_engine.cpp`: `registerTool` / `unregisterTool` / 撤销动作 lambda
+  三处改走 `tableOpBlockingRaw`（脚本线程不是主程序 IO 线程，会真等）。
+- 测试：`boundaries` 成员清单改名；`test_plugin_bridge.cpp` / `test_plugin_sdk.cpp`
+  的 fake 表改成异步签名（回调内联发 OK，返回非空 handle）；
+  `test_plugin_host_mount.cpp` / `test_plugin_runtime.cpp` 用 `tableOpBlockingRaw`
+  包一层同步断言；`test_start_fail` DSO 插件在 `start` 里加 `RegProbe`（IO 线程上内联回调）。
+- 文档：`plugins.md` 的 tools 行抬到 v5 并记变更、§8.0 补"作用域引用的两种失败"、
+  JS 引擎那段 `call_tool_async` → `call_tool`。
+
+验证：
+
+- 内层 lib / test / client 三个构建目录均编译通过，25 个插件全部重编（首次
+  `agentxx_javascript_engine` 因漏改一处 `unregister_tool` 而失败，改后通过）；
+- `boundaries`、`plugins` 707、`plugin_host_mount` 147、`plugin_multi_mount` 47、
+  `plugin_cleanup` 90、`plugin_runtime`、`plugin_sdk`、`plugin_bridge` → 2067 通过；
+- `client_plugins` 835、`plugin_feature` 34、`plugin_point` 68、`plugin_broadcast` 90、
+  `plugin_dispatch` 112、`plugin_agent_runtime` 221、`plugin_example_runtime` 50 → 2117 通过。
+
 ## 与计划的偏差
 
 - 计划 §7.3 写"全局版本 5 → 6"：实际第 6 代已被占用，改为 6 → 7。
+- 计划 §7.1 把"作用域失效"一律算**未受理**。实现上只能拆两半: 引用的**形状**无效
+  (空指针 / `id` 为空 / `struct_size` 越界) 同步返回 `NULL`; 引用指向的挂载不存在或
+  序号过期要读挂载表, 只能在 IO 线程上判, 按**受理后失败**交回。这样既不跨线程读表,
+  也不把错误退化成"永远成功"。已写进 `plugins.md` §8.0。
 - `tableOpBlocking` 在计划里写的是"io 线程直接返回错误"；实现上先看主程序有没有
   内联完成（表操作在调用方就是 IO 线程时是内联的），只有确实没完成才返回错误。
   这样 `mount`/`start` 回调里原有的同步写法（`workDir` / `addShareStore`）行为不变，
@@ -208,8 +247,8 @@ IO 线程。
 
 ## 剩余事项
 
-- 阶段 B / C / C2-表异步化 / D 全部待做（见进度总表），即 104 个成员里已改异步的
-  只有 4 个（`agentxx.agent.session`）+ 骨架与三形态。
+- 阶段 B 剩下 7 张表 (`permission` / `context` / `model` / `prompt` / `resources` /
+  `graph` / `mount`), 阶段 C / C2-表异步化 / D 全部待做: 104 个成员里已改异步的有 6 个。
 - 阶段 E 还剩：删残留同步实现路径、client 侧 150 ms 同步桥改 Promise、
   `AGENTS.md` 的调用模型说明。
 - `KeyMetrics` 的表调用耗时统计（计划 §10）尚未加。

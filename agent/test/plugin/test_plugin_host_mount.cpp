@@ -449,20 +449,48 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             spec.parameters_json = agentxx::plugin::PluginStringView::fromCstr("{}");
             spec.execute_start   = &probeToolStart;
 
-            // 9. 不带引用 = 等同于在 `start` 里注册: 拒绝且无副作用
-            XX_TEST_EXPECT_EQ(
-                tools->register_tool(hostView, nullptr, &spec),
-                int32_t{AGENTXX_RESULT_ERR_NO_AGENT}
+            // 表成员是异步契约: 测试要在同一个栈上断言结果, 用阻塞形态等完成
+            // (调用线程就是主程序 IO 线程时是内联完成, 不会真等)
+            const auto* cancelTbl = static_cast<const PluginxxCancelIface*>(
+                queryTable(hostView, PLUGINXX_IFACE_CANCEL)
             );
+            const auto* schedTbl = static_cast<const PluginxxSchedulerIface*>(
+                queryTable(hostView, PLUGINXX_IFACE_SCHEDULER)
+            );
+            auto probeName = agentxx::plugin::PluginStringView::fromCstr("host_mount_probe");
+            auto registerSync = [&](const PluginxxScopeRef* ref) {
+                return pluginxx::tableOpBlockingRaw(
+                    hostView,
+                    cancelTbl,
+                    schedTbl,
+                    [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return tools->register_tool(hostView, ref, &spec, cb, ud, err);
+                    }
+                );
+            };
+            auto unregisterSync = [&](const PluginxxScopeRef* ref) {
+                return pluginxx::tableOpBlockingRaw(
+                    hostView,
+                    cancelTbl,
+                    schedTbl,
+                    [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return tools->unregister_tool(hostView, ref, &probeName, cb, ud, err);
+                    }
+                );
+            };
+
+            // 9. 不带引用 = 引用形状无效: 未受理 (没有完成回调), 且无副作用
+            XX_TEST_EXPECT_FALSE(registerSync(nullptr).accepted());
             XX_TEST_EXPECT_FALSE(agentA->toolRegistry->contains("host_mount_probe"));
 
-            // 14. 未知 agentId
+            // 14. 未知 agentId: 已受理但判定失败 (挂载表只在 IO 线程上看得到)
             auto unknown = scopeRefOf("agent_zzz", seqA);
             XX_TEST_EXPECT_TRUE(host->mountOf(&unknown) == nullptr);
-            XX_TEST_EXPECT_EQ(
-                tools->register_tool(hostView, &unknown, &spec),
-                int32_t{AGENTXX_RESULT_ERR_NO_AGENT}
-            );
+            {
+                auto res = registerSync(&unknown);
+                XX_TEST_EXPECT_TRUE(res.accepted());
+                XX_TEST_EXPECT_FALSE(res.ok());
+            }
             XX_TEST_EXPECT_FALSE(agentA->toolRegistry->contains("host_mount_probe"));
 
             // 14. 过期序号: 拆掉再挂上, 上一轮的序号不再匹配
@@ -480,18 +508,15 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
                 XX_TEST_EXPECT_TRUE(host->mountOf(&stale) == nullptr);
                 XX_TEST_EXPECT_TRUE(host->mountOf(&fresh) == agentA->pluginMount.get());
                 // 过期引用登记被拒, 新引用登记成功 (证明拒绝不是"永远失败")
-                XX_TEST_EXPECT_EQ(
-                    tools->register_tool(hostView, &stale, &spec),
-                    int32_t{AGENTXX_RESULT_ERR_NO_AGENT}
-                );
-                XX_TEST_EXPECT_EQ(tools->register_tool(hostView, &fresh, &spec), int32_t{0});
+                {
+                    auto res = registerSync(&stale);
+                    XX_TEST_EXPECT_TRUE(res.accepted());
+                    XX_TEST_EXPECT_FALSE(res.ok());
+                }
+                XX_TEST_EXPECT_TRUE(registerSync(&fresh).ok());
                 XX_TEST_EXPECT_TRUE(agentA->toolRegistry->contains("host_mount_probe"));
                 // 收尾: 撤销这个探针工具
-                auto probeName = agentxx::plugin::PluginStringView::fromCstr("host_mount_probe");
-                XX_TEST_EXPECT_EQ(
-                    tools->unregister_tool(hostView, &fresh, &probeName),
-                    int32_t{0}
-                );
+                XX_TEST_EXPECT_TRUE(unregisterSync(&fresh).ok());
                 XX_TEST_EXPECT_FALSE(agentA->toolRegistry->contains("host_mount_probe"));
             }
         }

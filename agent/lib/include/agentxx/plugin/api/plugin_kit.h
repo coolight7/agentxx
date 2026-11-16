@@ -2502,7 +2502,7 @@ struct CallToolAwaiter {
     }
 
     bool await_ready() const noexcept {
-        return !st || !st->tools || !st->tools->call_tool_async;
+        return !st || !st->tools || !st->tools->call_tool;
     }
 
     template<typename Promise>
@@ -2516,7 +2516,7 @@ struct CallToolAwaiter {
         auto           argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
         auto           tidSv  = PluginStringView::from(st->sessionId.data(), st->sessionId.size());
 
-        st->opHandle = st->tools->call_tool_async(
+        st->opHandle = st->tools->call_tool(
             st->host,
             st->agent.ptr(),
             &nameSv,
@@ -2824,6 +2824,40 @@ inline PluginxxOperatorNotify frameNotify(const AgentxxPluginToolNotify& tool) n
     return PluginxxOperatorNotify{tool.done_frame, tool.host_ud};
 }
 
+/// 注册插件工具 (生命周期回调里的同步形态)
+///
+/// 表成员是异步操作契约, 而 `start` / `mount` 是同步 C 函数: 这里用阻塞形态拿结果。
+/// 调用方本来就在主程序 IO 线程时是**内联执行**的, 不产生等待; 在插件自己的线程
+/// (如后台工具线程) 上则真等待, 与旧同步表调用的阻塞行为一致。
+///
+/// - `return` `AGENTXX_RESULT_OK` 成功; 主程序未提供该表 `ERR_UNSUPPORTED`;
+///   其余失败 `ERR_INTERNAL` (原因记日志)
+template<typename Ctx>
+inline int32_t registerToolSync(
+    const Ctx&                   ctx,
+    const PluginxxScopeRef*      agent,
+    const AgentxxPluginToolSpec* spec
+) {
+    if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    auto res = pluginxx::tableOpBlockingRaw(
+        ctx.host,
+        ctx.iface.cancel,
+        ctx.iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ctx.iface.tools->register_tool(ctx.host, agent, spec, cb, ud, err);
+        }
+    );
+    if (!res.ok() && ctx.iface.log && ctx.iface.log->log) {
+        const std::string why
+            = res.accepted() ? std::string(res.text()) : std::string(res.startError);
+        const PluginxxStringView view{why.data(), static_cast<uint64_t>(why.size())};
+        ctx.iface.log->log(ctx.host, 3, &view);
+    }
+    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
+}
+
 } // namespace detail
 
 template<typename Ctx, typename TaskFn>
@@ -2961,7 +2995,7 @@ inline void tool(
 
     if (ctx.iface.tools && ctx.iface.tools->register_tool) {
         auto ref = agent.raw();
-        ctx.iface.tools->register_tool(ctx.host, &ref, &spec);
+        detail::registerToolSync(ctx, &ref, &spec);
     }
 }
 
@@ -3070,7 +3104,7 @@ inline void fast_tool(
 
     if (ctx.iface.tools && ctx.iface.tools->register_tool) {
         auto ref = agent.raw();
-        ctx.iface.tools->register_tool(ctx.host, &ref, &spec);
+        detail::registerToolSync(ctx, &ref, &spec);
     }
 }
 
@@ -3388,7 +3422,7 @@ inline void blocking_tool(
 
     if (ctx.iface.tools && ctx.iface.tools->register_tool) {
         auto ref = agent.raw();
-        ctx.iface.tools->register_tool(ctx.host, &ref, &spec);
+        detail::registerToolSync(ctx, &ref, &spec);
     }
 }
 
@@ -3702,7 +3736,7 @@ inline void polled_tool(
 
     if (ctx.iface.tools && ctx.iface.tools->register_tool) {
         auto ref = agent.raw();
-        ctx.iface.tools->register_tool(ctx.host, &ref, &spec);
+        detail::registerToolSync(ctx, &ref, &spec);
     }
 }
 
@@ -4180,7 +4214,7 @@ inline PluginxxString call_tool_blocking(
     std::string_view               thread_id,
     PluginxxString*                error_out
 ) {
-    if (!host || !tools || !tools->call_tool_async) {
+    if (!host || !tools || !tools->call_tool) {
         if (error_out) {
             *error_out = PluginString::fromCstr(host, "tools iface not available");
         }
@@ -4209,7 +4243,7 @@ inline PluginxxString call_tool_blocking(
     auto argsSv = PluginStringView::from(args_json.data(), args_json.size());
     auto tidSv  = PluginStringView::from(thread_id.data(), thread_id.size());
 
-    PluginxxOperatorHandle* handle = tools->call_tool_async(
+    PluginxxOperatorHandle* handle = tools->call_tool(
         host,
         agent,
         &nameSv,

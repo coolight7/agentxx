@@ -1647,7 +1647,7 @@ throw new Error("top-level rollback probe");
         auto inst31 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst31 != nullptr);
 
-        // 31.1 call_tool_async 回调语义 (主程序在 io 线程派发 cb; 恰好一次)
+        // 31.1 call_tool 回调语义 (主程序在 io 线程派发 cb; 恰好一次)
         {
             PluginxxString e        = {nullptr, 0};
             int            cbStatus = -1;

@@ -1284,7 +1284,7 @@ public:
         delete bridge;
     }
 
-    /// 【JS 线程】立即拒绝 (主程序同步拒绝 call_tool_async 的路径)
+    /// 【JS 线程】立即拒绝 (主程序同步拒绝 call_tool 的路径)
     static void
         rejectCallNow(JSContext* ctx, JSValue resolve, JSValue reject, const std::string& msg) {
         JSValue err = JS_NewError(ctx);
@@ -4966,7 +4966,26 @@ JSValue JsEngine::bridgeCall(
             spec.execute_start  = &JsEngine::toolExecuteStart;
             spec.execute_cancel = &JsEngine::toolExecuteCancel;
             spec.user_data      = binding.get();
-            int rc              = iface.tools->register_tool(host, pctx->scope(), &spec);
+            int rc = 0;
+            {
+                // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
+                auto reg = agentxx::plugin::tableOpBlockingRaw(
+                    host,
+                    iface.cancel,
+                    iface.scheduler,
+                    [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return iface.tools->register_tool(
+                            host,
+                            pctx->scope(),
+                            &spec,
+                            cb,
+                            ud,
+                            err
+                        );
+                    }
+                );
+                rc       = reg.ok() ? 0 : -1;
+            }
             if (rc != 0) {
                 JS_FreeValue(ctx, execFn);
                 return throwJsError(
@@ -4984,9 +5003,28 @@ JSValue JsEngine::bridgeCall(
             JS_FreeValue(ctx, execFn);
 
             // 脚本初始化事务: 注册成功登记撤销动作 (顶层失败/实例卸载时回滚)
-            pctx->rollbackActions.push_back([host, toolsIface = iface.tools, pctxRaw = pctx, name]() {
+            pctx->rollbackActions.push_back([host,
+                                             toolsIface  = iface.tools,
+                                             cancelIface = iface.cancel,
+                                             schedIface  = iface.scheduler,
+                                             pctxRaw     = pctx,
+                                             name]() {
                 auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-                toolsIface->unregister_tool(host, pctxRaw->scope(), &nameSv);
+                agentxx::plugin::tableOpBlockingRaw(
+                    host,
+                    cancelIface,
+                    schedIface,
+                    [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return toolsIface->unregister_tool(
+                            host,
+                            pctxRaw->scope(),
+                            &nameSv,
+                            cb,
+                            ud,
+                            err
+                        );
+                    }
+                );
             });
             pctx->toolBindings.push_back(std::move(binding));
             return JS_UNDEFINED;
@@ -4998,7 +5036,22 @@ JSValue JsEngine::bridgeCall(
                 return JS_ThrowTypeError(ctx, "unregisterTool: name required");
             }
             auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-            iface.tools->unregister_tool(host, pctx->scope(), &nameSv);
+            // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
+            agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.tools->unregister_tool(
+                        host,
+                        pctx->scope(),
+                        &nameSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
             JS_SetPropertyStr(ctx, pctx->tools, name.c_str(), JS_UNDEFINED);
             return JS_UNDEFINED;
         }
@@ -5027,7 +5080,7 @@ JSValue JsEngine::bridgeCall(
             // callTool 始终返回 Promise, 完成事件回到 JS 线程 settle。
             // - 本引擎 JS 工具: 同线程执行并把结果/内部 Promise 链到外层 Promise
             //   (不阻塞等待, 内部 Promise 由外层驱动的 job/timer/队列泵推进)
-            // - 主程序插件工具: call_tool_async + 完成回调投递回 JS 线程 (不再
+            // - 主程序插件工具: call_tool + 完成回调投递回 JS 线程 (不再
             //   call_tool_blocking 阻塞 JS 线程, 消除 A/B 脚本互调自锁)
             JSValue resolving[2];
             JSValue promise = JS_NewPromiseCapability(ctx, resolving);
@@ -5082,7 +5135,7 @@ JSValue JsEngine::bridgeCall(
             auto sidSv
                 = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
             PluginxxString err{nullptr, 0};
-            auto*          handle = iface.tools->call_tool_async(
+            auto*          handle = iface.tools->call_tool(
                 host,
                 pctx->scope(),
                 &nameSv,

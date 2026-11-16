@@ -277,8 +277,13 @@ void PLUGINXX_CALL fakeLog(const PluginxxHost* host, int32_t, const PluginxxStri
     }
 }
 
-int32_t PLUGINXX_CALL fakeRegisterTool(
-    const PluginxxHost*, const PluginxxScopeRef*, const AgentxxPluginToolSpec* spec
+PluginxxOperatorHandle* PLUGINXX_CALL fakeRegisterTool(
+    const PluginxxHost*,
+    const PluginxxScopeRef*,
+    const AgentxxPluginToolSpec* spec,
+    PluginxxOperatorCallback cb,
+    void* ud,
+    PluginxxString* error_out
 );
 
 const PluginxxSchedulerIface g_fakeScheduler = {
@@ -308,7 +313,7 @@ const AgentxxPluginToolsIface g_fakeTools = {
     /* struct_size */ sizeof(AgentxxPluginToolsIface),
     /* register_tool */ fakeRegisterTool,
     /* unregister_tool */ nullptr,
-    /* call_tool_async */ nullptr,
+    /* call_tool */ nullptr,
 };
 
 /// 用例可临时置空来验证"主程序不提供驱动时"的回退路径。
@@ -363,15 +368,24 @@ const agentxx::plugin::ScopeRef g_agentRef{"root", 0};
 const agentxx::plugin::ScopeRef g_agentRefA{"root", 0};
 const agentxx::plugin::ScopeRef g_agentRefB{"root", 0};
 
-int32_t PLUGINXX_CALL fakeRegisterTool(
-    const PluginxxHost*, const PluginxxScopeRef* agent, const AgentxxPluginToolSpec* spec
+PluginxxOperatorHandle* PLUGINXX_CALL fakeRegisterTool(
+    const PluginxxHost*,
+    const PluginxxScopeRef* agent,
+    const AgentxxPluginToolSpec* spec,
+    PluginxxOperatorCallback cb,
+    void* ud,
+    PluginxxString* error_out
 ) {
+    (void)error_out;
     if (!agent || !spec) {
-        return -1;
+        return nullptr;
     }
     g_capturedTool.spec = *spec;
     g_capturedTool.has  = true;
-    return 0;
+    if (cb) {
+        cb(ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    return reinterpret_cast<PluginxxOperatorHandle*>(1);
 }
 
 /// 完成通知探针 (工具结果分两段: 正文 + 元数据)。
