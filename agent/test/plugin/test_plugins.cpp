@@ -1643,23 +1643,30 @@ throw new Error("top-level rollback probe");
             // 启用状态: publish 正常 (`pluginxx.broadcasts` 通用表)
             const auto bc30 = agentxx::plugin::AgentIfaces::query(inst30->hostView()).broadcasts;
             XX_TEST_EXPECT_TRUE(bc30 != nullptr && bc30->publish_broadcast != nullptr);
-            auto topicSv = agentxx::plugin::PluginStringView::fromCstr("plugin.example_plugin.demo");
-            auto paySv   = agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})");
-            const auto declSv = agentxx::plugin::PluginStringView::fromCstr(
-                R"({"id":"plugin.example_plugin.demo","cache":"latest"})"
+            // 表成员是异步契约: kit 的便捷入口内部走阻塞形态 (用例在主程序 IO 线程上)
+            agentxx::plugin::declarePluginBroadcast(
+                inst30->hostView(),
+                bc30,
+                "plugin.example_plugin.demo"
             );
-            if (bc30) {
-                bc30->declare_broadcast(inst30->hostView(), &declSv, nullptr);
-            }
-            XX_TEST_EXPECT_EQ(
-                bc30 ? bc30->publish_broadcast(inst30->hostView(), &topicSv, &paySv, nullptr) : -1,
-                PLUGINXX_RESULT_OK
+            XX_TEST_EXPECT_TRUE(
+                agentxx::plugin::publishPluginBroadcast(
+                    inst30->hostView(),
+                    bc30,
+                    "plugin.example_plugin.demo",
+                    R"({"k":"v"})"
+                )
             );
             ctx->pluginManager->disable("example_plugin");
-            // 禁用状态: 接口表 publish 拒绝 (返回非 OK)
-            int rc = bc30 ? bc30->publish_broadcast(inst30->hostView(), &topicSv, &paySv, nullptr)
-                          : -1;
-            XX_TEST_EXPECT_TRUE(rc != PLUGINXX_RESULT_OK);
+            // 禁用状态: 接口表 publish 拒绝 (返回 false)
+            XX_TEST_EXPECT_FALSE(
+                agentxx::plugin::publishPluginBroadcast(
+                    inst30->hostView(),
+                    bc30,
+                    "plugin.example_plugin.demo",
+                    R"({"k":"v"})"
+                )
+            );
             co_await ctx->pluginManager->unloadAsync("example_plugin");
         }
     }
@@ -4069,22 +4076,18 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(bcIface != nullptr);
 
         // 2) round_start 值能经广播频道送达订阅者 (验证发布/订阅流程本身)
-        std::atomic<int>    hits{0};
-        PluginxxStringView  topicSv{"agentxx.agent.round.start",
-                                    sizeof("agentxx.agent.round.start") - 1};
-        auto*               sub = (bcIface && bcIface->subscribe_broadcast)
-                                      ? bcIface->subscribe_broadcast(
-                                            probeInst->hostView(),
-                                            nullptr,
-                                            &topicSv,
-                                            [](const PluginxxStringView*, void* ud) {
-                                                static_cast<std::atomic<int>*>(ud)->fetch_add(1);
-                                            },
-                                            &hits,
-                                            nullptr,
-                                            nullptr
-                                        )
-                                      : nullptr;
+        std::atomic<int> hits{0};
+        // 表成员是异步契约: kit 的订阅入口内部走阻塞形态, 句柄以十进制文本交回
+        auto* sub = agentxx::plugin::subscribePluginBroadcast(
+            probeInst->hostView(),
+            bcIface,
+            nullptr,
+            "agentxx.agent.round.start",
+            [](const PluginxxStringView*, void* ud) {
+                static_cast<std::atomic<int>*>(ud)->fetch_add(1);
+            },
+            &hits
+        );
         XX_TEST_EXPECT_TRUE(sub != nullptr);
 
         // 3) PluginBase 订阅的清理回调生效: 已取消标记在轮次开始后被清掉

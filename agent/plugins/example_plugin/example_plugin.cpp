@@ -381,15 +381,13 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     //    (已经不再有"处理器登记"这回事; 序号已换成点 id)
     {
         const std::string_view pointId = agentxx::plugin::points::ToolEnd;
-        auto                   idSv    = agentxx::plugin::PluginStringView::from(pointId);
-        ctx.iface.broadcasts->subscribe_broadcast(
+        agentxx::plugin::subscribePluginBroadcast(
             host,
+            ctx.iface.broadcasts,
             ref.ptr(),
-            &idSv,
+            pointId,
             on_demo_event, ///< 与自己的频道共用同一个处理器 (只打印载荷)
-            &ctx,
-            nullptr,
-            nullptr
+            &ctx
         );
     }
     // 3. 事件订阅 (读侧可跨族, 但必须是全名)

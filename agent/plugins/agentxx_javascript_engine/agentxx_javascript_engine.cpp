@@ -4822,6 +4822,66 @@ static std::string callTableText(const PluginxxHost* host, const Ifaces& iface, 
     );
 }
 
+/// 读一条广播的当前值 (阻塞形态)
+///
+/// 表成员是异步操作契约, 脚本线程不是主程序 io 线程, 这里等到完成回调后返回。
+/// 没有声明 / 没有当前值 / 已结束都返回空串 (与旧的"空 out 出参"同义)。
+template<typename Ifaces>
+static std::string broadcastReadText(
+    const PluginxxHost*       host,
+    const Ifaces&             iface,
+    const PluginxxStringView& id
+) {
+    return callTableText(
+        host,
+        iface,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.broadcasts->read_broadcast(host, &id, cb, ud, err);
+        }
+    );
+}
+
+/// 声明一条广播 (阻塞形态): 返回是否成功, 失败原因写进 [errText]
+template<typename Ifaces>
+static bool broadcastDeclareOp(
+    const PluginxxHost*       host,
+    const Ifaces&             iface,
+    const PluginxxStringView& declJson,
+    std::string*              errText
+) {
+    auto op = agentxx::plugin::tableOpBlockingRaw(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.broadcasts->declare_broadcast(host, &declJson, cb, ud, err);
+        }
+    );
+    if (errText != nullptr) {
+        errText->assign(op.text());
+    }
+    return op.ok();
+}
+
+/// 结束一条流 (阻塞形态): 返回是否成功 (重复结束按成功处理)
+template<typename Ifaces>
+static bool broadcastEndOp(
+    const PluginxxHost*       host,
+    const Ifaces&             iface,
+    const PluginxxStringView& id,
+    const PluginxxStringView& reasonJson
+) {
+    auto op = agentxx::plugin::tableOpBlockingRaw(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.broadcasts->end_broadcast(host, &id, &reasonJson, cb, ud, err);
+        }
+    );
+    return op.ok();
+}
+
 JSValue JsEngine::bridgeCall(
     JSContext*    ctx,
     JSValueConst  this_val,
@@ -4865,29 +4925,42 @@ JSValue JsEngine::bridgeCall(
             optionsJson.size()
         );
         const PluginxxStringView* optPtr = optionsJson.empty() ? nullptr : &optSv;
-        PluginxxSubscription*     sub    = nullptr;
-        if (JS_IsFunction(ctx, on_end) && iface.broadcasts->subscribe_broadcast_ex) {
-            sub = iface.broadcasts->subscribe_broadcast_ex(
-                host,
-                pctx->scope(),
-                &topicSv,
-                &JsEngine::eventFire,
-                &JsEngine::eventEndFire,
-                binding.get(),
-                optPtr,
-                nullptr
-            );
-        } else {
-            sub = iface.broadcasts->subscribe_broadcast(
-                host,
-                pctx->scope(),
-                &topicSv,
-                &JsEngine::eventFire,
-                binding.get(),
-                optPtr,
-                nullptr
-            );
-        }
+        // 表成员是异步操作契约: 脚本线程不是主程序 io 线程, 这里阻塞等完成回调;
+        // 订阅句柄以十进制文本放在 `payload` 里交回
+        auto op = agentxx::plugin::tableOpBlockingRaw(
+            host,
+            iface.cancel,
+            iface.scheduler,
+            [&](PluginxxOperatorCallback cb, void* opUd, PluginxxString* err) {
+                if (JS_IsFunction(ctx, on_end) && iface.broadcasts->subscribe_broadcast_ex) {
+                    return iface.broadcasts->subscribe_broadcast_ex(
+                        host,
+                        pctx->scope(),
+                        &topicSv,
+                        &JsEngine::eventFire,
+                        &JsEngine::eventEndFire,
+                        binding.get(),
+                        optPtr,
+                        cb,
+                        opUd,
+                        err
+                    );
+                }
+                return iface.broadcasts->subscribe_broadcast(
+                    host,
+                    pctx->scope(),
+                    &topicSv,
+                    &JsEngine::eventFire,
+                    binding.get(),
+                    optPtr,
+                    cb,
+                    opUd,
+                    err
+                );
+            }
+        );
+        PluginxxSubscription* sub
+            = op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
         if (!sub) {
             return -1;
         }
@@ -4921,10 +4994,9 @@ JSValue JsEngine::bridgeCall(
             JS_NewInt32(ctx, static_cast<int32_t>(subPtr >> 32))
         );
         JS_SetPropertyUint32(ctx, pctx->agents, len, entry);
-        pctx->rollbackActions.push_back([bc = iface.broadcasts, sub]() {
-            if (bc && bc->unsubscribe_broadcast) {
-                bc->unsubscribe_broadcast(sub);
-            }
+        pctx->rollbackActions.push_back([host, bc = iface.broadcasts, sub]() {
+            // 阻塞形态退订 (脚本线程不是主程序 io 线程)
+            agentxx::plugin::unsubscribePluginBroadcast(host, bc, sub);
         });
         pctx->hookBindings.push_back(std::move(binding));
         return static_cast<int32_t>(len);
@@ -4946,11 +5018,11 @@ JSValue JsEngine::bridgeCall(
             JS_FreeValue(ctx, hiV);
             subPtr = (static_cast<uint64_t>(hi) << 32) | lo;
             if (subPtr) {
-                if (iface.broadcasts && iface.broadcasts->unsubscribe_broadcast) {
-                    iface.broadcasts->unsubscribe_broadcast(
-                        reinterpret_cast<PluginxxSubscription*>(subPtr)
-                    );
-                }
+                agentxx::plugin::unsubscribePluginBroadcast(
+                    host,
+                    iface.broadcasts,
+                    reinterpret_cast<PluginxxSubscription*>(subPtr)
+                );
             }
             JS_SetPropertyUint32(ctx, pctx->agents, token, JS_UNDEFINED);
         }
@@ -6691,19 +6763,15 @@ JSValue JsEngine::bridgeCall(
                 decl.data(),
                 decl.size()
             );
-            PluginxxString err{nullptr, 0};
-            const int32_t  rc = iface.broadcasts->declare_broadcast(host, &declSv, &err);
-            if (rc != PLUGINXX_RESULT_OK) {
-                std::string errText
-                    = err.data ? std::string(err.data, static_cast<size_t>(err.size))
-                               : std::string{"declare failed"};
-                if (err.data) {
-                    agentxx::plugin::PluginString::free(host, &err);
-                }
-                return throwJsError(ctx, fmt::format("declareBroadcast: {}", errText));
-            }
-            if (err.data) {
-                agentxx::plugin::PluginString::free(host, &err);
+            std::string errText;
+            if (!broadcastDeclareOp(host, iface, declSv, &errText)) {
+                return throwJsError(
+                    ctx,
+                    fmt::format(
+                        "declareBroadcast: {}",
+                        errText.empty() ? std::string{"declare failed"} : errText
+                    )
+                );
             }
             return JS_TRUE;
         }
@@ -6714,15 +6782,9 @@ JSValue JsEngine::bridgeCall(
             }
             const std::string id   = jsToCppString(ctx, argv[0]);
             auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-            PluginxxString    out{nullptr, 0};
-            const int32_t     rc = iface.broadcasts->read_broadcast(host, &idSv, &out);
-            std::string       json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
+            const std::string json = broadcastReadText(host, iface, idSv);
             // 没声明 / 没当前值 / 已结束 都返回 null (调用方不需要区分)
-            if (rc != PLUGINXX_RESULT_OK) {
+            if (json.empty()) {
                 return JS_NULL;
             }
             return jsonTextToValue(ctx, json, "<broadcast>");
@@ -6739,12 +6801,7 @@ JSValue JsEngine::bridgeCall(
                 reason.data(),
                 reason.size()
             );
-            PluginxxString err{nullptr, 0};
-            const int32_t  rc = iface.broadcasts->end_broadcast(host, &idSv, &reaSv, &err);
-            if (err.data) {
-                agentxx::plugin::PluginString::free(host, &err);
-            }
-            return rc == PLUGINXX_RESULT_OK ? JS_TRUE : JS_FALSE;
+            return broadcastEndOp(host, iface, idSv, reaSv) ? JS_TRUE : JS_FALSE;
         }
 
         // ---- 会话 share_store 写入 / 本插件资源 / 模型配置 ----
@@ -8234,14 +8291,8 @@ JSValue JsEngine::clientBridgeCall(
                 decl.data(),
                 decl.size()
             );
-            PluginxxString err{nullptr, 0};
-            const int32_t  rc = iface.broadcasts->declare_broadcast(host, &declSv, &err);
-            std::string    errText;
-            if (err.data) {
-                errText.assign(err.data, static_cast<size_t>(err.size));
-                agentxx::plugin::PluginString::free(host, &err);
-            }
-            if (rc != PLUGINXX_RESULT_OK) {
+            std::string errText;
+            if (!broadcastDeclareOp(host, iface, declSv, &errText)) {
                 return throwJsError(
                     ctx,
                     fmt::format(
@@ -8259,15 +8310,9 @@ JSValue JsEngine::clientBridgeCall(
             }
             const std::string id   = jsToCppString(ctx, argv[0]);
             auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-            PluginxxString    out{nullptr, 0};
-            const int32_t     rc = iface.broadcasts->read_broadcast(host, &idSv, &out);
-            std::string       json;
-            if (out.data) {
-                json.assign(out.data, static_cast<size_t>(out.size));
-                agentxx::plugin::PluginString::free(host, &out);
-            }
+            const std::string json = broadcastReadText(host, iface, idSv);
             // 没声明 / 没当前值 / 已结束 都返回 null
-            if (rc != PLUGINXX_RESULT_OK) {
+            if (json.empty()) {
                 return JS_NULL;
             }
             return jsonTextToValue(ctx, json, "<broadcast>");
@@ -8284,12 +8329,7 @@ JSValue JsEngine::clientBridgeCall(
                 reason.data(),
                 reason.size()
             );
-            PluginxxString err{nullptr, 0};
-            const int32_t  rc = iface.broadcasts->end_broadcast(host, &idSv, &reaSv, &err);
-            if (err.data) {
-                agentxx::plugin::PluginString::free(host, &err);
-            }
-            return rc == PLUGINXX_RESULT_OK ? JS_TRUE : JS_FALSE;
+            return broadcastEndOp(host, iface, idSv, reaSv) ? JS_TRUE : JS_FALSE;
         }
 
         case B_SUBSCRIBE: {
@@ -8321,29 +8361,42 @@ JSValue JsEngine::clientBridgeCall(
             );
             const PluginxxStringView* optPtr = optionsJson.empty() ? nullptr : &optSv;
             // client 侧没有 agent 作用域: 传 nullptr = 订阅主程序总线
-            PluginxxSubscription* sub = nullptr;
-            if (JS_IsFunction(ctx, onEnd) && iface.broadcasts->subscribe_broadcast_ex) {
-                sub = iface.broadcasts->subscribe_broadcast_ex(
-                    host,
-                    nullptr,
-                    &topicSv,
-                    &JsEngine::eventFire,
-                    &JsEngine::eventEndFire,
-                    binding.get(),
-                    optPtr,
-                    nullptr
-                );
-            } else {
-                sub = iface.broadcasts->subscribe_broadcast(
-                    host,
-                    nullptr,
-                    &topicSv,
-                    &JsEngine::eventFire,
-                    binding.get(),
-                    optPtr,
-                    nullptr
-                );
-            }
+            // 表成员是异步操作契约: 脚本线程不是主程序 io 线程, 这里阻塞等完成回调;
+            // 订阅句柄以十进制文本放在 `payload` 里交回
+            auto op = agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* opUd, PluginxxString* err) {
+                    if (JS_IsFunction(ctx, onEnd) && iface.broadcasts->subscribe_broadcast_ex) {
+                        return iface.broadcasts->subscribe_broadcast_ex(
+                            host,
+                            nullptr,
+                            &topicSv,
+                            &JsEngine::eventFire,
+                            &JsEngine::eventEndFire,
+                            binding.get(),
+                            optPtr,
+                            cb,
+                            opUd,
+                            err
+                        );
+                    }
+                    return iface.broadcasts->subscribe_broadcast(
+                        host,
+                        nullptr,
+                        &topicSv,
+                        &JsEngine::eventFire,
+                        binding.get(),
+                        optPtr,
+                        cb,
+                        opUd,
+                        err
+                    );
+                }
+            );
+            PluginxxSubscription* sub
+                = op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
             if (!sub) {
                 JS_FreeValue(ctx, onEnd);
                 return throwJsError(
@@ -8359,10 +8412,9 @@ JSValue JsEngine::clientBridgeCall(
             pctx->clientSubs[token] = JsPluginCtx::ClientSub{sub, entryIdx};
             JS_FreeValue(ctx, onEnd);
             pctx->hookBindings.push_back(std::move(binding));
-            pctx->rollbackActions.push_back([bc = iface.broadcasts, sub]() {
-                if (bc && bc->unsubscribe_broadcast) {
-                    bc->unsubscribe_broadcast(sub);
-                }
+            pctx->rollbackActions.push_back([host, bc = iface.broadcasts, sub]() {
+                // 阻塞形态退订 (脚本线程不是主程序 io 线程)
+                agentxx::plugin::unsubscribePluginBroadcast(host, bc, sub);
             });
             return JS_NewInt64(ctx, token);
         }
@@ -8375,9 +8427,13 @@ JSValue JsEngine::clientBridgeCall(
             JS_ToInt64(ctx, &token, argv[0]);
             auto it = pctx->clientSubs.find(token);
             if (it != pctx->clientSubs.end()) {
-                if (iface.broadcasts && iface.broadcasts->unsubscribe_broadcast
-                    && it->second.sub != nullptr) {
-                    iface.broadcasts->unsubscribe_broadcast(it->second.sub);
+                if (it->second.sub != nullptr) {
+                    // 阻塞形态退订 (脚本线程不是主程序 io 线程)
+                    agentxx::plugin::unsubscribePluginBroadcast(
+                        host,
+                        iface.broadcasts,
+                        it->second.sub
+                    );
                 }
                 // 订阅表里的处理器一并置空 (JSValue 只在 JS 线程释放)
                 if (it->second.entry >= 0) {

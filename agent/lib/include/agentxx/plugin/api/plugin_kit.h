@@ -16,6 +16,7 @@
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/tool_result_frame.h"
+#include "pluginxx/api/broadcast_handle.h"
 #include "pluginxx/api/net.h"
 #include "pluginxx/net/ops.h"
 #include "agentxx/util/tool_result.h"
@@ -154,6 +155,20 @@ inline std::string takeHostString(const PluginxxHost* host, Fn&& fn) {
 /// - `agentxx.*` 是主程序频道, 插件声明会被拒 (需要时请主程序声明);
 /// - `anyonePublish` = true 时两端都能发 (跨端共享频道用)。
 /// - 订阅自己的频道前先声明它, 否则订阅会被拒 (声明是显式动作)。
+/// 广播表调用要用的取消/调度表 (阻塞形态的"能不能阻塞"判据)
+///
+/// 进程级静态数据, 按 IID 查一次即可; 广播不在热路径上, 不做缓存。
+inline std::pair<const PluginxxCancelIface*, const PluginxxSchedulerIface*>
+    broadcastCallIfaces(const PluginxxHost* host) {
+    if (!host) {
+        return {nullptr, nullptr};
+    }
+    return {
+        queryInterface<PluginxxCancelIface>(host, PLUGINXX_IFACE_CANCEL),
+        queryInterface<PluginxxSchedulerIface>(host, PLUGINXX_IFACE_SCHEDULER),
+    };
+}
+
 inline bool declarePluginBroadcast(
     const PluginxxHost*            host,
     const PluginxxBroadcastsIface* broadcasts,
@@ -168,12 +183,17 @@ inline bool declarePluginBroadcast(
                              + (cacheLatest ? "latest" : "none") + "\",\"publish\":\""
                              + (anyonePublish ? "anyone" : "owner") + "\"}";
     const auto declSv = PluginStringView::from(decl.data(), decl.size());
-    PluginxxString err{nullptr, 0};
-    const int32_t  rc = broadcasts->declare_broadcast(host, &declSv, &err);
-    if (err.data) {
-        PluginString::free(host, &err);
-    }
-    return rc == PLUGINXX_RESULT_OK;
+    const auto caps   = broadcastCallIfaces(host);
+    return pluginxx::tableOpBlockingRaw(
+               host,
+               caps.first,
+               caps.second,
+               [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                   return broadcasts->declare_broadcast(host, &declSv, cb, ud, err);
+               },
+               0
+    )
+        .ok();
 }
 
 /// 发布一条广播 (频道不存在时自动声明; 失败只记日志并返回 false)
@@ -193,7 +213,41 @@ inline bool publishPluginBroadcast(
     // 先声明 (已声明时主程序按幂等处理); 不关心结果 —— 应用频道不能改声明
     declarePluginBroadcast(host, broadcasts, id, anyonePublish);
     const auto payloadSv = PluginStringView::from(payload.data(), payload.size());
-    return broadcasts->publish_broadcast(host, &idSv, &payloadSv, nullptr) == PLUGINXX_RESULT_OK;
+    const auto caps      = broadcastCallIfaces(host);
+    return pluginxx::tableOpBlockingRaw(
+               host,
+               caps.first,
+               caps.second,
+               [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                   return broadcasts->publish_broadcast(host, &idSv, &payloadSv, cb, ud, err);
+               },
+               0
+    )
+        .ok();
+}
+
+/// 撤销一条广播订阅 (异步表的阻塞形态; 幂等)
+///
+/// `sub` 来自 [subscribePluginBroadcast]; 主程序在实例卸载时也会一并回收。
+inline bool unsubscribePluginBroadcast(
+    const PluginxxHost*            host,
+    const PluginxxBroadcastsIface* broadcasts,
+    PluginxxSubscription*          sub
+) {
+    if (!host || !broadcasts || !broadcasts->unsubscribe_broadcast || sub == nullptr) {
+        return false;
+    }
+    const auto caps = broadcastCallIfaces(host);
+    return pluginxx::tableOpBlockingRaw(
+               host,
+               caps.first,
+               caps.second,
+               [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                   return broadcasts->unsubscribe_broadcast(host, sub, cb, ud, err);
+               },
+               0
+    )
+        .ok();
 }
 
 /// 订阅一条广播 (返回句柄; 主程序在实例卸载时一并回收)
@@ -209,7 +263,19 @@ inline PluginxxSubscription* subscribePluginBroadcast(
         return nullptr;
     }
     const auto idSv = PluginStringView::from(id.data(), id.size());
-    return broadcasts->subscribe_broadcast(host, scope, &idSv, handler, ud, nullptr, nullptr);
+    const auto caps = broadcastCallIfaces(host);
+    auto       op   = pluginxx::tableOpBlockingRaw(
+        host,
+        caps.first,
+        caps.second,
+        [&](PluginxxOperatorCallback cb, void* opUd, PluginxxString* err) {
+            return broadcasts->subscribe_broadcast(host, scope, &idSv, handler, ud, nullptr, cb,
+                                                   opUd, err);
+        },
+        0
+    );
+    // 表成员是异步契约: 订阅句柄以十进制文本放在 `payload` 里交回
+    return op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
 }
 
 /// 发布一条广播 (ABI 视图形态; 与 `string_view` 版同义)
@@ -1960,14 +2026,12 @@ protected:
         if (!iface.broadcasts || !iface.broadcasts->subscribe_broadcast) {
             return;
         }
-        auto topicSv = PluginStringView::from(
-            "agentxx.agent.round.start",
-            sizeof("agentxx.agent.round.start") - 1
-        );
-        roundStartSub_ = iface.broadcasts->subscribe_broadcast(
+        // 订阅主程序总线 (基类不知道 agent 引用, 会话事件一并到达)
+        roundStartSub_ = subscribePluginBroadcast(
             host,
-            nullptr, ///< 基类不知道 agent 引用: 订阅主程序总线 (会话事件一并到达)
-            &topicSv,
+            iface.broadcasts,
+            nullptr,
+            "agentxx.agent.round.start",
             [](const PluginxxStringView* ev, void* ud) {
                 auto* self = static_cast<PluginBase*>(ud);
                 if (!self || !ev || !ev->data) {
@@ -1984,9 +2048,7 @@ protected:
                 } catch (...) {
                 }
             },
-            this,
-            nullptr,
-            nullptr
+            this
         );
         if (!roundStartSub_) {
             // 订阅失败时取消标记只能靠每个工具根开始时自清 (见 polled_tool/blocking_tool),

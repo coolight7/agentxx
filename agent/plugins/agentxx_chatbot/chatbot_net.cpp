@@ -188,5 +188,10 @@ PluginxxSubscription* ChatbotNet::subscribeEvents(
     );
 }
 
+bool ChatbotNet::unsubscribeEvents(PluginxxSubscription* sub) const {
+    // 阻塞形态退订 (调用方是插件 io 线程, 不是主程序 io 线程)
+    return agentxx::plugin::unsubscribePluginBroadcast(host, broadcasts, sub);
+}
+
 } // namespace chatbot
 } // namespace agentxx

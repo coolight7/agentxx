@@ -184,7 +184,8 @@ std::string cdpWsRoundTrip(
             std::lock_guard<std::mutex> lock(state.mtx);
             state.alive = false;
         }
-        ctx.iface.broadcasts->unsubscribe_broadcast(sub);
+        // 阻塞形态退订 (插件 io 线程不是主程序 io 线程)
+        agentxx::plugin::unsubscribePluginBroadcast(ctx.host, ctx.iface.broadcasts, sub);
     };
 
     std::string out;

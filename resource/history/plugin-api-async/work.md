@@ -12,7 +12,7 @@
 | A2 | agent 侧 `dlopen` + `create` 挪到加载线程池 | 完成（编译通过、插件测试全绿） |
 | B | `agentxx.agent` 业务表全部成员 | 完成（9 张表全部改异步操作契约） |
 | C | `agentxx.agent.runtime` 全部成员 | 完成（21 个成员改异步；lib / test / client / 25 个插件编译通过，插件相关测试 3983 条全绿） |
-| C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 进行中（第一批 `config` v4 / `plugins` v2 完成；`broadcasts` / `capabilities` 登记 / `net.call` 待做） |
+| C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 进行中（`config` v4 / `plugins` v2 / `broadcasts` v4 完成；`capabilities` 登记 / `net.call` 待做） |
 | D | `agentxx.client.*` 六张表 + 三个回答型回调 | 待做 |
 | E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 部分完成（接口表数量与 §8.0 调用模型文档已同步） |
 
@@ -468,6 +468,83 @@ clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清�
 - `libagentxx_staticd.lib` 出现过一次 `LNK1243: COMDAT ... 关联`：删掉对应
   `.obj` 重编即可（增量构建产物不一致，与代码无关）。
 
+### 第 9 步：阶段 C2 第二批 —— `agentxx.broadcasts` v4
+
+把框架的广播表 7 个成员全部改成异步操作契约。这张表比前面几张多一处新问题：
+**订阅会产出一个句柄**（`PluginxxSubscription*`），而异步契约只有"结果正文"这一条回程通道。
+
+- 表头 `pluginxx/api/tables.h`：`PLUGINXX_IFACE_BROADCASTS_VERSION` / `_MIN_VERSION` 3 → 4，
+  基线重置为 `sizeof(PluginxxBroadcastsIface)`（以后再追加成员才改成 `offsetof`）；
+- **句柄经 `payload` 交回，表示形式是进程内地址的十进制文本**：新增
+  `pluginxx/api/broadcast_handle.h`，`pluginxxSubscriptionToText` /
+  `pluginxxSubscriptionFromText` 放在 `namespace pluginxx`。主程序（`tables_impl.h`）与插件
+  侧（`plugin_kit.h`）共用同一份实现，解析规则只写一遍；`host/broadcast_registry.h`
+  里原先那份的定义改为包含头文件（避免两份同名 inline 冲突）。
+  选十进制文本而不是结构体/二进制：跨边界只传字符串，插件用 JS/Python 也能自己拼；
+  句柄由实例的订阅表保活到实例析构，因此传地址是安全的；
+- `unsubscribe_broadcast` 多一个 `const PluginxxHost* host` 首参：原来它是唯一"只靠
+  `sub` 就能干活"的成员，改成统一走入口骨架（`detail::asyncTableOp`）后必须能解析实例；
+- 实现（`pluginxx/host/tables_impl.h`）：7 个入口改 `detail::asyncTableOp`；
+  普通订阅与 `_ex` 共用模板 `subscribeBroadcastOp<OnEnd>`；
+  `read` 用新加的 `PluginHostCore::readBroadcastText` + `result::nameOf` 把细分原因
+  （`not_declared` / `no_value` / `ended`）写进结果正文；
+  `unsubscribe` 走 `allowClosing = true` —— 插件在 `stop` 里退订必须仍然生效
+  （与实例状态无关的就地撤销），也是旧同步语义；
+- `api_abi_check.c`：广播表的两条静态断言改成"基线 <= 表长"（基线已重置）。
+
+调用点（表的签名变了，全部要跟着改）：
+
+- `plugin_kit.h`：`declarePluginBroadcast` / `publishPluginBroadcast` /
+  `unsubscribePluginBroadcast(host, bc, sub)` / `subscribePluginBroadcast` 四个便捷入口内部
+  走 `tableOpBlockingRaw`（非 IO 线程真等待、IO 线程内联），订阅句柄用
+  `pluginxxSubscriptionFromText` 还原；`PluginBase::onHostReady` 的轮次订阅改用便捷入口。
+  新增 `broadcastCallIfaces(host)`（按 IID 查 cancel/scheduler）。
+- `agentxx_javascript_engine`：agent 侧 `subscribeChannel` / `unsubscribeToken` /
+  rollback action 与 client 侧 `B_SUBSCRIBE` / `B_UNSUBSCRIBE` / rollback action；
+  两侧的 `B_DECLARE_BROADCAST` / `B_READ_BROADCAST` / `B_END_BROADCAST` 抽成
+  `broadcastDeclareOp` / `broadcastReadText` / `broadcastEndOp` 三个模板（agent/client 的
+  接口表聚合都带 `cancel` / `scheduler`）。失败降级：declare/end → `JS_FALSE`、
+  read → `JS_NULL`、subscribe → throw、unsubscribe → 空操作。
+- 插件：`example_event`（read / subscribe_ex / subscribe）、`agentxx_text_selection_monitor`
+  （退订）、`example_plugin`（订阅点频道）、`agentxx_chatbot`（`ChatbotNet` 新增
+  `unsubscribeEvents`，qq 网关改用它）、`chatbot_net.cpp` 本来就走便捷入口。
+- 测试：`test_plugin_broadcast`（重写 6 个便捷入口 + 断言改看原因文本）、
+  `test_plugin_runtime`（订阅/退订改阻塞形态）、`test_plugins`（publish 用例改便捷入口）、
+  `test_client_plugins`（3 处退订）、`dso_plugins/test_start_fail`（7 处：进度上报不关心结果，
+  订阅用 `RegProbe` 看状态位）、`dso_plugins/test_client_start_fail`（1 处）。
+- 文档：`plugins.md` §8.2 抬版 + §20.1 / §20.3 成员签名与句柄约定、§8.0 当前进度；
+  顺带把 §8.2 后注里过期的"现在是 v6"改成 v7（前几步抬代次时漏了）。
+
+**测试断言的写法跟着变了**：异步契约没有细分返回码，`read` 的 `no_value` /
+`not_declared`、`publish`/`read` 的 `ended` 现在是完成回调 `payload` 里的文本。
+`test_plugin_broadcast` 因此引入 `pluginxx::detail::TableOpResult` + `gLastBroadcastReason`
+（失败原因），断言从"返回码等于 `PLUGINXX_RESULT_ERR_*`"改成"失败且原因含 `ended` 等"。
+
+验证：
+
+- 框架库 / 内层 lib / test 全部编译通过；25 个插件重编（其中 `agentxx_javascript_engine`
+  首轮编译失败于 client 侧 `on_end` 与 `onEnd` 变量名不一致，改正后单编通过；
+  `example_event` 是在插件批量构建开始后改的，单独重编了一次）；
+- 插件相关 16 个模块：`boundaries` 19、`plugins` 704、`plugin_runtime` 730、
+  `plugin_sdk` 134、`plugin_bridge` 193、`plugin_cleanup` 90、`plugin_host_mount` 147、
+  `plugin_multi_mount` 47、`plugin_resources` 101、`plugin_agent_runtime` 221、
+  `plugin_example_runtime` 50、`client_plugins` 840、`plugin_feature` 34、
+  `plugin_point` 68、`plugin_broadcast` 96、`plugin_dispatch` 112、`chatbot_task` 138
+  → **3628 通过、0 失败**；
+- **全量回归**（`agentxx_test --log-level warn`，15 分钟）：
+  `Total: passed=43038 failed=1` —— 唯一失败仍是 `ui_snapshot` 的 `diff_json` 基线
+  （用户上次改 diff 渲染未重生成快照，与本任务无关；上次回归是 43025/1，本次净增 13 条断言
+  且没新增失败）。
+
+遇到的问题（已解决）：
+
+- 旧插件 DLL 调新 vtable 是**运行期崩溃**（不是加载被拒）：第一次跑 `plugin_broadcast` 直接
+  ASan access-violation，原因是 `exec/plugins` 里还是改表之前的 DLL（`publish_broadcast`
+  的实参个数变了）。抬表版本或改 `plugin_kit.h` 后必须重编全部插件再跑测试。
+- `pluginxxSubscriptionFromText` 最初写在 `host/broadcast_registry.h`（host 头），
+  但插件侧也要用：建单独的 `api/broadcast_handle.h`（C++ 头，与 `api/iface_meta.h` 同类），
+  两侧都包含它。
+
 ## 与计划的偏差
 
 - 计划 §7.3 写"全局版本 5 → 6"：实际第 6 代已被占用，改为 6 → 7。
@@ -482,9 +559,8 @@ clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清�
 
 ## 剩余事项
 
-- 阶段 C2 还剩框架表 `broadcasts`（含 `subscribe` 的句柄如何经 `payload` 交回）、
-  `capabilities` 登记、`net.call` 合并 `call_async`；阶段 D（`agentxx.client.*` 六张 +
-  三个回答型回调）待做。
+- 阶段 C2 还剩框架表 `capabilities` 登记（`register/unregister/capability_info/list_capabilities`）
+  与 `net.call` 合并 `call_async`；阶段 D（`agentxx.client.*` 六张 + 三个回答型回调）待做。
 - 阶段 E 还剩：删残留同步实现路径、client 侧 150 ms 同步桥改 Promise、
   `AGENTS.md` 的调用模型说明。
 - `KeyMetrics` 的表调用耗时统计（计划 §10）尚未加。

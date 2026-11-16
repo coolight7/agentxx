@@ -165,9 +165,9 @@ void QqGateway::stop() {
     }
     // 先退订: 之后不会再有网络事件进到本对象 (已经在路上的由 stopped_ 挡掉)
     if (netSub_ != nullptr) {
-        if (net_ != nullptr && net_->broadcasts != nullptr
-            && net_->broadcasts->unsubscribe_broadcast != nullptr) {
-            net_->broadcasts->unsubscribe_broadcast(netSub_);
+        if (net_ != nullptr) {
+            // 阻塞形态退订 (插件 io 线程不是主程序 io 线程)
+            net_->unsubscribeEvents(netSub_);
         }
         netSub_ = nullptr;
     }

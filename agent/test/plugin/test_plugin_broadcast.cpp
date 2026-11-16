@@ -143,10 +143,44 @@ const PluginxxBroadcastsIface* broadcastTableOf(PluginInstance* inst) {
     );
 }
 
+/// 一次广播表调用 (阻塞形态)
+///
+/// 表成员是异步操作契约: 用例跑在主程序 IO 线程上, 主程序内联完成, 不产生等待。
+/// 失败细节在结果正文里 (例如 `read_broadcast: no_value`), 因此下面的便捷入口把它
+/// 记进 [gLastBroadcastReason], 供断言检查具体原因。
+template<typename Fn>
+pluginxx::detail::TableOpResult broadcastOp(PluginInstance* inst, Fn&& start) {
+    const auto* host   = inst->hostView();
+    const auto  ifaces = agentxx::plugin::AgentIfaces::query(host);
+    return pluginxx::tableOpBlockingRaw(
+        host,
+        ifaces.cancel,
+        ifaces.scheduler,
+        std::forward<Fn>(start)
+    );
+}
+
+/// 最近一次广播表调用的失败原因 (空 = 成功)
+std::string gLastBroadcastReason;
+
+/// 结果记进 [gLastBroadcastReason], 成功给 0、失败给 -1 (表成员不再有细分返回码)
+int32_t broadcastCodeOf(pluginxx::detail::TableOpResult result) {
+    if (result.ok()) {
+        gLastBroadcastReason.clear();
+        return 0;
+    }
+    gLastBroadcastReason.assign(result.text());
+    if (gLastBroadcastReason.empty()) {
+        gLastBroadcastReason = result.startError;
+    }
+    return -1;
+}
+
 /// 表调用: 声明一个频道
 int32_t declareOf(PluginInstance* inst, std::string_view id, std::string_view extra = {}) {
     auto* table = broadcastTableOf(inst);
     if (nullptr == table || table->declare_broadcast == nullptr) {
+        gLastBroadcastReason = "declare_broadcast unavailable";
         return -1;
     }
     std::string decl = R"({"id":")" + std::string{id} + R"(","cache":"latest","publish":"owner")";
@@ -155,75 +189,147 @@ int32_t declareOf(PluginInstance* inst, std::string_view id, std::string_view ex
         decl += std::string{extra};
     }
     decl += "}";
-    auto           declSv = agentxx::plugin::PluginStringView::from(decl.data(), decl.size());
-    PluginxxString err{nullptr, 0};
-    const int32_t  rc = table->declare_broadcast(inst->hostView(), &declSv, &err);
-    if (nullptr != err.data) {
-        agentxx::plugin::PluginString::free(inst->hostView(), &err);
-    }
-    return rc;
+    auto declSv = agentxx::plugin::PluginStringView::from(decl.data(), decl.size());
+    return broadcastCodeOf(
+        broadcastOp(inst, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return table->declare_broadcast(inst->hostView(), &declSv, cb, ud, err);
+        })
+    );
 }
 
 /// 表调用: 发布
 int32_t publishOf(PluginInstance* inst, std::string_view id, std::string_view payload) {
     auto* table = broadcastTableOf(inst);
     if (nullptr == table || table->publish_broadcast == nullptr) {
+        gLastBroadcastReason = "publish_broadcast unavailable";
         return -1;
     }
     auto idSv      = agentxx::plugin::PluginStringView::from(id.data(), id.size());
     auto payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-    PluginxxString err{nullptr, 0};
-    const int32_t  rc = table->publish_broadcast(inst->hostView(), &idSv, &payloadSv, &err);
-    if (nullptr != err.data) {
-        agentxx::plugin::PluginString::free(inst->hostView(), &err);
-    }
-    return rc;
+    return broadcastCodeOf(
+        broadcastOp(inst, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return table->publish_broadcast(inst->hostView(), &idSv, &payloadSv, cb, ud, err);
+        })
+    );
 }
 
-/// 表调用: 读当前值 (返回正文; `codeOut` 给出返回码)
+/// 表调用: 读当前值 (返回正文; `codeOut` 0 = 成功 / -1 = 失败)
 std::string readOf(PluginInstance* inst, std::string_view id, int32_t* codeOut = nullptr) {
     auto* table = broadcastTableOf(inst);
     if (nullptr == table || table->read_broadcast == nullptr) {
+        gLastBroadcastReason = "read_broadcast unavailable";
         if (codeOut != nullptr) {
             *codeOut = -1;
         }
         return {};
     }
-    auto           idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-    PluginxxString out{nullptr, 0};
-    const int32_t  rc = table->read_broadcast(inst->hostView(), &idSv, &out);
+    auto   idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+    auto   op   = broadcastOp(
+        inst,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return table->read_broadcast(inst->hostView(), &idSv, cb, ud, err);
+        }
+    );
+    const int32_t code = broadcastCodeOf(op);
     if (codeOut != nullptr) {
-        *codeOut = rc;
+        *codeOut = code;
     }
-    std::string text;
-    if (nullptr != out.data) {
-        text.assign(out.data, static_cast<size_t>(out.size));
-        agentxx::plugin::PluginString::free(inst->hostView(), &out);
-    }
-    return text;
+    return op.ok() ? std::string{op.text()} : std::string{};
 }
 
 /// 表调用: 结束一条流
 int32_t endOf(
-    PluginInstance*   inst,
-    std::string_view  id,
-    std::string_view  reasonJson = R"({"reason":"test"})"
+    PluginInstance*  inst,
+    std::string_view id,
+    std::string_view reasonJson = R"({"reason":"test"})"
 ) {
     auto* table = broadcastTableOf(inst);
     if (nullptr == table || table->end_broadcast == nullptr) {
+        gLastBroadcastReason = "end_broadcast unavailable";
         return -1;
     }
-    auto           idSv     = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-    auto           reasonSv = agentxx::plugin::PluginStringView::from(
+    auto idSv     = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+    auto reasonSv = agentxx::plugin::PluginStringView::from(
         reasonJson.data(),
         reasonJson.size()
     );
-    PluginxxString err{nullptr, 0};
-    const int32_t  rc = table->end_broadcast(inst->hostView(), &idSv, &reasonSv, &err);
-    if (nullptr != err.data) {
-        agentxx::plugin::PluginString::free(inst->hostView(), &err);
+    return broadcastCodeOf(
+        broadcastOp(inst, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return table->end_broadcast(inst->hostView(), &idSv, &reasonSv, cb, ud, err);
+        })
+    );
+}
+
+/// 表调用: 订阅 (返回句柄; 失败给 nullptr, 原因记进 [gLastBroadcastReason])
+///
+/// `onEnd` 非空且主程序支持时走 `subscribe_broadcast_ex` (频道被结束时回调一次)。
+PluginxxSubscription* subscribeOf(
+    PluginInstance*           inst,
+    const PluginxxScopeRef*   scope,
+    const PluginxxStringView* id,
+    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
+    void*                     ud,
+    void(PLUGINXX_CALL* onEnd)(const PluginxxStringView*, void*) = nullptr
+) {
+    auto* table = broadcastTableOf(inst);
+    if (nullptr == table || table->subscribe_broadcast == nullptr) {
+        gLastBroadcastReason = "subscribe_broadcast unavailable";
+        return nullptr;
     }
-    return rc;
+    const bool wantEnd = onEnd != nullptr && table->subscribe_broadcast_ex != nullptr;
+    auto       op      = broadcastOp(
+        inst,
+        [&](PluginxxOperatorCallback cb, void* opUd, PluginxxString* err) {
+            if (wantEnd) {
+                return table->subscribe_broadcast_ex(
+                    inst->hostView(),
+                    scope,
+                    id,
+                    handler,
+                    onEnd,
+                    ud,
+                    nullptr,
+                    cb,
+                    opUd,
+                    err
+                );
+            }
+            return table->subscribe_broadcast(
+                inst->hostView(),
+                scope,
+                id,
+                handler,
+                ud,
+                nullptr,
+                cb,
+                opUd,
+                err
+            );
+        }
+    );
+    (void)broadcastCodeOf(op);
+    // 订阅句柄以十进制文本放在结果正文里交回
+    return op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
+}
+
+/// 表调用: 退订 (幂等)
+bool unsubscribeOf(PluginInstance* inst, PluginxxSubscription* sub) {
+    auto* table = broadcastTableOf(inst);
+    if (nullptr == table || table->unsubscribe_broadcast == nullptr || nullptr == sub) {
+        return false;
+    }
+    return broadcastCodeOf(
+               broadcastOp(inst, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                   return table->unsubscribe_broadcast(
+                       inst->hostView(),
+                       sub,
+                       cb,
+                       ud,
+                       err
+                   );
+               })
+           )
+           == 0;
 }
 
 /// 订阅回调计数 (测试自己持有, 用 `ud` 指回来)
@@ -428,15 +534,7 @@ asio::awaitable<void> test_subscribe_and_read() {
 
     // A. 普通订阅: 只收后续发布
     SubCounter plain;
-    auto* sub = table->subscribe_broadcast(
-        inst.get()->hostView(),
-        &ref,
-        &id,
-        &countValue,
-        &plain,
-        nullptr,
-        nullptr
-    );
+    auto* sub = subscribeOf(inst.get(), &ref, &id, &countValue, &plain);
     XX_TEST_EXPECT_TRUE(sub != nullptr);
     XX_TEST_EXPECT_EQ(plain.values, 0); ///< 没有 pushOnSubscribe, 订阅时不补当前值
     XX_TEST_EXPECT_EQ(
@@ -448,7 +546,7 @@ asio::awaitable<void> test_subscribe_and_read() {
 
     // 退订之后不再收到
     if (sub != nullptr) {
-        table->unsubscribe_broadcast(sub);
+        XX_TEST_EXPECT_TRUE(unsubscribeOf(inst.get(), sub));
     }
     XX_TEST_EXPECT_EQ(
         publishOf(inst.get(), "plugin.example_event.build", R"({"step":4})"),
@@ -464,20 +562,12 @@ asio::awaitable<void> test_subscribe_and_read() {
     XX_TEST_EXPECT_EQ(publishOf(inst.get(), "plugin.example_event.pushy", R"({"v":1})"), int32_t{0});
     SubCounter pushy;
     auto       pushyId = agentxx::plugin::PluginStringView::fromCstr("plugin.example_event.pushy");
-    auto*      pushySub = table->subscribe_broadcast(
-        inst.get()->hostView(),
-        &ref,
-        &pushyId,
-        &countValue,
-        &pushy,
-        nullptr,
-        nullptr
-    );
+    auto*      pushySub = subscribeOf(inst.get(), &ref, &pushyId, &countValue, &pushy);
     XX_TEST_EXPECT_TRUE(pushySub != nullptr);
     XX_TEST_EXPECT_EQ(pushy.values, 1); ///< 订阅前的那份当前值补了一次
     XX_TEST_EXPECT_TRUE(contains(pushy.lastPayload, "\"v\":1"));
     if (pushySub != nullptr) {
-        table->unsubscribe_broadcast(pushySub);
+        XX_TEST_EXPECT_TRUE(unsubscribeOf(inst.get(), pushySub));
     }
 
     // C. 读当前值: 有缓存 / 无缓存 / 未声明
@@ -493,11 +583,13 @@ asio::awaitable<void> test_subscribe_and_read() {
             int32_t{PLUGINXX_RESULT_OK}
         );
         (void)readOf(inst.get(), "plugin.example_event.nocache", &code);
-        XX_TEST_EXPECT_EQ(code, int32_t{PLUGINXX_RESULT_ERR_NO_VALUE});
+        XX_TEST_EXPECT_TRUE(code != int32_t{PLUGINXX_RESULT_OK});
+        XX_TEST_EXPECT_TRUE(contains(gLastBroadcastReason, "no_value"));
 
         // 未声明: 没有这个频道
         (void)readOf(inst.get(), "plugin.example_event.missing", &code);
-        XX_TEST_EXPECT_EQ(code, int32_t{PLUGINXX_RESULT_ERR_NOT_DECLARED});
+        XX_TEST_EXPECT_TRUE(code != int32_t{PLUGINXX_RESULT_OK});
+        XX_TEST_EXPECT_TRUE(contains(gLastBroadcastReason, "not_declared"));
     }
 
     co_await unloadExampleEvent(f);
@@ -526,16 +618,7 @@ asio::awaitable<void> test_end_stream() {
 
     // 带结束回调的订阅
     SubCounter watch;
-    auto*      sub = table->subscribe_broadcast_ex(
-        inst.get()->hostView(),
-        &ref,
-        &id,
-        &countValue,
-        &countEnd,
-        &watch,
-        nullptr,
-        nullptr
-    );
+    auto*      sub = subscribeOf(inst.get(), &ref, &id, &countValue, &watch, &countEnd);
     XX_TEST_EXPECT_TRUE(sub != nullptr);
 
     XX_TEST_EXPECT_EQ(
@@ -552,15 +635,17 @@ asio::awaitable<void> test_end_stream() {
     XX_TEST_EXPECT_TRUE(registry->isEnded("plugin.example_event.build"));
     XX_TEST_EXPECT_EQ(watch.ends, 1);
 
-    // 结束后: 发布与读都被拒
-    XX_TEST_EXPECT_EQ(
-        publishOf(inst.get(), "plugin.example_event.build", R"({"step":10})"),
-        int32_t{PLUGINXX_RESULT_ERR_ENDED}
-    );
+    // 结束后: 发布与读都被拒 (失败原因经结果正文交回)
+    {
+        const auto rc = publishOf(inst.get(), "plugin.example_event.build", R"({"step":10})");
+        XX_TEST_EXPECT_TRUE(rc != int32_t{PLUGINXX_RESULT_OK});
+        XX_TEST_EXPECT_TRUE(contains(gLastBroadcastReason, "ended"));
+    }
     {
         int32_t code = 0;
         (void)readOf(inst.get(), "plugin.example_event.build", &code);
-        XX_TEST_EXPECT_EQ(code, int32_t{PLUGINXX_RESULT_ERR_ENDED});
+        XX_TEST_EXPECT_TRUE(code != int32_t{PLUGINXX_RESULT_OK});
+        XX_TEST_EXPECT_TRUE(contains(gLastBroadcastReason, "ended"));
     }
     // 重复结束: 幂等成功, 不再回调 on_end
     XX_TEST_EXPECT_EQ(

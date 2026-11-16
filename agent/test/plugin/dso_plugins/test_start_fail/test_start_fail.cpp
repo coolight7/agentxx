@@ -72,7 +72,8 @@ void report(const PluginxxHost* host, const char* step, bool ok) {
     const auto decl = sv(R"({"id":"plugin.test_start_fail_plugin.probe","cache":"latest"})");
     if (broadcasts->declare_broadcast) {
         PluginxxString declErr{nullptr, 0};
-        broadcasts->declare_broadcast(host, &decl, &declErr);
+        // 表成员是异步契约: 不关心结果, 只受理 (本插件在 start 里跑, 主程序内联完成)
+        broadcasts->declare_broadcast(host, &decl, nullptr, nullptr, &declErr);
         if (declErr.data) {
             host->vtable->free(declErr.data);
         }
@@ -90,7 +91,7 @@ void report(const PluginxxHost* host, const char* step, bool ok) {
     payload.data = buffer;
     payload.size = static_cast<uint64_t>(length > 0 ? length : 0);
     PluginxxString pubErr{nullptr, 0};
-    broadcasts->publish_broadcast(host, &topic, &payload, &pubErr);
+    broadcasts->publish_broadcast(host, &topic, &payload, nullptr, nullptr, &pubErr);
     if (pubErr.data) {
         host->vtable->free(pubErr.data);
     }
@@ -255,20 +256,29 @@ static void* probeMount(
     if (broadcasts->declare_broadcast) {
         const auto     watchDecl = sv(R"({"id":"plugin.test_start_fail_plugin.watch","cache":"none"})");
         PluginxxString declErr{nullptr, 0};
-        broadcasts->declare_broadcast(host, &watchDecl, &declErr);
+        broadcasts->declare_broadcast(host, &watchDecl, nullptr, nullptr, &declErr);
         if (declErr.data) {
             host->vtable->free(declErr.data);
         }
     }
-    if (!broadcasts->subscribe_broadcast(
-            host,
-            &ref,
-            &watchTopic,
-            &onProbeEvent,
-            ctx,
-            nullptr,
-            nullptr
-        )) {
+    // 表成员是异步契约: 本插件在 `start` 里跑 (主程序 IO 线程), 会内联完成
+    RegProbe subReg{};
+    PluginxxString subErr{nullptr, 0};
+    auto* subOp = broadcasts->subscribe_broadcast(
+        host,
+        &ref,
+        &watchTopic,
+        &onProbeEvent,
+        ctx,
+        nullptr,
+        &regToolDone,
+        &subReg,
+        &subErr
+    );
+    if (subErr.data) {
+        host->vtable->free(subErr.data);
+    }
+    if (subOp == nullptr || !subReg.done || subReg.status != PLUGINXX_OPERATOR_OK) {
         setError(host, error_out, failStep(host, "subscribe"));
         return nullptr;
     }
@@ -293,15 +303,23 @@ static void* probeMount(
 
     // 5. 订阅通知型功能埋点 (频道由主程序声明, 这里只订阅; 回滚时随实例整批撤销)
     const auto pointTopic = sv("agentxx.agent.point.model.start");
-    if (!broadcasts->subscribe_broadcast(
-            host,
-            &ref,
-            &pointTopic,
-            &onProbeEvent,
-            ctx,
-            nullptr,
-            nullptr
-        )) {
+    RegProbe pointReg{};
+    PluginxxString pointErr{nullptr, 0};
+    auto* pointOp = broadcasts->subscribe_broadcast(
+        host,
+        &ref,
+        &pointTopic,
+        &onProbeEvent,
+        ctx,
+        nullptr,
+        &regToolDone,
+        &pointReg,
+        &pointErr
+    );
+    if (pointErr.data) {
+        host->vtable->free(pointErr.data);
+    }
+    if (pointOp == nullptr || !pointReg.done || pointReg.status != PLUGINXX_OPERATOR_OK) {
         setError(host, error_out, failStep(host, "point_subscribe"));
         return nullptr;
     }

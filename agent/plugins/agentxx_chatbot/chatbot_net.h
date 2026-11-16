@@ -105,8 +105,11 @@ struct ChatbotNet {
     /// 订阅本插件的网络事件 (先声明频道再订阅; 返回退订句柄, 空 = 失败)
     ///
     /// - `handler` 在主程序 io 线程被调用, 里面只应做"拷贝 + post 回插件 io 线程";
-    /// - 用 `broadcasts->unsubscribe_broadcast(handle)` 退订。
+    /// - 退订用 [unsubscribeEvents] (主程序在实例卸载时也会一并回收)。
     PluginxxSubscription* subscribeEvents(ChatbotNetEventHandler handler, void* ud) const;
+
+    /// 退订 [subscribeEvents] 拿到的句柄 (幂等; 空句柄什么也不做)
+    bool unsubscribeEvents(PluginxxSubscription* sub) const;
 };
 
 } // namespace chatbot

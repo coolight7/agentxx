@@ -157,14 +157,16 @@ static int eventAgentSetup(EventCtx& ctx, EventMountState& state) {
 
     // 3. 读当前值: 有当前值的频道可以直接读, 不必等下一次发布
     if (bc->read_broadcast != nullptr) {
-        PluginxxString out{nullptr, 0};
         auto           idSv = PluginStringView::fromCstr("plugin.example_event.build");
-        if (bc->read_broadcast(ctx.host, &idSv, &out) == PLUGINXX_RESULT_OK
-            && out.data != nullptr) {
+        const auto     op   = tableOpBlocking(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return bc->read_broadcast(ctx.host, &idSv, cb, ud, err);
+            },
+            0
+        );
+        if (op.ok()) {
             ctx.log.info("example_event: current value of the build channel read back");
-            PluginString::free(ctx.host, &out);
-        } else if (out.data != nullptr) {
-            PluginString::free(ctx.host, &out);
         }
     }
 
@@ -173,16 +175,26 @@ static int eventAgentSetup(EventCtx& ctx, EventMountState& state) {
     const auto ref = state.ref.raw();
     if (bc->subscribe_broadcast_ex != nullptr) {
         auto       buildId = PluginStringView::fromCstr("plugin.example_event.build");
-        state.buildSub     = bc->subscribe_broadcast_ex(
-            ctx.host,
-            &ref,
-            &buildId,
-            &onBuildValue,
-            &onBuildEnd,
-            &state,
-            nullptr,
-            nullptr
+        const auto op      = tableOpBlocking(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return bc->subscribe_broadcast_ex(
+                    ctx.host,
+                    &ref,
+                    &buildId,
+                    &onBuildValue,
+                    &onBuildEnd,
+                    &state,
+                    nullptr,
+                    cb,
+                    ud,
+                    err
+                );
+            },
+            0
         );
+        // 订阅句柄以十进制文本放在结果正文里交回
+        state.buildSub = op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
         if (nullptr == state.buildSub) {
             ctx.log.info("example_event: subscribe the build channel rejected");
             return -1;
@@ -193,15 +205,24 @@ static int eventAgentSetup(EventCtx& ctx, EventMountState& state) {
             broadcasts::AgentRoundStart.data(),
             broadcasts::AgentRoundStart.size()
         );
-        state.roundSub = bc->subscribe_broadcast(
-            ctx.host,
-            &ref,
-            &roundId,
-            &onRoundStart,
-            &state,
-            nullptr,
-            nullptr
+        const auto op = tableOpBlocking(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return bc->subscribe_broadcast(
+                    ctx.host,
+                    &ref,
+                    &roundId,
+                    &onRoundStart,
+                    &state,
+                    nullptr,
+                    cb,
+                    ud,
+                    err
+                );
+            },
+            0
         );
+        state.roundSub = op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
         // 轮次通知订阅不到不算失败: 主程序可能还没声明这个频道
         if (nullptr == state.roundSub) {
             ctx.log.info("example_event: round.start channel not available, skipped");

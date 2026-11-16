@@ -2225,17 +2225,54 @@ TestResult testPluginRuntime() {
             }
             f.io.restart();
         };
-        auto* sub = ifaces.broadcasts->subscribe_broadcast(
-            host,
-            nullptr, ///< 主程序总线 (与 agent 无关的进程级事件)
-            &topicSv,
-            +[](const PluginxxStringView*, void* ud) {
-                ++*static_cast<int*>(ud);
-            },
-            &handlerCalls,
-            nullptr,
-            nullptr
-        );
+        // 表成员是异步操作契约: 用例在主程序 IO 线程上, 主程序内联完成, 不产生等待
+        auto broadcastOp = [&](auto&& start) {
+            return pluginxx::tableOpBlockingRaw(
+                host,
+                ifaces.cancel,
+                ifaces.scheduler,
+                std::forward<decltype(start)>(start)
+            );
+        };
+        auto unsubscribeOf = [&](PluginxxSubscription* target) {
+            if (target == nullptr) {
+                return false;
+            }
+            return broadcastOp(
+                       [&](PluginxxOperatorCallback cb, void* cbUd, PluginxxString* err) {
+                           return ifaces.broadcasts->unsubscribe_broadcast(
+                               host,
+                               target,
+                               cb,
+                               cbUd,
+                               err
+                           );
+                       }
+                   )
+                .ok();
+        };
+        auto subscribeOf = [&](const PluginxxStringView* topic) {
+            auto op = broadcastOp(
+                [&](PluginxxOperatorCallback cb, void* cbUd, PluginxxString* err) {
+                    return ifaces.broadcasts->subscribe_broadcast(
+                        host,
+                        nullptr, ///< 主程序总线 (与 agent 无关的进程级事件)
+                        topic,
+                        +[](const PluginxxStringView*, void* ud2) {
+                            ++*static_cast<int*>(ud2);
+                        },
+                        &handlerCalls,
+                        nullptr,
+                        cb,
+                        cbUd,
+                        err
+                    );
+                }
+            );
+            // 订阅句柄以十进制文本放在结果正文里交回
+            return op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
+        };
+        auto* sub = subscribeOf(&topicSv);
         XX_TEST_EXPECT_TRUE(sub != nullptr);
         XX_TEST_EXPECT_TRUE(sub && sub->alive.load());
 
@@ -2244,25 +2281,15 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(handlerCalls, 1);
 
         // 重复退订: 第二次必须是空操作 (alive 先失效再移除主程序引用)。
-        ifaces.broadcasts->unsubscribe_broadcast(sub);
-        ifaces.broadcasts->unsubscribe_broadcast(sub);
+        XX_TEST_EXPECT_TRUE(unsubscribeOf(sub));
+        XX_TEST_EXPECT_TRUE(unsubscribeOf(sub));
         XX_TEST_EXPECT_FALSE(sub->alive.load());
         f.manager->publishBroadcastValue("plugin.provider.topic", "{}");
         flushEvents();
         XX_TEST_EXPECT_EQ(handlerCalls, 1); ///< 退订后不再回调
 
         // 卸载实例 (detachAll 统一退订) 后, 对插件保存的旧句柄再次退订必须安全。
-        auto* late = ifaces.broadcasts->subscribe_broadcast(
-            host,
-            nullptr, ///< 主程序总线
-            &topicSv,
-            +[](const PluginxxStringView*, void* ud) {
-                ++*static_cast<int*>(ud);
-            },
-            &handlerCalls,
-            nullptr,
-            nullptr
-        );
+        auto* late = subscribeOf(&topicSv);
         XX_TEST_EXPECT_TRUE(late != nullptr);
         bool unloaded = false;
         {
@@ -2275,8 +2302,9 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(unloaded);
         if (late) {
             XX_TEST_EXPECT_FALSE(late->alive.load()); ///< detachAll 已失效句柄
-            ifaces.broadcasts->unsubscribe_broadcast(late); ///< 迟到调用必须安全空操作
-            ifaces.broadcasts->unsubscribe_broadcast(late);
+            // 实例已卸载: 入口按“不可用”拒绍, 退订本身由卸载流程完成 (不得崩溃)
+            (void)unsubscribeOf(late);
+            (void)unsubscribeOf(late);
         }
         // 主题只要求落在 plugin.*: 实例卸载后写同一主题仍允许
         // (同组织多插件可共用一个段, 主程序不把主题绑定到具体实例)

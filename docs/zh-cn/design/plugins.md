@@ -44,7 +44,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   - C++ 辅助便捷层：`PluginxxStringView` 与 `PluginxxString` 内置 `operator const T*()` 隐式取址转换与 `empty()` 方法，文件尾部提供值传兼容重载与 `pluginxx_string_free` 重载
 - **接口表独立演进**：每张表首字段 `int32_t version` 独立版本号；表内函数指针可能为 `NULL` (主程序未实现该子能力，调用前判空)
 - **版本限制**：全局 `PLUGINXX_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均为 5（v5 = 插件框架 ABI 迁到 `cxx_pluginxx` 0.3.0：通知/事件表收进广播与能力表，见 §17），加载时要求 `>=` 主程序版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
-- **v5 契约的实施方式（不改库）**: `cxx_pluginxx` 的 `abi.h` 里 `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认**恒为 1**（该库被多个主程序共用，默认值不跟随任一主程序的契约）；agentxx 在 `agent/CMakeLists.txt` 用选项 `AGENTXX_PLUGIN_API_VERSION`（当前 5）向全局 `CMAKE_C_FLAGS/CMAKE_CXX_FLAGS` **宏覆盖**，并同时传给 `cxx_pluginxx` 的嵌套构建（它的 PUBLIC `INTERFACE_COMPILE_DEFINITIONS` 也跟着变成 5），嵌套构建（插件 / 测试 / 客户端）继承同一份 FLAGS，因此框架、使用方与插件看到的值一致；插件不链接框架库也能拿到（只用头文件）。覆盖时**先剔除旧值再追加**，否则缓存里的上一代 `-DPLUGINXX_API_VERSION=3` 会一直留着，插件与主程序编译到不同代次；改完需要让嵌套工程重新配置
+- **v5 契约的实施方式（不改库）**: `cxx_pluginxx` 的 `abi.h` 里 `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认**恒为 1**（该库被多个主程序共用，默认值不跟随任一主程序的契约）；agentxx 在 `agent/CMakeLists.txt` 用选项 `AGENTXX_PLUGIN_API_VERSION`（当前 7）向全局 `CMAKE_C_FLAGS/CMAKE_CXX_FLAGS` **宏覆盖**，并同时传给 `cxx_pluginxx` 的嵌套构建（它的 PUBLIC `INTERFACE_COMPILE_DEFINITIONS` 也跟着变成 5），嵌套构建（插件 / 测试 / 客户端）继承同一份 FLAGS，因此框架、使用方与插件看到的值一致；插件不链接框架库也能拿到（只用头文件）。覆盖时**先剔除旧值再追加**，否则缓存里的上一代 `-DPLUGINXX_API_VERSION=3` 会一直留着，插件与主程序编译到不同代次；改完需要让嵌套工程重新配置
 - **加载与挂载分离**：`AgentHost` 持有插件管理器（进程一份，一次 `create`/`start`），每个 agent 在 `init` 的 `plugin_mount` 步骤 `mountAgentAsync` 挂载；加载表见 yaml `plugin.list`，本会话挂哪些由 `plugin.mount` 决定 (`policy: all|none|listed` + `list` + 每插件 `args`)，子代理与插件自己创建的根默认 `none`
 - **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由主程序内部投递同步等待；操作 `start/cancel` 由主程序在 IO 线程驱动 (单次 <~1ms)；`PluginxxOperatorNotify.done` 可任意线程回调；主程序派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
 - **实例生命周期、Operation 终态与租约**：见第 15 节（实例生命周期契约，所有插件必须遵守）
@@ -129,7 +129,7 @@ auto b64 = utilxx_base::base64Encode(data);
 
 | 路径 | 命名空间 | 内容 |
 |---|---|---|
-| `pluginxx/api/` | 纯 C (`Agentxx*`) | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/主程序 vtable/入口符号)、`tables.h` (通用接口表: broadcasts/capabilities/scheduler/tasks/cancel/plugins/config/json/log) |
+| `pluginxx/api/` | 纯 C (`Agentxx*`); 两个 C++ 头例外 | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/主程序 vtable/入口符号)、`tables.h` (通用接口表: broadcasts/capabilities/scheduler/tasks/cancel/plugins/config/json/log)、`broadcast_handle.h` (C++: 订阅句柄 ⇄ 完成回调 `payload` 的十进制文本, 主程序与插件共用)、`iface_meta.h` (C++: 各表 `IfaceMeta` 特化) |
 | `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK (header-only): `kit.h` (通用部分: 跨边界字符串工具 `PluginStringView`/`PluginString`、通用接口表聚合 `PluginIfaceCore`、实例级 `Logger`、`Task<T>` 锚定协程与锚定原语 `sleep`/`yield`/`offload`/`invoke_cap`、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏)、`guard.h` (C ABI 边界异常守卫 `guardCall`/`guardCallVoid`/`logTo`) |
 | `pluginxx/runtime/` | `pluginxx` | 主程序侧运行时: `runtime.h` (实例状态机/执行 lease/投递通道)、`driver.h` (协程驱动 ticket)、`instance_base.h` (实例基类 + 主程序控制块 + C ABI 内存 + 通用表相关登记: 事件订阅/睡眠句柄/能力声明)、`manager_base.h` (管理器基类 + vtable 入口上下文)、`op_driver.h` (统一 Operation 驱动器) |
 | `pluginxx/host/` | `pluginxx` | 主程序侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常保护/io 线程同步投递)、`capability_registry.h` + `capability_chain.h` (能力登记表与实现链: 实现行按 scope / 优先级排序后调用)、`broadcast_registry.h` (广播频道登记表: 声明 / 发布 / 订阅 / 当前值 / 结束)、`domain_services.h` (业务数据入口 `DomainServices`: 通用表需要主程序数据的入口)、`host_core.h` (主程序核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现 + 功能埋点原语 `declarePoint`/`emitPointAsync`)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`)、`lifecycle.h` (主程序生命周期骨架 `PluginHostLifecycle<InstanceT>`: 加载/启停/禁用启用/卸载/级联依赖) |
@@ -469,9 +469,9 @@ C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
 > 当前进度: 阶段 A 的骨架与 `agentxx.agent.session` (v4), 阶段 B 的
 > `agentxx.agent.tools` (v5) / `permission` (v3) / `context` (v3) / `model` (v3) /
 > `prompt` (v4) / `resources` (v3) / `graph` (v3) / `mount` (v2), 阶段 C 的
-> `agentxx.agent.runtime` (v3), 以及阶段 C2 的第一批通用表 `agentxx.config` (v4) /
-> `agentxx.plugins` (v2) 已切到这套契约; 其余通用表 (`broadcasts` / `capabilities` 登记 /
-> `net.call`) 与 `agentxx.client.*` 六张仍是一条条同步签名, 迁移按
+> `agentxx.agent.runtime` (v3), 以及阶段 C2 的通用表 `agentxx.config` (v4) /
+> `agentxx.plugins` (v2) / `agentxx.broadcasts` (v4) 已切到这套契约; 其余通用表
+> (`capabilities` 登记 / `net.call`) 与 `agentxx.client.*` 六张仍是一条条同步签名, 迁移按
 > `resource/history/plugin-api-async/plan.md` 的阶段推进。
 >
 > 作用域引用的两种失败要分开看: 引用的**形状**无效 (空指针 / `id` 为空 /
@@ -508,7 +508,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 
 | IID | 版本 | 能力 |
 |-----|------|------|
-| `agentxx.broadcasts` | 3 | 广播: `declare_broadcast` (声明频道: 缓存/发布权限/订阅补当前值/限频/scope) + `publish_broadcast` + `subscribe_broadcast(_ex)` (带流结束回调) + `read_broadcast` + `unsubscribe_broadcast` + `end_broadcast`。插件的通知面与跨端数据都走它, 见 §20。v3 = 加 `end_broadcast` 与 `subscribe_broadcast_ex` (订阅侧收 `on_end`) |
+| `agentxx.broadcasts` | 4 | 广播: `declare_broadcast` (声明频道: 缓存/发布权限/订阅补当前值/限频/scope) + `publish_broadcast` + `subscribe_broadcast(_ex)` (带流结束回调) + `read_broadcast` + `unsubscribe_broadcast` + `end_broadcast`。插件的通知面与跨端数据都走它, 见 §20。v3 = 加 `end_broadcast` 与 `subscribe_broadcast_ex` (订阅侧收 `on_end`); v4 = 7 个成员改成异步操作契约 (见 §8.0): **订阅句柄以十进制文本放在 `payload` 里交回** (插件侧用 `pluginxx::pluginxxSubscriptionFromText` 转回), `unsubscribe_broadcast` 多一个 `host` 参数 (原来只能从入参推), 基线重置为整表长度 |
 | `agentxx.capabilities` | 7 | `register_capability/unregister_capability/invoke_capability/capability_info/list_capabilities` (另有 `invoke_capability_ex` / `unregister_capability_ex`; v7 删掉 `op_cancel`, 取消统一走 `agentxx.cancel`)。能力行按 **scope** 隔离 (同一个插件挂在多个 agent 上时各一行), 一个能力可以由多家登记实现行, 取值链按 `(priority 升序, 登记序号)` 排序后取首行 —— **功能埋点的实现行就是能力行** (见 §21.4) |
 | `agentxx.scheduler` | 2 | 调度与驱动: `is_io_thread` / `sleep` / `offload` / `request_driver` / `cancel_driver` (driver ticket/wake 协议, 见 §16; 早期的 `post_to_io` 与 `op_cancel` 已删, 独立的 `coroutine_runtime` 表已并入) |
 | `agentxx.plugins` | 2 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上)。v2 = 三个成员改成异步操作契约 (清单经 `payload` 交回, `get_plugin` 找不到按 `not_found` 失败) |
@@ -525,10 +525,14 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 > `X_BASELINE_SIZE` (基线字节数); 需要按 agent 区分的业务表为 v2 起 (v1 只在本进程单 agent
 > 下成立, 已不再兼容), 其余表为 v1 (基线 = 完整表长)。
 >
-> **代次 (全局 API 版本) 与当前状态**: 现在是 **v6** (2026-11 工具结果两段上报) ——
-> `agentxx.agent.tools` 表抬到 4: 工具结果拆成"正文 (原样字节) + 元数据 JSON"两段,
-> 完成通知器换成 `AgentxxPluginToolNotify`, 插件互调回调换成 `AgentxxPluginToolCallback`
-> (见 §8.4)。client 侧表布局未变, 但两端需同一代头文件重编。
+> **代次 (全局 API 版本) 与当前状态**: 现在是 **v7** (2026-11 接口表异步操作契约) ——
+> 插件接口表不再有"同步拿结果"的成员: 受理即返回 `PluginxxOperatorHandle*`, 结果 (正文 /
+> 句柄 id / 失败原因) 经 `PluginxxOperatorCallback` 恰好一次交回, 返回 `NULL` = 未受理 +
+> `error_out` (见 §8.0)。插件侧不需要协程的场合用 `plugin_kit.h` 的三种形态之一
+> (`co_await tableOp` / `tableOpCallback` / `tableOpBlocking`)。两端需同一代头文件重编。
+> 更早的档位: v6 (2026-11 工具结果两段上报) —— `agentxx.agent.tools` 抬到 4: 工具结果拆成
+> "正文 (原样字节) + 元数据 JSON"两段, 完成通知器换成 `AgentxxPluginToolNotify`,
+> 插件互调回调换成 `AgentxxPluginToolCallback` (见 §8.4)。
 > 更早的档位: v5 (2026-11 迁到 `cxx_pluginxx` 0.3.0) 删旧通知表与事件表, 通知面统一成广播频道,
 > 功能埋点实现行统一成能力行, client 侧删 `events` / `json` / `log` 三张表;
 > v3 把通用表里的业务成员 (`get_tool_prompt` / `get_session_work_dir` /
@@ -2422,15 +2426,24 @@ v3 起这些码不再作为入口返回值出现: 入口只表达"受理 / 未�
 
 | 成员 | 语义 |
 |---|---|
-| `declare_broadcast(decl_json, err)` | 声明频道：`id`（短名 `build` 由主程序补成 `plugin.<本插件 id>.build`；写全名也可以）、`cache`（`latest` 有当前值 / `none`）、`publish`（`owner` 只有属主能发 / `anyone` 谁都能发）、`pushOnSubscribe`（订阅时先推当前值，要求 `cache: latest`）、`coalesce`、`scope`（`app` / `system`）。应用频道（`agentxx.*`）不能被插件改写；同一 id 重复声明幂等（**声明内容完全相同时不改状态、不打"replaced"日志** —— 插件侧每次发布前都会先声明，周期频道不该因此刷日志），第二段流从 `end` 之后重新开始 |
-| `publish_broadcast(id, payload_json, err)` | 发布：属主发 `owner` 频道、任何插件发 `anyone` 频道；未声明 / 已结束 / 没权限分别返回 `ERR_NOT_DECLARED` / `ERR_ENDED` / `ERR_PERMISSION` |
-| `subscribe_broadcast(scope, id, handler, ud, options_json, err)` | 订阅：`options_json` 形如 `{"intervalMs":200,"mode":"delay|drop"}`（每个订阅自己的通知间隔，互不影响）。返回句柄，用 `unsubscribe_broadcast(sub)` 撤销 |
+| `declare_broadcast(decl_json, cb, ud, err)` | 声明频道：`id`（短名 `build` 由主程序补成 `plugin.<本插件 id>.build`；写全名也可以）、`cache`（`latest` 有当前值 / `none`）、`publish`（`owner` 只有属主能发 / `anyone` 谁都能发）、`pushOnSubscribe`（订阅时先推当前值，要求 `cache: latest`）、`coalesce`、`scope`（`app` / `system`）。应用频道（`agentxx.*`）不能被插件改写；同一 id 重复声明幂等（**声明内容完全相同时不改状态、不打"replaced"日志** —— 插件侧每次发布前都会先声明，周期频道不该因此刷日志），第二段流从 `end` 之后重新开始 |
+| `publish_broadcast(id, payload_json, cb, ud, err)` | 发布：属主发 `owner` 频道、任何插件发 `anyone` 频道；未声明 / 已结束 / 没权限在完成回调里按 `not_declared` / `ended` / `not_owner` 失败（原因在 `payload` 文本里） |
+| `subscribe_broadcast(scope, id, handler, ud, options_json, cb, ud, err)` | 订阅：`options_json` 形如 `{"intervalMs":200,"mode":"delay|drop"}`（每个订阅自己的通知间隔，互不影响）。**完成回调的 `payload` 是订阅句柄的十进制文本**，用 `unsubscribe_broadcast(host, sub, cb, ud, err)` 撤销 |
 | `subscribe_broadcast_ex(..., on_end, ...)` | 同上，另收流结束回调（频道被 `end` 时回调一次，随后该订阅消失） |
-| `read_broadcast(id, out_json)` | 读当前值：`cache: none` 返回 `ERR_NO_VALUE`，未声明返回 `ERR_NOT_DECLARED`，已结束返回 `ERR_ENDED` |
-| `end_broadcast(id, reason_json, err)` | 结束一条流（属主或主程序）：之后发布与读都被拒，全部订阅收到 `on_end`；重复结束幂等；再次 `declare` 同一 id = 开新流 |
+| `read_broadcast(id, cb, ud, err)` | 读当前值（完成时 `payload` 是值 JSON）：`cache: none` 按 `no_value` 失败，未声明按 `not_declared`，已结束按 `ended` |
+| `end_broadcast(id, reason_json, cb, ud, err)` | 结束一条流（属主或主程序）：之后发布与读都被拒，全部订阅收到 `on_end`；重复结束幂等；再次 `declare` 同一 id = 开新流 |
 
-返回码判断一律用宏名（`PLUGINXX_RESULT_*`），不要写数字：码表只有一份，在
-`pluginxx/api/result.h` —— 通用段 `-1 ~ -99`（`ERR_ARG` / `ERR_STATE` / `ERR_JSON` /
+v4 起这 7 个成员都是**异步操作契约**（见 §8.0）：返回 `PluginxxOperatorHandle*` 非空 =
+已受理、业务结论经 `PluginxxOperatorCallback` 恰好一次交回；返回 `NULL` = 未受理
+（参数形状错 / 实例不可用，原因写 `error_out`）。因此**细分结论不再是返回值** ——
+`not_declared` / `no_value` / `ended` / `not_owner` 改在完成回调的 `payload` 文本里给出
+（`pluginxx::result::nameOf` 出的名字）。订阅句柄只能经 `payload` 交回，插件侧用
+`pluginxx::pluginxxSubscriptionFromText` 转回（主程序与插件共用
+`pluginxx/api/broadcast_handle.h` 里的同一份实现）。`unsubscribe_broadcast` 多一个
+`host` 参数（原来靠实例上下文推），并按"关闭中也允许"受理 —— 插件在 `stop` 里退订仍生效。
+
+跨进程/日志里出现的失败原因文本用 `pluginxx::result::nameOf` 的名字（`not_declared` 等），
+不要写数字。码表只有一份，在 `pluginxx/api/result.h` —— 通用段 `-1 ~ -99`（`ERR_ARG` / `ERR_STATE` / `ERR_JSON` /
 `ERR_NOT_FOUND` / `ERR_TIMEOUT` / `ERR_PERMISSION` / `ERR_BUSY` / `ERR_NO_MEMORY`）、
 广播段 `-200 ~ -299`（`not_declared` -200 / `no_value` -201 / `ended` -202 / `not_owner` -203）、
 内部错误 `ERR_INTERNAL` -999（2026-11 重编号；旧版广播段用的是 -2/-4/-5）。
@@ -2449,10 +2462,10 @@ v3 起这些码不再作为入口返回值出现: 入口只表达"受理 / 未�
 
 | 分组 | 函数 |
 |---|---|
-| 声明 / 发布 | `declarePluginBroadcast(host, bc, id, anyonePublish=false, cacheLatest=true)`；`publishPluginBroadcast(host, bc, id, payload, anyonePublish=false)`（未声明时先补声明） |
-| 订阅 | `subscribePluginBroadcast(host, bc, scope, id, handler, ud)`（带结束回调时直接用表成员 `subscribe_broadcast_ex`；撤销用 `bc->unsubscribe_broadcast(sub)`） |
-| 当前值 | 表成员 `read_broadcast` |
-| 结束 | 表成员 `end_broadcast` |
+| 声明 / 发布 | `declarePluginBroadcast(host, bc, id, anyonePublish=false, cacheLatest=true)`；`publishPluginBroadcast(host, bc, id, payload, anyonePublish=false)`（未声明时先补声明）。两者内部走阻塞形态, 返回 `bool` |
+| 订阅 | `subscribePluginBroadcast(host, bc, scope, id, handler, ud)`（需要结束回调时用表成员 `subscribe_broadcast_ex` + `pluginxx::pluginxxSubscriptionFromText`；撤销用 `unsubscribePluginBroadcast(host, bc, sub)`） |
+| 当前值 | 表成员 `read_broadcast`（阻塞形态：`tableOpBlocking` / `detail::tableOpText`） |
+| 结束 | 表成员 `end_broadcast`（阻塞形态） |
 
 存量调用形状 `iface.events->publish / subscribe` 与 `PluginEventsCompat` 已删：发布 / 订阅只有
 广播表一套，存量代码都改成了 `publishPluginBroadcast` / `subscribePluginBroadcast`。

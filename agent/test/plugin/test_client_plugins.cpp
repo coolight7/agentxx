@@ -989,7 +989,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_EQ(hits.load(), 3);
         for (auto* sub : subs) {
             if (broadcasts8 && sub) {
-                broadcasts8->unsubscribe_broadcast(sub);
+                XX_TEST_EXPECT_TRUE(
+                    agentxx::plugin::unsubscribePluginBroadcast(
+                        inst2->hostView(),
+                        broadcasts8,
+                        sub
+                    )
+                );
             }
         }
         mgr->onConnStateChanged("connected", "100%");
@@ -1017,7 +1023,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             // 主程序代发 (发布者 = 属主) → 订阅收到
             mgr->publishClientChannelValue(kTopic, R"({"n":1})");
             XX_TEST_EXPECT_EQ(hits.load(), 4);
-            broadcasts8->unsubscribe_broadcast(sub);
+            XX_TEST_EXPECT_TRUE(
+                agentxx::plugin::unsubscribePluginBroadcast(inst2->hostView(), broadcasts8, sub)
+            );
         }
 
         // 8.3 收尾: 卸载时订阅被撤销, 之后再发布不再进入插件代码
@@ -1264,7 +1272,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(readyPayload.find("\"interfaces\"") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(readyPayload.find("agentxx.client.panel") != std::string::npos);
                 if (broadcasts11 && sub) {
-                    broadcasts11->unsubscribe_broadcast(sub);
+                    XX_TEST_EXPECT_TRUE(
+                        agentxx::plugin::unsubscribePluginBroadcast(
+                            okInst->hostView(),
+                            broadcasts11,
+                            sub
+                        )
+                    );
                 }
 
                 co_await mgr->unloadAsync("example_plugin");

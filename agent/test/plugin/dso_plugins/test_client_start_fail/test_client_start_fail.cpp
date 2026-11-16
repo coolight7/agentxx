@@ -141,8 +141,18 @@ bool registerAll(const PluginxxHost* host, ProbeCtx* ctx) {
         return false;
     }
     const auto readyId = sv("agentxx.client.ready");
-    if (!broadcasts->subscribe_broadcast(host, nullptr, &readyId, &onReadyEvent, ctx, nullptr, nullptr)
-    ) {
+    // 表成员是异步契约: 不关心结果, 只受理 (本插件在 start 里跑, 主程序内联完成)
+    if (!broadcasts->subscribe_broadcast(
+            host,
+            nullptr,
+            &readyId,
+            &onReadyEvent,
+            ctx,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr
+        )) {
         return false;
     }
     return true;
