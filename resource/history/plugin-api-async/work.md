@@ -448,7 +448,12 @@ clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清�
   `plugin_multi_mount` 47、`plugin_resources` 101、`plugin_agent_runtime` 221、
   `plugin_example_runtime` 50、`client_plugins` 835、`plugin_feature` 34、
   `plugin_point` 68、`plugin_broadcast` 90、`plugin_dispatch` 112、`chatbot_task` 138
-  → **3711 通过、0 失败**。
+  → **3711 通过、0 失败**；
+- **全量回归**（`agentxx_test --log-level warn`，15 分钟）：
+  `Total: passed=43025 failed=1` —— 唯一失败是 `ui_snapshot` 的 `diff_json` 基线
+  对不上，来自本任务开始之前的那次 `f5fb0df8 调整 diff 渲染样式`（改了
+  `plugin_ui_items.cpp` 的 diff 渲染但没重新生成 `agent/test/snapshots/ui/diff_json.snap`），
+  与本任务的改动无关（本次没碰 UI 渲染与快照夹具）。要么重生成快照，要么等渲染样式定稿后一起更新。
 
 遇到的问题（已解决）：
 
