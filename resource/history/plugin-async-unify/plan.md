@@ -237,6 +237,25 @@ void* myStart(Ctx& ctx, const PluginxxOperatorNotify* n, PluginxxString* err) {
 - `plugin_kit.h` 的源码级破坏会强迫全部插件重编（头文件 inline 函数改名/删除），
   旧插件库与新宿主仍能互相加载。
 
+### 3.9 与"插件独立线程"重构的关系（为什么本轮先做）
+
+现状（`plugins.md` §16）：插件协程的**每一步**都由主程序 io 线程经 `request_driver` →
+`poll_one` 推进，插件代码与主程序协程**在同一个 io 执行序列里交错**；`blocking_tool` 体与
+`offload` 工作体在主程序工作线程池；JS 插件在自己的 JS 线程；少数插件（chatbot、
+text_selection_monitor）另有自己的线程，但它们调接口表仍然要回到主程序 io 线程。
+
+`resource/history/plugin-executor/` 计划把插件代码整体搬到"插件线程"。**必须先做完本轮**：
+
+1. 现在 `*Blocking` 之所以"看起来不慢"，是因为调用方常常就在主程序 io 线程上，
+   表操作**内联**执行、一次线程切换都没有；插件搬到另一条线程后这条快路径消失，
+   每次表调用都会变成"插件线程 → io 线程 → 插件线程"的真实往返；
+2. 那时阻塞形态还会带来互等风险（`stop` 时 io 等插件收尾，插件收尾里等 io 的表调用）；
+3. 本轮把等待全部换成"提交 + 挂起"，插件线程重构就只剩"谁来 driver 推进"这件事
+   （`PollOneBridge` 已经抽象好了），**调用点不用再改第二遍**。
+
+反过来，本轮也不引用任何"我是否在 io 线程"的判断 —— 插件线程重构完成后
+`scheduler.is_io_thread` / `ioCallSync` 这类机制要删掉，新代码不该再依赖它。
+
 ## 4. 边界（本轮不做）
 
 - 不改表成员签名、不改完成回调类型、不新增表；
