@@ -298,21 +298,22 @@ std::string datetimeNodeRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
 ///     end       → agent_end → __end__
 ///     default   → agent_end                          (默认结束)
 ///
-/// channels: messages / savedGraphData / __route__ / __intent_checked
-static int modifyGraphToIntentFlow(
+/// 读当前图定义 → 改写为意图路由流程 (**协程形态**)
+/// - 读与写都是“提交 + `co_await`”: 返回时定义已写入, `errOut` 给出失败原因
+static pluginxx::Task<bool> modifyGraphToIntentFlow(
     AgentCtx&                        ctx,
     const agentxx::plugin::ScopeRef& agent,
     std::string&                     errOut
 ) {
     if (!ctx.iface.graph || !ctx.iface.graph->get_graph_json || !ctx.iface.graph->set_graph_json) {
         errOut = "graph iface not available";
-        return -1;
+        co_return false;
     }
-    // 表成员是异步契约: 生命周期里的同步取值走阻塞形态 (IO 线程上内联完成)
-    std::string jsonStr = agentxx::plugin::graphJson(ctx.host, ctx.iface, agent.ptr());
-    if (jsonStr.empty()) {
+    auto readResult = co_await agentxx::plugin::graphJson(ctx, agent.ptr());
+    std::string jsonStr{readResult.text()};
+    if (!readResult.ok() || jsonStr.empty()) {
         errOut = "get_graph_json returned no definition";
-        return -1;
+        co_return false;
     }
 
     utilxx_base::Json def;
@@ -320,11 +321,11 @@ static int modifyGraphToIntentFlow(
         def = utilxx_base::Json::parse(jsonStr);
     } catch (const std::exception& e) {
         errOut = fmt::format("default graph JSON parse failed: {}", e.what());
-        return -1;
+        co_return false;
     }
     if (!def.is_object()) {
         errOut = "default graph JSON is not an object";
-        return -1;
+        co_return false;
     }
 
     // 仅处理默认图 (agentxx.default); 已被其他插件修改/自定义的图不动
@@ -333,7 +334,7 @@ static int modifyGraphToIntentFlow(
                                  : std::string{};
     if (!name.empty() && name != "agentxx.default") {
         errOut = fmt::format("graph name `{}` is not agentxx.default, skip", name);
-        return -1;
+        co_return false;
     }
 
     // ---- 组装新图 ----
@@ -420,11 +421,15 @@ static int modifyGraphToIntentFlow(
     graph["edges"] = std::move(edges);
 
     const std::string newJson = graph.dump();
-    if (agentxx::plugin::setGraphJson(ctx.host, ctx.iface, agent.ptr(), newJson) != 0) {
-        errOut = "set_graph_json failed";
-        return -1;
+    auto              wr      = co_await agentxx::plugin::setGraphJson(ctx, agent.ptr(), newJson);
+    if (!wr.ok()) {
+        errOut = wr.accepted() ? std::string(wr.text()) : wr.startError;
+        if (errOut.empty()) {
+            errOut = "set_graph_json failed";
+        }
+        co_return false;
     }
-    return 0;
+    co_return true;
 }
 
 /// ---------------- entry / lifecycle ----------------
@@ -462,42 +467,50 @@ extern "C" PLUGINXX_EXPORT int
     );
 }
 
-/// 注册事务 (start 的实际内容); 任一步失败由主程序回滚已生效的注册。
-/// 挂载事务 (mount): 登记自定义节点类型并改写执行图
+/// 挂载事务 (mount): 登记自定义节点类型并改写执行图 (**协程形态**)
 /// - `ref` 为本次挂载的 agent 引用, 节点类型与该 agent 的图定义都记在它名下
-static int exampleGraphAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
+/// - 每条登记都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到失败原因
+static pluginxx::Task<void>
+    exampleGraphAgentSetup(AgentCtx& ctx, agentxx::plugin::AgentRef ref) {
     // 1. 注册意图识别节点类型 (统一 root adapter: 输入拥有化 + provider 句柄)
-    if (agentxx::plugin::graph_node(
-            ctx,
-            ref,
-            "example_intent_router",
-            R"_({"type":"object","properties":{"intents":{"type":"array","items":{"type":"string"}},"fallback":{"type":"string"}}})_",
-            [ref](AgentCtx& c, const agentxx::plugin::RootRequest& req) {
-                return intentRouterRun(c, ref, req);
-            }
-        )
-        != 0) {
-        return -1;
+    auto nodeResult = co_await agentxx::plugin::graph_node(
+        ctx,
+        ref,
+        "example_intent_router",
+        R"_({"type":"object","properties":{"intents":{"type":"array","items":{"type":"string"}},"fallback":{"type":"string"}}})_",
+        [ref](AgentCtx& c, const agentxx::plugin::RootRequest& req) {
+            return intentRouterRun(c, ref, req);
+        }
+    );
+    if (!nodeResult.ok()) {
+        throw std::runtime_error{
+            "example_graph_node: register node type example_intent_router failed: "
+            + (nodeResult.accepted() ? std::string(nodeResult.text()) : nodeResult.startError)
+        };
     }
     // 2. 注册时间输出节点类型
-    if (agentxx::plugin::graph_node(
-            ctx,
-            ref,
-            "example_datetime",
-            R"_({"type":"object"})_",
-            datetimeNodeRun
-        )
-        != 0) {
-        return -1;
+    auto datetimeResult = co_await agentxx::plugin::graph_node(
+        ctx,
+        ref,
+        "example_datetime",
+        R"_({"type":"object"})_",
+        datetimeNodeRun
+    );
+    if (!datetimeResult.ok()) {
+        throw std::runtime_error{
+            "example_graph_node: register node type example_datetime failed: "
+            + (datetimeResult.accepted() ? std::string(datetimeResult.text())
+                                         : datetimeResult.startError)
+        };
     }
 
     // 3. 修改执行图: 默认图 → 意图路由流程
     std::string err;
-    if (modifyGraphToIntentFlow(ctx, ref, err) != 0) {
+    if (!co_await modifyGraphToIntentFlow(ctx, ref, err)) {
         ctx.log.warn("modify graph failed: " + err);
         // 节点已注册, 图修改失败不阻止插件加载 (主程序回退默认图)
     }
-    return 0;
+    co_return;
 }
 
 static void* exampleGraphAgentStart(
@@ -537,20 +550,30 @@ static void* exampleGraphAgentMount(
         }
         return nullptr;
     }
-    const agentxx::plugin::AgentRef ref(*spec);
-    if (exampleGraphAgentSetup(ctx, ref) != 0) {
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "example_graph_node mount: registration transaction failed"
+                "example_graph_node mount: host has no pluginxx.tasks (spawn unavailable)"
             );
         }
         return nullptr;
     }
-    ctx.log.info("example_graph_node mounted, graph modified");
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    auto later = agentxx::plugin::finishLater(notify);
+    // 注册事务交给协程: 节点类型/图定义逐条“提交 + co_await”, 全部生效后再放行挂载
+    const agentxx::plugin::AgentRef agentRef(*spec);
+    ctx.spawn([later, agentRef](AgentCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await exampleGraphAgentSetup(c, agentRef);
+            c.log.info("example_graph_node mounted, graph modified");
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 static void* exampleGraphAgentUnmount(

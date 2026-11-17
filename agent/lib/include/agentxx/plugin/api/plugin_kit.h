@@ -4786,9 +4786,10 @@ inline std::string_view nodeStateOf(const RootRequest& req) noexcept {
 ///   完成通知在协程真正结束后 exactly-once 发出；
 /// - `run_cancel` 置取消标志并取消嵌套 awaiter。
 ///
-/// `return`: 0 = 注册成功；非 0 = 类型名冲突或主程序不支持（调用方应使 start 事务失败）。
+/// `return`: 表调用凭据 ([pluginxx::tableOp]): `co_await` 它才拿"是否受理 + 登记成败"
+/// (类型名冲突或主程序不支持都体现在结果里, 不会抛异常)
 template<typename Ctx, typename NodeFn>
-inline int32_t graph_node(
+inline pluginxx::TableOpTicket graph_node(
     Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view type,
@@ -4796,7 +4797,7 @@ inline int32_t graph_node(
     NodeFn&&         fn
 ) {
     if (!ctx.iface.graph || !ctx.iface.graph->register_node_type) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+        return pluginxx::TableOpTicket{};
     }
 
     struct NodeShim {
@@ -4909,17 +4910,16 @@ inline int32_t graph_node(
         }
     };
 
-    auto ref = agent.raw();
-    // 表成员是异步契约: 生命周期里的同步取值走阻塞形态 (IO 线程上内联完成)
-    auto res = pluginxx::tableOpBlockingRaw(
-        ctx.host,
-        ctx.iface.cancel,
-        ctx.iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ctx.iface.graph->register_node_type(ctx.host, &ref, &spec, cb, ud, err);
+    auto ref = agent;
+    // 表成员是异步契约: 提交即开始; 主程序在 IO 线程上内联执行, 返回时已登记
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, ref, spec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            auto r = ref.raw();
+            return ctx.iface.graph->register_node_type(ctx.host, &r, &spec, cb, ud, err);
         }
     );
-    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
 }
 /* ==================== 工具权限声明 ====================
  *
