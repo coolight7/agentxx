@@ -8,7 +8,7 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | A | 框架层：ticket（调用即提交）+ `whenAll` + 顺序契约写进头文件 | 已完成 |
-| B | kit 改名与补形态：同步形态先改 `*Blocking`，主名让给 ticket / callback 形态 | 待做 |
+| B | kit 改名与补形态：同步形态先改 `*Blocking`，主名让给 ticket / callback 形态 | 进行中（协程形态已补，改名与删阻塞待批 E） |
 | C | 迁移 25 个插件（含 chatbot 10 个工具改 `polled_tool`）+ 删 4 个私有 `netCallWait` | 待做 |
 | D | 生命周期异步完成（`finishLater`；不设时限、不加配置键） | 进行中（kit 部分完成） |
 | E | 删除全部阻塞形态 + `boundaries` 禁令 + 文档 | 待做 |
@@ -101,6 +101,31 @@
   （`register_task` 只返回一个非空句柄）。
 
 结果：`plugin_bridge` 270 条全绿（原 259 + 新增 11）。
+
+### 批 B（第一批）：kit 的协程形态（已完成）
+
+给常用的表便捷入口补了“**调用即提交** + `co_await` 拿结果”的同名重载（第一个参数
+是插件实例上下文），阻塞形态继续保留，两条形态并存，插件可以逐处迁移：
+
+- 广播：`declarePluginBroadcast` / `publishPluginBroadcast` /
+  `subscribePluginBroadcast` / `unsubscribePluginBroadcast`，另有
+  `subscriptionOf(result)` 从结果正文取订阅句柄；
+- 提示词 / 模型 / 图 / 自身资源：`promptJson` / `setPromptJson` / `modelConfigJson` /
+  `graphJson` / `graphName` / `setGraphJson` / `ownResourcesJson`；
+- 资源登记：`registerSkillDir` / `unregisterSkillDir` / `registerMemoryFile` /
+  `unregisterMemoryFile` / `registerMcpServer` / `unregisterMcpServer`（公共实现
+  `resourceOpAsync`）；
+- 挂载：`listMounts` / `mountInfoOf`（阻塞形态改名 `listMountsBlocking` /
+  `mountInfoOfBlocking`，无插件调用点）；
+- `PluginBase` 成员：`addShareStore` / `workDir`（原 `xxxAsync` 改名，现在就是协程形态）、
+  `getSessionMessages` / `sessionMessagesCount` / `toolPrompt` 的协程形态。
+
+验证：`plugin_bridge` 270 / `plugin_sdk` 134 / `plugin_host_mount` 147 /
+`plugin_runtime` 742 / `plugin_multi_mount` 47 / `boundaries` 19 全绿。
+
+剩下未做（下一批）：权限（`registerToolPermission` 等，签名冲突需先改名）、会话运行时与
+后台任务、工具/图节点注册（`registerToolSync` / `tool` / `graph_node`）的协程形态；
+之后是插件调用点迁移、删阻塞形态、禁令与文档。
 
 ## 与计划的偏差
 
