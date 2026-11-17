@@ -3749,10 +3749,32 @@ inline int32_t registerToolSync(
     return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
 }
 
+/// 工具注册的"调用即提交"形态 (返回 ticket, 由调用方 `co_await`)
+///
+/// 与 [registerToolSync] 的区别只有等待方式: 这里提交完就返回, 注册是否生效由
+/// `co_await` 的结果说了算 —— 生命周期里"登记完再放行"的顺序靠 await 完再
+/// `later.ok()` 保证。
+template<typename Ctx>
+inline pluginxx::TableOpTicket
+    registerToolTicket(const Ctx& ctx, const ScopeRef& agent, const AgentxxPluginToolSpec& spec) {
+    auto ref = agent;
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, ref, spec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
+                return nullptr;
+            }
+            auto r = ref.raw();
+            return ctx.iface.tools->register_tool(ctx.host, &r, &spec, cb, ud, err);
+        }
+    );
+}
+
 } // namespace detail
 
 template<typename Ctx, typename TaskFn>
-inline void tool(
+inline pluginxx::TableOpTicket tool(
     Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view name,
@@ -3884,14 +3906,11 @@ inline void tool(
         }
     };
 
-    if (ctx.iface.tools && ctx.iface.tools->register_tool) {
-        auto ref = agent.raw();
-        detail::registerToolSync(ctx, &ref, &spec);
-    }
+    return detail::registerToolTicket(ctx, agent, spec);
 }
 
 template<typename Ctx, typename SyncFn>
-inline void fast_tool(
+inline pluginxx::TableOpTicket fast_tool(
     Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view name,
@@ -3993,14 +4012,11 @@ inline void fast_tool(
 
     spec.execute_cancel = nullptr;
 
-    if (ctx.iface.tools && ctx.iface.tools->register_tool) {
-        auto ref = agent.raw();
-        detail::registerToolSync(ctx, &ref, &spec);
-    }
+    return detail::registerToolTicket(ctx, agent, spec);
 }
 
 template<typename Ctx, typename BlockFn>
-inline void blocking_tool(
+inline pluginxx::TableOpTicket blocking_tool(
     Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view name,
@@ -4311,10 +4327,7 @@ inline void blocking_tool(
         }
     };
 
-    if (ctx.iface.tools && ctx.iface.tools->register_tool) {
-        auto ref = agent.raw();
-        detail::registerToolSync(ctx, &ref, &spec);
-    }
+    return detail::registerToolTicket(ctx, agent, spec);
 }
 
 /* ==================== 受控轮询工具 (polled_tool) ====================
@@ -4439,7 +4452,7 @@ inline asio::awaitable<void> runPolledPumpJob(Job* job) {
 } // namespace detail
 
 template<typename Ctx, typename PolledFn>
-inline void polled_tool(
+inline pluginxx::TableOpTicket polled_tool(
     Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view name,
@@ -4625,10 +4638,7 @@ inline void polled_tool(
         }
     };
 
-    if (ctx.iface.tools && ctx.iface.tools->register_tool) {
-        auto ref = agent.raw();
-        detail::registerToolSync(ctx, &ref, &spec);
-    }
+    return detail::registerToolTicket(ctx, agent, spec);
 }
 
 namespace detail {
