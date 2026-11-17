@@ -1696,6 +1696,7 @@ TestResult testPluginBridge() {
         auto notify = probe.notify();
         auto later  = pluginxx::finishLater(&notify);
         XX_TEST_EXPECT_TRUE(later.active());
+        XX_TEST_EXPECT_TRUE(later.provider() != nullptr); // 异步完成必须返回非空 provider 句柄
         XX_TEST_EXPECT_FALSE(later.completed());
 
         // 入口把活交给协程后立刻返回, 结果由协程完成时交回

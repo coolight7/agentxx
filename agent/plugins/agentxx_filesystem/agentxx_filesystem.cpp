@@ -269,7 +269,527 @@ static bool destinationAllowed(
 
 /// 注册事务 (挂载的实际内容); 失败由主程序按拒绝处理并回滚。
 /// - `ref` 为本次挂载的 agent 引用, 工具注册与权限声明都记在该 agent 名下
-static int32_t fsSetup(FsPluginCtx& ctx, const ScopeRef& ref) {
+static pluginxx::Task<void> fsSetupAsync(FsPluginCtx& ctx, ScopeRef ref) {
+    // 说明: 每个工具注册后立即声明其权限限制 (目标参数 `path`, 读/写作用域),
+    // 具体判定 (白/黑名单、permission.mode、记住的选择、工作区隔离) 由主程序
+    // 权限中间件执行; 未声明的工具不参与权限判定 (直接放行)
+
+    // 1. List
+    auto listSchema
+        = ctx.schema(kNameList)
+              .string("path", kPathDescList, /*required=*/true)
+              .boolean(
+                  "recursive",
+                  "Default `false`. If `true`, list subdirectories recursively; when `path` "
+                  "contains wildcards, matched directories are expanded as well.",
+                  false,
+                  false
+              )
+              .integer(
+                  "limit",
+                  "Default `100`. Maximum number of entries to return (total lines in output). Set `limit <= 0` for unlimited.",
+                  false,
+                  100
+              )
+              .integer(
+                  "max_files",
+                  "Default `1000`. Maximum number of matched entries expanded before listing; a "
+                  "larger expansion is cut to the first entries with a `[Note]` (raise it or narrow "
+                  "`path`). Set `0` for no limit.",
+                  false,
+                  1000
+              )
+              .number("timeout", kTimeoutDesc, false, 60.0)
+              .build();
+
+    co_await blocking_tool(
+         ctx,
+         ref,
+        kNameList,
+        kDepictList,
+        listSchema,
+        [ref](FsPluginCtx&               c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel) {
+            ArgReader args(args_json);
+            auto      path = args.require<std::string>("path");
+            if (!args.ok()) {
+                return ToolResult::fail(args.errorMessage());
+            }
+            return fileListExecute(
+                args.raw(),
+                std::string(workDir),
+                [&] {
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+                },
+                makeReadPathFilter(c, ref, tid)
+            );
+        },
+        0,
+        kReadOnlyFlags
+    );
+    // 列表按读取类工具处理: 声明 `path` (可为通配模式) 决定是否询问一次;
+    // 列出的条目 (含 recursive 逐层展开结果) 在工具内逐项复核权限后才输出
+    co_await registerReadPathPermission(ctx, ref, kNameList, "path");
+
+    // 2. Read
+    auto readSchema
+        = ctx.schema(kNameRead)
+              .string("path", kPathDesc, /*required=*/true)
+              .integer(
+                  "offset",
+                  R"_(Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count.)_",
+                  false,
+                  0
+              )
+              .integer(
+                  "limit",
+                  R"_(Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error.
+The whole result of one call must stay within 2000 lines / 256 KiB; a larger result is refused with an error, so read large files in parts.)_"
+              )
+              .build();
+
+    if (utilxx_base::isAsyncFileIoSupported()) {
+        polled_tool(
+             ctx,
+             ref,
+            kNameRead,
+            kDepictRead,
+            readSchema,
+            [](FsPluginCtx&,
+               std::string_view args_json,
+               std::string_view,
+               std::string_view workDir,
+               const PluginxxCancelToken*) -> asio::awaitable<ToolResult> {
+                ArgReader args(args_json);
+                auto      path = args.require<std::string>("path");
+                if (!args.ok()) {
+                    co_return ToolResult::fail(args.errorMessage());
+                }
+                // 局部量: 其生命周期覆盖整个 co_await (异步读完整文件/逐行读)
+                std::string workDirStr(workDir);
+                co_return co_await fileReadExecuteAsync(args.raw(), workDirStr);
+            },
+            0,
+            kReadFlags
+        );
+    } else {
+        blocking_tool(
+             ctx,
+             ref,
+            kNameRead,
+            kDepictRead,
+            readSchema,
+            [ref](FsPluginCtx&               c,
+               std::string_view           args_json,
+               std::string_view           tid,
+               std::string_view           workDir,
+               const PluginxxCancelToken* cancel) {
+                ArgReader args(args_json);
+                auto      path = args.require<std::string>("path");
+                if (!args.ok()) {
+                    return ToolResult::fail(args.errorMessage());
+                }
+                return fileReadExecute(args.raw(), std::string(workDir), [&] {
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+                });
+            },
+            0,
+            kReadFlags
+        );
+    }
+    co_await registerReadPathPermission(ctx, ref, kNameRead, "path");
+
+    // 2.1 Read Media
+    auto readMediaSchema
+        = ctx.schema(kNameReadMedia)
+              .string("path", kPathDescMedia, /*required=*/true)
+              .build();
+
+    co_await blocking_tool(
+        ctx,
+        ref,
+        kNameReadMedia,
+        kDepictReadMedia,
+        readMediaSchema,
+        [ref](FsPluginCtx&               c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel) {
+            ArgReader args(args_json);
+            auto      path = args.require<std::string>("path");
+            if (!args.ok()) {
+                return ToolResult::fail(args.errorMessage());
+            }
+            return fileReadMediaExecute(args.raw(), std::string(workDir), [&] {
+                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+            });
+        },
+        0,
+        kReadOnlyFlags
+    );
+    co_await registerReadPathPermission(ctx, ref, kNameReadMedia, "path");
+
+    // 3. Write
+    auto writeSchema
+        = ctx.schema(kNameWrite)
+              .string(
+                  "path",
+                  "Path to the target file. Relative paths are resolved against the current working directory; `~` expands to the home directory.",
+                  /*required=*/true
+              )
+              .string("content", "Content to write into the file.", /*required=*/true)
+              .boolean("overwrite", kWriteOverwriteDesc, true)
+              .build();
+
+    if (utilxx_base::isAsyncFileIoSupported()) {
+        polled_tool(
+             ctx,
+             ref,
+            kNameWrite,
+            kDepictWrite,
+            writeSchema,
+            [](FsPluginCtx&,
+               std::string_view args_json,
+               std::string_view,
+               std::string_view workDir,
+               const PluginxxCancelToken*) -> asio::awaitable<ToolResult> {
+                ArgReader args(args_json);
+                auto      path    = args.require<std::string>("path");
+                auto      content = args.require<std::string>("content");
+                if (!args.ok()) {
+                    co_return ToolResult::fail(args.errorMessage());
+                }
+                std::string workDirStr(workDir);
+                co_return co_await fileWriteExecuteAsync(args.raw(), workDirStr);
+            },
+            0,
+            kWriteFlags
+        );
+    } else {
+        blocking_tool(
+             ctx,
+             ref,
+            kNameWrite,
+            kDepictWrite,
+            writeSchema,
+            [ref](FsPluginCtx&               c,
+               std::string_view           args_json,
+               std::string_view           tid,
+               std::string_view           workDir,
+               const PluginxxCancelToken* cancel) {
+                ArgReader args(args_json);
+                auto      path    = args.require<std::string>("path");
+                auto      content = args.require<std::string>("content");
+                if (!args.ok()) {
+                    return ToolResult::fail(args.errorMessage());
+                }
+                return fileWriteExecute(args.raw(), std::string(workDir), [&] {
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+                });
+            },
+            0,
+            kWriteFlags
+        );
+    }
+    co_await registerWritePathPermission(ctx, ref, kNameWrite, "path");
+
+    // 4. Edit
+    // 两种写法: 多段 `edits: [{old_str,new_str}, ...]` (推荐, 一次改多处) 与
+    // 单段 `old_str`/`new_str` (兼容旧写法); 两处同时给出时工具报错。
+    // 每段只替换第一处匹配 (要改多处就写多段)
+    auto editSchema
+        = ctx.schema(kNameEdit)
+              .string(
+                  "path",
+                  "Path to the text file. Relative paths are resolved against the current working directory; `~` expands to the home directory.",
+                  /*required=*/true
+              )
+              .objectArray(
+                  "edits",
+                  kEditEditsDesc,
+                  utilxx_base::Json{
+                      {"type",       "object"                                        },
+                      {"properties",
+                       utilxx_base::Json{
+                           {"old_str", utilxx_base::Json{{"type", "string"}}},
+                           {"new_str", utilxx_base::Json{{"type", "string"}}},
+                       }                                                             },
+                      {"required",   utilxx_base::Json::array({"old_str", "new_str"})},
+    }
+              )
+              .string("old_str", kEditOldStrDesc, false)
+              .string("new_str", kEditNewStrDesc, false)
+              .build();
+
+    if (utilxx_base::isAsyncFileIoSupported()) {
+        polled_tool(
+             ctx,
+             ref,
+            kNameEdit,
+            kDepictEdit,
+            editSchema,
+            [](FsPluginCtx&,
+               std::string_view args_json,
+               std::string_view,
+               std::string_view workDir,
+               const PluginxxCancelToken*) -> asio::awaitable<ToolResult> {
+                ArgReader args(args_json);
+                auto      path = args.require<std::string>("path");
+                if (!args.ok()) {
+                    co_return ToolResult::fail(args.errorMessage());
+                }
+                std::string workDirStr(workDir);
+                co_return co_await fileEditExecuteAsync(args.raw(), workDirStr);
+            }
+        );
+    } else {
+        blocking_tool(
+             ctx,
+             ref,
+            kNameEdit,
+            kDepictEdit,
+            editSchema,
+            [ref](FsPluginCtx&               c,
+               std::string_view           args_json,
+               std::string_view           tid,
+               std::string_view           workDir,
+               const PluginxxCancelToken* cancel) {
+                ArgReader args(args_json);
+                auto      path = args.require<std::string>("path");
+                if (!args.ok()) {
+                    return ToolResult::fail(args.errorMessage());
+                }
+                return fileEditExecute(args.raw(), std::string(workDir), [&] {
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+                });
+            }
+        );
+    }
+    co_await registerWritePathPermission(ctx, ref, kNameEdit, "path");
+
+    // 5. Glob
+    // 权限限制: 先按 `file_patterns` (数组) 声明读权限 —— 这决定"是否询问用户一次"
+    // (目标是模式表达的扫描起点); 模式实际展开出的路径在工具内用
+    // makeReadPathFilter 逐项复核 (拒绝/未获批准的路径不进入结果), 防止
+    // `**` 之类模式绕过针对子目录的拒绝规则
+    auto globSchema = ctx.schema(kNameGlob)
+                          .stringArray(
+                              "file_patterns",
+                              kGlobFilePatternsDesc,
+                              /*required=*/true
+                          )
+                          .stringArray("exclude_patterns", kGlobExcludeDesc)
+                          .integer("max_depth", kGlobMaxDepthDesc, false, -1)
+                          .boolean("sort", kGlobSortDesc, false, false)
+                          .stringArray("type", kGlobTypeDesc)
+                          .integer("max_files", kGlobMaxFilesDesc, false, 1000)
+                          .number("timeout", kTimeoutDesc, false, 60.0)
+                          .build();
+
+    co_await blocking_tool(
+         ctx,
+         ref,
+        kNameGlob,
+        kDepictGlob,
+        globSchema,
+        [ref](FsPluginCtx&               c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel) {
+            ArgReader args(args_json);
+            auto      patterns = args.require<std::vector<std::string>>("file_patterns");
+            if (!args.ok()) {
+                return ToolResult::fail(args.errorMessage());
+            }
+            return fileGlobExecute(
+                args.raw(),
+                std::string(workDir),
+                [&] {
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+                },
+                makeReadPathFilter(c, ref, tid)
+            );
+        },
+        0,
+        kReadOnlyFlags
+    );
+    co_await registerReadPathPermission(ctx, ref, kNameGlob, "file_patterns");
+
+    // 6. Grep
+    auto grepSchema = ctx.schema(kNameGrep)
+                          .stringArray(
+                              "file_patterns",
+                              kGrepFilePatternsDesc,
+                              /*required=*/true
+                          )
+                          .stringArray("text_patterns", kGrepTextPatternsDesc)
+                          .stringArray("regex_patterns", kGrepRegexPatternsDesc)
+                          .stringArray("exclude_patterns", kGrepExcludeDesc)
+                          .enumString(
+                              "output_mode",
+                              kGrepOutputModeDesc,
+                              {"files_with_matches", "content", "count"},
+                              false,
+                              "files_with_matches"
+                          )
+                          .integer("max_count_per_file", kGrepMaxCountPerFileDesc, false, 0)
+                          .integer("max_files", kGrepMaxFilesDesc, false, 1000)
+                          .number("max_file_size_mb", kGrepMaxFileSizeDesc, false, 32.0)
+                          .integer("context_lines", kGrepContextLinesDesc, false, 0)
+                          .boolean("case_sensitive", kGrepCaseSensitiveDesc, false, true)
+                          .number("timeout", kTimeoutDesc, false, 60.0)
+                          .build();
+
+    co_await blocking_tool(
+         ctx,
+         ref,
+        kNameGrep,
+        kDepictGrep,
+        grepSchema,
+        [ref](FsPluginCtx&               c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel) {
+            ArgReader args(args_json);
+            auto      patterns = args.require<std::vector<std::string>>("file_patterns");
+            if (!args.ok()) {
+                return ToolResult::fail(args.errorMessage());
+            }
+            return fileGrepExecute(
+                args.raw(),
+                std::string(workDir),
+                [&] {
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+                },
+                makeReadPathFilter(c, ref, tid)
+            );
+        },
+        0,
+        kReadOnlyFlags
+    );
+    // 权限限制: 同 glob —— 按 `file_patterns` (数组) 声明读权限决定是否询问,
+    // 扫描出的文件在工具内逐项复核后才读取 (被拒/未获批准的文件不读)
+    co_await registerReadPathPermission(ctx, ref, kNameGrep, "file_patterns");
+
+    // 7. Move
+    auto moveSchema = ctx.schema(kNameMove)
+                          .string("src", kMoveSrcDesc, /*required=*/true)
+                          .string("dst", kMoveDstDesc, /*required=*/true)
+                          .boolean("overwrite", kReplaceOverwriteDesc, false, false)
+                          .build();
+
+    co_await blocking_tool(
+         ctx,
+         ref,
+        kNameMove,
+        kDepictMove,
+        moveSchema,
+        [ref](FsPluginCtx&               c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel) {
+            ArgReader args(args_json);
+            auto      src = args.require<std::string>("src");
+            auto      dst = args.require<std::string>("dst");
+            if (!args.ok()) {
+                return ToolResult::fail(args.errorMessage());
+            }
+            std::string reason;
+            if (false == destinationAllowed(c, ref, tid, workDir, dst, reason)) {
+                return ToolResult::fail(std::move(reason));
+            }
+            return fileMoveExecute(args.raw(), std::string(workDir), [&] {
+                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+            });
+        },
+        0,
+        kWriteFlags
+    );
+    // 权限限制: 声明 `src` (被移动的路径) 为写入目标决定是否询问一次;
+    // `dst` 在工具内用只读查询复核 (见 destinationAllowed)
+    co_await registerWritePathPermission(ctx, ref, kNameMove, "src");
+
+    // 8. Copy
+    auto copySchema = ctx.schema(kNameCopy)
+                          .string("src", kCopySrcDesc, /*required=*/true)
+                          .string("dst", kCopyDstDesc, /*required=*/true)
+                          .boolean("overwrite", kReplaceOverwriteDesc, false, false)
+                          .build();
+
+    co_await blocking_tool(
+         ctx,
+         ref,
+        kNameCopy,
+        kDepictCopy,
+        copySchema,
+        [ref](FsPluginCtx&               c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel) {
+            ArgReader args(args_json);
+            auto      src = args.require<std::string>("src");
+            auto      dst = args.require<std::string>("dst");
+            if (!args.ok()) {
+                return ToolResult::fail(args.errorMessage());
+            }
+            std::string reason;
+            if (false == destinationAllowed(c, ref, tid, workDir, dst, reason)) {
+                return ToolResult::fail(std::move(reason));
+            }
+            return fileCopyExecute(args.raw(), std::string(workDir), [&] {
+                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+            });
+        },
+        0,
+        kWriteFlags
+    );
+    // 权限限制: 同 move
+    co_await registerWritePathPermission(ctx, ref, kNameCopy, "src");
+
+    // 9. Remove
+    auto removeSchema = ctx.schema(kNameRemove)
+                            .string("path", kRemovePathDesc, /*required=*/true)
+                            .boolean("recursive", kRemoveRecursiveDesc, false, false)
+                            .build();
+
+    co_await blocking_tool(
+         ctx,
+         ref,
+        kNameRemove,
+        kDepictRemove,
+        removeSchema,
+        [ref](FsPluginCtx&               c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel) {
+            ArgReader args(args_json);
+            auto      path = args.require<std::string>("path");
+            if (!args.ok()) {
+                return ToolResult::fail(args.errorMessage());
+            }
+            return fileRemoveExecute(args.raw(), std::string(workDir), [&] {
+                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+            });
+        },
+        0,
+        kWriteFlags
+    );
+    // 删除是写操作: 声明 `path` 为写入目标 (同 write/edit)
+    co_await registerWritePathPermission(ctx, ref, kNameRemove, "path");
+
+    co_return;
+}
+
+static void fsSetupBlocking(FsPluginCtx& ctx, const ScopeRef& ref) {
     // 说明: 每个工具注册后立即声明其权限限制 (目标参数 `path`, 读/写作用域),
     // 具体判定 (白/黑名单、permission.mode、记住的选择、工作区隔离) 由主程序
     // 权限中间件执行; 未声明的工具不参与权限判定 (直接放行)
@@ -785,8 +1305,6 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     );
     // 删除是写操作: 声明 `path` 为写入目标 (同 write/edit)
     registerWritePathPermissionBlocking(ctx, ref, kNameRemove, "path");
-
-    return 0;
 }
 
 /// 进程级启动: 本插件没有自管线程/定时器/订阅, 工具注册全在挂载阶段做
@@ -816,15 +1334,29 @@ static void* fsMount(
         }
         return nullptr;
     }
-    const AgentRef ref(*spec);
-    if (fsSetup(ctx, ref) != 0) {
-        if (error) {
-            PluginString::set(ctx.host, error, "agentxx_filesystem mount: registration failed");
-        }
+    auto later = finishLater(notify);
+    if (!later.active()) {
+        // 老宿主: 没有 provider 句柄可返回, 退回同步注册 (IO 线程上内联完成)
+        const AgentRef ref(*spec);
+        fsSetupBlocking(ctx, ref);
         return nullptr;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        later.failed("agentxx_filesystem mount: host has no pluginxx.tasks (spawn unavailable)");
+        return later.provider();
+    }
+    const AgentRef agentRef(*spec);
+    // 注册事务交给协程: 每个工具/权限都是"提交 + co_await", 全部生效后再放行挂载
+    ctx.spawn([later, agentRef](FsPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await fsSetupAsync(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 /// 卸载: 无 per-agent 状态需要释放 (工具与权限声明由主程序按记录撤销)
