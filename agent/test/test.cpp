@@ -99,6 +99,7 @@
 #include "agentxx-test/plugin/test_plugin_point.h"
 #include "agentxx-test/plugin/test_plugin_net.h"
 #include "agentxx-test/plugin/test_plugin_dispatch.h"
+#include "agentxx-test/plugin/test_plugin_executor.h"
 #include "agentxx-test/plugin/test_plugin_host_mount.h"
 #include "agentxx-test/plugin/test_plugin_multi_instance.h"
 #include "agentxx-test/plugin/test_plugin_multi_mount.h"
@@ -603,6 +604,7 @@ int main(int argn, char** argv) {
         co_await run("plugin_net", agentxx::test::run_plugin_net_tests);
                 co_await run("plugin_broadcast", agentxx::test::run_plugin_broadcast_tests);
                 co_await run("plugin_dispatch", agentxx::test::run_plugin_dispatch_tests);
+                co_await run("plugin_executor", agentxx::test::run_plugin_executor_tests);
                 co_await run("plugin_resources", agentxx::test::run_plugin_resource_tests);
                 co_await run("plugin_host_mount", agentxx::test::run_plugin_host_mount_tests);
                 co_await run(

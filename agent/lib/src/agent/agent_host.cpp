@@ -356,6 +356,14 @@ asio::awaitable<void> AgentHost::loadPluginsAsync() {
     // offload 工作线程池直接注入: 插件阻塞工具不依赖主 agent 上下文是否已挂载
     pluginHost_->setWorkerThreadPool(threadPool_);
     pluginHost_->setIoExecutor(ioCtx_->get_executor());
+    // 插件执行线程: 插件代码 (回调/协程驱动/工具) 全部搬到这条线上, io 线程只做
+    // 受理与投递 —— 插件里读一次慢盘不再卡住整条 io 线程。启动失败时保持旧行为
+    // (插件代码与 io 同线程), 不因为起不了线程而拒绝加载插件。
+    if (pluginThread_.start("agentxx-plugin")) {
+        pluginHost_->setPluginExecutor(pluginThread_.executor());
+    } else {
+        XX_LOGW("Plugin executor thread could not start; plugin callbacks run on the IO thread");
+    }
     XX_LOGI("Loading {} plugin(s) into the agent host", cfg_.pluginList.size());
     co_await pluginHost_->loadConfiguredPlugins(cfg_.pluginList);
     XX_LOGI("Plugin host ready: {} instance(s)", pluginHost_->list().size());

@@ -861,18 +861,18 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
     }
 
-    /// 无裸 manager 的 post；manager 消失不丢失已接受 callback/lease。
+    /// 管理器先于完成包释放: 已受理的回调仍旧交付, lease 正常回收。
+    /// (原用例走 `postCallback`; 该入口已删 —— 插件不再有“往 io 线程投递任意
+    /// 代码”的能力, 这里改用 `sleep` 验证同一套投递协议。)
     {
         RuntimeFixture f;
-        int            calls   = 0;
-        auto           runtime = f.manager->runtime();
-        f.manager->postCallback(
-            f.provider.get(),
-            +[](void* ud) {
-                ++*static_cast<int*>(ud);
-            },
-            &calls
-        );
+        int            calls = 0;
+        auto           callback = +[](void* ud, int32_t, const PluginxxStringView*) {
+            ++*static_cast<int*>(ud);
+        };
+        PluginxxString error{};
+        auto*          handle = f.manager->sleep(f.provider.get(), 0, callback, &calls, &error);
+        XX_TEST_EXPECT_TRUE(handle != nullptr);
         XX_TEST_EXPECT_EQ(calls, 0);
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
         /// 先移出实例，避免旧同步 shutdown 路径干扰这里独立验证的投递协议。
@@ -881,7 +881,7 @@ TestResult testPluginRuntime() {
         f.provider->lifetime->requestClose();
         f.drain();
         XX_TEST_EXPECT_EQ(calls, 1);
-        XX_TEST_EXPECT_TRUE(runtime->operations.empty());
+        XX_TEST_EXPECT_TRUE(f.provider->sleepTimers.empty());
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
     }
 

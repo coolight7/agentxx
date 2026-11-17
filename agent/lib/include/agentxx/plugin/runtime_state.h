@@ -96,6 +96,8 @@ struct RuntimeChannel {
     /// 事件回调与其上下文 (由插件提供; 通道关闭后不再调用)
     AgentxxPluginChannelEventFn onEvent   = nullptr;
     void*                        userData = nullptr;
+    /// 插件实例 (弱引用: 事件要投到它的执行器上; 实例释放后不再投递)
+    std::weak_ptr<PluginInstance> inst;
 
     /// 驱动壳 (根就绪后才建)
     std::shared_ptr<agent::AgentSessionRuntime> runtime;

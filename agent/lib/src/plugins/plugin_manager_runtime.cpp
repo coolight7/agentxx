@@ -139,29 +139,41 @@ void PluginManager::deliverChannelEvent(
     if (!channel.onEvent || channel.closed) {
         return;
     }
-    // 载荷文本要在回调期间有效: 放在本栈帧里的局部字符串
+    auto inst = channel.inst.lock();
+    if (!inst) {
+        return;
+    }
+    // 载荷文本要在回调期间有效: 存进闭包 (视图不能跨线程借用)
     std::string payloadText;
     if (payload != nullptr) {
         payloadText = payload->dump();
     }
-    AgentxxPluginChannelEvent event{};
-    event.struct_size    = sizeof(AgentxxPluginChannelEvent);
-    event.kind           = kind;
-    event.channel_id     = channel.channelId;
-    event.interrupt_id   = interruptId;
-    event.text           = PluginStringView::from(text.data(), text.size());
-    event.payload_json   = PluginStringView::from(payloadText.data(), payloadText.size());
-    try {
-        channel.onEvent(channel.userData, &event);
-    } catch (const std::exception& e) {
-        XX_LOGE(
-            "[runtime] channel {} event callback threw: {}",
-            channel.channelId,
-            e.what()
-        );
-    } catch (...) {
-        XX_LOGE("[runtime] channel {} event callback threw unknown exception", channel.channelId);
-    }
+    const auto onEvent  = channel.onEvent;
+    void*      userData = channel.userData;
+    const auto channelId = channel.channelId;
+    // 插件代码只能在插件执行器上跑: 事件投过去 (同实例 FIFO, 不会与其它回调并发)
+    pluginxx::dispatchToPlugin(
+        inst,
+        "channel event",
+        [onEvent,
+         userData,
+         channelId,
+         kind,
+         interruptId,
+         text       = std::string{text},
+         payloadText = std::move(payloadText)]() {
+            AgentxxPluginChannelEvent event{};
+            event.struct_size  = sizeof(AgentxxPluginChannelEvent);
+            event.kind         = kind;
+            event.channel_id   = channelId;
+            event.interrupt_id = interruptId;
+            event.text         = PluginStringView::from(text.data(), text.size());
+            event.payload_json
+                = PluginStringView::from(payloadText.data(), payloadText.size());
+            onEvent(userData, &event);
+        },
+        pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
+    );
 }
 
 // =====================================================================
@@ -475,6 +487,14 @@ int32_t PluginManager::runtimeOpenChannel(
     channel->interruptTimeout = std::chrono::milliseconds(spec->interrupt_timeout_ms);
     channel->onEvent          = spec->on_event;
     channel->userData         = spec->user_data;
+    // 事件要投到实例的执行器上: 优先用自引用, 手工构造的实例则从实例表取
+    {
+        auto channelInst = inst->self.lock();
+        if (!channelInst) {
+            channelInst = find(inst->name);
+        }
+        channel->inst = channelInst;
+    }
     if (channel->sessionId.empty()) {
         // 框架生成: 会话 id 决定上下文与持久化目录, 必须可读且唯一
         channel->sessionId = fmt::format(
@@ -1116,10 +1136,13 @@ PluginManager::AsyncSubmitOutcome
     if (!work.baseConfig) {
         work.baseConfig = ctx->agentConfig;
     }
-    // 回调包装: 实例释放/禁用后不再进入插件代码
+    // 回调包装: 实例释放/禁用后不再进入插件代码; 插件代码一律投到插件执行器上
     if (work.onEvent) {
-        auto cb       = std::move(work.onEvent);
-        auto weakInst = inst->self;
+        auto cb = std::move(work.onEvent);
+        std::weak_ptr<PluginInstance> weakInst = inst->self;
+        if (weakInst.expired()) {
+            weakInst = find(inst->name);
+        }
         work.onEvent
             = [weakInst, cb = std::move(cb)](agent::AsyncWorkEventPhase phase,
                                              const utilxx_base::Json&  payload) {
@@ -1127,7 +1150,16 @@ PluginManager::AsyncSubmitOutcome
                   if (!ptr || !ptr->enabled) {
                       return;
                   }
-                  cb(phase, payload);
+                  if (!pluginxx::dispatchToPlugin(
+                          ptr,
+                          "async work event",
+                          [cb, phase, payload] {
+                              cb(phase, payload);
+                          },
+                          pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
+                      )) {
+                      return;
+                  }
               };
     }
     auto res = host->submitAsyncWork(std::move(work), ctx);

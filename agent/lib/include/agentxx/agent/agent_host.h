@@ -7,6 +7,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "asio/awaitable.hpp"
 #include "asio/io_context.hpp"
+#include "pluginxx/runtime/plugin_thread.h"
 #include "utilxx_base/json.h"
 #include <chrono>
 #include <functional>
@@ -490,6 +491,12 @@ private:
     /// - 首个 agent `init` 时从自己的 `availableModels` 填进来, 之后的 agent 只
     ///   补自己才认识的那些; 容器与 agent 同一条 io 线程, 不需要锁
     std::shared_ptr<agentxx::agent::ModelProviderRegistry> modelRegistry_;
+    /// 插件执行线程: 所有插件回调 (start/mount/工具/事件/驱动票) 都在这条线上跑
+    ///
+    /// - **声明在 [pluginHost_] 之前**: 成员逆序析构, 所以插件管理器先释放
+    ///   (卸载/拆挂载走完), 线程最后停;
+    /// - 仅在真的加载插件时启动 (`loadPluginsAsync`), 没插件就不会多一条线程。
+    pluginxx::PluginExecutorThread pluginThread_;
     /// 插件管理器 (进程一份; 由 [loadPluginsAsync] 建立)
     /// - 声明在 roots_ 之前: 成员逆序析构, 这样 agent 先释放 (拆挂载) 再关管理器
     std::shared_ptr<agentxx::plugin::PluginManager> pluginHost_;
