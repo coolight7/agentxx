@@ -67,7 +67,7 @@ SDK 层不再保留"阻塞等结果"的入口。三种消费形态各司其职�
 （`PluginxxCancelToken` 与 kit 的 `CancelRegistry`），不走接口表，**必须保持同步**。
 统计里那 22 处 `isCanceled` 属这一类，不进入迁移清单。
 
-### 2.4 生命周期：异步完成已支持，缺超时
+### 2.4 生命周期：异步完成已支持（本轮不加超时）
 
 `pluginxx/runtime/op_driver.h` 的 `awaitPluginLifecycle`：把 `start` / `stop` / `mount` / `unmount`
 当一次操作跑（`OpCore` + notify），宿主 `co_await core->wait()` 之后才推进下一阶段。
@@ -75,7 +75,7 @@ SDK 层不再保留"阻塞等结果"的入口。三种消费形态各司其职�
 
 缺的两点：
 
-1. `core->wait()` **没有超时**（`OpCore` 的定时器是 `time_point::max()`）—— 插件不 done 就永久卡住加载/卸载；
+1. `core->wait()` **没有超时**（`OpCore` 的定时器是 `time_point::max()`）—— 插件不 done 就永久卡住加载/卸载；本轮**不加**超时（见 §3.4，限时由插件自己决定）；
 2. kit 没有"稍后完成某次生命周期"的便捷对象，插件只能自己摸 `notify`，容易写成"既不 done 也不返回"。
 
 ### 2.5 kit 的协程基础设施（够用，不需要新建）
@@ -185,13 +185,12 @@ void* myStart(Ctx& ctx, const PluginxxOperatorNotify* n, PluginxxString* err) {
 }
 ```
 
-宿主侧（`pluginxx`）：`awaitPluginLifecycle` 增加超时（`OpCore::wait` 里支持截止时间）。
-超时语义：
+宿主侧（`pluginxx`）：`awaitPluginLifecycle` 保持现状（已经是"等 notify"，不改）。
 
-- `start` / `mount` 超时 → 按失败处理（回滚，错误文本说明"生命周期超时"）；
-- `stop` / `unmount` 超时 → 记日志后继续（不能因为一个插件不肯收尾拖住整个退出）。
-
-配置键：`plugin.lifecycle_timeout_ms`（默认 30000，0 = 不超时）。
+**不做生命周期超时**（刻意）：不同插件"正常需要多久"差别太大（建索引、连平台、起子进程），
+定一个数只会逼插件去适配它。谁发起异步操作，谁负责给它加上自己需要的限时。
+代价也要接受：插件如果永不 `notify->done()`，本次加载/卸载就一直等着 —— 那是插件的 bug，
+宿主不为它设定时限。
 
 ### 3.5 析构不调接口表
 
@@ -226,7 +225,7 @@ void* myStart(Ctx& ctx, const PluginxxOperatorNotify* n, PluginxxString* err) {
 - 不改表成员签名、不改完成回调类型、不新增表；
 - 不动"插件提供实现、主程序调用"那一侧（工具 / 能力行 / 图节点 / 生命周期回调本身的形态）；
 - 不把 `blocking_tool` 删掉（它是工具体形态，不是表等待）；
-- client 侧三个回答型回调与 150 ms 同步桥：**单独一批（F），需确认后才做**；
+- client 侧三个回答型回调与 150 ms 同步桥：不在本轮（上一个任务完成后再继续）；
 - 不改 `isCanceled` 等本地查询。
 
 ## 5. 分阶段实施
@@ -260,17 +259,19 @@ void* myStart(Ctx& ctx, const PluginxxOperatorNotify* n, PluginxxString* err) {
    `polled_tool`：网络 `co_await netFetch`，CPU 重活 `co_await offload(ctx, …)`；
    `rag_search_impl.h` 的 `EmbedFn`、`websearch_impl.h` 的 `HttpFn` 改成返回 `awaitable`，
    并同步改测试里的注入实现；
-3. `chatbot`：先按第 1 步迁完表调用；10 个工具改 `polled_tool` 作为可选子项（工作量较大，单独提交）；
+3. `chatbot`：10 个工具全部改 `polled_tool`（去掉 `runToolOnIo` / `runOnIoBlocking` 那条"等插件
+   io 线程"的阻塞路径），平台调用改成 `co_await` 插件 io 线程上的协程（经 `asio::co_spawn`）；
+   这一项单独一个提交，方便单独回归；
 4. 全量插件重编 + 插件相关测试全绿。
 
 ### 批 D：生命周期异步
 
-- 框架：`awaitPluginLifecycle` 超时（`pluginxx/runtime/op_driver.h` + `OpCore::wait(deadline)`）；
-- 主程序：`plugin.lifecycle_timeout_ms` 配置键（`config_loader` + `config-keys.md`）；
+- 框架：宿主侧不改（`awaitPluginLifecycle` 已支持 notify，且不加超时）；
+- 主程序：不加任何时限配置键；
 - kit：`LifecycleFinisher` / `finishLater`；
 - 插件：至少改一个真实用例（`text_selection_monitor` 析构收尾 → `stop` 异步；`chatbot` 的
   `stop` 里等 io 线程收尾）；
-- 测试：`plugin_host_mount` 新增"start 延时 done / start 失败 / start 超时 / stop 超时"用例。
+- 测试：`plugin_host_mount` 新增"start 延时 done / start 失败 / stop 异步收尾 / 完成调两次"用例。
 
 ### 批 E：删除阻塞形态
 
@@ -280,12 +281,10 @@ void* myStart(Ctx& ctx, const PluginxxOperatorNotify* n, PluginxxString* err) {
   （`blocking_tool` 形态不在此列）；
 - 文档：`plugins.md` §8.0 调用模型、`AGENTS.md`、`docs/zh-cn/design/plugins.md` §22。
 
-### 批 F（可选）：client 侧回答型回调
+### 批 F（不做）
 
-- 三个回调改异步（返回 Promise / 长任务），删 `JsEngine::invokeRenderSync` / `invokeCallbackSync`
-  与 `kClientSyncTimeoutMs`；
-- 渲染路径改为"先用缓存/默认内容，回调结果到了再刷新"，`ui_components.cpp` 与 TUI 首帧行为要一起改；
-- 影响面在客户端，需单独回归 `client_plugins` / `tui_*`。
+client 侧三个回答型回调与 150 ms 同步桥不在本轮：上一个任务（`plugin-api-async`）剩下的
+阶段 D/E 在本轮完成后再继续实施。
 
 ### 批 G：收尾
 
@@ -310,7 +309,7 @@ void* myStart(Ctx& ctx, const PluginxxOperatorNotify* n, PluginxxString* err) {
 
 | 风险 | 应对 |
 |---|---|
-| 插件 `start` 永不 done → 加载卡死 | D 批加超时（默认 30 s），超时按失败回滚 |
+| 插件 `start` 永不 done → 加载卡死 | 接受（不做超时）；文档要求插件给自己发起的异步操作限时，并保证 `finishLater` 恰好完成一次 |
 | 异步完成漏调 / 调两次 | `LifecycleFinisher` 内部原子标记；测试覆盖"调两次" |
 | 大批量改名把树改坏 | 每区块编译+测试后才继续；每批独立提交 |
 | `polled_tool` 体内跑 CPU 重活占住宿主 IO 线程 | 规则写进文档；`websearch` / `rag_search` 用 `offload` |
@@ -320,9 +319,12 @@ void* myStart(Ctx& ctx, const PluginxxOperatorNotify* n, PluginxxString* err) {
 
 ## 8. 待确认的决策点
 
-1. 生命周期超时默认 30 s、配置键 `plugin.lifecycle_timeout_ms` 是否可以；
-2. `chatbot` 的 10 个工具是否一并改 `polled_tool`（收益：不再占工作线程；成本：10 个工具体重写）；
-3. 批 F（client 侧回答型回调 + 删 150 ms 桥）是否纳入本轮；
-4. 命名确认：`xxx`（awaiter）/ `xxxSubmit`（ticket）/ `xxxCallback`（回调），
+已定（本轮不再讨论）：不做生命周期超时；`chatbot` 一并改（10 个工具全部）；
+不做 client 侧回答型回调（批 F）；不改表成员、不抬 API 代次（停在 7）。
+
+仍待确认：
+
+1. 命名：`xxx`（awaiter）/ `xxxSubmit`（ticket）/ `xxxCallback`（回调），
    旧同步名迁移期叫 `xxxBlocking` 并在 E 批删除；
-5. 是否同意"不改表成员、不抬代次"（停在 7），只做 SDK 源码级破坏。
+2. ticket 是否允许"并发发起多条再统一等"（ticket 可放进容器，用一次 `whenAll` 等全部）——
+   推荐允许，这是 ticket 相对 awaiter 的主要价值。

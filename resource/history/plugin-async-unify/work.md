@@ -9,11 +9,12 @@
 |---|---|---|
 | A | 框架层：提交即可等的 ticket + `tableOpSubmit` + 顺序契约写进头文件 | 待做 |
 | B | kit 改名与补形态：先同步 → `*Blocking`，主名让给 awaiter / submit / callback | 待做 |
-| C | 迁移 25 个插件 + 删 4 个私有 `netCallWait` + 工具形态（`polled_tool` + `offload`） | 待做 |
-| D | 生命周期异步完成（`finishLater` + 宿主超时配置） | 待做 |
+| C | 迁移 25 个插件（含 chatbot 10 个工具改 `polled_tool`）+ 删 4 个私有 `netCallWait` | 待做 |
+| D | 生命周期异步完成（`finishLater`；不设时限、不加配置键） | 待做 |
 | E | 删除全部阻塞形态 + `boundaries` 禁令 + 文档 | 待做 |
-| F | （可选）client 侧三个回答型回调异步 + 删 150 ms 同步桥 | 待确认 |
-| G | 收尾：文档、快照、全量回归、性能对比 | 待做 |
+| G | 收尾：文档、全量回归、卸载路径 ASan 复核、性能对比 | 待做 |
+
+不做：client 侧回答型回调与 150 ms 同步桥（留给 `plugin-api-async` 的阶段 D/E）。
 
 ## 分步记录
 
