@@ -84,15 +84,17 @@ extern "C" PLUGINXX_EXPORT int
     );
 }
 
-/// 挂载事务 (mount): 登记实现行与通知订阅
+/// 挂载事务 (mount): 登记实现行与通知订阅 (**协程形态**)
 /// - `ref` 为本次挂载的 agent 引用, 全部登记都记在该 agent 名下
-static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
+/// - 每条登记都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到拒绝原因
+static pluginxx::Task<void>
+    featureAgentSetup(FeatureCtx& ctx, agentxx::plugin::AgentRef ref) {
     using namespace agentxx::plugin;
 
     // 能力表缺失 (主程序太旧 / 清单未声明): 按"功能不可用"降级, 不影响加载
     if (!ctx.iface.capabilities || !ctx.iface.capabilities->register_capability) {
         ctx.log.info("example_feature: capabilities iface unavailable, plugin stays idle");
-        return 0;
+        co_return;
     }
 
     // 1. 自己的功能埋点: 同步实现行
@@ -101,8 +103,7 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
     //    - `pointAnswer` 把业务 JSON 包成 `{"value": ...}` 形式 (与早期写法一致),
     //      已经带 `value` / `disable` 的会原样返回
     {
-        std::string error;
-        const int32_t rc = providePoint(
+        auto r = co_await providePoint(
             ctx,
             ref,
             "plugin.example_feature.beat",
@@ -116,13 +117,14 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
                 out["beats"]    = utilxx_base::Json::array();
                 out["confident"] = true;
                 return pointAnswer(out.dump());
-            },
-            {},
-            &error
+            }
         );
-        if (rc != 0) {
-            ctx.log.warn("example_feature: providePoint(beat) rejected: " + error);
-            return -1; // 挂载事务失败: 主程序按拒绝处理并回滚
+        if (!r.ok()) {
+            // 挂载事务失败: 主程序按拒绝处理并回滚
+            throw std::runtime_error{
+                "example_feature: providePoint(beat) rejected: "
+                + (r.accepted() ? std::string(r.text()) : r.startError)
+            };
         }
     }
 
@@ -130,8 +132,7 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
     //    - 协程的返回值就是回答本身, 用 `pointAnswer` 包一层 (与同步形态一致)
     //    - `value` / `disable` 是回答的保留键: 业务数据里要用同名字段时自己包一层
     {
-        std::string   error;
-        const int32_t rc = providePoint(
+        auto r = co_await providePoint(
             ctx,
             ref,
             "plugin.example_feature.slow",
@@ -144,13 +145,13 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
                 out["counter"] = ++c.counter;
                 out["input"]   = args.value<int64_t>("input", 1);
                 co_return pointAnswer(out.dump());
-            },
-            {},
-            &error
+            }
         );
-        if (rc != 0) {
-            ctx.log.warn("example_feature: providePoint(slow) rejected: " + error);
-            return -1;
+        if (!r.ok()) {
+            throw std::runtime_error{
+                "example_feature: providePoint(slow) rejected: "
+                + (r.accepted() ? std::string(r.text()) : r.startError)
+            };
         }
     }
 
@@ -158,19 +159,19 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
     //    - 主程序点写全名; 行只对本挂载生效, 优先级默认 0
     //    - 点还没声明 (如裸 PluginManager 环境) 时登记被拒, 记一条日志继续
     {
-        std::string   error;
-        const int32_t rc = providePoint(
+        auto r = co_await providePoint(
             ctx,
             ref,
             agentxx::plugin::points::ContextCountTokens,
             [](FeatureCtx&, std::string_view) {
                 return std::string{R"_({"value":{"tokens":424242}})_"};
-            },
-            {},
-            &error
+            }
         );
-        if (rc != 0) {
-            ctx.log.info("example_feature: host point countTokens not declared yet: " + error);
+        if (!r.ok()) {
+            ctx.log.info(
+                "example_feature: host point countTokens not declared yet: "
+                + (r.accepted() ? std::string(r.text()) : r.startError)
+            );
         }
     }
 
@@ -179,13 +180,10 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
     //    - 一个插件可能同时挂在多个 agent 上: 载荷里带 `agentId`, 订阅侧自己过滤
     //    - 订阅跟着实例走: 禁用/卸载时由主程序自动退订
     if (ctx.iface.broadcasts && ctx.iface.broadcasts->subscribe_broadcast) {
-        const std::string_view pointId = agentxx::plugin::points::TurnStart;
-        auto                   idSv    = agentxx::plugin::PluginStringView::from(pointId);
-        agentxx::plugin::subscribePluginBroadcast(
-            ctx.host,
-            ctx.iface.broadcasts,
+        co_await agentxx::plugin::subscribePluginBroadcast(
+            ctx,
             ref.ptr(),
-            idSv,
+            agentxx::plugin::points::TurnStart,
             [](const PluginxxStringView* payload, void* ud) {
                 auto* c = static_cast<FeatureCtx*>(ud);
                 if (c == nullptr) {
@@ -200,7 +198,7 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
             &ctx
         );
     }
-    return 0;
+    co_return;
 }
 
 static void* featureAgentStart(
@@ -240,20 +238,30 @@ static void* featureAgentMount(
         }
         return nullptr;
     }
-    const agentxx::plugin::AgentRef ref(*spec);
-    if (featureAgentSetup(ctx, ref) != 0) {
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "example_feature mount: registration transaction failed"
+                "example_feature mount: host has no pluginxx.tasks (spawn unavailable)"
             );
         }
         return nullptr;
     }
-    ctx.log.info("example_feature mounted");
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    auto later = agentxx::plugin::finishLater(notify);
+    // 注册事务交给协程: 实现行/订阅逐条"提交 + co_await", 全部生效后再放行挂载
+    const agentxx::plugin::AgentRef agentRef(*spec);
+    ctx.spawn([later, agentRef](FeatureCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await featureAgentSetup(c, agentRef);
+            c.log.info("example_feature mounted");
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 static void* featureAgentUnmount(

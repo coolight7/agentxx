@@ -13,10 +13,12 @@ void usePositive(Ctx& ctx) {
     // 功能埋点实现行 = 能力行 (实现体收载荷, 返回结果正文)
     providePoint(ctx, ScopeRef{}, "pos.point", [](Ctx&, std::string_view payload) -> std::string {
         return std::string{payload};
-    });
+    })
+        .forget();
     capability(ctx, "pos.cap", [](Ctx&, std::string_view, std::string_view) -> std::string {
         return {};
-    });
+    })
+        .forget();
     graph_node(ctx, "pos.node", "{}", [](Ctx&, const RootRequest&) -> std::string {
         return "{}";
     });

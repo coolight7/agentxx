@@ -82,8 +82,10 @@ void readArgs(UncensoredCtx& ctx) {
     }
 }
 
-/// 注册事务 (mount 的实际内容): 为**该 agent** 注入一段附加系统提示词
-static int uncensoredSetup(UncensoredCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
+/// 挂载事务 (mount 的实际内容): 为**该 agent** 注入一段附加系统提示词
+/// - **协程形态**: 提示词写入是“提交 + `co_await`”, 没写成就是挂载失败
+static pluginxx::Task<void>
+    uncensoredSetup(UncensoredCtx& ctx, agentxx::plugin::AgentRef ref) {
     using namespace agentxx::plugin;
 
     readArgs(ctx);
@@ -92,8 +94,7 @@ static int uncensoredSetup(UncensoredCtx& ctx, const agentxx::plugin::ScopeRef& 
     // 清单里已声明 require `agentxx.agent.prompt`, 走到这里该表必然可用;
     // 仍做一次判空, 主程序换版本/表被摘除时给出明确失败而不是崩溃
     if (!ctx.iface.prompt || !ctx.iface.prompt->set_prompt) {
-        ctx.log.error(prefix + "prompt iface unavailable, injection skipped");
-        return -1;
+        throw std::runtime_error{prefix + "prompt iface unavailable, injection skipped"};
     }
 
     utilxx_base::Json append       = utilxx_base::Json::object();
@@ -101,17 +102,19 @@ static int uncensoredSetup(UncensoredCtx& ctx, const agentxx::plugin::ScopeRef& 
     utilxx_base::Json payload      = utilxx_base::Json::object();
     payload["appendSystemPrompts"] = std::move(append);
 
-    const std::string js       = payload.dump();
-    auto              agentRef = ref.raw();
-    if (setPromptJson(ctx.host, ctx.iface, &agentRef, js) != 0) {
-        ctx.log.error(prefix + "set_prompt(appendSystemPrompts) rejected by host");
-        return -1;
+    const std::string js = payload.dump();
+    auto              wr = co_await setPromptJson(ctx, ref.ptr(), js);
+    if (!wr.ok()) {
+        throw std::runtime_error{
+            prefix + "set_prompt(appendSystemPrompts) rejected by host: "
+            + (wr.accepted() ? std::string(wr.text()) : wr.startError)
+        };
     }
     ctx.log.info(
         prefix + "appendSystemPrompts[" + ctx.sectionKey + "] injected ("
         + std::to_string(ctx.text.size()) + " bytes)"
     );
-    return 0;
+    co_return;
 }
 
 } // namespace
@@ -190,19 +193,29 @@ static void* uncensoredAgentMount(
         }
         return nullptr;
     }
-    const agentxx::plugin::AgentRef ref(*spec);
-    if (uncensoredSetup(ctx, ref) != 0) {
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "agentxx_llm_uncensored mount: prompt injection failed"
+                "agentxx_llm_uncensored mount: host has no pluginxx.tasks (spawn unavailable)"
             );
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    auto later = agentxx::plugin::finishLater(notify);
+    // 提示词注入交给协程: 写成了才放行挂载
+    const agentxx::plugin::AgentRef agentRef(*spec);
+    ctx.spawn([later, agentRef](UncensoredCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await uncensoredSetup(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 static void*

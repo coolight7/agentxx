@@ -3714,7 +3714,7 @@ struct PointImplAdapter {
 
 } // namespace detail
 
-/// 为一个功能埋点登记一行实现 (实现行 = 能力行)
+/// 为一个功能埋点登记一行实现 (实现行 = 能力行, **调用即提交**)
 ///
 /// - 主程序点写全名 (`agentxx.agent.point.*` 等), 自己的点写 `plugin.<插件名>.*`;
 /// - `fn` 收 `(ctx, 载荷 JSON)` (也可以只收载荷), 可返回字符串 (同步, 必须快速返回)
@@ -3727,17 +3727,15 @@ struct PointImplAdapter {
 ///     - [pointId] 功能埋点 id
 ///     - [fn] 实现体
 ///     - [opts] 顺序与耗时声明
-///     - [error] 非空时写入拒绝原因
 ///
-/// - `return` `AGENTXX_RESULT_OK` = 成功, 其它 = `agentxx_result.h` 的错误码
+/// - `return` 表调用凭据 ([pluginxx::tableOp]): `co_await` 它才拿 `<是否受理, 状态, 原因>`
 template<typename Ctx, typename Fn>
-inline int32_t providePoint(
-    Ctx&                      ctx,
-    const ScopeRef&           ref,
-    std::string_view          pointId,
-    Fn&&                      fn,
-    const PointImplOptions&   opts  = {},
-    std::string*              error = nullptr
+inline pluginxx::TableOpTicket providePoint(
+    Ctx&                    ctx,
+    const ScopeRef&         ref,
+    std::string_view        pointId,
+    Fn&&                    fn,
+    const PointImplOptions& opts = {}
 ) {
     pluginxx::CapabilityOptions cap;
     cap.impls     = PLUGINXX_CAPABILITY_IMPLS_MANY;
@@ -3748,13 +3746,12 @@ inline int32_t providePoint(
     cap.timeoutMs = opts.timeoutMs;
     cap.ownerTag  = opts.ownerTag;
     // 空的引用 = 进程级行 (对所有 agent 生效); 有引用时只对这个挂载生效
-    cap.scope     = ref.empty() ? nullptr : ref.ptr();
+    cap.scope = ref.empty() ? nullptr : ref.ptr();
     return pluginxx::capability(
         ctx,
         pointId,
         detail::PointImplAdapter<Ctx, std::decay_t<Fn>>{std::forward<Fn>(fn)},
-        cap,
-        error
+        cap
     );
 }
 

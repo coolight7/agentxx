@@ -530,8 +530,8 @@ TestResult testPluginSdk() {
     {
         SdkCtx ctx;
         ctx.init(&host);
-        g_captured       = CapturedRegistration{};
-        const int32_t rc = agentxx::plugin::providePoint(
+        g_captured = CapturedRegistration{};
+        auto pt    = agentxx::plugin::providePoint(
             ctx,
             g_agentRef,
             points::ContextCountTokens,
@@ -541,9 +541,9 @@ TestResult testPluginSdk() {
             },
             PointImplOptions{.priority = 5}
         );
-        XX_TEST_EXPECT_EQ(rc, 0);
+        XX_TEST_EXPECT_TRUE(pt.accepted());
+        XX_TEST_EXPECT_TRUE(pt.done());
         XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
-
         {
             NotifyProbe probe;
             auto        notify = probe.notify();
@@ -559,17 +559,16 @@ TestResult testPluginSdk() {
 
         // 收上下文+载荷的形态
         g_captured = CapturedRegistration{};
-        XX_TEST_EXPECT_EQ(
-            agentxx::plugin::providePoint(
-                ctx,
-                g_agentRef,
-                points::ToolSummarizeOutput,
-                [](SdkCtx&, std::string_view payload) -> std::string {
-                    return std::string{payload};
-                }
-            ),
-            0
+        auto pt2   = agentxx::plugin::providePoint(
+            ctx,
+            g_agentRef,
+            points::ToolSummarizeOutput,
+            [](SdkCtx&, std::string_view payload) -> std::string {
+                return std::string{payload};
+            }
         );
+        XX_TEST_EXPECT_TRUE(pt2.accepted());
+        XX_TEST_EXPECT_TRUE(pt2.done());
         XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
         {
             NotifyProbe probe;
@@ -588,12 +587,15 @@ TestResult testPluginSdk() {
         SdkCtx ctx;
         ctx.init(&host);
         g_captured = CapturedRegistration{};
-        agentxx::plugin::capability(
-            ctx,
-            "test.cap.sync",
-            [](SdkCtx&, std::string_view method, std::string_view args) -> std::string {
-                return fmt::format(R"({{"method":"{}","args":{}}})", method, args);
-            }
+        XX_TEST_EXPECT_TRUE(
+            agentxx::plugin::capability(
+                ctx,
+                "test.cap.sync",
+                [](SdkCtx&, std::string_view method, std::string_view args) -> std::string {
+                    return fmt::format(R"({{"method":"{}","args":{}}})", method, args);
+                }
+            )
+                .done()
         );
         XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
 
@@ -621,14 +623,17 @@ TestResult testPluginSdk() {
         SdkCtx ctx;
         ctx.init(&host);
         g_captured = CapturedRegistration{};
-        agentxx::plugin::capability(
-            ctx,
-            "test.cap.async",
-            [&box](SdkCtx&, std::string_view method, std::string_view) -> Task<std::string> {
-                co_await Gate{box.released, box.handle};
-                *box.finished = true;
-                co_return fmt::format("done:{}", method);
-            }
+        XX_TEST_EXPECT_TRUE(
+            agentxx::plugin::capability(
+                ctx,
+                "test.cap.async",
+                [&box](SdkCtx&, std::string_view method, std::string_view) -> Task<std::string> {
+                    co_await Gate{box.released, box.handle};
+                    *box.finished = true;
+                    co_return fmt::format("done:{}", method);
+                }
+            )
+                .done()
         );
         XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
         XX_TEST_EXPECT_TRUE(g_captured.capCancel != nullptr);
