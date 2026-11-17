@@ -245,8 +245,8 @@ static pluginxx::Task<void> sysMonMountSetupAsync(SysMonCtx& ctx, ScopeRef ref) 
     co_return;
 }
 
-/// 进程级启动工作: 能力、事件订阅与后台采样任务 (与挂载数无关)
-static int32_t sysMonStartSetup(SysMonCtx& ctx) {
+/// 进程级启动工作: 能力、事件订阅与后台采样任务 (与挂载数无关, **协程形态**)
+static pluginxx::Task<void> sysMonStartSetup(SysMonCtx& ctx) {
     // 2. 能力: agentxx.system_usage —— 读取当前系统负担 (cpu/gpu 占用、内存与显存占用)
     //    - 这个 id 由主程序声明 (agentxx/plugin/api/agentxx_capability_ids.h),
     //      插件只登记实现行
@@ -257,7 +257,7 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
     //    - 载荷字段见 [usageToJson] (内存与显存都给出可用量与总量)
     //    - 查询要读系统/GPU 计数器 (约 100ms 以上), 交给主程序阻塞池执行,
     //      异步返回: 调用方可以随时调用, 不会占住主程序 IO 线程
-    capability(
+    co_await capability(
         ctx,
         agentxx::plugin::capabilities::SystemUsage,
         [](SysMonCtx& c, const PluginxxHost*, std::string_view, std::string_view)
@@ -271,12 +271,10 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
 
     // 3. 事件订阅
     if (ctx.iface.broadcasts && ctx.iface.broadcasts->subscribe_broadcast) {
-        auto t1 = PluginStringView::fromCstr("agentxx.client.plugin.agentxx_system_monitor.usage_enabled");
-        agentxx::plugin::subscribePluginBroadcast(
-            ctx.host,
-            ctx.iface.broadcasts,
+        co_await agentxx::plugin::subscribePluginBroadcast(
+            ctx,
             nullptr, ///< 进程级订阅 (客户端开关事件走主程序总线)
-            t1,
+            "agentxx.client.plugin.agentxx_system_monitor.usage_enabled",
             [](const PluginxxStringView* event_json, void* ud) {
                 auto* c = static_cast<SysMonCtx*>(ud);
                 if (!c) {
@@ -295,12 +293,10 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
             &ctx
         );
 
-        auto t2 = PluginStringView::fromCstr("agentxx.agent.host.client_attached");
-        agentxx::plugin::subscribePluginBroadcast(
-            ctx.host,
-            ctx.iface.broadcasts,
+        co_await agentxx::plugin::subscribePluginBroadcast(
+            ctx,
             nullptr, ///< 进程级订阅 (客户端接入事件走主程序总线)
-            t2,
+            "agentxx.agent.host.client_attached",
             [](const PluginxxStringView*, void* ud) {
                 auto* c = static_cast<SysMonCtx*>(ud);
                 if (!c || !c->usageEnabled.load(std::memory_order_relaxed)) {
@@ -360,7 +356,7 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
         }
     });
 
-    return 0;
+    co_return;
 }
 
 static void*
@@ -371,32 +367,28 @@ static void*
         }
         return nullptr;
     }
-    if (sysMonStartSetup(ctx) != 0) {
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         if (error) {
-            PluginString::set(ctx.host, error, "agentxx_system_monitor start: registration failed");
+            PluginString::set(
+                ctx.host,
+                error,
+                "agentxx_system_monitor start: host has no pluginxx.tasks (spawn unavailable)"
+            );
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
-}
-
-/// 挂载: 把系统信息工具注册到本 agent 名下
-static void sysMonMountSetupBlocking(SysMonCtx& ctx, const ScopeRef& ref) {
-    // 1. 工具
-    auto schema = ctx.schema("agentxx_get_system_core_info").build();
-    blocking_tool(
-         ctx,
-         ref,
-        "agentxx_get_system_core_info",
-        "Get system resource usage: CPU utilization and core count, memory usage, GPU utilization, and GPU memory usage.",
-        schema,
-        [](SysMonCtx& c, std::string_view) -> std::string {
-            auto usage = c.querySync();
-            return formatUsageText(usage);
+    auto later = finishLater(notify);
+    // 能力登记与事件订阅走协程: 全部生效后再报启动完成
+    ctx.spawn([later](SysMonCtx& c, OpCtl&) -> Task<void> {
+        try {
+            co_await sysMonStartSetup(c);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
         }
-    );
-
+        co_return;
+    });
+    return later.provider();
 }
 
 static void* sysMonMount(
@@ -412,12 +404,6 @@ static void* sysMonMount(
         return nullptr;
     }
     auto later = finishLater(notify);
-    if (!later.active()) {
-        // 老宿主: 没有 provider 句柄可返回, 退回同步注册 (IO 线程上内联完成)
-        const AgentRef ref(*spec);
-        sysMonMountSetupBlocking(ctx, ref);
-        return nullptr;
-    }
     if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         later.failed("agentxx_system_monitor mount: host has no pluginxx.tasks (spawn unavailable)");
         return later.provider();
