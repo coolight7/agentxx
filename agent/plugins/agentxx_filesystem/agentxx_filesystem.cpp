@@ -332,7 +332,7 @@ static int32_t fsSetup(FsPluginCtx& ctx, const ScopeRef& ref) {
     );
     // 列表按读取类工具处理: 声明 `path` (可为通配模式) 决定是否询问一次;
     // 列出的条目 (含 recursive 逐层展开结果) 在工具内逐项复核权限后才输出
-    registerReadPathPermission(ctx, ref, kNameList, "path");
+    registerReadPathPermissionBlocking(ctx, ref, kNameList, "path");
 
     // 2. Read
     auto readSchema
@@ -400,7 +400,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             kReadFlags
         );
     }
-    registerReadPathPermission(ctx, ref, kNameRead, "path");
+    registerReadPathPermissionBlocking(ctx, ref, kNameRead, "path");
 
     // 2.1 Read Media
     auto readMediaSchema
@@ -431,7 +431,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
         0,
         kReadOnlyFlags
     );
-    registerReadPathPermission(ctx, ref, kNameReadMedia, "path");
+    registerReadPathPermissionBlocking(ctx, ref, kNameReadMedia, "path");
 
     // 3. Write
     auto writeSchema
@@ -495,7 +495,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             kWriteFlags
         );
     }
-    registerWritePathPermission(ctx, ref, kNameWrite, "path");
+    registerWritePathPermissionBlocking(ctx, ref, kNameWrite, "path");
 
     // 4. Edit
     // 两种写法: 多段 `edits: [{old_str,new_str}, ...]` (推荐, 一次改多处) 与
@@ -569,7 +569,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             }
         );
     }
-    registerWritePathPermission(ctx, ref, kNameEdit, "path");
+    registerWritePathPermissionBlocking(ctx, ref, kNameEdit, "path");
 
     // 5. Glob
     // 权限限制: 先按 `file_patterns` (数组) 声明读权限 —— 这决定"是否询问用户一次"
@@ -618,7 +618,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
         0,
         kReadOnlyFlags
     );
-    registerReadPathPermission(ctx, ref, kNameGlob, "file_patterns");
+    registerReadPathPermissionBlocking(ctx, ref, kNameGlob, "file_patterns");
 
     // 6. Grep
     auto grepSchema = ctx.schema(kNameGrep)
@@ -675,7 +675,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     );
     // 权限限制: 同 glob —— 按 `file_patterns` (数组) 声明读权限决定是否询问,
     // 扫描出的文件在工具内逐项复核后才读取 (被拒/未获批准的文件不读)
-    registerReadPathPermission(ctx, ref, kNameGrep, "file_patterns");
+    registerReadPathPermissionBlocking(ctx, ref, kNameGrep, "file_patterns");
 
     // 7. Move
     auto moveSchema = ctx.schema(kNameMove)
@@ -714,7 +714,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     );
     // 权限限制: 声明 `src` (被移动的路径) 为写入目标决定是否询问一次;
     // `dst` 在工具内用只读查询复核 (见 destinationAllowed)
-    registerWritePathPermission(ctx, ref, kNameMove, "src");
+    registerWritePathPermissionBlocking(ctx, ref, kNameMove, "src");
 
     // 8. Copy
     auto copySchema = ctx.schema(kNameCopy)
@@ -752,7 +752,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
         kWriteFlags
     );
     // 权限限制: 同 move
-    registerWritePathPermission(ctx, ref, kNameCopy, "src");
+    registerWritePathPermissionBlocking(ctx, ref, kNameCopy, "src");
 
     // 9. Remove
     auto removeSchema = ctx.schema(kNameRemove)
@@ -784,7 +784,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
         kWriteFlags
     );
     // 删除是写操作: 声明 `path` 为写入目标 (同 write/edit)
-    registerWritePathPermission(ctx, ref, kNameRemove, "path");
+    registerWritePathPermissionBlocking(ctx, ref, kNameRemove, "path");
 
     return 0;
 }

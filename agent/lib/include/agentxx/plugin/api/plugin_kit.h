@@ -4846,7 +4846,9 @@ struct ToolPermissionSpec {
 };
 
 /// 声明工具权限 (工具注册后调用); 返回 C ABI 状态码 (0 成功)
-inline int32_t registerToolPermission(
+///
+/// 阻塞形态 (没有实例上下文可查 cancel/scheduler); 协程/生命周期里用同名协程形态。
+inline int32_t registerToolPermissionBlocking(
     const PluginxxHost*                 host,
     const AgentxxPluginPermissionIface* iface,
     const PluginxxScopeRef*             agent,
@@ -4878,15 +4880,53 @@ inline int32_t registerToolPermission(
     return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
 }
 
-/// 声明工具权限 (从插件实例上下文取主程序与接口表)
+/// 声明工具权限 (**协程形态**: 调用即提交, `co_await` 后看 `.ok()`)
 template<typename Ctx>
-inline int32_t registerToolPermission(
+inline pluginxx::TableOpTicket registerToolPermission(
+    const Ctx&                ctx,
+    const ScopeRef&           agent,
+    const ToolPermissionSpec& spec
+) {
+    if (spec.toolName.empty()) {
+        return {};
+    }
+    AgentxxPluginToolPermissionSpec abiSpec{};
+    abiSpec.tool_name   = PluginStringView::from(spec.toolName);
+    abiSpec.scope       = static_cast<int32_t>(spec.scope);
+    abiSpec.target_kind = static_cast<int32_t>(spec.target);
+    abiSpec.target_arg  = PluginStringView::from(spec.targetArg);
+    abiSpec.struct_size = sizeof(AgentxxPluginToolPermissionSpec);
+    abiSpec.category    = PluginStringView::from(spec.category);
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, agent, abiSpec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.permission
+                || !ctx.iface.permission->register_tool_permission) {
+                return nullptr;
+            }
+            auto ref = agent.raw();
+            return ctx.iface.permission->register_tool_permission(
+                ctx.host,
+                &ref,
+                &abiSpec,
+                cb,
+                ud,
+                err
+            );
+        }
+    );
+}
+
+/// 声明工具权限 (阻塞形态, 从插件实例上下文取主程序与接口表)
+template<typename Ctx>
+inline int32_t registerToolPermissionBlocking(
     const Ctx&              ctx,
     const ScopeRef&         agent,
     const ToolPermissionSpec& spec
 ) {
     auto ref = agent.raw();
-    return registerToolPermission(ctx.host, ctx.iface.permission, &ref, spec);
+    return registerToolPermissionBlocking(ctx.host, ctx.iface.permission, &ref, spec);
 }
 
 /// 便捷: 声明"路径参数 + 读作用域" (读取类工具, 目标参数值为路径)
@@ -4894,7 +4934,23 @@ inline int32_t registerToolPermission(
 /// - 模式/前缀类参数 (glob 表达式) 建议配合 checkPathDecisions/filterPathPermissions
 ///   在工具内对展开出的实际路径逐项复核 (见"路径权限查询"一节)
 template<typename Ctx>
-inline int32_t registerReadPathPermission(
+inline int32_t registerReadPathPermissionBlocking(
+    const Ctx&       ctx,
+    const ScopeRef&  agent,
+    std::string_view toolName,
+    std::string_view pathArg
+) {
+    ToolPermissionSpec spec;
+    spec.toolName  = toolName;
+    spec.scope     = PermissionScope::Read;
+    spec.target    = PermissionTarget::Path;
+    spec.targetArg = pathArg;
+    return registerToolPermissionBlocking(ctx, agent, spec);
+}
+
+/// 声明"路径参数 + 读作用域" (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket registerReadPathPermission(
     const Ctx&       ctx,
     const ScopeRef&  agent,
     std::string_view toolName,
@@ -4910,7 +4966,23 @@ inline int32_t registerReadPathPermission(
 
 /// 便捷: 声明"路径参数 + 写作用域" (写入/编辑类工具, 目标参数值为路径)
 template<typename Ctx>
-inline int32_t registerWritePathPermission(
+inline int32_t registerWritePathPermissionBlocking(
+    const Ctx&       ctx,
+    const ScopeRef&  agent,
+    std::string_view toolName,
+    std::string_view pathArg
+) {
+    ToolPermissionSpec spec;
+    spec.toolName  = toolName;
+    spec.scope     = PermissionScope::Write;
+    spec.target    = PermissionTarget::Path;
+    spec.targetArg = pathArg;
+    return registerToolPermissionBlocking(ctx, agent, spec);
+}
+
+/// 声明"路径参数 + 写作用域" (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket registerWritePathPermission(
     const Ctx&       ctx,
     const ScopeRef&  agent,
     std::string_view toolName,
