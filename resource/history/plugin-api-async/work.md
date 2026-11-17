@@ -14,7 +14,7 @@
 | C | `agentxx.agent.runtime` 全部成员 | 完成（21 个成员改异步；lib / test / client / 25 个插件编译通过，插件相关测试 3983 条全绿） |
 | C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 完成（`config` v4 / `plugins` v2 / `broadcasts` v4 / `capabilities` v8 / `net` v2） |
 | D | `agentxx.client.*` 六张表 + 三个回答型回调 | 完成（client 六张表 v2、三个回调改 notify、6 个插件与 4 个测试文件迁移；`client_plugins` / `plugin_sdk` / `plugin_bridge` / `plugin_runtime` / `boundaries` / 两个挂载组全绿） |
-| E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 部分完成（接口表数量与 §8.0 调用模型文档已同步） |
+| E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 完成（150 ms 同步桥已随阶段 D 删掉；本轮清掉最后四个无调用的同步助手 + 过时注释，`AGENTS.md` / `plugins.md` 同步到 v7/v8，全量回归 43136 条全绿） |
 
 ## 关键实现决定（与计划一致，落在代码里）
 
@@ -694,6 +694,44 @@ clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清�
   原来“调用完立刻断言”的写法会读到旧计数；改成轮询到内容出现再断言（断言按内容，
   不按精确次数，避免别的异步 toast 干扰）。
 
+### 第 13 步：阶段 E —— 残留同步路径清理 + 文档
+
+计划 §9 / §10。这步只做收尾：删掉全部成员改异步后没人再调的同步助手、把过时注释
+改成现在的执行方式、文档对齐 v7 / v8。
+
+改了哪些文件：
+
+1. `agent/lib/src/plugins/plugin_manager_vtable.cpp`: 删除四个已无人调用的同步助手
+   `onInstanceIo` / `queryStringIo` / `onScopedInstanceIo` / `queryScopedStringIo`
+   （9 张业务表全部改异步后只剩定义）; `enterHost` 注释里的 "见 `ioCallSyncKeep`"
+   改成 `startTableOp` 的租约说明。
+2. `agent/lib/src/plugins/client_plugin_manager.cpp`: 删掉已无用的 `#include <future>`
+   （`onClientIo` 等同步等待助手删除后无任何 `std::future` 用法）。
+3. `agent/lib/src/plugins/plugin_manager_capability.cpp`: `call_tool` 的文件头与 5 条
+   错误文本从旧名 `call_tool_async` 改成现在的成员名 `call_tool`。这里的 `ioCallSync`
+   **保留**：它只用来在 IO 线程完成"受理"并同步拿到句柄，工具结果仍经完成回调异步回来。
+4. 过时注释同步（都只说执行方式，不改行为）：`plugin_manager.h`（runtime 段线程约定）、
+   `runtime_state.h`（文件头）、`plugin_manager_runtime.cpp`（文件头）、
+   `agent/context.cpp`（`getSessionWorkDir` 的 io 线程说明）、`tool_result_frame.h`
+   （`call_tool` 名字）。
+5. `AGENTS.md`: JS 引擎"同步回调有 150 ms 上限"整段改写为异步操作契约 + Promise；
+   新增"client 侧六张表同一套契约"段；代次说明改成 agent 7 / client 8，`v7` 条目补全，
+   `AGENTXX_PLUGIN_API_VERSION` 追到 7。
+6. `docs/zh-cn/design/plugins.md`: §1 版本限制与实施方式、§8.0 加 client 段（调用模型）、
+   §9 六张表版本 2 + 异步说明、§12 client 脚本回调异步、§15.5 主程序不等插件线程，
+   以及本轮把"非 IO 线程上以 `ioCallSync` 投递回 IO 线程"改成 `startTableOp` 的排队说法。
+7. 英文文档 `docs/en/design/plugins.md` **未改**：该页自己在开头声明 “以中文页为准、
+   只做摘要”，其中的版本号仍是旧的。
+
+验证：
+
+- 内层 lib `agentxx_static` 重编 → `cmake --install` 刷新安装前缀 → test 重链
+  （删静态函数后无未使用告警）;
+- 定向 `boundaries client_plugins plugin_sdk plugin_bridge plugin_runtime
+  plugin_host_mount plugin_multi_mount` → `passed=2207 failed=0`;
+- 全量 `agentxx_test --log-level warn` → `Total: passed=43136 failed=0`
+  （与阶段 D 结束时同数）。
+
 ## 与计划的偏差
 
 - 计划 §7.3 写"全局版本 5 → 6"：实际第 6 代已被占用，改为 6 → 7。
@@ -716,14 +754,11 @@ clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清�
 
 ## 剩余事项
 
-- 阶段 D（`agentxx.client.*` 六张 + 三个回答型回调）待做。
-- 阶段 E 还剩：删残留同步实现路径、client 侧 150 ms 同步桥改 Promise、
-  `AGENTS.md` 的调用模型说明。
 - `KeyMetrics` 的表调用耗时统计（计划 §10）尚未加。
-- **子模块改动要在 `cxx_pluginxx` 仓库里单独提交**：`agent/third_party/cxx_pluginxx`
-  是子模块，父仓库只能记录指针。前两个 commit 因此不含它的改动（只含 agent/docs），
-  指针在本次提交里一并对齐。
+- 英文设计文档 `docs/en/design/plugins.md` 仍是摘要版（版本号停在 v3），需要时再整页对齐中文版。
 - 插件的同步阻塞助手（`netCallWait`）现在在 3 个插件里各一份（`websearch` / `rag_search` /
   `text_selection_monitor`）加 `chatbot` 的 `chatbot_net.cpp` 一份。它们只需要 `net.call`
   + 条件变量；如果以后接入第三家插件库，可以考虑放进插件自己的私有头文件里复用
   （但**不要**再回 SDK）。
+- 子模块 `agent/third_party/cxx_pluginxx` 的改动已在其仓库内提交（HEAD `9647586`
+  “kit: 删除阻塞形态, 只留 ticket / 回调 / 同步桥原语”），父仓库指针已对齐。

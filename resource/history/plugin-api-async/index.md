@@ -66,13 +66,15 @@
 
 ## 状态
 
-实施中（2026-11）：阶段 A（骨架 + `session` 试点）、A2（加载线程）、B（`agentxx.agent`
-九张业务表）、C（`runtime` 21 个成员）、C2 的第一批（`config` v4 / `plugins` v2）、
-第二批（`broadcasts` v4）、第三批（`capabilities` v8）、第四批（`net` v2：`call` 合并
-`call_async`，同时删掉 SDK 的同步阻塞形态 `netCallBlocking` / `netFetchBlocking`）已完成，
-进度与验证见 [work.md](work.md)。剩下 D（`agentxx.client.*` 六张 + 三个回答型回调）、
-E（删同步路径与 client 侧 150 ms 同步桥）。全局 API 代次实际是 **6 → 7**（第 6 代已被
-"工具结果两段上报"占用）。
+已完成（2026-11）。七个阶段全部落地：A（骨架 + `session` 试点）、A2（加载线程）、
+B（`agentxx.agent` 九张业务表）、C（`runtime` 21 个成员）、C2（框架表四批：`config` v4 /
+`plugins` v2 / `broadcasts` v4 / `capabilities` v8 / `net` v2）、D（`agentxx.client.*`
+六张表 + 三个回答型回调，连带删除 client 侧 150 ms 同步桥）、E（残留同步路径与文档）。
+进度与逐步验证见 [work.md](work.md)。
+
+全局 API 代次实际是 **6 → 7**（第 6 代已被 "工具结果两段上报" 占用），client 侧
+`AGENTXX_CLIENT_PLUGIN_API_VERSION` = **8**；收尾时全量回归 `agentxx_test` =
+`passed=43136 failed=0`。
 
 前置: 无。后续依赖它的任务: [js-runtime-singleton](../js-runtime-singleton/index.md)
 （JS 运行时单例重构建议在它之后做，可少写一半同步桥过渡代码）与
@@ -110,4 +112,24 @@ E（删同步路径与 client 侧 150 ms 同步桥）。全局 API 代次实际�
 
 ## 结论
 
-待实施后补充。
+做完了。实际落地与计划一致的部分：125 个成员里绝大多数改了异步（主体是 agent 九张业务表、
+`runtime` 21 个成员、框架通用表、client 六张表），三个回答型回调（工具折叠/展开渲染、命令
+`execute`）改成 `PluginxxOperatorNotify`，client 侧 150 ms 同步桥整体删除；`*Blocking` 形态
+比计划更彻底地删干净了（SDK 只留 `co_await` / 回调），插件要阻塞就自己组合
+（4 个网络插件各带一份私有 “提交 + 条件变量” 助手）。
+
+实施中定下来的几条经验：
+
+- **一个执行框架就够**：主程序侧全部成员都走 `pluginxx::startTableOp`（调用方已在 IO 线程时
+  内联，其他线程排队），入口自己只负责参数/作用域校验与写 `error_out`；直接 `ioCallSync`
+  的旧写法现在只剩两处 “同步拿受理句柄” 的地方（`call_tool` 受理与 `is_canceled` 查询）。
+- **入参借用视图必须拷**：主程序投递前一律按值拷贝（`copyView` / `SpecKeep`），否则跨线程
+  执行时原内存已失效 —— ASan 实测 heap-use-after-free。
+- **`version` 与 `BASELINE_SIZE` 必须一起动**：布局变了却没抬 `version` 时，现象是插件注册
+  全部失败而日志不明显。
+- **测试不能假设 “当场完成”**：表调用可能延后到 IO 线程，断言要么轮询到内容出现，要么自备
+  完成等待（DSO 用例 `test_client_start_fail`）。
+- **改完 lib 必须 `cmake --install` 再编 test**：test 链的是安装前缀里的 `agentxx_static`，
+  否则现象是 “改了没生效”。
+
+后续可做（不在本任务内）：`KeyMetrics` 的表调用耗时统计；英文设计文档整页对齐中文版。

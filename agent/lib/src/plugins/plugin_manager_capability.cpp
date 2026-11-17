@@ -1,4 +1,4 @@
-/// 插件工具调用 (agentxx.agent.tools 表的 call_tool_async 实现)
+/// 插件工具调用 (agentxx.agent.tools 表的 call_tool 实现)
 ///
 /// 通用表 (能力/事件/调度/任务/协程驱动/日志/JSON/配置/插件互查/取消) 的实现已
 /// 下沉到 cxx_pluginxx (见 pluginxx/host/host_core.h 与 tables_impl.h); 本文件只保留
@@ -52,7 +52,7 @@ PluginxxOperatorHandle* PluginMount::callToolAsync(
     // 入参在当前调用内复制；查询、登记和完整 start 都在所属 IO 线程执行。
     auto host = host_.lock();
     if (!host) {
-        hostMemorySetString(error_out, "call_tool_async: plugin host released");
+        hostMemorySetString(error_out, "call_tool: plugin host released");
         return nullptr;
     }
     if (!host->isIoThread()) {
@@ -77,24 +77,24 @@ PluginxxOperatorHandle* PluginMount::callToolAsync(
     try {
         auto owner = caller ? caller->self.lock() : nullptr;
         if (!owner || !host->ioExecutor()) {
-            throw std::runtime_error("call_tool_async: missing caller or IO executor");
+            throw std::runtime_error("call_tool: missing caller or IO executor");
         }
         const auto toolName = svToStr(name);
         auto       tool     = std::dynamic_pointer_cast<PluginTool>(toolRegistry()->find(toolName));
         auto       provider = tool ? tool->instance() : nullptr;
         if (!provider || !provider->enabled
             || (provider->lifetime && !provider->lifetime->acceptsOperations())) {
-            throw std::runtime_error("call_tool_async: plugin tool not available: " + toolName);
+            throw std::runtime_error("call_tool: plugin tool not available: " + toolName);
         }
         const auto spec = tool->spec();
         if (!spec.execute_start) {
-            throw std::runtime_error("call_tool_async: tool has no start callback");
+            throw std::runtime_error("call_tool: tool has no start callback");
         }
         auto parsed = PluginStringView::empty(args_json)
                           ? utilxx_base::Json::object()
                           : utilxx_base::Json::parse(PluginStringView::str(args_json));
         if (!parsed.is_object()) {
-            throw std::runtime_error("call_tool_async: arguments must be a JSON object");
+            throw std::runtime_error("call_tool: arguments must be a JSON object");
         }
         const auto session     = svToStr(thread_id);
         core                   = OpCore::create(host->runtime(), provider, owner, toolName);

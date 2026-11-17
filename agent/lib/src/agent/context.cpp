@@ -978,7 +978,7 @@ std::string AgentContext::getSessionBaseWorkDir(std::string_view sessionId) cons
 
 std::string AgentContext::getSessionWorkDir(std::string_view sessionId) const {
     // worktree 绑定优先 (worktree 模式; Session 可变状态仅 io 线程读写,
-    // 本方法约定在 io 线程调用 —— 插件主程序侧经 ioCallSync 投递)
+    // 本方法约定在 io 线程调用 —— 插件的 work_dir 表入口就在该线程执行工作体)
     auto session = sessions->get(sessionId);
     if (session) {
         const auto& wb = session->getWorktreeBinding();

@@ -43,8 +43,8 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   - 核心 vtable 精简：移除原 `strdup` 槽位，改为基于 `alloc` 的头文件内联实现 `pluginxx_strdup`
   - C++ 辅助便捷层：`PluginxxStringView` 与 `PluginxxString` 内置 `operator const T*()` 隐式取址转换与 `empty()` 方法，文件尾部提供值传兼容重载与 `pluginxx_string_free` 重载
 - **接口表独立演进**：每张表首字段 `int32_t version` 独立版本号；表内函数指针可能为 `NULL` (主程序未实现该子能力，调用前判空)
-- **版本限制**：全局 `PLUGINXX_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均为 5（v5 = 插件框架 ABI 迁到 `cxx_pluginxx` 0.3.0：通知/事件表收进广播与能力表，见 §17），加载时要求 `>=` 主程序版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
-- **v5 契约的实施方式（不改库）**: `cxx_pluginxx` 的 `abi.h` 里 `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认**恒为 1**（该库被多个主程序共用，默认值不跟随任一主程序的契约）；agentxx 在 `agent/CMakeLists.txt` 用选项 `AGENTXX_PLUGIN_API_VERSION`（当前 7）向全局 `CMAKE_C_FLAGS/CMAKE_CXX_FLAGS` **宏覆盖**，并同时传给 `cxx_pluginxx` 的嵌套构建（它的 PUBLIC `INTERFACE_COMPILE_DEFINITIONS` 也跟着变成 5），嵌套构建（插件 / 测试 / 客户端）继承同一份 FLAGS，因此框架、使用方与插件看到的值一致；插件不链接框架库也能拿到（只用头文件）。覆盖时**先剔除旧值再追加**，否则缓存里的上一代 `-DPLUGINXX_API_VERSION=3` 会一直留着，插件与主程序编译到不同代次；改完需要让嵌套工程重新配置
+- **版本限制**：全局 `PLUGINXX_API_VERSION` 当前 **7**、`AGENTXX_CLIENT_PLUGIN_API_VERSION` 当前 **8**；加载时要求 `>=` 主程序版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
+- **v7/v8 契约的实施方式（不改库）**: `cxx_pluginxx` 的 `abi.h` 里 `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认**恒为 1**（该库被多个主程序共用，默认值不跟随任一主程序的契约）；agentxx 在 `agent/CMakeLists.txt` 用选项 `AGENTXX_PLUGIN_API_VERSION`（当前 7）向全局 `CMAKE_C_FLAGS/CMAKE_CXX_FLAGS` **宏覆盖**，并同时传给 `cxx_pluginxx` 的嵌套构建（它的 PUBLIC `INTERFACE_COMPILE_DEFINITIONS` 也跟着变成 7），嵌套构建（插件 / 测试 / 客户端）继承同一份 FLAGS，因此框架、使用方与插件看到的值一致；插件不链接框架库也能拿到（只用头文件）。覆盖时**先剔除旧值再追加**，否则缓存里的上一代 `-DPLUGINXX_API_VERSION=3` 会一直留着，插件与主程序编译到不同代次；改完需要让嵌套工程重新配置
 - **加载与挂载分离**：`AgentHost` 持有插件管理器（进程一份，一次 `create`/`start`），每个 agent 在 `init` 的 `plugin_mount` 步骤 `mountAgentAsync` 挂载；加载表见 yaml `plugin.list`，本会话挂哪些由 `plugin.mount` 决定 (`policy: all|none|listed` + `list` + 每插件 `args`)，子代理与插件自己创建的根默认 `none`
 - **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由主程序内部投递同步等待；操作 `start/cancel` 由主程序在 IO 线程驱动 (单次 <~1ms)；`PluginxxOperatorNotify.done` 可任意线程回调；主程序派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
 - **实例生命周期、Operation 终态与租约**：见第 15 节（实例生命周期契约，所有插件必须遵守）
@@ -446,6 +446,11 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* member)(
   `publish_broadcast` / `update_*` / `unregister_*` 一类不关心结果的成员;
 - 未完成的调用经 `agentxx.cancel.op_cancel` 取消 (协作式)。
 
+**client 侧完全相同**: 六张 `agentxx.client.*` 表全部是这套契约 (v2), 且**没有保留的同步
+成员** —— 连 `is_visible` 这类查询也走完成回调; 渲染回调 (`collapsed_fn` / `expanded_fn`)
+与命令 `execute` 也改成同一套 (`PluginxxOperatorNotify`, 回调可立即 `done` = 同步完成)。
+client 侧没有作用域引用 (`PluginxxScopeRef`), 不带 agent 挂载序号。
+
 **为什么连"很快"的成员也要异步**: 判据不是"实现快不快", 而是"调用方的线程要不要等另一条
 线程"。一次跨执行体往返 = 两次投递 + 两次唤醒 (调度粒度 10~100 µs 起), 而"快接口"本体只是
 几百纳秒 —— 差 2~3 个数量级。能在调用方线程当场算完的只有五类, 它们保持同步:
@@ -544,11 +549,13 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 > `X_BASELINE_SIZE` (基线字节数); 需要按 agent 区分的业务表为 v2 起 (v1 只在本进程单 agent
 > 下成立, 已不再兼容), 其余表为 v1 (基线 = 完整表长)。
 >
-> **代次 (全局 API 版本) 与当前状态**: 现在是 **v7** (2026-11 接口表异步操作契约) ——
-> 插件接口表不再有"同步拿结果"的成员: 受理即返回 `PluginxxOperatorHandle*`, 结果 (正文 /
-> 句柄 id / 失败原因) 经 `PluginxxOperatorCallback` 恰好一次交回, 返回 `NULL` = 未受理 +
-> `error_out` (见 §8.0)。插件侧不需要协程的场合用 `plugin_kit.h` 的三种形态之一
-> (`co_await tableOp` / `tableOpCallback`)。两端需同一代头文件重编。
+> **代次 (全局 API 版本) 与当前状态**: agent 侧现在是 **v7**、client 侧 **v8**
+> (2026-11 接口表异步操作契约) —— 插件接口表不再有"同步拿结果"的成员: 受理即返回
+> `PluginxxOperatorHandle*`, 结果 (正文 / 句柄 id / 失败原因) 经 `PluginxxOperatorCallback`
+> 恰好一次交回, 返回 `NULL` = 未受理 + `error_out` (见 §8.0)。client 侧连同步查询成员
+> 也没有保留, 渲染回调与命令 `execute` 同样是异步契约。插件侧不需要协程的场合用
+> `plugin_kit.h` 的两种形态之一 (`co_await tableOp` / `tableOpCallback`)。
+> 两端需同一代头文件重编。
 > 更早的档位: v6 (2026-11 工具结果两段上报) —— `agentxx.agent.tools` 抬到 4: 工具结果拆成
 > "正文 (原样字节) + 元数据 JSON"两段, 完成通知器换成 `AgentxxPluginToolNotify`,
 > 插件互调回调换成 `AgentxxPluginToolCallback` (见 §8.4)。
@@ -790,12 +797,23 @@ cancel) + 1 张**网络表** `agentxx.net` (两侧都提供) + 6 张自有表 (`
 
 | IID | 版本 | 能力 |
 |-----|------|------|
-| `agentxx.client.ui` | 1 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay` |
-| `agentxx.client.session` | 1 | `get_client_state` (快照 JSON), `send_user_input`, `request_cancel` |
-| `agentxx.client.wire` | 1 | `send_plugin_data(topic, json)` → 服务端原样发到 agent 总线的同一个主题 (topic 必须是全名 `agentxx.client.plugin.<名字>.<事件>`, 不限定插件名) |
-| `agentxx.client.self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
-| `agentxx.client.timer` | 1 | 一次性/周期定时器与区域可见性查询 (暂停策略见 §9.5) |
-| `agentxx.client.keybind` | 1 | 全局快捷键注册/注销/列表 (键位规范与优先级见 §9.6) |
+| `agentxx.client.ui` | 2 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay` |
+| `agentxx.client.session` | 2 | `get_client_state` (快照 JSON), `send_user_input`, `request_cancel` |
+| `agentxx.client.wire` | 2 | `send_plugin_data(topic, json)` → 服务端原样发到 agent 总线的同一个主题 (topic 必须是全名 `agentxx.client.plugin.<名字>.<事件>`, 不限定插件名) |
+| `agentxx.client.self` | 2 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
+| `agentxx.client.timer` | 2 | 一次性/周期定时器与区域可见性查询 (暂停策略见 §9.5) |
+| `agentxx.client.keybind` | 2 | 全局快捷键注册/注销/列表 (键位规范与优先级见 §9.6) |
+
+**六张表全部是异步操作契约 (v2)**: 成员返回 `PluginxxOperatorHandle*` (**已受理**),
+结果经 `cb(ud, status, payload)` 恰好一次交回; 返回 `NULL` = 未受理 (原因写
+`error_out`)。查询类的结果在 `payload`、句柄类的 `payload` 是进程内地址的十进制文本
+(`agentxx/plugin/api/client_handle.h` 的 `clientHandleFromText`)。client 侧**没有**保留的
+同步成员 (连 `is_visible` 这类查询也走异步); 不关心结果时 `cb` 传 `NULL` 即可。
+渲染回调 (`collapsed_fn` / `expanded_fn`) 与命令 `execute` 同样是异步契约 ——
+回调可立即 `notify->done` (= 同步完成), 也可稍后交回。插件侧用 kit 的
+`clientTableOp` / `clientTableText` / `clientTableHandle` 与
+`clientRegisterStatusItem` / `clientRegisterCommand` / `notifyText` 一组便捷入口即可;
+**入参都是借用视图**, 主程序投递前必按值拷贝。
 
 **客户端事件走广播频道, 不再有事件表** (原来的 `agentxx.client.events` /
 `agentxx.client.json` / `agentxx.client.log` 已删除, 后两者改用通用表
@@ -1309,9 +1327,9 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
     - **网络（`agentxx.net`，与 agent 插件同一张表）**：`netCall(op, args)` / `netFetch(urlOrOptions)` / `netDownload(urlOrOptions, fileName?)` / `netHttpServe` / `netInfo()` 返回 **Promise**；`netWsConnect` / `netWsSend` / `netWsClose` / `netHttpRespond` 提交即返回；`netCancel(requestId)` 是同步成员。语义与 C++ SDK / agent 侧脚本完全一致（表入口是异步操作契约，没有同步版本），资源归属是本插件实例（禁用/卸载整批收掉）
     - 实例模型：client 表成员**不带** `PluginxxScopeRef`，因此一份脚本一个实例（无 agent 挂载作用域），脚本全局状态天然按进程隔离；壳只用一份 `start`/`stop`，不需要 mount 入口
     - 不在 client 桥上：后台任务 / 会话运行时 / 图 / 提示词 / session 资源（Skill/Memory/MCP）—— 这些都是 agent 侧能力；客户端脚本要取数据就用 `sendPluginData` 通知 agent 侧插件，或者写成 C++ client 插件
-    - **同步回调有上限**：渲染内容回调与命令 `execute` 都在主程序 io 线程要求同步返回，而 JS 只在 JS 线程执行。引擎因此提供一条 io→JS 的同步桥：请求投到 JS 线程后最多等 `150 ms` (`kClientSyncTimeoutMs`)；超时、引擎已停、或 JS 线程正卡在“等 io 线程处理它的表调用”上一律直接放弃（渲染回退默认内容 / 命令按失败处理，不报错、不阻塞界面）。这两类回调**必须同步返回值**（返回 Promise 视为没有内容）；耗时计算请改为订阅事件后用 `updateToolDecor` 推数据。动作/定时器/快捷键回调是投递式的（fire-and-forget），不受此限
-    - **回调里别再调 client 表**：client 表的注册/更新入口在 JS 线程上会同步等 io 线程做完（`ioCallSyncKeep`），而渲染/命令回调这阵 io 线程正等着 JS —— 两边互等只会等到 150 ms 上限后各自退回（渲染没内容、表调用正常完成）。需要动展示项的活放动作/定时器/快捷键回调里，它们是投递式的，io 线程不在等
-    - **Promise 续体由主循环泵**：动作/定时器/快捷键/渲染/命令回调里可以写 `netFetch(...).then(...)`，JS 线程在每个任务与每个定时器之后泵一次微任务队列（单次上限 10000 个 job，到限记一条警告）。回调本身仍然要同步返回它该返回的值（渲染内容 / 动作 JSON），Promise 只用于“结果晚些到”的后续动作
+    - **渲染与命令回调是异步操作契约**：主程序传 `PluginxxOperatorNotify`，脚本回调**可以直接返回内容**（引擎立即 `notify`，等于同步完成），**也可以返回 Promise**，完好后再交回。client io 线程不再等 JS 线程（旧的 150 ms 同步桥 `invokeRenderSync` / `invokeCallbackSync` 已删），所以渲染/命令回调里调 client 表不会互等；代价是内容到得晚时界面先用默认渲染，结果到了再重绘。动作/定时器/快捷键回调仍是投递式的（fire-and-forget）
+    - **脚本里的表调用内部用 `tableOpSyncWait`**：QuickJS 的 C API 要求当场回答，所以引擎在 JS 线程上提交后同步等完成（调用方不是主程序 io 线程，不会与 io 线程互等）；**不要在 client io 线程上做同样的等待**
+    - **Promise 续体由主循环泵**：动作/定时器/快捷键/渲染/命令回调里都可以写 `netFetch(...).then(...)`，JS 线程在每个任务与每个定时器之后泵一次微任务队列（单次上限 10000 个 job，到限记一条警告）
     - 一次没拿到内容的渲染会按“没有自定义内容”缓存，界面用默认渲染；同一行输入不变时不会反复请求（参数/结果变化、行重建、重新注册后会再请求）
     - 示例：`example_js` 的 `plugin.js` 用 `agentxx.side` 分支，client 侧注册了工具行特化渲染、状态栏项、Info 段落、面板、斜杠命令 `/jsdemo`、按钮动作、快捷键 `ctrl+alt+j` 与一个 60ms×2 的定时器；另有一个 `ctrl+alt+u` 演示注销与查询（`listKeybinds` / `isRegionVisible` / `unregister*` / `cancelClientTimer`）、命令 `/jsnet` 演示同步网络入口，动作 `js.demo.net` / `js.demo.sdk` 演示回环 HTTP（`http.serve` + `http.route` → `netFetch` → `.then`）与通用表（插件清单 / 配置 / 广播声明-发布-读-结束）。它的清单同时声明 agent 侧 `agentxx.agent.core` 与 client 侧 `agentxx.client.msg_decor`，两侧各自只比较自己那部分
 - 可自研脚本JS 运行时插件 (Python/Lua 等) 替换或扩充脚本能力
@@ -1621,7 +1639,8 @@ Closing → CloseFailed → Closing (可重试)
   线程、提交运行时注册 (能力)；`stop` 停止线程并释放运行时；`destroy` 只释放本地状态，
   不调用主程序接口。
 - **stop 必须可重复且不能被调用线程自锁**：插件线程若可能反向调用主程序 vtable
-  (主程序在非 IO 线程上以 `ioCallSync` 投递回 IO 线程)，则 `stop` 不得在 IO 线程直接
+  (主程序在非 IO 线程上发出的表调用会把工作体排队到 IO 线程，即 `startTableOp`)，
+  则 `stop` 不得在 IO 线程直接
   `join`；应把 `join` 交给独立收尾线程，并在收尾完成后上报完成通知
   (完成通知允许来自任意线程)。线程空闲时可在调用线程直接收尾 (省一次线程切换)。
 - **停止即拒绝新工作**：停止标志生效后不再接受新 Operation；已入队但未开始的任务
@@ -1629,10 +1648,9 @@ Closing → CloseFailed → Closing (可重试)
   按取消完成 —— 满足"所有已接受操作必须终结"。
 - **线程空闲判定必须有不变式**：主程序线程据"无在手中任务 + 队列为空"判定可直接收尾，
   因此插件线程取任务/执行定时器与置忙标记必须在同一临界区内完成。
-- **主程序线程不得无限等插件线程**：客户端渲染回调要求同步返回内容（§12 的 client 侧
-  脚本），引擎为此加了一条带上限 (150 ms) 的 io→JS 同步桥，并在 JS 线程正卡在"等主程序
-  处理它的表调用"时直接放弃。不要把它改成无超时等待 —— 那样脚本里的表调用与渲染回调
-  会互等，UI 也卡死。
+- **主程序线程不等插件线程**：渲染/命令回调改成了异步操作契约（回调可返回 Promise），
+  所以 client io 线程不再等 JS 线程；反过来，脚本里的表调用在 JS 线程上会同步等
+  主程序 io 线程（`tableOpSyncWait`）—— 这条方向的等待不能搬到主程序 io 线程上做。
 - **脚本/子对象注册归属调用方实例**：引擎注册的脚本挂在调用方 (壳插件) 实例上，
   由主程序在该实例停用/卸载时统一撤销；引擎自身的 `stop` 只释放运行时，不假设主程序
   注册表的清理顺序。

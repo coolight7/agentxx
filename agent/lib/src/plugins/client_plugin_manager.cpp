@@ -33,7 +33,6 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
-#include <future>
 #include <iostream>
 #include <thread>
 
@@ -662,10 +661,10 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     // 控制块 tombstone 保证这类迟到调用安全失败)
     attachInstance(inst, lifecycleStart, lifecycleStop);
 
-    // entry 卸载到内部线程池执行 (A2): 与 agent 侧一致 —— entry 内 vtable
-    // 注册动作经 ioCallSync 回 io 线程同步执行; entry 在 io 线程执行会阻塞
-    // client io 事件循环 (慢初始化/插件间调用时明显), 且违背契约声明的
-    // "entry 运行在主程序线程池";
+    // entry 卸载到内部线程池执行 (A2): 与 agent 侧一致 —— entry 内的表调用经
+    // `startTableOp` 投递到 client io 线程执行 (异步契约, 入口不等它);
+    // entry 在 io 线程执行会阻塞 client io 事件循环 (慢初始化/插件间调用时明显),
+    // 且违背契约声明的 "entry 运行在主程序线程池";
     // 插件违约抛异常按 rc=-1 处理 (加载失败清理路径)
     int rc = co_await utilxx::offloadAsync<int>(*pool_, [inst, entryFn]() -> asio::awaitable<int> {
         try {
@@ -1761,7 +1760,7 @@ using ClientHostCall = PluginHostCall<ClientPluginInstance, ClientPluginManager>
 /// - `allowClosing=true` 用于只读查询：关闭过程中仍允许执行（lease 保证卸载会
 ///   等它返回）。注册、投递新工作等入口必须用默认值，Closing/Disabled 后拒绝；
 /// - 返回的上下文按值捕获进投递闭包后，卸载的 idle 等待会覆盖"已排队但尚未在
-///   IO 线程执行"的阶段，见 [ioCallSyncKeep]。
+///   IO 线程执行"的阶段 (`OpCore` 租约 + 完成通道保证卸载等到它)。
 static ClientHostCall enterClientHost(const PluginxxHost* host, bool allowClosing = false) {
     return enterPluginHost<ClientPluginInstance, ClientPluginManager>(host, allowClosing);
 }

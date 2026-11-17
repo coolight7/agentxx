@@ -321,19 +321,17 @@ path/to/agentxx_test --log-level warn string_util regex
     后台任务 / 会话运行时 / 图 / 提示词 / Skill-Memory-MCP
     资源不在 client 桥上 (那些是 agent 侧能力)
   - **Promise 续体由主循环泵**: 动作/定时器/快捷键/渲染/命令回调里写 `netFetch(...).then(...)`
-    会执行 —— JS 线程在每个任务与每个定时器之后泵微任务 (单次上限 10000 个 job);
-    回调本身仍要同步返回该返回的值 (渲染内容 / 动作 JSON), Promise 只用于“结果晚些到”的后续动作
+    会执行 —— JS 线程在每个任务与每个定时器之后泵微任务 (单次上限 10000 个 job)
   - **展示项句柄是整数 token**: client 表的句柄是主程序侧的不透明指针, JS 的 number 存不下;
     桥在 `JsPluginCtx::clientHandles` 里换成 token (`0` = 主程序不支持或注册失败),
     更新/注销都用 token, 类别不对或已注销返回 false (不抛异常)
-  - **同步回调有 150ms 上限**: 渲染内容回调与命令 `execute` 在 client io 线程要求同步返回,
-    而 JS 只在 JS 线程执行, 因此 `JsEngine::invokeRenderSync` / `invokeCallbackSync` 投递后最多等
-    `kClientSyncTimeoutMs` (150ms); 超时 / 引擎已停 / JS 线程正卡在等主程序
-    (`jsHostCallDepth_ > 0`) 一律直接放弃 (渲染回退默认内容, 命令按失败处理)。这两类回调
-    **必须同步返回** (返回 Promise = 没有内容), 耗时逻辑改成订阅事件 + `updateToolDecor`;
-    动作/定时器/快捷键回调是投递式的, 不受此限; 回调里也**不要**再调 client 表 (注册/更新入口
-    在 JS 线程同步等 io 线程, 两边互等只能等到 150ms 后各自退回); **不要把桥改成无超时等待**
-    (两边互等, 界面卡死)。一次没拿到内容的渲染按"没有自定义内容"缓存, 界面用默认渲染
+  - **渲染与命令回调也是异步操作契约 (2026-11)**: 主程序传入 `PluginxxOperatorNotify`,
+    脚本回调把内容交回给它 —— 回调可以直接返回内容 (立即 `notify`, 等于同步完成),
+    也可以返回 Promise, 完好后再交回。client io 线程不再等 JS 线程 (旧的 150 ms 同步桥
+    `invokeRenderSync` / `invokeCallbackSync` 已删), 因此渲染/命令回调里调 client 表不会互等;
+    代价是内容到得晚时界面先用默认渲染, 结果到了再重绘。
+    动作/定时器/快捷键回调仍是投递式; 脚本里的表调用内部用 `tableOpSyncWait`
+    (QuickJS 的 C API 要求当场回答), 所以**不要在 client io 线程上做同样的等待**
   - 示例 `example_js`: 双入口 + `plugin.js` 按 side 分支; 清单同时声明 `agentxx.agent.core`
     与 `agentxx.client.msg_decor`; 用例 `client_plugins` 第 34 段
   - **脚本 SDK 与 C++ 插件 SDK 的对齐面 (2026-11)**: 能力行/功能埋点 (`provideCapability` /
@@ -803,6 +801,15 @@ path/to/agentxx_test --log-level warn string_util regex
   (JS 运行时插件的 QuickJS 回调) 与 kit 内部几个同步便捷函数, `boundaries` 规则 16 拦回退。
   生命周期入口的注册事务写成协程: `finishLater(notify)` + `ctx.spawn(...)` +
   `return later.provider()`; 挂载带挂载级状态时返回自己的状态对象 (unmount 收到它)
+- client 侧六张表同一套契约 (2026-11): `agentxx.client.ui` / `session` / `wire` / `self` /
+  `timer` / `keybind` 全部 v2 异步, **没有保留的同步成员** (连 `is_visible` 也走异步);
+  渲染回调与命令 `execute` 也是异步 (主程序给 `PluginxxOperatorNotify`, 回调可立即
+  `notify` 交出内容 = 同步完成)。插件用 kit 的 `clientTableOp` / `clientTableText` /
+  `clientTableHandle` 与展示面入口 (`clientRegisterStatusItem` / `clientUpdatePanel` /
+  `clientRegisterCommand` / `clientUpdateToolDecor` / `clientOpenOverlay` / `clientBindAction` /
+  `clientSendPluginData` …); 回答型回调收尾用 `notifyText` / `notifyError`。
+  **入参都是借用视图**: 主程序投递前必按值拷贝 (`copyView`), 否则跨线程执行时
+  heap-use-after-free (ASan 实测)
 - 接口表数量: agent 侧 19 张 (9 张通用表 `<应用名>.*` 即 `agentxx.*`: broadcasts/capabilities/
   scheduler/tasks/cancel/plugins/config/json/log + 10 张业务表 `agentxx.agent.*`,
   不含两侧都有的 `agentxx.net`;
@@ -842,18 +849,23 @@ path/to/agentxx_test --log-level warn string_util regex
   4 个网络插件已全部迁完 (`websearch` / `rag_search` / `text_selection_monitor` / `chatbot`),
   插件里不再出现 `utilxx/http_client.h` / `ws_client.h`; 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §22
-- 接口表版本与基线 (**当前代次 6**, 全局 API 版本 = 6: v2 是多 agent 挂载换代;
+- 接口表版本与基线 (**当前代次 7** (agent 侧) / **8** (client 侧), 全局 API 版本 = 7:
+  v2 是多 agent 挂载换代;
   v3 把通用表里的业务成员 (会话工作目录 / 取消查询 / 工具提示词) 迁回 agentxx 业务表
   并把 "agent" 用词泛化为 "作用域"; v4 = 工具结果换代 (成败改由状态位表达);
   v5 = 迁移到 `cxx_pluginxx` 0.3.0 (旧通知表与事件表删除 → 广播频道 + 能力实现行,
   client 侧 `events`/`json`/`log` 三张表删除, 能力行带 scope);
   v6 = 工具结果两段上报 (`AgentxxPluginToolNotify`, `agentxx.agent.tools` 抬到 4);
+  v7 = 表成员全改**异步操作契约** (agent 9 张业务表 + 运行时会话表 + 框架通用表;
+  SDK 只留 `co_await tableOp` / `tableOpCallback`, 删掉全部阻塞形态);
+  client 侧 `AGENTXX_CLIENT_PLUGIN_API_VERSION` = **8** (client 六张表改异步 +
+  渲染/命令回调改 notify; client 侧没有保留的同步成员);
   业务表 `version` = `MIN_VERSION` = 2 ~ 4, 通用表见 `pluginxx/api/tables.h`,
   基线 = 重置时的完整布局):
   - **库里的默认值不改**: cxx_pluginxx 的 `abi.h` 中 `PLUGINXX_API_VERSION` /
     `PLUGINXX_MIN_API_VERSION` 恒保持 1 (多主程序共用); agentxx 在 `agent/CMakeLists.txt`
-    用 `AGENTXX_PLUGIN_API_VERSION` 选项向全局 FLAGS 追 `-D...=6` 覆盖, 并随 `CMAKE_ARGS`
-    传给 cxx_pluginxx 的嵌套构建 (installed targets 的 INTERFACE 定义随之变成 6)
+    用 `AGENTXX_PLUGIN_API_VERSION` 选项向全局 FLAGS 追 `-D...=7` 覆盖, 并随 `CMAKE_ARGS`
+    传给 cxx_pluginxx 的嵌套构建 (installed targets 的 INTERFACE 定义随之变成 7)
   - 改代次时注意构建缓存: 覆盖时必须**先剔旧值再追加** (否则嵌套 ExternalProject
     会一直用缓存里的上一代值编译)
   - `agentxx.config` 现有 `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language`,

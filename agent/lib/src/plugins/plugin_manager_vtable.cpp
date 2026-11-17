@@ -39,7 +39,7 @@ using HostCall = PluginHostCall<PluginInstance, PluginManager>;
 /// - `allowClosing=true` 用于只读查询：关闭过程中仍允许执行（lease 保证卸载会
 ///   等它返回）。注册、投递新工作等入口必须用默认值，Closing/Disabled 后拒绝；
 /// - 返回的上下文按值捕获进投递闭包后，卸载的 idle 等待会覆盖"已排队但尚未在
-///   IO 线程执行"的阶段，见 [ioCallSyncKeep]。
+///   IO 线程执行"的阶段（租约随闭包活到操作结束，见 [pluginxx::startTableOp]）。
 static HostCall enterHost(const PluginxxHost* host, bool allowClosing = false) {
     return enterPluginHost<PluginInstance, PluginManager>(host, allowClosing);
 }
@@ -258,94 +258,8 @@ static std::string takePluginString(PluginxxString& s) {
 }
 
 
-/// 注册/写入类入口的公共骨架: 解析 host 上下文 → 把业务逻辑投递到 IO 线程执行。
-/// - 参数视图只在本次调用内有效, 因此闭包必须按值捕获自己需要的拷贝;
-/// - `fn` 的入参是实例与管理器 (投递期间由 `keep` 保活, 含 admission lease);
-///   业务参数校验由 `fn` 自己完成, 失败返回非 0 状态码。
-template<typename Fn>
-static int32_t onInstanceIo(const PluginxxHost* host, Fn&& fn) {
-    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
-        auto call = enterHost(host);
-        if (!call.ok()) {
-            return AGENTXX_RESULT_ERR_ARG;
-        }
-        auto keep = call; // 投递期间持实例/管理器强引用与 admission lease
-        return ioCallSyncKeep<int32_t>(
-            keep,
-            keep.manager(),
-            [keep, fn = std::forward<Fn>(fn)]() -> int32_t {
-                return fn(keep.instance(), keep.manager());
-            }
-        );
-    });
-}
-
-/// 只读查询类入口的公共骨架 (允许关闭中查询):
-/// 在 IO 线程取字符串结果 → 经 host->alloc 写入 `out`; 结果为空按失败返回 -1。
-template<typename Fn>
-static int32_t queryStringIo(const PluginxxHost* host, PluginxxString* out, Fn&& fn) {
-    if (!out) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
-        auto call = enterHost(host, /*allowClosing=*/true);
-        if (!call.ok()) {
-            return AGENTXX_RESULT_ERR_ARG;
-        }
-        auto keep = call;
-        auto text = ioCallSyncKeep<std::string>(
-            keep,
-            keep.manager(),
-            [keep, fn = std::forward<Fn>(fn)]() -> std::string {
-                return fn(keep.instance(), keep.manager());
-            }
-        );
-        if (text.empty()) {
-            return AGENTXX_RESULT_ERR_NOT_FOUND;
-        }
-        hostMemorySetString(out, text);
-        return AGENTXX_RESULT_OK;
-    });
-}
-
 // C ABI 内存操作
 
-/// 带作用域校验的注册入口: 引用无效时直接返回 `AGENTXX_RESULT_ERR_NO_AGENT`
-/// (不产生任何副作用)
-template<typename Fn>
-static int32_t
-    onScopedInstanceIo(const PluginxxHost* host, const PluginxxScopeRef* agent, Fn&& fn) {
-    return onInstanceIo(
-        host,
-        [agent, fn = std::forward<Fn>(fn)](PluginInstance* inst, PluginManager* mgr) -> int32_t {
-            if (!scopeOk(mgr, agent)) {
-                XX_LOGW("agentxx 注册接口: agent 引用无效, 请在 mount 里注册");
-                return AGENTXX_RESULT_ERR_NO_AGENT;
-            }
-            return fn(inst, mgr);
-        }
-    );
-}
-
-/// 带作用域校验的只读入口: 引用无效时返回 -1
-template<typename Fn>
-static int32_t queryScopedStringIo(
-    const PluginxxHost*     host,
-    const PluginxxScopeRef* agent,
-    PluginxxString*         out,
-    Fn&&                    fn
-) {
-    return queryStringIo(
-        host,
-        out,
-        [agent, fn = std::forward<Fn>(fn)](PluginInstance* inst, PluginManager* mgr) -> std::string {
-            if (!scopeOk(mgr, agent)) {
-                return std::string{};
-            }
-            return fn(inst, mgr);
-        }
-    );
-}
 static void* PLUGINXX_CALL xx_alloc(uint64_t size) {
     return agentxx::plugin::hostMemoryAlloc(size);
 }

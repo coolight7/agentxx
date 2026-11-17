@@ -16,7 +16,7 @@
 /// 用到的两处:
 /// - 工具执行 (`PluginTool::execute_async` → `mapPluginOpResult`): 收端拆开并
 ///   对正文做编码校正;
-/// - 插件互调 (`call_tool_async` 的完成回调): 收端拆开后按两段交给调用方。
+/// - 插件互调 (`call_tool` 的完成回调): 收端拆开后按两段交给调用方。
 ///
 /// 相关: 两段在插件侧的产出见 `plugin_kit.h` 的 `toolBodyResultTo`。
 #ifndef AGENTXX_PLUGIN_TOOL_RESULT_FRAME_H

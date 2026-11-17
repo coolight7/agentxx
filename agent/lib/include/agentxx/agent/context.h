@@ -1092,8 +1092,9 @@ public:
     /// - 会话已绑定 worktree 时返回 worktree 路径 (worktree 模式)
     /// - 否则同 [getSessionBaseWorkDir] (会话覆写 > agent 配置 / 进程 cwd)
     /// - 均不可用时返回空串 (调用方自行处理)
-    /// - 线程约束: worktree 绑定读取沿用 Session 的 io 线程约定 (插件主程序侧
-    ///   经 ioCallSync 投递); 覆写表经 mutex 保护, 任意线程可读写
+    /// - 线程约束: worktree 绑定读取沿用 Session 的 io 线程约定 (插件经
+    ///   `agentxx.agent.session` 的 work_dir 入口取, 工作体在 io 线程执行);
+    ///   覆写表经 mutex 保护, 任意线程可读写
     /// - const: 只读取状态 (覆写表/互斥量按 mutable 处理), 供只读场景使用
     std::string getSessionWorkDir(std::string_view sessionId) const;
 

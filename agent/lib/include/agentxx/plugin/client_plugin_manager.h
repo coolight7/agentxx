@@ -705,8 +705,8 @@ public:
     void onPluginData(const agentxx::agent::WirePluginData& data) override;
 
     // ==================== 内部 (host vtable 回调) ====================
-    // 以下为 vtable 实现的强类型入口, 须 io 线程调用 (vtable 内部经 ioCallSync
-    // 跨线程投递, 插件无感)
+    // 以下为 vtable 实现的强类型入口, 须 io 线程调用 (vtable 入口经
+    // `startTableOp` 受理, 工作体在本管理器 io 线程执行)
 
     /// 注册状态栏项; 返回主程序句柄 (nullptr = 主程序不支持或 id 冲突)
     void* registerStatusItem(
