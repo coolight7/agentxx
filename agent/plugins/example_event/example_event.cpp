@@ -123,106 +123,84 @@ static void PLUGINXX_CALL onRoundStart(const PluginxxStringView* payload, void* 
 }
 
 /// 挂载事务: 声明频道、发布初始值、订阅频道
-static int eventAgentSetup(EventCtx& ctx, EventMountState& state) {
+/// 挂载事务: 声明频道、发布初始值、订阅频道 (**协程形态**)
+static pluginxx::Task<void> eventAgentSetup(EventCtx& ctx, EventMountState& state) {
     using namespace agentxx::plugin;
     const auto* bc = ctx.iface.broadcasts;
     if (nullptr == bc || nullptr == bc->declare_broadcast || nullptr == bc->publish_broadcast) {
         ctx.log.info("example_event: broadcasts iface unavailable, plugin stays idle");
-        return 0;
+        co_return;
     }
 
     // 1. 声明两条自己的频道: 都保留当前值 (后订阅者能立刻拿到最后一条)
-    if (!declarePluginBroadcast(ctx.host, bc, "plugin.example_event.build", false, true)) {
-        ctx.log.info("example_event: declare example_event.build rejected");
-        return -1;
-    }
-    if (!declarePluginBroadcast(ctx.host, bc, "plugin.example_event.ready", false, true)) {
-        return -1;
+    for (const char* id : {"plugin.example_event.build", "plugin.example_event.ready"}) {
+        auto declared = co_await declarePluginBroadcast(ctx, id, false, true);
+        if (!declared.ok()) {
+            throw std::runtime_error{
+                fmt::format(
+                    "example_event: declare {} rejected: {}",
+                    id,
+                    declared.accepted() ? std::string(declared.text()) : declared.startError
+                )
+            };
+        }
     }
 
     // 2. 发布初始值
     utilxx_base::Json ready = utilxx_base::Json::object();
     ready["ok"]             = true;
     ready["plugin"]         = "example_event";
-    if (!publishPluginBroadcast(ctx.host, bc, "plugin.example_event.ready", ready.dump(), false)) {
-        return -1;
-    }
+    co_await publishPluginBroadcast(ctx, "plugin.example_event.ready", ready.dump(), false);
     utilxx_base::Json step = utilxx_base::Json::object();
     step["step"]           = 1;
     step["total"]          = 2;
-    if (!publishPluginBroadcast(ctx.host, bc, "plugin.example_event.build", step.dump(), false)) {
-        return -1;
-    }
+    co_await publishPluginBroadcast(ctx, "plugin.example_event.build", step.dump(), false);
     ++ctx.emitted;
 
     // 3. 读当前值: 有当前值的频道可以直接读, 不必等下一次发布
     if (bc->read_broadcast != nullptr) {
-        auto           idSv = PluginStringView::fromCstr("plugin.example_event.build");
-        const auto     op   = tableOpBlocking(
+        auto readResult = co_await tableOp(
             ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            [&ctx, bc](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+                -> PluginxxOperatorHandle* {
+                auto idSv = PluginStringView::fromCstr("plugin.example_event.build");
                 return bc->read_broadcast(ctx.host, &idSv, cb, ud, err);
-            },
-            0
+            }
         );
-        if (op.ok()) {
+        if (readResult.ok()) {
             ctx.log.info("example_event: current value of the build channel read back");
         }
     }
 
     // 4. 订阅: 自己的进度频道 (带结束回调) + 主程序的轮次通知。
     //    轮次通知属主是主程序, 订阅它不需要先声明。
-    const auto ref = state.ref.raw();
     if (bc->subscribe_broadcast_ex != nullptr) {
-        auto       buildId = PluginStringView::fromCstr("plugin.example_event.build");
-        const auto op      = tableOpBlocking(
+        auto subResult = co_await subscribePluginBroadcastEx(
             ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return bc->subscribe_broadcast_ex(
-                    ctx.host,
-                    &ref,
-                    &buildId,
-                    &onBuildValue,
-                    &onBuildEnd,
-                    &state,
-                    nullptr,
-                    cb,
-                    ud,
-                    err
-                );
-            },
-            0
+            state.ref.ptr(),
+            "plugin.example_event.build",
+            &onBuildValue,
+            &onBuildEnd,
+            &state
         );
         // 订阅句柄以十进制文本放在结果正文里交回
-        state.buildSub = op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
+        state.buildSub = subscriptionOf(subResult);
         if (nullptr == state.buildSub) {
-            ctx.log.info("example_event: subscribe the build channel rejected");
-            return -1;
+            throw std::runtime_error{
+                "example_event: subscribe the build channel rejected: "
+                + (subResult.accepted() ? std::string(subResult.text()) : subResult.startError)
+            };
         }
     }
     if (bc->subscribe_broadcast != nullptr) {
-        auto roundId = PluginStringView::from(
-            broadcasts::AgentRoundStart.data(),
-            broadcasts::AgentRoundStart.size()
-        );
-        const auto op = tableOpBlocking(
+        auto subResult = co_await subscribePluginBroadcast(
             ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return bc->subscribe_broadcast(
-                    ctx.host,
-                    &ref,
-                    &roundId,
-                    &onRoundStart,
-                    &state,
-                    nullptr,
-                    cb,
-                    ud,
-                    err
-                );
-            },
-            0
+            state.ref.ptr(),
+            broadcasts::AgentRoundStart,
+            &onRoundStart,
+            &state
         );
-        state.roundSub = op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
+        state.roundSub = subscriptionOf(subResult);
         // 轮次通知订阅不到不算失败: 主程序可能还没声明这个频道
         if (nullptr == state.roundSub) {
             ctx.log.info("example_event: round.start channel not available, skipped");
@@ -230,7 +208,7 @@ static int eventAgentSetup(EventCtx& ctx, EventMountState& state) {
     }
 
     ctx.log.info("example_event: channels declared, values published, subscriptions made");
-    return 0;
+    co_return;
 }
 
 static void* eventAgentStart(
@@ -300,19 +278,32 @@ static void* eventAgentMount(
         }
     }
 
-    if (eventAgentSetup(ctx, *state) != 0) {
+    // 注册事务交给协程: 频道声明/发布/订阅逐条"提交 + co_await"
+    // - 返回的挂载句柄仍是 `state` (unmount 收到同一个指针)
+    // - 完成通知经 `later` 发出, 不占住主程序 IO 线程
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "example_event mount: registration transaction failed"
+                "example_event mount: host has no pluginxx.tasks (spawn unavailable)"
             );
         }
         delete state;
         return nullptr;
     }
-    ctx.log.info("example_event mounted");
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    auto later = agentxx::plugin::finishLater(notify);
+    ctx.spawn([later, state](EventCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await eventAgentSetup(c, *state);
+            c.log.info("example_event mounted");
+            later.ok();
+        } catch (const std::exception& e) {
+            delete state;
+            later.failed(e.what());
+        }
+        co_return;
+    });
     return state;
 }
 

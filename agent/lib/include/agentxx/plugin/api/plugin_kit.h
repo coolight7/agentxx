@@ -401,6 +401,52 @@ inline PluginxxSubscription* subscriptionOf(const pluginxx::TableOpResult& resul
     return result.ok() ? pluginxx::pluginxxSubscriptionFromText(result.text()) : nullptr;
 }
 
+/// 订阅一条广播 (扩展形态: 带频道结束回调与选项) — **协程形态**
+///
+/// - `optionsJson` 形如 `{"intervalMs":100,"mode":"coalesce"}`, 空串 = 全用默认值;
+/// - `onEnd` 可选: 频道被结束 (或声明撤销) 时回调一次;
+/// - `co_await` 之后用 [subscriptionOf] 取句柄。
+template<typename Ctx>
+inline pluginxx::TableOpTicket subscribePluginBroadcastEx(
+    const Ctx&             ctx,
+    const PluginxxScopeRef* scope,
+    std::string_view        id,
+    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
+    void(PLUGINXX_CALL* onEnd)(const PluginxxStringView*, void*),
+    void*            ud,
+    std::string_view optionsJson = {}
+) {
+    auto options = std::string{optionsJson};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, scope, id, handler, onEnd, ud, options](PluginxxOperatorCallback cb,
+                                                      void*                    opUd,
+                                                      PluginxxString*          err)
+            -> PluginxxOperatorHandle* {
+            if (id.empty() || !handler || !ctx.host || !ctx.iface.broadcasts
+                || !ctx.iface.broadcasts->subscribe_broadcast_ex) {
+                return nullptr;
+            }
+            auto idSv = PluginStringView::from(id.data(), id.size());
+            auto optSv = options.empty()
+                             ? PluginxxStringView{nullptr, 0}
+                             : PluginStringView::from(options.data(), options.size());
+            return ctx.iface.broadcasts->subscribe_broadcast_ex(
+                ctx.host,
+                scope,
+                &idSv,
+                handler,
+                onEnd,
+                ud,
+                &optSv,
+                cb,
+                opUd,
+                err
+            );
+        }
+    );
+}
+
 /// 发布一条广播 (ABI 视图形态; 与 `string_view` 版同义)
 ///
 /// `id` / `payload` 为跨边界视图 (插件里常见的是 `PluginStringView::fromCstr` 的产物),
