@@ -259,7 +259,9 @@ TestResult testUiSnapshots() {
     }
 
     // ---------------- 夹具自身的失败路径 (检查用例必须真的会失败) ----------------
-    {
+    // 只在比较模式下验证: 更新模式会把“不存在的基线”真的写出来 (包括本例的探针文件),
+    // 写完之后再比较就成了“存在且一致”, 两条断言会互相矛盾
+    if (!uiSnapshotUpdateMode()) {
         // 基线不存在: 判失败并提示如何生成
         auto missing = checkUiSnapshot("__no_such_baseline__", "x\n");
         XX_TEST_EXPECT_FALSE(missing.ok);

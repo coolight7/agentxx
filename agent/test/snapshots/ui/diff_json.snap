@@ -1,4 +1,4 @@
-  file: app.json                                
+[file] app.json                                 
   {                                             
     "a": 1,                                     
 -   "b": 2                                      
