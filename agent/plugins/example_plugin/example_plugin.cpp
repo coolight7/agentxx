@@ -163,13 +163,13 @@ extern "C" PLUGINXX_EXPORT int
     );
 }
 
-/// 注册事务 (start 的实际内容): 任一步骤失败返回 -1, 由主程序回滚已生效的注册。
-/// 挂载事务 (mount): 工具/通知/订阅/能力/提示词
+/// 挂载事务 (mount): 工具/通知/订阅/能力/提示词 (**协程形态**)
 /// - `ref` 为本次挂载的 agent 引用, 全部登记都记在该 agent 名下
-static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
-    const PluginxxHost* host = ctx.host;
+/// - 每条登记都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到失败原因
+static pluginxx::Task<void>
+    exampleAgentSetup(AgentCtx& ctx, agentxx::plugin::AgentRef ref) {
     // 1.1 echo: 快同步内联工具 (fast_tool)
-    agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::fast_tool(
          ctx,
          ref,
         "example_echo",
@@ -189,7 +189,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     //   不加 `[Error: ...]` 前缀 (主程序统一排版)
     // - `ToolResult::ok(文本)` 与直接返回字符串等价
     // - 与 example_echo 对照: 一个返回字符串 (永远成功), 一个能表达失败
-    agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::fast_tool(
          ctx,
          ref,
         "example_fail_demo",
@@ -208,7 +208,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     );
 
     // 1.2 caller: 锚定 Task 协程互调工具 (tool + call_tool)
-    agentxx::plugin::tool(
+    co_await agentxx::plugin::tool(
          ctx,
          ref,
         "example_caller",
@@ -228,7 +228,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     );
 
     // 1.3 sleeper: 锚定 Task 协程 sleep 工具 (tool + sleep)
-    agentxx::plugin::tool(
+    co_await agentxx::plugin::tool(
          ctx,
          ref,
         "example_sleep",
@@ -257,7 +257,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     //      continuation 投递到本地执行器并唤醒, 下一步由下一次 host driver 推进;
     //   2. 主程序回调式异步接口 (`co_await call_tool`) —— 完成回调同样不重入插件协程。
     // 因此这里的循环既不是轮询、也不占用额外线程: 每一步都对应一次主程序驱动。
-    agentxx::plugin::tool(
+    co_await agentxx::plugin::tool(
          ctx,
          ref,
         "example_bridge",
@@ -313,7 +313,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     // - 主程序不提供 `scheduler.request_driver`/`scheduler.sleep` 时自动降级为
     //   offload 工作线程 + 局部 io_context 跑完 (行为对业务体透明)。
     // 返回的 pumpOnStart 证明该协程确实以"受控轮询根"身份运行。
-    agentxx::plugin::polled_tool(
+    co_await agentxx::plugin::polled_tool(
          ctx,
          ref,
         "example_polled_timer",
@@ -380,12 +380,10 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     // 2. 通知型功能埋点: 插件"想知道某个点发生了"就订阅同名广播频道
     //    (已经不再有"处理器登记"这回事; 序号已换成点 id)
     {
-        const std::string_view pointId = agentxx::plugin::points::ToolEnd;
-        agentxx::plugin::subscribePluginBroadcast(
-            host,
-            ctx.iface.broadcasts,
+        co_await agentxx::plugin::subscribePluginBroadcast(
+            ctx,
             ref.ptr(),
-            pointId,
+            agentxx::plugin::points::ToolEnd,
             on_demo_event, ///< 与自己的频道共用同一个处理器 (只打印载荷)
             &ctx
         );
@@ -393,19 +391,17 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     // 3. 事件订阅 (读侧可跨族, 但必须是全名)
     //    自己的频道要先声明再订阅 (声明是显式动作; 主程序频道由主程序声明)
     const char* demoChannel = "plugin.example_plugin.demo";
-    agentxx::plugin::declarePluginBroadcast(host, ctx.iface.broadcasts, demoChannel);
-    agentxx::plugin::subscribePluginBroadcast(
-        host,
-        ctx.iface.broadcasts,
+    co_await agentxx::plugin::declarePluginBroadcast(ctx, demoChannel);
+    co_await agentxx::plugin::subscribePluginBroadcast(
+        ctx,
         ref.ptr(),
         demoChannel,
         on_demo_event,
         &ctx
     );
     // client 插件上行: client 侧自己的族 `agentxx.client.plugin.<插件名>.<事件>`
-    agentxx::plugin::subscribePluginBroadcast(
-        host,
-        ctx.iface.broadcasts,
+    co_await agentxx::plugin::subscribePluginBroadcast(
+        ctx,
         ref.ptr(),
         "agentxx.client.plugin.example_plugin.hello",
         on_client_hello,
@@ -425,14 +421,12 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
         spec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
         spec.run_start   = &on_demo_capability;
         // 作用域: 挂载引用 = 这一行只对该作用域生效 (空 = 进程级)
-        // 表成员是异步契约: 挂载事务在主程序 IO 线程上, 内联完成 (结果不影响加载)
-        (void)agentxx::plugin::tableOpBlockingRaw(
-            host,
-            ctx.iface.cancel,
-            ctx.iface.scheduler,
+        // 表成员是异步契约: 登记结论只有结果里有 (失败不影响挂载, 只记日志)
+        auto capResult = co_await agentxx::plugin::tableOp(
+            ctx,
             [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return ctx.iface.capabilities->register_capability(
-                    host,
+                    ctx.host,
                     ref.ptr(),
                     &spec,
                     cb,
@@ -441,21 +435,29 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
                 );
             }
         );
+        if (!capResult.ok()) {
+            ctx.log.warn(
+                fmt::format(
+                    "example_plugin: register capability failed: {}",
+                    capResult.accepted() ? std::string(capResult.text()) : capResult.startError
+                )
+            );
+        }
     }
 
     // 5. 提示词读写
     if (ctx.iface.prompt && ctx.iface.prompt->get_prompt && ctx.iface.prompt->set_prompt) {
-        std::string prompt = agentxx::plugin::promptJson(host, ctx.iface, ref.ptr());
-        if (!prompt.empty()) {
-            if (prompt.find("\"example_echo\"") == std::string::npos) {
+        auto promptResult = co_await agentxx::plugin::promptJson(ctx, ref.ptr());
+        if (promptResult.ok() && !promptResult.text().empty()) {
+            if (promptResult.text().find("\"example_echo\"") == std::string_view::npos) {
                 const char* promptJson
                     = R"_({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})_";
-                agentxx::plugin::setPromptJson(host, ctx.iface, ref.ptr(), promptJson);
+                co_await agentxx::plugin::setPromptJson(ctx, ref.ptr(), promptJson);
             }
         }
     }
 
-    return 0;
+    co_return;
 }
 
 static void*
@@ -492,20 +494,29 @@ static void* exampleAgentMount(
         }
         return nullptr;
     }
-    const agentxx::plugin::AgentRef ref(*spec);
-    if (exampleAgentSetup(ctx, ref) != 0) {
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "example_plugin mount: registration transaction failed"
+                "example_plugin mount: host has no pluginxx.tasks (spawn unavailable)"
             );
         }
         return nullptr;
     }
-    ctx.log.info("example plugin mounted");
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    auto later = agentxx::plugin::finishLater(notify);
+    // 注册事务交给协程: 工具/订阅/能力/提示词逐条"提交 + co_await", 全部生效后再放行挂载
+    const agentxx::plugin::AgentRef agentRef(*spec);
+    ctx.spawn([later, agentRef](AgentCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await exampleAgentSetup(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 static void* exampleAgentUnmount(

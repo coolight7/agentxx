@@ -1870,6 +1870,114 @@ private:
     std::vector<std::string> required_;
 };
 
+/* ==================== 提示词描述 / 模式构建器的协程形态 ==================== */
+
+/// 解析 `get_tool_prompt` 的结果正文 (`{"depict":..., "args":{...}}`)
+///
+/// - 空正文、非法 JSON、非对象都返回空描述 (工具照常注册, 只是描述文本用调用方给的默认值)
+inline ToolPromptText parseToolPromptJson(std::string_view json) {
+    ToolPromptText res;
+    if (json.empty()) {
+        return res;
+    }
+    try {
+        auto j = utilxx_base::Json::parse(std::string{json});
+        if (!j.is_object()) {
+            return res;
+        }
+        if (j.contains("depict") && j["depict"].is_string()) {
+            res.depict = j["depict"].get<std::string>();
+        }
+        if (j.contains("args") && j["args"].is_object()) {
+            for (const auto& [k, v] : j["args"].items()) {
+                if (v.is_string()) {
+                    utilxx_base::insertOrAssignHeterogeneous(res.args, k, v.get<std::string>());
+                }
+            }
+        }
+    } catch (...) {
+    }
+    return res;
+}
+
+namespace detail {
+
+/// 工具提示词描述的协程等待器 (见 [toolPromptOf])
+struct ToolPromptAwaiter {
+    pluginxx::TableOpTicket ticket;
+
+    bool await_ready() const noexcept {
+        return ticket.done();
+    }
+
+    template<typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> h) {
+        return ticket.await_suspend(h);
+    }
+
+    ToolPromptText await_resume() {
+        auto r = ticket.await_resume();
+        return parseToolPromptJson(r.ok() ? r.text() : std::string_view{});
+    }
+};
+
+/// 工具模式构建器的协程等待器 (见 [schemaOf])
+struct ToolSchemaAwaiter {
+    ToolPromptAwaiter prompt;
+
+    bool await_ready() const noexcept {
+        return prompt.await_ready();
+    }
+
+    template<typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> h) {
+        return prompt.await_suspend(h);
+    }
+
+    ToolSchemaBuilder await_resume() {
+        return ToolSchemaBuilder(prompt.await_resume());
+    }
+};
+
+} // namespace detail
+
+/// 取本插件工具提示词描述 (**协程形态**)
+///
+/// 与 [PluginBase::toolPrompt] 的同步形态等价, 只是走"调用即提交":
+/// ```cpp
+/// auto p = co_await agentxx::plugin::toolPromptOf(ctx, "my_tool");
+/// std::string depict = p.depict.empty() ? kDefaultDepict : p.depict;
+/// ```
+/// 主程序未提供 `agentxx.agent.prompt` 表或查询失败时得到空描述 (不抛异常)。
+template<typename Ctx>
+inline detail::ToolPromptAwaiter toolPromptOf(const Ctx& ctx, std::string_view tool) {
+    auto name = std::string{tool};
+    return detail::ToolPromptAwaiter{
+        pluginxx::tableOp(
+            ctx,
+            [&ctx, name](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+                -> PluginxxOperatorHandle* {
+                if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->get_tool_prompt) {
+                    return nullptr;
+                }
+                auto v = PluginStringView::from(name.data(), name.size());
+                return ctx.iface.prompt->get_tool_prompt(ctx.host, &v, cb, ud, err);
+            }
+        )
+    };
+}
+
+/// 声明式模式构建器 (**协程形态**, 先取主程序里本工具的提示词再建模式)
+///
+/// ```cpp
+/// auto b = co_await agentxx::plugin::schemaOf(ctx, "my_tool");
+/// auto schema = b.string("path", kPathArgDesc, /*required=*/true).build();
+/// ```
+template<typename Ctx>
+inline detail::ToolSchemaAwaiter schemaOf(const Ctx& ctx, std::string_view tool) {
+    return detail::ToolSchemaAwaiter{toolPromptOf(ctx, tool)};
+}
+
 /* ==================== 插件实例上下文基类 (agentxx 业务扩展) ==================== */
 
 /// agentxx 插件实例上下文基类

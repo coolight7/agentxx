@@ -151,49 +151,53 @@ You have access to CodeGraph code analysis tools for precise, index-based code n
 Workflow: use `search` to resolve the exact symbol name, then `context`/`callers`/`callees`/`path` as needed. Use these for tasks like "where is X defined", "who calls X", "what does X call", "what depends on X", "is it safe to modify X" before falling back to grep/glob. Results may be incomplete while indexing is in progress (tool output will warn).
 )_";
 
-static void injectCodegraphSystemPrompt(
-    const PluginxxHost*                 host,
-    const agentxx::plugin::AgentIfaces& iface,
-    const PluginxxScopeRef*             agent
-) {
-    if (!host || !iface.prompt || !iface.prompt->set_prompt) {
-        return;
+/// 注入系统提示词段 (**协程形态**: 调用即提交, 结果里才知道写没写成)
+static pluginxx::Task<void>
+    injectCodegraphSystemPrompt(PluginCtx& ctx, agentxx::plugin::ScopeRef ref) {
+    if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->set_prompt) {
+        co_return;
     }
     codegraph::Json j        = codegraph::Json::object();
     codegraph::Json append   = codegraph::Json::object();
     append["codegraph"]      = std::string(kSystemCodegraphPrompt);
     j["appendSystemPrompts"] = append;
     std::string payload      = j.dump();
-    if (agentxx::plugin::setPromptJson(host, iface, agent, payload) != 0) {
+    auto        r            = co_await agentxx::plugin::setPromptJson(ctx, ref.ptr(), payload);
+    if (!r.ok()) {
         pluginLog(
-            host,
-            iface.log,
+            ctx.host,
+            ctx.iface.log,
             3,
-            "agentxx_codegraph: set appendSystemPrompts[codegraph] failed"
+            fmt::format(
+                "agentxx_codegraph: set appendSystemPrompts[codegraph] failed: {}",
+                r.accepted() ? std::string(r.text()) : r.startError
+            )
         );
     } else {
         pluginLog(
-            host,
-            iface.log,
+            ctx.host,
+            ctx.iface.log,
             2,
             "agentxx_codegraph: appendSystemPrompts[codegraph] injected via prompt iface"
         );
     }
+    co_return;
 }
 
-static void
-    ensureToolPromptsInHost(
-        const PluginxxHost*                 host,
-        const agentxx::plugin::AgentIfaces& iface,
-        const PluginxxScopeRef*             agent
-    ) {
-    if (!host || !iface.prompt || !iface.prompt->get_prompt || !iface.prompt->set_prompt) {
-        return;
+/// 把五个工具的描述补进主程序提示词表 (已有条目不覆盖)
+/// - **协程形态**: 先读当前提示词 JSON, 再写回本实例的贡献
+/// - 主程序按所有者记录贡献, 插件卸载/禁用时自动撤销
+static pluginxx::Task<void>
+    ensureToolPromptsInHost(PluginCtx& ctx, agentxx::plugin::ScopeRef ref) {
+    if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->get_prompt
+        || !ctx.iface.prompt->set_prompt) {
+        co_return;
     }
-    std::string s = agentxx::plugin::promptJson(host, iface, agent);
-    if (s.empty()) {
-        return;
+    auto readResult = co_await agentxx::plugin::promptJson(ctx, ref.ptr());
+    if (!readResult.ok() || readResult.text().empty()) {
+        co_return;
     }
+    std::string s{readResult.text()};
     agentxx::plugin::ArgReader promptArgs(s);
     static const char*         kToolNames[] = {
         "agentxx_codegraph_search",
@@ -243,13 +247,23 @@ static void
         dirty       = true;
     }
     if (!dirty) {
-        return;
+        co_return;
     }
-    patch["toolPrompt"]   = tools;
-    std::string payload   = patch.dump();
-    if (agentxx::plugin::setPromptJson(host, iface, agent, payload) != 0) {
-        pluginLog(host, iface.log, 3, "agentxx_codegraph: set_prompt failed");
+    patch["toolPrompt"] = tools;
+    std::string payload = patch.dump();
+    auto        wr      = co_await agentxx::plugin::setPromptJson(ctx, ref.ptr(), payload);
+    if (!wr.ok()) {
+        pluginLog(
+            ctx.host,
+            ctx.iface.log,
+            3,
+            fmt::format(
+                "agentxx_codegraph: set_prompt failed: {}",
+                wr.accepted() ? std::string(wr.text()) : wr.startError
+            )
+        );
     }
+    co_return;
 }
 
 static std::string appendJsonNodeDetails(std::string& out, const codegraph::Json& node) {
@@ -473,18 +487,21 @@ struct SchemaBuilder {
     }
 };
 
-static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
+/// 注册五个查询工具 (**协程形态**)
+/// - 每个注册都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到失败原因
+static pluginxx::Task<void>
+    registerAllTools(PluginCtx& ctx, agentxx::plugin::ScopeRef ref) {
     constexpr int kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
     // agentxx_codegraph_search
     {
-        auto          p      = ctx.toolPrompt("agentxx_codegraph_search");
+        auto          p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_codegraph_search");
         const auto    def    = defaultToolPrompt("agentxx_codegraph_search");
         std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
         b.str("query", p.args.contains("query") ? p.args["query"] : def.query);
         b.integer("limit", p.args.contains("limit") ? p.args["limit"] : def.limit, 20);
-        agentxx::plugin::blocking_tool(
+        co_await agentxx::plugin::blocking_tool(
             ctx,
             ref,
             "agentxx_codegraph_search",
@@ -533,7 +550,7 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
 
     // agentxx_codegraph_context
     {
-        auto          p      = ctx.toolPrompt("agentxx_codegraph_context");
+        auto          p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_codegraph_context");
         const auto    def    = defaultToolPrompt("agentxx_codegraph_context");
         std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
@@ -544,7 +561,7 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             3
         );
-        agentxx::plugin::blocking_tool(
+        co_await agentxx::plugin::blocking_tool(
             ctx,
             ref,
             "agentxx_codegraph_context",
@@ -577,7 +594,7 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
 
     // agentxx_codegraph_callers
     {
-        auto          p      = ctx.toolPrompt("agentxx_codegraph_callers");
+        auto          p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_codegraph_callers");
         const auto    def    = defaultToolPrompt("agentxx_codegraph_callers");
         std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
@@ -587,7 +604,7 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             3
         );
-        agentxx::plugin::blocking_tool(
+        co_await agentxx::plugin::blocking_tool(
             ctx,
             ref,
             "agentxx_codegraph_callers",
@@ -615,7 +632,7 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
 
     // agentxx_codegraph_callees
     {
-        auto          p      = ctx.toolPrompt("agentxx_codegraph_callees");
+        auto          p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_codegraph_callees");
         const auto    def    = defaultToolPrompt("agentxx_codegraph_callees");
         std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
@@ -625,7 +642,7 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             3
         );
-        agentxx::plugin::blocking_tool(
+        co_await agentxx::plugin::blocking_tool(
             ctx,
             ref,
             "agentxx_codegraph_callees",
@@ -653,7 +670,7 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
 
     // agentxx_codegraph_path
     {
-        auto          p      = ctx.toolPrompt("agentxx_codegraph_path");
+        auto          p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_codegraph_path");
         const auto    def    = defaultToolPrompt("agentxx_codegraph_path");
         std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
@@ -664,7 +681,7 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             10
         );
-        agentxx::plugin::blocking_tool(
+        co_await agentxx::plugin::blocking_tool(
             ctx,
             ref,
             "agentxx_codegraph_path",
@@ -711,6 +728,7 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
             kAutoSummary
         );
     }
+    co_return;
 }
 
 static void
@@ -918,31 +936,31 @@ extern "C" PLUGINXX_EXPORT int
     });
 }
 
-/// 挂载事务 (mount 的实际内容): 工具/prompt/事件订阅。
+/// 挂载事务 (mount 的实际内容): 工具/prompt/事件订阅 (**协程形态**)。
 /// - `ref` 为本次挂载的 agent 引用, 提示词/工具/订阅都记在该 agent 名下
 /// - dataDir 缺失或 initialize 失败时 mgr 为空: 保持降级加载, mount 直接完成
 ///   (与迁移前 create 的降级行为一致)。
-static int codegraphAgentMountSetup(PluginCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
+/// - 每条注册都 `co_await` 完再继续: 登记本身已经生效, 等结果只为了拿到失败原因;
+///   `co_await` 期间不占线程 (主程序在 IO 线程上是内联完成的, 不会多一次等待)
+static pluginxx::Task<void>
+    codegraphAgentMountSetup(PluginCtx& ctx, agentxx::plugin::ScopeRef ref) {
     if (!ctx.mgr) {
-        return 0;
+        co_return;
     }
-    ensureToolPromptsInHost(ctx.host, ctx.iface, ref.ptr());
-    injectCodegraphSystemPrompt(ctx.host, ctx.iface, ref.ptr());
-    registerAllTools(ctx, ref);
+    co_await ensureToolPromptsInHost(ctx, ref);
+    co_await injectCodegraphSystemPrompt(ctx, ref);
+    co_await registerAllTools(ctx, ref);
 
     if (ctx.iface.broadcasts) {
-        auto attachTopic
-            = agentxx::plugin::PluginStringView::fromCstr("agentxx.agent.host.client_attached");
-        agentxx::plugin::subscribePluginBroadcast(
-            ctx.host,
-            ctx.iface.broadcasts,
+        co_await agentxx::plugin::subscribePluginBroadcast(
+            ctx,
             ref.ptr(),
-            attachTopic,
+            "agentxx.agent.host.client_attached",
             on_client_attached,
             &ctx
         );
     }
-    return 0;
+    co_return;
 }
 
 /// 进程级启动工作: 后台索引预热 + 状态事件。
@@ -1033,19 +1051,29 @@ static void* codegraphAgentMount(
         }
         return nullptr;
     }
-    const agentxx::plugin::AgentRef ref(*spec);
-    if (codegraphAgentMountSetup(ctx, ref) != 0) {
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "agentxx_codegraph mount: setup failed"
+                "agentxx_codegraph mount: host has no pluginxx.tasks (spawn unavailable)"
             );
         }
         return nullptr;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    auto later = agentxx::plugin::finishLater(notify);
+    // 注册事务交给协程: 工具/prompt/订阅逐条"提交 + co_await", 全部生效后再放行挂载
+    const agentxx::plugin::AgentRef agentRef(*spec);
+    ctx.spawn([later, agentRef](PluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await codegraphAgentMountSetup(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 static void* codegraphAgentUnmount(
