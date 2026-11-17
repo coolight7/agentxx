@@ -395,16 +395,14 @@ static void* textSelectionAgentStart(
     return nullptr;
 }
 
-static void* textSelectionAgentMount(
-    TextSelectionPluginCtx&            ctx,
-    const AgentxxPluginAgentMountSpec* spec,
-    const PluginxxOperatorNotify*      notify,
-    PluginxxString*                    err
+/// 挂载事务 (**协程形态**): 取工具提示词 + 建 schema + 注册工具
+static pluginxx::Task<void> textSelectionAgentSetup(
+    TextSelectionPluginCtx& ctx,
+    agentxx::plugin::AgentRef ref
 ) {
-    const agentxx::plugin::AgentRef ref(*spec);
-
+    auto schemaBuilder = co_await agentxx::plugin::schemaOf(ctx, "agentxx_text_selection_monitor");
     auto schema
-        = ctx.schema("agentxx_text_selection_monitor")
+        = schemaBuilder
               .enumString(
                   "command",
                   "Operation command: start listening, stop listening, or query running status.",
@@ -417,7 +415,7 @@ static void* textSelectionAgentMount(
               )
               .build();
 
-    blocking_tool(
+    co_await blocking_tool(
         ctx,
         ref,
         "agentxx_text_selection_monitor",
@@ -455,9 +453,45 @@ static void* textSelectionAgentMount(
             return agentxx::plugin::ToolResult::fail(R"_(unknown command: use start/stop/status)_");
         }
     );
+    co_return;
+}
 
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+static void* textSelectionAgentMount(
+    TextSelectionPluginCtx&            ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    err
+) {
+    if (!notify) {
+        agentxx::plugin::PluginString::set(
+            ctx.host,
+            err,
+            "text_selection_monitor mount: notify required"
+        );
+        return nullptr;
+    }
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        agentxx::plugin::PluginString::set(
+            ctx.host,
+            err,
+            "text_selection_monitor mount: host has no pluginxx.tasks (spawn unavailable)"
+        );
+        return nullptr;
+    }
+    auto later = agentxx::plugin::finishLater(notify);
+    // 工具注册交给协程: schema/提示词读取与注册逐条 co_await, 全部生效后再放行挂载
+    const agentxx::plugin::AgentRef agentRef(*spec);
+    ctx.spawn([later, agentRef](TextSelectionPluginCtx& c, agentxx::plugin::OpCtl&)
+                  -> pluginxx::Task<void> {
+        try {
+            co_await textSelectionAgentSetup(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 static void* textSelectionAgentUnmount(

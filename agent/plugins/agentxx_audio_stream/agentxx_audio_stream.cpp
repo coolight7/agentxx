@@ -154,16 +154,12 @@ static void* audioStreamAgentStart(
     return nullptr;
 }
 
-static void* audioStreamAgentMount(
-    AudioStreamPluginCtx&              ctx,
-    const AgentxxPluginAgentMountSpec* spec,
-    const PluginxxOperatorNotify*      notify,
-    PluginxxString*                    err
-) {
-    const agentxx::plugin::AgentRef ref(*spec);
-
+/// 挂载事务 (**协程形态**): 取工具提示词 + 建 schema + 注册工具
+static pluginxx::Task<void>
+    audioStreamAgentSetup(AudioStreamPluginCtx& ctx, agentxx::plugin::AgentRef ref) {
+    auto schemaBuilder = co_await agentxx::plugin::schemaOf(ctx, "agentxx_audio_stream");
     auto schema
-        = ctx.schema("agentxx_audio_stream")
+        = schemaBuilder
               .enumString(
                   "command",
                   "Operation command: start capturing, stop capturing, or query status.",
@@ -185,7 +181,7 @@ static void* audioStreamAgentMount(
               )
               .build();
 
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "agentxx_audio_stream",
@@ -230,9 +226,42 @@ static void* audioStreamAgentMount(
             return agentxx::plugin::ToolResult::fail(R"_(unknown command: use start/stop/status)_");
         }
     );
+    co_return;
+}
 
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+static void* audioStreamAgentMount(
+    AudioStreamPluginCtx&              ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    err
+) {
+    if (!notify) {
+        agentxx::plugin::PluginString::set(ctx.host, err, "audio_stream mount: notify required");
+        return nullptr;
+    }
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        agentxx::plugin::PluginString::set(
+            ctx.host,
+            err,
+            "audio_stream mount: host has no pluginxx.tasks (spawn unavailable)"
+        );
+        return nullptr;
+    }
+    auto later = agentxx::plugin::finishLater(notify);
+    // 工具注册交给协程: schema/提示词读取与注册逐条 co_await, 全部生效后再放行挂载
+    const agentxx::plugin::AgentRef agentRef(*spec);
+    ctx.spawn(
+        [later, agentRef](AudioStreamPluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+            try {
+                co_await audioStreamAgentSetup(c, agentRef);
+                later.ok();
+            } catch (const std::exception& e) {
+                later.failed(e.what());
+            }
+            co_return;
+        }
+    );
+    return later.provider();
 }
 
 static void* audioStreamAgentUnmount(

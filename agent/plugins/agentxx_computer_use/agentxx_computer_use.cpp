@@ -109,22 +109,13 @@ static void* computerUseAgentStart(
     return nullptr;
 }
 
-static void* computerUseAgentMount(
-    ComputerUsePluginCtx&              ctx,
-    const AgentxxPluginAgentMountSpec* spec,
-    const PluginxxOperatorNotify*      notify,
-    PluginxxString*                    err
-) {
-    if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
-        agentxx::plugin::PluginString::set(ctx.host, err, "tools iface unavailable");
-        return nullptr;
-    }
-    const agentxx::plugin::AgentRef ref(*spec);
-
-    auto        p      = ctx.toolPrompt("agentxx_ui_control_keyboard_mouse");
+/// 挂载事务 (**协程形态**): 先取主程序里的工具提示词, 再注册鼠标/键盘工具
+static pluginxx::Task<void>
+    computerUseAgentSetup(ComputerUsePluginCtx& ctx, agentxx::plugin::AgentRef ref) {
+    auto        p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_ui_control_keyboard_mouse");
     std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
 
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "agentxx_ui_control_keyboard_mouse",
@@ -138,9 +129,46 @@ static void* computerUseAgentMount(
             return uiControlExecute(reader.raw());
         }
     );
+    co_return;
+}
 
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+static void* computerUseAgentMount(
+    ComputerUsePluginCtx&              ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    err
+) {
+    if (!notify) {
+        agentxx::plugin::PluginString::set(ctx.host, err, "computer_use mount: notify required");
+        return nullptr;
+    }
+    if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
+        agentxx::plugin::PluginString::set(ctx.host, err, "tools iface unavailable");
+        return nullptr;
+    }
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        agentxx::plugin::PluginString::set(
+            ctx.host,
+            err,
+            "computer_use mount: host has no pluginxx.tasks (spawn unavailable)"
+        );
+        return nullptr;
+    }
+    auto later = agentxx::plugin::finishLater(notify);
+    // 工具提示词读取与工具注册逐条“提交 + co_await”, 全部生效后再放行挂载
+    const agentxx::plugin::AgentRef agentRef(*spec);
+    ctx.spawn(
+        [later, agentRef](ComputerUsePluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+            try {
+                co_await computerUseAgentSetup(c, agentRef);
+                later.ok();
+            } catch (const std::exception& e) {
+                later.failed(e.what());
+            }
+            co_return;
+        }
+    );
+    return later.provider();
 }
 
 static void* computerUseAgentUnmount(

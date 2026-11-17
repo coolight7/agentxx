@@ -157,9 +157,12 @@ static const char* kScreenCaptureDefaultDepict
       "the result only contains frame metadata (size/offset/screen) plus the image file path — "
       "pixel data never enters the conversation.";
 
-static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
+/// 注册截图工具 (**协程形态**): schema/提示词读取与工具注册都是“提交 + `co_await`”
+static pluginxx::Task<void>
+    registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, agentxx::plugin::AgentRef ref) {
+    auto schemaBuilder = co_await agentxx::plugin::schemaOf(ctx, "agentxx_screen_capture");
     auto schema
-        = ctx.schema("agentxx_screen_capture")
+        = schemaBuilder
               .enumString(
                   "command",
                   "Operation to perform: capture_all (default), capture_mouse, capture_screen, get_screen_count, start_streaming, stop_streaming.",
@@ -188,10 +191,10 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, const agentxx
               )
               .build();
 
-    auto        p      = ctx.toolPrompt("agentxx_screen_capture");
+    auto        p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_screen_capture");
     std::string depict = p.depict.empty() ? kScreenCaptureDefaultDepict : p.depict;
 
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "agentxx_screen_capture",
@@ -317,10 +320,33 @@ static void* screenCaptureAgentMount(
         agentxx::plugin::PluginString::set(ctx.host, err, "tools iface unavailable");
         return nullptr;
     }
-    const agentxx::plugin::AgentRef ref(*spec);
-    registerScreenCaptureTool(ctx, ref);
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    if (!notify) {
+        agentxx::plugin::PluginString::set(ctx.host, err, "screen_capture mount: notify required");
+        return nullptr;
+    }
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        agentxx::plugin::PluginString::set(
+            ctx.host,
+            err,
+            "screen_capture mount: host has no pluginxx.tasks (spawn unavailable)"
+        );
+        return nullptr;
+    }
+    auto later = agentxx::plugin::finishLater(notify);
+    // 工具注册交给协程: schema/提示词读取与注册逐条 co_await, 全部生效后再放行挂载
+    const agentxx::plugin::AgentRef agentRef(*spec);
+    ctx.spawn(
+        [later, agentRef](ScreenCapturePluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+            try {
+                co_await registerScreenCaptureTool(c, agentRef);
+                later.ok();
+            } catch (const std::exception& e) {
+                later.failed(e.what());
+            }
+            co_return;
+        }
+    );
+    return later.provider();
 }
 
 static void* screenCaptureAgentUnmount(
