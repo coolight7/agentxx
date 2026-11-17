@@ -110,8 +110,10 @@ using pluginxx::tableOpBlocking;
 using pluginxx::tableOpBlockingRaw;
 using pluginxx::tableOpCallback;
 using pluginxx::TableOpResult;
+using pluginxx::TableOpTicket;
 using pluginxx::Task;
 using pluginxx::validateInterface;
+using pluginxx::whenAll;
 using pluginxx::yield;
 
 namespace detail {

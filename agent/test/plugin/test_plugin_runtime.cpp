@@ -12,6 +12,7 @@
 #include "neograph/graph/run_context.h"
 #include "neograph/graph/state.h"
 #include "neograph/graph/types.h"
+#include "pluginxx/host/table_op.h"
 #include "pluginxx/runtime/op_driver.h"
 #include "utilxx_base/asio_error.h"
 
@@ -2412,6 +2413,66 @@ TestResult testPluginRuntime() {
             f.manager->plugins_.erase(f.provider->name);
         }
     }
+
+    /// 表调用的顺序契约 ([startTableOp]):
+    /// - 调用方就是 IO 线程 (夹具里 `setIoExecutor` 把当前线程登记为 IO 线程):
+    ///   内联执行, 函数返回时工作体已经跑完, 顺序就是提交顺序;
+    /// - 其它线程: 按受理顺序排队, 由 IO 线程依次执行 (FIFO)。
+    {
+        RuntimeFixture   f;
+        std::vector<int> order;
+
+        // 1) IO 线程上提交: 内联执行
+        for (int i = 0; i < 3; ++i) {
+            auto* op = pluginxx::startTableOp(
+                f.manager.get(),
+                nullptr,
+                nullptr,
+                nullptr,
+                "test.inline",
+                [&order, i] {
+                    order.push_back(i);
+                    return std::string{"ok"};
+                }
+            );
+            XX_TEST_EXPECT_TRUE(op != nullptr);
+        }
+        XX_TEST_EXPECT_EQ(order.size(), size_t{3});
+
+        // 2) 别的线程提交: 排队, 未驱动前一条都不跑
+        order.clear();
+        std::atomic<int> accepted{0};
+        std::thread      submitter([&] {
+            for (int i = 0; i < 5; ++i) {
+                auto* op = pluginxx::startTableOp(
+                    f.manager.get(),
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    "test.fifo",
+                    [&order, i] {
+                        order.push_back(i);
+                        return std::string{"ok"};
+                    }
+                );
+                if (op) {
+                    accepted.fetch_add(1);
+                }
+            }
+        });
+        submitter.join();
+        XX_TEST_EXPECT_EQ(accepted.load(), 5);
+        XX_TEST_EXPECT_TRUE(order.empty());
+
+        f.io.run();
+        XX_TEST_EXPECT_EQ(order.size(), size_t{5});
+        if (order.size() == 5) {
+            for (int i = 0; i < 5; ++i) {
+                XX_TEST_EXPECT_EQ(order[static_cast<size_t>(i)], i);
+            }
+        }
+    }
+
     return result;
 }
 } // namespace agentxx::test

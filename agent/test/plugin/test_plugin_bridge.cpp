@@ -81,9 +81,21 @@ struct Harness {
     int                                  opCancelCalls = 0; ///< scheduler op_cancel 被调用次数
     int                                  offloadCalls  = 0; ///< scheduler offload 被调用次数
     uintptr_t                            nextSleepHandle = 1;
+    /// 经 `cancel.op_cancel` 请求取消过的伪操作句柄 (按请求顺序)
+    std::vector<uintptr_t> canceledHandles;
 
     size_t queuedTicketCount() const {
         return pending.size();
+    }
+
+    /// 造一个"已受理"的伪操作句柄 (登记在本 harness 里, 因此 `op_cancel` 能安全识别)
+    PluginxxOperatorHandle* newOpHandle(uintptr_t id) {
+        auto record     = std::make_unique<FakeOp>();
+        record->harness = this;
+        record->handle  = id;
+        auto* raw       = record.get();
+        ops.push_back(std::move(record));
+        return reinterpret_cast<PluginxxOperatorHandle*>(raw);
     }
 
     /// 执行"下一次请求" (等价于主程序把一次投递排到 IO 线程并执行它)。
@@ -123,6 +135,7 @@ struct Harness {
         opCancelCalls   = 0;
         offloadCalls    = 0;
         nextSleepHandle = 1;
+        canceledHandles.clear();
     }
 };
 
@@ -226,6 +239,7 @@ void PLUGINXX_CALL fakeOpCancel(PluginxxOperatorHandle* op) {
         return;
     }
     auto* harness = record->harness;
+    harness->canceledHandles.push_back(record->handle);
     for (auto& entry : harness->sleeps) {
         if (entry.handle == record->handle) {
             ++harness->opCancelCalls;
@@ -498,6 +512,49 @@ void* startTool(
     auto cid    = PluginStringView::fromCstr("call-1");
     return spec.execute_start(spec.user_data, &args, &sid, &cid, &notify, nullptr);
 }
+
+/// 伪表调用的受理记录: 记下完成回调, 由用例决定"何时完成、以什么顺序完成"。
+///
+/// 表调用的 SDK 凭据 (`TableOpTicket`) 在构造时就提交, 因此用例可以观察"还没 await
+/// 就已经在跑"以及"完成顺序与受理顺序无关"。
+struct PendingTableCalls {
+    struct Entry {
+        PluginxxOperatorCallback cb = nullptr;
+        void*                    ud = nullptr;
+        uintptr_t                id = 0;
+    };
+
+    std::vector<Entry> entries;
+    uintptr_t          nextId = 1;
+
+    /// 受理一次调用 (返回的伪操作句柄登记在 harness 里, `op_cancel` 能安全识别)
+    PluginxxOperatorHandle* accept(Harness& harness, PluginxxOperatorCallback cb, void* ud) {
+        Entry entry;
+        entry.cb = cb;
+        entry.ud = ud;
+        entry.id = nextId++;
+        entries.push_back(entry);
+        return harness.newOpHandle(entry.id);
+    }
+
+    /// 按受理顺序完成第 `index` 条 (空正文 = 没有结果正文)
+    void complete(size_t index, int32_t status, std::string_view body = {}) {
+        if (index >= entries.size() || !entries[index].cb) {
+            return;
+        }
+        auto entry     = entries[index];
+        entries[index] = Entry{};
+        PluginxxStringView payload = body.empty()
+                                         ? PluginStringView::from(nullptr, 0)
+                                         : PluginStringView::from(body.data(), body.size());
+        entry.cb(entry.ud, status, &payload);
+    }
+
+    /// 已受理条数
+    size_t count() const {
+        return entries.size();
+    }
+};
 
 } // namespace
 
@@ -1279,6 +1336,311 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(bridge->polledRootCount(), uint64_t{0});
         XX_TEST_EXPECT_GE(bridge->idlePollCount(), uint64_t{1});
         XX_TEST_EXPECT_EQ(rounds < 4000, true); // 未超轮次上限 (无自旋)
+    }
+
+    /// 15. 表调用凭据 (ticket): 调用即提交 (不 await 也在跑), forget 丢结果,
+    ///     未受理同样是"有结果", 正文只能取一次。
+    {
+        harness.clear();
+        BridgeCtx         ctx;
+        ctx.init(&host);
+        PendingTableCalls calls;
+
+        auto start = [&calls, &harness](PluginxxOperatorCallback cb, void* ud, PluginxxString*) {
+            return calls.accept(harness, cb, ud);
+        };
+
+        // 提交就发生在构造 ticket 的那个语句里: 这里既没有协程也没有 co_await
+        auto first = pluginxx::tableOp(ctx, start);
+        XX_TEST_EXPECT_EQ(calls.count(), size_t{1});
+        XX_TEST_EXPECT_TRUE(first.accepted());
+        XX_TEST_EXPECT_FALSE(first.done());
+        XX_TEST_EXPECT_FALSE(first.await_ready());
+
+        // 第二条照常提交: 多条可以同时在跑, 互不等待
+        auto second = pluginxx::tableOp(ctx, start);
+        XX_TEST_EXPECT_EQ(calls.count(), size_t{2});
+
+        // fire-and-forget: 提交完不管结果 (回调照常到达, 只是没人看)
+        pluginxx::tableOp(ctx, start).forget();
+        XX_TEST_EXPECT_EQ(calls.count(), size_t{3});
+
+        // 先完成第二条: 只有它变成"有结果", 与受理顺序无关
+        calls.complete(1, PLUGINXX_OPERATOR_OK, "second");
+        XX_TEST_EXPECT_TRUE(second.done());
+        XX_TEST_EXPECT_FALSE(first.done());
+
+        // 显式取消: 经 cancel.op_cancel 请求取消 (伪主程序只记下句柄)
+        first.cancel();
+        XX_TEST_EXPECT_EQ(harness.canceledHandles.size(), size_t{1});
+
+        calls.complete(0, PLUGINXX_OPERATOR_CANCELED, "stop");
+        calls.complete(2, PLUGINXX_OPERATOR_OK, "ignored");
+
+        auto firstRes = first.await_resume();
+        XX_TEST_EXPECT_TRUE(firstRes.canceled());
+        XX_TEST_EXPECT_EQ(std::string{firstRes.text()}, std::string{"stop"});
+        auto secondRes = second.await_resume();
+        XX_TEST_EXPECT_TRUE(secondRes.ok());
+        XX_TEST_EXPECT_EQ(std::string{secondRes.text()}, std::string{"second"});
+
+        // 正文只能取一次: 第二次得到"已被取走"的说明 (而不是空的"成功")
+        auto again = second.await_resume();
+        XX_TEST_EXPECT_FALSE(again.accepted());
+        XX_TEST_EXPECT_TRUE(again.startError.find("already taken") != std::string::npos);
+
+        // 未受理: 主程序拒绝 -> accepted()==false 且已经"有结果", await 不挂起
+        auto rejected = pluginxx::tableOp(
+            ctx,
+            [](PluginxxOperatorCallback, void*, PluginxxString* err) -> PluginxxOperatorHandle* {
+                setHostError(err, "scope expired");
+                return nullptr;
+            }
+        );
+        XX_TEST_EXPECT_FALSE(rejected.accepted());
+        XX_TEST_EXPECT_TRUE(rejected.done());
+        XX_TEST_EXPECT_TRUE(rejected.await_ready());
+        auto rejectedRes = rejected.await_resume();
+        XX_TEST_EXPECT_FALSE(rejectedRes.accepted());
+        XX_TEST_EXPECT_EQ(rejectedRes.startError, std::string{"scope expired"});
+    }
+
+    /// 16. ticket 稍后 await: 提交发生在构造处, 协程挂起后在完成回调里恢复;
+    ///     完成回调不重入插件协程 (仍是一次请求一次推进)。
+    {
+        harness.clear();
+        NotifyProbe probe;
+        BridgeCtx   ctx;
+        ctx.init(&host);
+        g_capturedTool = CapturedTool{};
+
+        PendingTableCalls calls;
+        bool              acceptedBeforeAwait = false;
+        bool              doneBeforeAwait     = false;
+        int               resumedCount        = 0;
+
+        agentxx::plugin::tool(
+            ctx,
+            g_agentRef,
+            "ticket_await",
+            "depict",
+            "{}",
+            [&calls, &harness, &acceptedBeforeAwait, &doneBeforeAwait, &resumedCount](
+                BridgeCtx&                c,
+                std::string_view,
+                OpCtl&
+            ) -> Task<std::string> {
+                auto ticket = pluginxx::tableOp(
+                    c,
+                    [&calls, &harness](
+                        PluginxxOperatorCallback cb,
+                        void*                    ud,
+                        PluginxxString*
+                    ) {
+                        return calls.accept(harness, cb, ud);
+                    }
+                );
+                // 还没 await: 调用已经在跑了
+                acceptedBeforeAwait = ticket.accepted();
+                doneBeforeAwait     = ticket.done();
+                auto r              = co_await ticket;
+                ++resumedCount;
+                co_return r.ok() ? std::string{r.text()} : std::string{"failed"};
+            }
+        );
+
+        auto  spec = g_capturedTool.spec;
+        void* op   = startTool(spec, probe);
+        XX_TEST_EXPECT_TRUE(op != nullptr);
+
+        XX_TEST_EXPECT_TRUE(harness.runOne()); // 首步: 提交 ticket 并挂起在 await
+        XX_TEST_EXPECT_EQ(calls.count(), size_t{1});
+        XX_TEST_EXPECT_TRUE(acceptedBeforeAwait);
+        XX_TEST_EXPECT_FALSE(doneBeforeAwait);
+        XX_TEST_EXPECT_EQ(resumedCount, 0);
+        XX_TEST_EXPECT_EQ(probe.calls, 0);
+
+        // 主程序完成回调 (伪主程序 IO 线程): 只投递 + 唤醒, 不重入协程
+        calls.complete(0, PLUGINXX_OPERATOR_OK, "value");
+        XX_TEST_EXPECT_EQ(probe.calls, 0);
+        XX_TEST_EXPECT_EQ(harness.runOne(), true);
+        XX_TEST_EXPECT_EQ(resumedCount, 1);
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"value"});
+        XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{0});
+    }
+
+    /// 17. whenAll: 一次等齐全部已提交的调用, 结果按传入顺序 (与完成顺序无关),
+    ///     总耗时是最慢那条 —— 后完成的条目不会额外申请驱动。
+    {
+        harness.clear();
+        NotifyProbe probe;
+        BridgeCtx   ctx;
+        ctx.init(&host);
+        g_capturedTool = CapturedTool{};
+
+        PendingTableCalls        calls;
+        std::vector<std::string> seen;
+
+        agentxx::plugin::tool(
+            ctx,
+            g_agentRef,
+            "ticket_when_all",
+            "depict",
+            "{}",
+            [&calls, &harness, &seen](BridgeCtx& c, std::string_view, OpCtl&) -> Task<std::string> {
+                std::vector<pluginxx::TableOpTicket> tickets;
+                for (int i = 0; i < 3; ++i) {
+                    tickets.push_back(pluginxx::tableOp(
+                        c,
+                        [&calls, &harness](
+                            PluginxxOperatorCallback cb,
+                            void*                    ud,
+                            PluginxxString*
+                        ) {
+                            return calls.accept(harness, cb, ud);
+                        }
+                    ));
+                }
+                auto results = co_await pluginxx::whenAll(std::move(tickets));
+                for (auto& r : results) {
+                    seen.push_back(std::string{r.text()});
+                }
+                co_return std::to_string(results.size());
+            }
+        );
+
+        auto  spec = g_capturedTool.spec;
+        void* op   = startTool(spec, probe);
+        XX_TEST_EXPECT_TRUE(op != nullptr);
+
+        XX_TEST_EXPECT_TRUE(harness.runOne()); // 首步: 三条一起提交, 挂起在第一条
+        XX_TEST_EXPECT_EQ(calls.count(), size_t{3});
+        XX_TEST_EXPECT_EQ(probe.calls, 0);
+
+        // 逆序完成: 后面两条还没有协程在等, 因此不产生驱动请求
+        calls.complete(2, PLUGINXX_OPERATOR_OK, "c");
+        XX_TEST_EXPECT_EQ(harness.runPending(), 0);
+        XX_TEST_EXPECT_EQ(probe.calls, 0);
+        calls.complete(1, PLUGINXX_OPERATOR_OK, "b");
+        XX_TEST_EXPECT_EQ(harness.runPending(), 0);
+        XX_TEST_EXPECT_EQ(probe.calls, 0);
+
+        calls.complete(0, PLUGINXX_OPERATOR_OK, "a");
+        XX_TEST_EXPECT_EQ(harness.runPending(), 1);
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"3"});
+
+        XX_TEST_EXPECT_EQ(seen.size(), size_t{3});
+        if (seen.size() == 3) {
+            XX_TEST_EXPECT_EQ(seen[0], std::string{"a"});
+            XX_TEST_EXPECT_EQ(seen[1], std::string{"b"});
+            XX_TEST_EXPECT_EQ(seen[2], std::string{"c"});
+        }
+    }
+
+    /// 18. 取消传播: 协程被取消时, 正在等的表调用经 op_cancel 请求取消,
+    ///     之后仍要等它的终态 (与 sleep/offload 等挂起点一致)。
+    {
+        harness.clear();
+        NotifyProbe probe;
+        BridgeCtx   ctx;
+        ctx.init(&host);
+        g_capturedTool = CapturedTool{};
+
+        PendingTableCalls calls;
+
+        agentxx::plugin::tool(
+            ctx,
+            g_agentRef,
+            "ticket_cancel",
+            "depict",
+            "{}",
+            [&calls, &harness](BridgeCtx& c, std::string_view, OpCtl&) -> Task<std::string> {
+                auto ticket = pluginxx::tableOp(
+                    c,
+                    [&calls, &harness](
+                        PluginxxOperatorCallback cb,
+                        void*                    ud,
+                        PluginxxString*
+                    ) {
+                        return calls.accept(harness, cb, ud);
+                    }
+                );
+                auto r = co_await ticket;
+                co_return r.canceled() ? std::string{"canceled"} : std::string{"other"};
+            }
+        );
+
+        auto  spec = g_capturedTool.spec;
+        void* op   = startTool(spec, probe);
+        XX_TEST_EXPECT_TRUE(op != nullptr);
+        XX_TEST_EXPECT_TRUE(harness.runOne());
+        XX_TEST_EXPECT_EQ(calls.count(), size_t{1});
+        XX_TEST_EXPECT_EQ(harness.canceledHandles.size(), size_t{0});
+
+        // 主程序取消 Operation: 挂起点把取消转给表调用 (协作式), 终态仍由表调用给出
+        XX_TEST_EXPECT_TRUE(spec.execute_cancel != nullptr);
+        spec.execute_cancel(spec.user_data, op);
+        XX_TEST_EXPECT_EQ(harness.canceledHandles.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(probe.calls, 0);
+
+        calls.complete(0, PLUGINXX_OPERATOR_CANCELED, "stop");
+        harness.runPending();
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_CANCELED);
+    }
+
+    /// 19. 提交即完成 (主程序在 IO 线程内联执行): `co_await` 不挂起, 也不再申请驱动。
+    {
+        harness.clear();
+        NotifyProbe probe;
+        BridgeCtx   ctx;
+        ctx.init(&host);
+        g_capturedTool = CapturedTool{};
+
+        PendingTableCalls calls;
+        bool              readyBeforeAwait = false;
+
+        agentxx::plugin::tool(
+            ctx,
+            g_agentRef,
+            "ticket_inline",
+            "depict",
+            "{}",
+            [&calls, &harness, &readyBeforeAwait](BridgeCtx& c, std::string_view, OpCtl&)
+                -> Task<std::string> {
+                auto ticket = pluginxx::tableOp(
+                    c,
+                    [&calls, &harness](
+                        PluginxxOperatorCallback cb,
+                        void*                    ud,
+                        PluginxxString*
+                    ) -> PluginxxOperatorHandle* {
+                        auto handle = calls.accept(harness, cb, ud);
+                        calls.complete(calls.count() - 1, PLUGINXX_OPERATOR_OK, "inline");
+                        return handle;
+                    }
+                );
+                readyBeforeAwait = ticket.await_ready();
+                auto r           = co_await ticket;
+                co_return r.ok() ? std::string{r.text()} : std::string{"failed"};
+            }
+        );
+
+        auto  spec = g_capturedTool.spec;
+        void* op   = startTool(spec, probe);
+        XX_TEST_EXPECT_TRUE(op != nullptr);
+
+        // 一次请求内全部跑完: 提交->完成->await 直接取结果, 没有第二次推进
+        XX_TEST_EXPECT_TRUE(harness.runOne());
+        XX_TEST_EXPECT_TRUE(readyBeforeAwait);
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"inline"});
+        XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{0});
     }
 
     harness.clear();
