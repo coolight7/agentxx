@@ -701,7 +701,9 @@ std::string
 /// 都只是等, 不会互相堵死。
 ///
 /// 内部把编译期已知的处理函数包成 lambda, 这样 SDK 不需要知道 `ChatbotToolDeps` 的类型。
-void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
+/// 注册 6 个 chatbot_* 工具 (**协程形态**)
+/// - 每个注册都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到失败原因
+pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
     const auto deps = &ctx.toolDeps;
 
     auto sendMessage = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
@@ -747,7 +749,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         });
     };
 
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_send_message",
@@ -759,7 +761,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         sendMessage
     );
 
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_chat_info",
@@ -770,7 +772,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         }
     );
 
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_history",
@@ -781,7 +783,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         }
     );
 
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_status",
@@ -792,7 +794,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         }
     );
 
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_set_mode",
@@ -809,7 +811,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
             return ac::toolRecallMessage(*deps, t, a);
         });
     };
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_recall_message",
@@ -825,7 +827,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
             return ac::toolTask(*deps, t, a);
         });
     };
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_task",
@@ -840,7 +842,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
 
     // 调试工具只在 `behavior.debugTools` 打开时注册 (测试与本地演示用)
     if (!ctx.config.behavior.debugTools) {
-        return;
+        co_return;
     }
     auto debugInject = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
         return runToolOnIo(c, args, tid, [deps](std::string_view, std::string_view a) {
@@ -852,7 +854,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
             return ac::toolDebugOutbox(*deps, a);
         });
     };
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_debug_inject",
@@ -861,7 +863,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         kDebugInjectSchema,
         debugInject
     );
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_debug_outbox",
@@ -877,7 +879,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
             return ac::toolDebugPlatform(*deps, a);
         });
     };
-    agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_debug_platform",
@@ -886,6 +888,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         kDebugPlatformSchema,
         debugPlatform
     );
+    co_return;
 }
 
 /* ==================== 人设根配置 ==================== */
@@ -1029,13 +1032,13 @@ Json personaMountPlugins(const ac::PersonaConfig& persona) {
 
 /* ==================== 生命周期 ==================== */
 
-/// 订阅两件与侧边栏面板有关的事件 (调用时已在主程序 io 线程)
+/// 订阅两件与侧边栏面板有关的事件 (**协程形态**)
 ///
 /// - 客户端插件请求重发快照 (client → agent, 见 [kPanelRefreshTopic]);
 /// - 主程序有客户端接入/重连: 新来的客户端立刻拿到一份当前状态。
-void subscribePanelEvents(ChatbotCtx& ctx) {
+pluginxx::Task<void> subscribePanelEvents(ChatbotCtx& ctx) {
     if (!ctx.iface.broadcasts || !ctx.host) {
-        return;
+        co_return;
     }
     auto handler = [](const PluginxxStringView*, void* ud) {
         auto* c = static_cast<ChatbotCtx*>(ud);
@@ -1048,19 +1051,22 @@ void subscribePanelEvents(ChatbotCtx& ctx) {
         });
     };
     for (const char* topic : {kPanelRefreshTopic, kClientAttachedTopic}) {
-        auto topicSv = PluginStringView::fromCstr(topic);
-        if (agentxx::plugin::subscribePluginBroadcast(
-                ctx.host,
-                ctx.iface.broadcasts,
-                nullptr,
-                topicSv,
-                handler,
-                &ctx
-            )
-            == nullptr) {
-            ctx.log.warn(fmt::format("订阅面板频道 '{}' 失败 (侧边栏面板可能不会自动刷新)", topic));
+        auto subResult = co_await agentxx::plugin::subscribePluginBroadcast(
+            ctx,
+            nullptr,
+            topic,
+            handler,
+            &ctx
+        );
+        if (!subResult.ok()) {
+            ctx.log.warn(fmt::format(
+                "订阅面板频道 '{}' 失败 (侧边栏面板可能不会自动刷新): {}",
+                topic,
+                subResult.accepted() ? std::string(subResult.text()) : subResult.startError
+            ));
         }
     }
+    co_return;
 }
 
 /* ==================== 后台任务 (async work) ====================
@@ -1643,8 +1649,7 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
 
     ctx.started.store(true, std::memory_order_release);
 
-    // ---- 7. 侧边栏「机器人」栏: 订阅刷新请求 + 推一份当前快照 ----
-    subscribePanelEvents(ctx);
+    // ---- 7. 侧边栏「机器人」栏: 推一份当前快照, 订阅刷新请求 (订阅走协程) ----
     ctx.runOnIoBlocking([&]() {
         ctx.publishPanel();
     });
@@ -1656,8 +1661,22 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
         ac::timezoneLabel(ctx.config.behavior.timezoneSpec, ac::systemNowMs()),
         ctx.config.behavior.timezone
     ));
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    // 面板频道的订阅走协程 (表调用是“提交 + co_await”), 完成通知经 later 异步发出
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        PluginString::set(ctx.host, error, "start: host has no pluginxx.tasks (spawn unavailable)");
+        return nullptr;
+    }
+    auto later = agentxx::plugin::finishLater(notify);
+    ctx.spawn([later](ChatbotCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await subscribePanelEvents(c);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 /// 进程级停止: 停平台 → 关通道 → 卸根 (逆序、幂等)
@@ -1764,15 +1783,35 @@ void* chatbotForAgent(
     const bool shouldRegister
         = isPersonaRoot || (isHostRoot && ctx.config.behavior.exposeToolsOnHost);
     if (shouldRegister) {
-        registerToolsOn(ctx, AgentRef(*spec));
-        ctx.log.info(fmt::format(
-            "已在 agent '{}' 上注册 6 个 chatbot_* 工具 ({})",
-            agentId,
-            isPersonaRoot ? "人设根" : "内置根 (调试)"
-        ));
-    } else {
-        ctx.log.debug(fmt::format("agent '{}' 不是 chatbot 人设根, 不注册工具", agentId));
+        if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+            PluginString::set(
+                ctx.host,
+                error,
+                "mount: host has no pluginxx.tasks (spawn unavailable)"
+            );
+            return nullptr;
+        }
+        auto later = agentxx::plugin::finishLater(notify);
+        // 工具注册交给协程: 每条注册“提交 + co_await”, 全部生效后再放行挂载
+        const AgentRef agentRef(*spec);
+        ctx.spawn([later, agentRef, agentId, isPersonaRoot](ChatbotCtx& c, agentxx::plugin::OpCtl&)
+                      -> pluginxx::Task<void> {
+            try {
+                co_await registerToolsOn(c, agentRef);
+                c.log.info(fmt::format(
+                    "已在 agent '{}' 上注册 6 个 chatbot_* 工具 ({})",
+                    agentId,
+                    isPersonaRoot ? "人设根" : "内置根 (调试)"
+                ));
+                later.ok();
+            } catch (const std::exception& e) {
+                later.failed(e.what());
+            }
+            co_return;
+        });
+        return later.provider();
     }
+    ctx.log.debug(fmt::format("agent '{}' 不是 chatbot 人设根, 不注册工具", agentId));
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
