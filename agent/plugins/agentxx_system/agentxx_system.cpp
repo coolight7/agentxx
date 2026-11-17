@@ -20,7 +20,32 @@ constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
 struct SysPluginCtx : public PluginBase {};
 
 /// 注册事务 (mount 的实际内容; 每个 agent 各自一份)。
-static int32_t sysSetup(SysPluginCtx& ctx, const ScopeRef& ref) {
+static pluginxx::Task<void> sysSetupAsync(SysPluginCtx& ctx, ScopeRef ref) {
+    auto schema = ctx.schema(kNameDatetime).build();
+
+    co_await fast_tool(
+        ctx,
+        ref,
+        kNameDatetime,
+        kDepictDatetime,
+        schema,
+        [](std::string_view) -> std::string {
+            return currentDatetimeExecute();
+        },
+        0,
+        kRepeatCheck
+    );
+    co_return;
+}
+
+static void*
+    sysStart(SysPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    (void)ctx;
+    return nullptr;
+}
+
+static void sysSetupBlocking(SysPluginCtx& ctx, const ScopeRef& ref) {
     auto schema = ctx.schema(kNameDatetime).build();
 
     fast_tool(
@@ -35,14 +60,6 @@ static int32_t sysSetup(SysPluginCtx& ctx, const ScopeRef& ref) {
         0,
         kRepeatCheck
     );
-    return 0;
-}
-
-static void*
-    sysStart(SysPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    (void)ctx;
-    return nullptr;
 }
 
 static void* sysMount(
@@ -57,15 +74,29 @@ static void* sysMount(
         }
         return nullptr;
     }
-    const AgentRef ref(*spec);
-    if (sysSetup(ctx, ref) != 0) {
-        if (error) {
-            PluginString::set(ctx.host, error, "agentxx_system mount: registration failed");
-        }
+    auto later = finishLater(notify);
+    if (!later.active()) {
+        // 老宿主: 没有 provider 句柄可返回, 退回同步注册 (IO 线程上内联完成)
+        const AgentRef ref(*spec);
+        sysSetupBlocking(ctx, ref);
         return nullptr;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        later.failed("agentxx_system mount: host has no pluginxx.tasks (spawn unavailable)");
+        return later.provider();
+    }
+    const AgentRef agentRef(*spec);
+    // 注册事务交给协程: 每个注册都是"提交 + co_await", 全部生效后再放行挂载
+    ctx.spawn([later, agentRef](SysPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await sysSetupAsync(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 static void*
