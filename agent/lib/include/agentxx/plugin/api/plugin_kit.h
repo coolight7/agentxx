@@ -173,6 +173,31 @@ inline std::pair<const PluginxxCancelIface*, const PluginxxSchedulerIface*>
     };
 }
 
+/// 声明一条广播频道 (**协程形态**: 调用即提交, `co_await` 拿 `TableOpResult`)
+template<typename Ctx>
+inline pluginxx::TableOpTicket declarePluginBroadcast(
+    const Ctx&       ctx,
+    std::string_view id,
+    bool             anyonePublish = false,
+    bool             cacheLatest   = true
+) {
+    const std::string decl = "{\"id\":\"" + std::string{id} + "\",\"cache\":\""
+                             + (cacheLatest ? "latest" : "none") + "\",\"publish\":\""
+                             + (anyonePublish ? "anyone" : "owner") + "\"}";
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, decl, id](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (id.empty() || !ctx.host || !ctx.iface.broadcasts
+                || !ctx.iface.broadcasts->declare_broadcast) {
+                return nullptr;
+            }
+            auto declSv = PluginStringView::from(decl.data(), decl.size());
+            return ctx.iface.broadcasts->declare_broadcast(ctx.host, &declSv, cb, ud, err);
+        }
+    );
+}
+
 inline bool declarePluginBroadcast(
     const PluginxxHost*            host,
     const PluginxxBroadcastsIface* broadcasts,
@@ -280,6 +305,100 @@ inline PluginxxSubscription* subscribePluginBroadcast(
     );
     // 表成员是异步契约: 订阅句柄以十进制文本放在 `payload` 里交回
     return op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
+}
+
+/// 发布一条广播 (**协程形态**: 调用即提交, 发布前先声明频道)
+///
+/// 结果的 `.ok()` 才是"主程序受理并执行完成"; `publish` 的失败只对调用方有意义
+/// (日志由插件自己打), 主程序不会因为发布失败而中断会话。
+template<typename Ctx>
+inline pluginxx::TableOpTicket publishPluginBroadcast(
+    const Ctx&       ctx,
+    std::string_view id,
+    std::string_view payload,
+    bool             anyonePublish = false
+) {
+    // 声明本身也是提交即返回, 不等结果 (已声明时主程序按幂等处理)
+    declarePluginBroadcast(ctx, id, anyonePublish).forget();
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, id, payload](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (id.empty() || !ctx.host || !ctx.iface.broadcasts
+                || !ctx.iface.broadcasts->publish_broadcast) {
+                return nullptr;
+            }
+            auto idSv      = PluginStringView::from(id.data(), id.size());
+            auto payloadSv = PluginStringView::from(payload.data(), payload.size());
+            return ctx.iface.broadcasts->publish_broadcast(
+                ctx.host,
+                &idSv,
+                &payloadSv,
+                cb,
+                ud,
+                err
+            );
+        }
+    );
+}
+
+/// 撤销一条广播订阅 (**协程形态**; 幂等)
+template<typename Ctx>
+inline pluginxx::TableOpTicket unsubscribePluginBroadcast(
+    const Ctx&            ctx,
+    PluginxxSubscription* sub
+) {
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, sub](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (sub == nullptr || !ctx.host || !ctx.iface.broadcasts
+                || !ctx.iface.broadcasts->unsubscribe_broadcast) {
+                return nullptr;
+            }
+            return ctx.iface.broadcasts->unsubscribe_broadcast(ctx.host, sub, cb, ud, err);
+        }
+    );
+}
+
+/// 订阅一条广播 (**协程形态**: `co_await` 之后用 [subscriptionOf] 取句柄)
+template<typename Ctx>
+inline pluginxx::TableOpTicket subscribePluginBroadcast(
+    const Ctx&             ctx,
+    const PluginxxScopeRef* scope,
+    std::string_view        id,
+    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
+    void* ud
+) {
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, scope, id, handler, ud](PluginxxOperatorCallback cb,
+                                       void*                    opUd,
+                                       PluginxxString*          err)
+            -> PluginxxOperatorHandle* {
+            if (id.empty() || !handler || !ctx.host || !ctx.iface.broadcasts
+                || !ctx.iface.broadcasts->subscribe_broadcast) {
+                return nullptr;
+            }
+            auto idSv = PluginStringView::from(id.data(), id.size());
+            return ctx.iface.broadcasts->subscribe_broadcast(
+                ctx.host,
+                scope,
+                &idSv,
+                handler,
+                ud,
+                nullptr,
+                cb,
+                opUd,
+                err
+            );
+        }
+    );
+}
+
+/// 订阅句柄从表结果里取出来 (失败返回 NULL; 配合 [subscribePluginBroadcast] 的协程形态)
+inline PluginxxSubscription* subscriptionOf(const pluginxx::TableOpResult& result) {
+    return result.ok() ? pluginxx::pluginxxSubscriptionFromText(result.text()) : nullptr;
 }
 
 /// 发布一条广播 (ABI 视图形态; 与 `string_view` 版同义)
@@ -1769,6 +1888,19 @@ public:
         return ToolSchemaBuilder(toolPrompt(toolName));
     }
 
+    /// 工具提示词描述 (**协程形态**: `co_await` 后 `.text()` 是 JSON)
+    template<typename Ctx>
+    pluginxx::TableOpTicket toolPrompt(const Ctx& ctx, std::string_view tool) const {
+        auto toolSv = std::string{tool};
+        return tableOp(ctx, [this, toolSv](auto cb, auto ud, auto err) {
+            auto v = PluginStringView::from(toolSv.data(), toolSv.size());
+            if (!host || !iface.prompt || !iface.prompt->get_tool_prompt) {
+                return static_cast<PluginxxOperatorHandle*>(nullptr);
+            }
+            return iface.prompt->get_tool_prompt(host, &v, cb, ud, err);
+        });
+    }
+
     /// 工具提示词描述 (经主程序 agentxx.agent.prompt 接口表查询; 缺失时返回空描述)
     ToolPromptText toolPrompt(std::string_view tool) const {
         ToolPromptText res;
@@ -1833,8 +1965,10 @@ public:
     }
 
     /// 写入会话共享存储 (**协程形态**; `co_await` 后取 `.integer(-1)` 读 id)
+    ///
+    /// 与阻塞形态同名: 第一个参数是插件实例上下文 (推带驱动桥), 返回 ticket。
     template<typename Ctx>
-    auto addShareStoreAsync(
+    auto addShareStore(
         Ctx&               ctx,
         const ScopeRef&    agent,
         PluginxxStringView tid,
@@ -1879,7 +2013,7 @@ public:
 
     /// 会话生效的工作目录 (**协程形态**)
     template<typename Ctx>
-    auto workDirAsync(Ctx& ctx, const ScopeRef& agent, std::string_view key = {}) const {
+    auto workDir(Ctx& ctx, const ScopeRef& agent, std::string_view key = {}) const {
         auto ref = agent;
         auto k   = std::string{key};
         return tableOp(ctx, [this, ref, k](auto cb, auto ud, auto err) {
@@ -1891,6 +2025,24 @@ public:
 
     std::string workDir(const PluginxxScopeRef* scope, std::string_view key) const {
         return workDir(scope, PluginStringView::from(key.data(), key.size()));
+    }
+
+    /// 读取会话 LLM 上下文 (**协程形态**: `co_await` 后 `.text()` 是 JSON 数组文本)
+    template<typename Ctx>
+    pluginxx::TableOpTicket getSessionMessages(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view tid
+    ) const {
+        auto ref   = agent;
+        auto tidSv = PluginStringView::from(tid.data(), tid.size());
+        return tableOp(ctx, [this, ref, tidSv](auto cb, auto ud, auto err) {
+            auto r = ref.raw();
+            if (!host || !iface.context || !iface.context->get_messages) {
+                return static_cast<PluginxxOperatorHandle*>(nullptr);
+            }
+            return iface.context->get_messages(host, &r, &tidSv, cb, ud, err);
+        });
     }
 
     /// 会话当前轮次是否已取消 (经主程序 agentxx.agent.session 接口表)
@@ -1953,6 +2105,24 @@ public:
             }
         );
         return res.ok() ? res.integer(-1) : int64_t{-1};
+    }
+
+    /// 会话 LLM 上下文条数 (**协程形态**: `co_await` 后 `.integer(-1)`)
+    template<typename Ctx>
+    pluginxx::TableOpTicket sessionMessagesCount(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view tid
+    ) const {
+        auto ref   = agent;
+        auto tidSv = PluginStringView::from(tid.data(), tid.size());
+        return tableOp(ctx, [this, ref, tidSv](auto cb, auto ud, auto err) {
+            auto r = ref.raw();
+            if (!host || !iface.context || !iface.context->messages_count) {
+                return static_cast<PluginxxOperatorHandle*>(nullptr);
+            }
+            return iface.context->messages_count(host, &r, &tidSv, cb, ud, err);
+        });
     }
 
 protected:
@@ -2092,8 +2262,8 @@ private:
     std::map<std::string, std::unique_ptr<T>, std::less<>> items_;
 };
 
-/// 全部挂载的摘要 JSON 数组 (主程序不支持时返回 `[]`)
-inline std::string listMounts(const PluginBase& ctx) {
+/// 全部挂载的摘要 JSON 数组 (阻塞形态; 主程序不支持时返回 `[]`)
+inline std::string listMountsBlocking(const PluginBase& ctx) {
     if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->list) {
         return "[]";
     }
@@ -2109,8 +2279,8 @@ inline std::string listMounts(const PluginBase& ctx) {
     return op.ok() ? std::string(op.text()) : std::string{"[]"};
 }
 
-/// 按 agentId 查一个挂载的摘要 (没有这个挂载返回空串)
-inline std::string mountInfoOf(const PluginBase& ctx, std::string_view agentId) {
+/// 按 agentId 查一个挂载的摘要 (阻塞形态; 没有这个挂载返回空串)
+inline std::string mountInfoOfBlocking(const PluginBase& ctx, std::string_view agentId) {
     if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->get) {
         return {};
     }
@@ -2124,6 +2294,301 @@ inline std::string mountInfoOf(const PluginBase& ctx, std::string_view agentId) 
         }
     );
     return op.ok() ? std::string(op.text()) : std::string{};
+}
+
+/* ==================== 业务表便捷入口 (协程形态) ====================
+ *
+ * 每个阻塞形态 `xxxBound` 都有一条同名协程形态 `xxx(ctx, ...)`:
+ * **调用即提交**并返回 `pluginxx::TableOpTicket`, `co_await` 它拿
+ * `pluginxx::TableOpResult` (`ok()` / `text()` / `integer()` / `flag()`)。
+ * 主程序不支持该能力时 ticket 就是"未受理"(`accepted() == false`), 不会挂起。
+ */
+
+/// 读当前完整提示词 JSON (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket promptJson(const Ctx& ctx, const PluginxxScopeRef* agent) {
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->get_prompt) {
+                return nullptr;
+            }
+            return ctx.iface.prompt->get_prompt(ctx.host, agent, cb, ud, err);
+        }
+    );
+}
+
+/// 写回本插件贡献的提示词段 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket setPromptJson(
+    const Ctx&              ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        json
+) {
+    auto text = std::string{json};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, agent, text](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->set_prompt) {
+                return nullptr;
+            }
+            auto sv = PluginStringView::from(text.data(), text.size());
+            return ctx.iface.prompt->set_prompt(ctx.host, agent, &sv, cb, ud, err);
+        }
+    );
+}
+
+/// 读该 agent 的主模型及关联配置 JSON (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket modelConfigJson(const Ctx& ctx, const PluginxxScopeRef* agent) {
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.model || !ctx.iface.model->get_config) {
+                return nullptr;
+            }
+            return ctx.iface.model->get_config(ctx.host, agent, cb, ud, err);
+        }
+    );
+}
+
+/// 读该 agent 当前执行图 JSON 定义 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket graphJson(const Ctx& ctx, const PluginxxScopeRef* agent) {
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.graph || !ctx.iface.graph->get_graph_json) {
+                return nullptr;
+            }
+            return ctx.iface.graph->get_graph_json(ctx.host, agent, cb, ud, err);
+        }
+    );
+}
+
+/// 当前执行图名称 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket graphName(const Ctx& ctx, const PluginxxScopeRef* agent) {
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.graph || !ctx.iface.graph->get_graph_name) {
+                return nullptr;
+            }
+            return ctx.iface.graph->get_graph_name(ctx.host, agent, cb, ud, err);
+        }
+    );
+}
+
+/// 写回执行图 JSON 定义 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket setGraphJson(
+    const Ctx&              ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        json
+) {
+    auto text = std::string{json};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, agent, text](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.graph || !ctx.iface.graph->set_graph_json) {
+                return nullptr;
+            }
+            auto sv = PluginStringView::from(text.data(), text.size());
+            return ctx.iface.graph->set_graph_json(ctx.host, agent, &sv, cb, ud, err);
+        }
+    );
+}
+
+/// 本插件向该 agent 贡献的资源清单 JSON (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket ownResourcesJson(const Ctx& ctx, const PluginxxScopeRef* agent) {
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->get_own_resources) {
+                return nullptr;
+            }
+            return ctx.iface.resources->get_own_resources(ctx.host, agent, cb, ud, err);
+        }
+    );
+}
+
+/// 资源登记/注销的协程形态公共实现 (单个字符串入参)
+template<typename Ctx, typename StartFn>
+inline pluginxx::TableOpTicket
+    resourceOpAsync(const Ctx& ctx, std::string_view arg, StartFn&& start) {
+    auto text = std::string{arg};
+    return pluginxx::tableOp(
+        ctx,
+        [text = std::move(text), start = std::forward<StartFn>(start)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            auto view = PluginStringView::from(text.data(), text.size());
+            return start(view, cb, ud, err);
+        }
+    );
+}
+
+/// 登记技能目录 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket registerSkillDir(
+    const Ctx&              ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->register_skill_dir) {
+        return {};
+    }
+    return resourceOpAsync(ctx, path, [&ctx, agent](
+                                          PluginxxStringView        view,
+                                          PluginxxOperatorCallback cb,
+                                          void*                    ud,
+                                          PluginxxString*          err
+                                      ) {
+        return ctx.iface.resources->register_skill_dir(ctx.host, agent, &view, cb, ud, err);
+    });
+}
+
+/// 撤销技能目录 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket unregisterSkillDir(
+    const Ctx&              ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->unregister_skill_dir) {
+        return {};
+    }
+    return resourceOpAsync(ctx, path, [&ctx, agent](
+                                          PluginxxStringView        view,
+                                          PluginxxOperatorCallback cb,
+                                          void*                    ud,
+                                          PluginxxString*          err
+                                      ) {
+        return ctx.iface.resources->unregister_skill_dir(ctx.host, agent, &view, cb, ud, err);
+    });
+}
+
+/// 登记记忆文件 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket registerMemoryFile(
+    const Ctx&              ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->register_memory_file) {
+        return {};
+    }
+    return resourceOpAsync(ctx, path, [&ctx, agent](
+                                          PluginxxStringView        view,
+                                          PluginxxOperatorCallback cb,
+                                          void*                    ud,
+                                          PluginxxString*          err
+                                      ) {
+        return ctx.iface.resources->register_memory_file(ctx.host, agent, &view, cb, ud, err);
+    });
+}
+
+/// 撤销记忆文件 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket unregisterMemoryFile(
+    const Ctx&              ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->unregister_memory_file) {
+        return {};
+    }
+    return resourceOpAsync(ctx, path, [&ctx, agent](
+                                          PluginxxStringView        view,
+                                          PluginxxOperatorCallback cb,
+                                          void*                    ud,
+                                          PluginxxString*          err
+                                      ) {
+        return ctx.iface.resources->unregister_memory_file(ctx.host, agent, &view, cb, ud, err);
+    });
+}
+
+/// 登记 MCP 服务器 (**协程形态**; 完成时已握手)
+template<typename Ctx>
+inline pluginxx::TableOpTicket registerMcpServer(
+    const Ctx&              ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        specJson
+) {
+    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->register_mcp_server) {
+        return {};
+    }
+    return resourceOpAsync(ctx, specJson, [&ctx, agent](
+                                              PluginxxStringView        view,
+                                              PluginxxOperatorCallback cb,
+                                              void*                    ud,
+                                              PluginxxString*          err
+                                          ) {
+        return ctx.iface.resources->register_mcp_server(ctx.host, agent, &view, cb, ud, err);
+    });
+}
+
+/// 撤销 MCP 服务器 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket unregisterMcpServer(
+    const Ctx&              ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        nameSpace
+) {
+    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->unregister_mcp_server) {
+        return {};
+    }
+    return resourceOpAsync(ctx, nameSpace, [&ctx, agent](
+                                               PluginxxStringView        view,
+                                               PluginxxOperatorCallback cb,
+                                               void*                    ud,
+                                               PluginxxString*          err
+                                           ) {
+        return ctx.iface.resources->unregister_mcp_server(ctx.host, agent, &view, cb, ud, err);
+    });
+}
+
+/// 全部挂载的摘要 JSON 数组 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket listMounts(const Ctx& ctx) {
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->list) {
+                return nullptr;
+            }
+            return ctx.iface.mount->list(ctx.host, cb, ud, err);
+        }
+    );
+}
+
+/// 按 agentId 查一个挂载的摘要 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket mountInfoOf(const Ctx& ctx, std::string_view agentId) {
+    auto idText = std::string{agentId};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, idText](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->get) {
+                return nullptr;
+            }
+            auto idSv = PluginStringView::from(idText.data(), idText.size());
+            return ctx.iface.mount->get(ctx.host, &idSv, cb, ud, err);
+        }
+    );
 }
 
 namespace detail {
