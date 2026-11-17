@@ -27,8 +27,9 @@
 #include <string>
 
 // 多实例约定 (2026-08 API v1): 零可变全局; 实例状态 (host/iface) 存于
-// ResCtx, create 经 *plugin_ctx 交给主程序 / destroy 释放
-struct ResCtx {
+// ResCtx, create 经 *plugin_ctx 交给主程序 / destroy 释放。
+// 继承 PluginBase: 表调用是“提交 + co_await”, 协程驱动桥与接口表都在基类里。
+struct ResCtx : public agentxx::plugin::PluginBase {
     const PluginxxHost*          host = nullptr;
     agentxx::plugin::AgentIfaces iface{};
 
@@ -130,10 +131,8 @@ extern "C" PLUGINXX_EXPORT int
             if (!host || !host->vtable || !plugin_ctx) {
                 return -1;
             }
-            ctx->host = host;
-            // COM 风格接口表查询 (存入本实例上下文; 原函数级 static 缓存多实例不安全)
-            ctx->iface = agentxx::plugin::AgentIfaces::query(host);
-            raw        = ctx.get();
+            ctx->init(host);
+            raw = ctx.get();
 
             // create 只构造上下文与查询接口: 资源注册属于 start 事务
             return 0;
@@ -159,33 +158,21 @@ static void*
     return nullptr;
 }
 
-static void* resAgentMount(
-    ResCtx&                            ctx,
-    const AgentxxPluginAgentMountSpec* spec,
-    const PluginxxOperatorNotify*      notify,
-    PluginxxString*                    error
-) {
-    if (!notify) {
-        if (error) {
-            agentxx::plugin::PluginString::set(
-                ctx.host,
-                error,
-                "example_resources mount: notify required"
-            );
-        }
-        return nullptr;
-    }
-    const agentxx::plugin::AgentRef ref(*spec);
-    const PluginxxHost*          host = ctx.host;
+/// 挂载事务 (**协程形态**): 追加运行时 skill 目录 + 记一条日志
+static pluginxx::Task<void>
+    resAgentSetup(ResCtx& ctx, agentxx::plugin::AgentRef ref) {
+    const PluginxxHost* host = ctx.host;
 
     // ---- 运行时注册: 追加 skill 目录 (声明式段见 plugin.yaml) ----
-    // - 与 yaml 主配置或其他插件冲突时返回非 0 (yaml 优先, 此处仅告警不失败);
-    //   start 事务本身仍成功, 已生效的注册由主程序在 stop 后统一撤销。
+    // - 与 yaml 主配置或其他插件冲突时登记被拒 (yaml 优先, 此处仅告警不失败);
+    //   已生效的注册由主程序在 stop 后统一撤销。
     if (ctx.iface.resources && ctx.iface.resources->register_skill_dir && ctx.iface.log
         && ctx.iface.log->log) {
         auto        base            = dirOf(ownInfoString(host, ctx.iface, "path"));
         std::string runtimeSkillDir = fmt::format("{}/skills_runtime", base);
-        if (agentxx::plugin::registerSkillDir(host, ctx.iface, ref.ptr(), runtimeSkillDir) != 0) {
+        auto        regResult
+            = co_await agentxx::plugin::registerSkillDir(ctx, ref.ptr(), runtimeSkillDir);
+        if (!regResult.ok()) {
             auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
                 "[example_resources] register runtime skill dir failed"
             );
@@ -209,8 +196,48 @@ static void* resAgentMount(
             = agentxx::plugin::PluginStringView::fromCstr("[example_resources] plugin started");
         ctx.iface.log->log(host, 2, &infoSv);
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    co_return;
+}
+
+static void* resAgentMount(
+    ResCtx&                            ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
+    if (!notify) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "example_resources mount: notify required"
+            );
+        }
+        return nullptr;
+    }
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "example_resources mount: host has no pluginxx.tasks (spawn unavailable)"
+            );
+        }
+        return nullptr;
+    }
+    auto later = agentxx::plugin::finishLater(notify);
+    // 资源登记交给协程: “提交 + co_await”, 完成通知随之异步发出
+    const agentxx::plugin::AgentRef agentRef(*spec);
+    ctx.spawn([later, agentRef](ResCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await resAgentSetup(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 static void* resAgentStop(ResCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {

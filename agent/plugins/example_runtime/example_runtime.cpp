@@ -203,9 +203,9 @@ void onChannelEventImpl(RuntimeCtx& ctx, const agentxx::plugin::ChannelEvent& ev
 }
 
 /// 给被挂的 agent 注册的工具 (mount 回调里做)
-void registerHostTools(RuntimeCtx& ctx, const agentxx::plugin::AgentRef& ref) {
+static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::AgentRef ref) {
     // 1) 往通道投一条消息 (等同平台收到一条用户消息)
-    agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::fast_tool(
         ctx,
         ref,
         "example_runtime_say",
@@ -238,7 +238,7 @@ void registerHostTools(RuntimeCtx& ctx, const agentxx::plugin::AgentRef& ref) {
     );
 
     // 2) 发一条事件 (由 COALESCE 触发器合并后投进通道)
-    agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::fast_tool(
         ctx,
         ref,
         "example_runtime_ping",
@@ -269,7 +269,7 @@ void registerHostTools(RuntimeCtx& ctx, const agentxx::plugin::AgentRef& ref) {
     );
 
     // 3) 运行时状态 (插件自查用: 根 / 通道 / 触发器 / 定时器一览)
-    agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::fast_tool(
         ctx,
         ref,
         "example_runtime_status",
@@ -302,6 +302,7 @@ void registerHostTools(RuntimeCtx& ctx, const agentxx::plugin::AgentRef& ref) {
             return out.dump();
         }
     );
+    co_return;
 }
 
 } // namespace
@@ -492,9 +493,27 @@ static void* runtimeForAgent(
         agentxx::plugin::PluginString::set(ctx.host, error, "mount: spec is null");
         return nullptr;
     }
-    registerHostTools(ctx, agentxx::plugin::AgentRef(*spec));
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        agentxx::plugin::PluginString::set(
+            ctx.host,
+            error,
+            "example_runtime mount: host has no pluginxx.tasks (spawn unavailable)"
+        );
+        return nullptr;
+    }
+    auto later = agentxx::plugin::finishLater(notify);
+    // 工具注册交给协程: 每条注册“提交 + co_await”, 全部生效后再放行挂载
+    const agentxx::plugin::AgentRef agentRef(*spec);
+    ctx.spawn([later, agentRef](RuntimeCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await registerHostTools(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 /// 拆 agent 挂载: 工具由主程序按挂载记录撤销, 这里没有额外状态

@@ -105,36 +105,12 @@ static void* multiMountStop(
     return nullptr;
 }
 
-/// 每个 agent 一次: 建本挂载的状态 + 注册工具
-static void* multiMountForAgent(
-    MultiMountCtx&                     ctx,
-    const AgentxxPluginAgentMountSpec* spec,
-    const PluginxxOperatorNotify*      notify,
-    PluginxxString*                    error
-) {
-    if (!notify || !notify->done) {
-        agentxx::plugin::PluginString::set(
-            ctx.host,
-            error,
-            "example_multi_mount mount: notify required"
-        );
-        return nullptr;
-    }
-    if (!spec) {
-        agentxx::plugin::PluginString::set(ctx.host, error, "mount spec is null");
-        return nullptr;
-    }
-    auto state = std::make_shared<MountState>();
-    state->ref = agentxx::plugin::AgentRef(*spec);
-    if (spec->config_json.data && spec->config_json.size > 0) {
-        state->configJson.assign(
-            spec->config_json.data,
-            static_cast<size_t>(spec->config_json.size)
-        );
-    }
-
+/// 注册本挂载的两个工具 (**协程形态**)
+/// - 每条注册都是"提交 + `co_await`": 提交就已经生效, 等结果只为了拿到失败原因
+static pluginxx::Task<void>
+    registerMultiMountTools(MultiMountCtx& ctx, std::shared_ptr<MountState> state) {
     // 工具 1: 计数 +1 (计数按挂载隔离)
-    agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::fast_tool(
         ctx,
         state->ref,
         "multi_mount_incr",
@@ -163,7 +139,7 @@ static void* multiMountForAgent(
     );
 
     // 工具 2: 本挂载的状态 (含 config_json, 用于验证 plugin.mount[].args 覆盖)
-    agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::fast_tool(
         ctx,
         state->ref,
         "multi_mount_state",
@@ -179,10 +155,63 @@ static void* multiMountForAgent(
             );
         }
     );
+    co_return;
+}
 
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    // 返回 per-agent 状态: 拆挂载时原样交回
-    return new std::shared_ptr<MountState>(state);
+/// 每个 agent 一次: 建本挂载的状态 + 注册工具
+/// - 工具注册走协程 (`co_await` 完再放行挂载), 完成通知经 finishLater 异步发出
+static void* multiMountForAgent(
+    MultiMountCtx&                     ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
+    if (!notify || !notify->done) {
+        agentxx::plugin::PluginString::set(
+            ctx.host,
+            error,
+            "example_multi_mount mount: notify required"
+        );
+        return nullptr;
+    }
+    if (!spec) {
+        agentxx::plugin::PluginString::set(ctx.host, error, "mount spec is null");
+        return nullptr;
+    }
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        agentxx::plugin::PluginString::set(
+            ctx.host,
+            error,
+            "example_multi_mount mount: host has no pluginxx.tasks (spawn unavailable)"
+        );
+        return nullptr;
+    }
+    auto state = std::make_shared<MountState>();
+    state->ref = agentxx::plugin::AgentRef(*spec);
+    if (spec->config_json.data && spec->config_json.size > 0) {
+        state->configJson.assign(
+            spec->config_json.data,
+            static_cast<size_t>(spec->config_json.size)
+        );
+    }
+
+    // 返回 per-agent 状态: 拆挂载时原样交回 (也是本次挂载的受理句柄)
+    auto* handle = new std::shared_ptr<MountState>(state);
+    auto  later  = agentxx::plugin::finishLater(notify);
+    ctx.spawn(
+        [later, handle, state](MultiMountCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+            try {
+                co_await registerMultiMountTools(c, state);
+                later.ok();
+            } catch (const std::exception& e) {
+                // 挂载失败时主程序不会调 unmount: 本函数返回的句柄由这里释放
+                delete handle;
+                later.failed(e.what());
+            }
+            co_return;
+        }
+    );
+    return handle;
 }
 
 /// 拆挂载: 工具由主程序按挂载记录撤销, 这里只释放本挂载的状态
