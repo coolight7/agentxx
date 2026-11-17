@@ -308,26 +308,12 @@ void* shellStart(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxSt
     if (!notify || !notify->done) {
         return setErr("example_js start: notify required");
     }
-    if (!ctx.capabilities || !ctx.capabilities->capability_info
-        || !ctx.capabilities->invoke_capability) {
+    if (!ctx.capabilities || !ctx.capabilities->invoke_capability) {
         return setErr("example_js start: host lacks capabilities interface");
     }
+    // 不单查 capability_info: 解释器能力没注册时下面的 invoke_capability 就不受理,
+    // 与“先查再调”等价, 且不必同步等待一次表调用
     auto capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
-    // 表成员是异步契约: start 事务在主程序 IO 线程上, 主程序内联完成
-    // 两侧的取消/调度表在各自的聚合里 (壳按 side 选用)
-    const bool hasCap
-        = pluginxx::tableOpSyncWait(
-              ctx.host,
-              ctx.clientSide ? ctx.client.cancel : ctx.agent.cancel,
-              ctx.clientSide ? ctx.client.scheduler : ctx.agent.scheduler,
-              [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                  return ctx.capabilities->capability_info(ctx.host, &capSv, cb, ud, err);
-              }
-          )
-              .ok();
-    if (!hasCap) {
-        return setErr("example_js start: interpreter.js capability not available");
-    }
     if (!fileExists(ctx.scriptPath)) {
         return setErr("example_js start: plugin.js not found next to the plugin library");
     }

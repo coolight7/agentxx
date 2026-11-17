@@ -312,26 +312,12 @@ static void*
     if (!notify || !notify->done) {
         return setErr("example_js_execute_command start: notify required");
     }
-    if (!ctx.iface.capabilities || !ctx.iface.capabilities->capability_info
-        || !ctx.iface.capabilities->invoke_capability) {
+    if (!ctx.iface.capabilities || !ctx.iface.capabilities->invoke_capability) {
         return setErr("example_js_execute_command start: host lacks capabilities interface");
     }
+    // 不单查 capability_info: 解释器能力没注册时下面的 invoke_capability 就不受理,
+    // 与“先查再调”等价, 且不必同步等待一次表调用
     auto capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
-    // 表成员是异步契约: start 事务在主程序 IO 线程上, 主程序内联完成
-    const bool hasCap
-        = agentxx::plugin::tableOpSyncWait(
-              ctx.host,
-              ctx.iface.cancel,
-              ctx.iface.scheduler,
-              [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                  return ctx.iface.capabilities->capability_info(ctx.host, &capSv, cb, ud, err);
-              }
-          )
-              .ok();
-    if (!hasCap) {
-        return setErr("example_js_execute_command start: interpreter.js capability not available "
-                      "(need agentxx_javascript_engine)");
-    }
     if (!fileExists(ctx.scriptPath)) {
         return setErr(
             "example_js_execute_command start: plugin.js not found next to the plugin library"

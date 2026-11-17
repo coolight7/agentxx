@@ -1375,6 +1375,80 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
     }
 }
 
+/// 规则 16: 插件表调用形态
+///
+/// 主程序接口表成员全是异步契约, 插件侧只允许两种消费形态:
+/// - **调用即提交**: `xxx(ctx, args)` 返回 `pluginxx::TableOpTicket`, `co_await` 取结果;
+/// - **回调形态**: `tableOpCallback(ctx, start, done)`。
+///
+/// 阻塞形态 (`tableOpBlocking*` / `invoke_capability_blocking` / `call_tool_blocking`)
+/// 已删除, 再出现就是回退。同步等待原语 `tableOpSyncWait` 只允许出现在必须同步回答
+/// 外部同步 API 的地方 —— 目前只有 JS 运行时插件 (QuickJS 是同步 C API):
+/// 它在脚本回调里必须当场拿到结果, 没有可以挂起的协程。
+void checkPluginTableCallShape(const fs::path& root, Violations& v) {
+    static constexpr std::string_view kForbidden[] = {
+        "tableOpBlocking(",
+        "tableOpBlockingRaw(",
+        "invoke_capability_blocking",
+        "call_tool_blocking",
+    };
+    // 同步等待原语: 只有这些文件可以用 (路径片段)
+    static constexpr std::string_view kSyncWaitAllowed[] = {
+        "plugins/agentxx_javascript_engine/",
+        "plugins\\agentxx_javascript_engine\\",
+    };
+
+    std::vector<fs::path> files;
+    collectSources(root / "plugins", files);
+    collectSources(root / "lib", files);
+
+    for (const auto& f : files) {
+        const auto text = readTextFile(f);
+        if (text.empty()) {
+            continue;
+        }
+        const auto rel      = toGeneric(f.lexically_relative(root));
+        const auto isKit    = rel.rfind("lib/include/agentxx/plugin/api/", 0) == 0;
+        const auto inBridge = std::any_of(
+            std::begin(kSyncWaitAllowed),
+            std::end(kSyncWaitAllowed),
+            [&rel](std::string_view part) {
+                return rel.find(part) != std::string::npos;
+            }
+        );
+
+        if (!isKit) {
+            for (const auto& name : kForbidden) {
+                if (text.find(name) != std::string::npos) {
+                    v.push_back(
+                        rel + ": 使用了已删除的阻塞形态 `" + std::string{name}
+                        + "` (改用 `co_await tableOp(...)` 或 tableOpCallback)"
+                    );
+                }
+            }
+        }
+        // 同步等待原语只能用在使用方必须同步拿到结果的地方
+        if (!inBridge) {
+            const auto pos = text.find("tableOpSyncWait(");
+            if (pos != std::string::npos) {
+                if (isKit) {
+                    continue; // kit 自己的实现 (工具权限/语言/工作目录这类同步便捷函数)
+                }
+                const auto line = 1 + static_cast<int>(std::count(
+                                          text.begin(),
+                                          text.begin() + static_cast<long>(pos),
+                                          '\n'
+                                      ));
+                v.push_back(
+                    rel + ":" + std::to_string(line)
+                    + ": `tableOpSyncWait` 只给必须同步回答外部同步 API 的桥用"
+                      " (插件里请 `co_await tableOp(...)`)"
+                );
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 规则清单
 // ---------------------------------------------------------------------------
@@ -1405,6 +1479,7 @@ constexpr BoundaryRule kRuleTable[] = {
     {"客户端模型层边界"    }, // 13
     {"JSONL 模式 stdout 纪律"}, // 14
     {"称呼与用词"          }, // 15
+    {"插件表调用形态"      }, // 16
 };
 
 /// 规则的报告标签 (形如 `规则 9: 接口表四件套`)
@@ -1471,6 +1546,9 @@ TestResult testBoundaries() {
     Violations termViolations;
     checkTerminology(root, termViolations);
 
+    Violations shapeViolations;
+    checkPluginTableCallShape(root, shapeViolations);
+
     // 扫描量下限: 防止目录改名/收集逻辑失效导致"零文件全通过"的假通过
     // (数值留出余量, 目录增删几十个文件不应触发失败)
     XX_TEST_EXPECT_GE(scannedClient, size_t{40});
@@ -1478,7 +1556,7 @@ TestResult testBoundaries() {
     XX_TEST_EXPECT_GE(scannedLib, size_t{100});
 
     // 规则表与调用顺序必须一一对应: 数量不符或编号重复时本模块失败
-    XX_TEST_EXPECT_EQ(std::size(kRuleTable), size_t{15});
+    XX_TEST_EXPECT_EQ(std::size(kRuleTable), size_t{16});
 
     // 报告标签带规则编号 (编号来自 kRuleTable 顺序, 不再手写)
     reportViolations(ruleLabel(1), clientViolations);
@@ -1496,6 +1574,7 @@ TestResult testBoundaries() {
     reportViolations(ruleLabel(13), modelViolations);
     reportViolations(ruleLabel(14), jsonlViolations);
     reportViolations(ruleLabel(15), termViolations);
+    reportViolations(ruleLabel(16), shapeViolations);
 
     TEST_INFO << "boundaries: scanned client=" << scannedClient << " plugin=" << scannedPlugin
               << " lib=" << scannedLib << " files" << std::endl;

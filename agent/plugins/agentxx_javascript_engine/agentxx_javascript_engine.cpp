@@ -5294,7 +5294,7 @@ JSValue JsEngine::bridgeCall(
             // - 本引擎 JS 工具: 同线程执行并把结果/内部 Promise 链到外层 Promise
             //   (不阻塞等待, 内部 Promise 由外层驱动的 job/timer/队列泵推进)
             // - 主程序插件工具: call_tool + 完成回调投递回 JS 线程 (不再
-            //   call_tool_blocking 阻塞 JS 线程, 消除 A/B 脚本互调自锁)
+            //   call_tool 的完成回调投递回 JS 线程, 消除 A/B 脚本互调自锁)
             JSValue resolving[2];
             JSValue promise = JS_NewPromiseCapability(ctx, resolving);
             if (JS_IsException(promise)) {
