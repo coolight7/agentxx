@@ -363,8 +363,8 @@ the same calls on both ends.
 >
 > A capability is a name + JSON payload RPC: the provider registers it in `start` / `mount`
 > with the kit helper `capability(ctx, "name", fn, opts)` (`PluginxxCapabilitySpec`), the caller
-> goes through the `agentxx.capabilities` table's `invoke_capability` (kit: `invoke_cap`
-> coroutine awaiter / `invoke_capability_blocking`). On the host side, `PluginManager::capabilities()`
+> goes through the `agentxx.capabilities` table's `invoke_capability` (kit: `co_await invoke_cap(ctx, ...)`).
+> On the host side, `PluginManager::capabilities()`
 > gives `infoJson` / `listJson` for discovery, and extension points go through
 > `emitPoint` / `emitPointAsync`. A call must carry the **calling plugin instance** (the host
 > holds its execution lease so unloading waits for the call). The FFI C API has no dedicated

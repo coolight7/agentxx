@@ -2107,7 +2107,7 @@ agent/
 │   │   │   │   ├── client_plugin_api.h # 仅含 pluginxx/api/{abi,tables}.h + client 业务表 (UI 无关语义层)
 │   │   │   │   ├── plugin_kit.h      # agentxx 业务 SDK header-only: 接口表聚合 AgentIfaces/ClientIfaces、
 │   │   │   │   │                     #   tool/fast_tool/blocking_tool/polled_tool、ToolSchemaBuilder、providePoint、
-│   │   │   │   │                     #   图节点、工具权限声明、call_tool_blocking、client 渲染/ClientPluginBase;
+│   │   │   │   │                     #   图节点、工具权限声明、call_tool、client 渲染/ClientPluginBase;
 │   │   │   │   │                     #   含 pluginxx/kit/kit.h 并以 using 把通用名引入 agentxx::plugin
 │   │   │   │   │                     #   (PluginStringView/PluginString/Task/sleep/offload/spawn/PluginBaseT/...)
 │   │   │   │   ├── plugin_guard.h    # 边界异常守卫 (通用部分在 pluginxx/kit/guard.h + client 日志表重载)

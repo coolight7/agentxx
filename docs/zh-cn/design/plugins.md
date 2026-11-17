@@ -170,7 +170,7 @@ auto b64 = utilxx_base::base64Encode(data);
   由主程序定义与实现，见 `agentxx/plugin/api/plugin_api.h` / `client_plugin_api.h`
 - **SDK 分层**: 通用部分 (`pluginxx/kit/kit.h` / `guard.h`) 在 `cxx_pluginxx`，业务 helper
   (工具注册 `tool`/`fast_tool`/`blocking_tool`/`polled_tool`、`ToolSchemaBuilder`、`providePoint`、
-  图节点、工具权限声明、`call_tool_blocking`、client 侧渲染与 `ClientPluginBase`) 在
+  图节点、工具权限声明、client 侧渲染与 `ClientPluginBase`) 在
   `agentxx/plugin/api/plugin_kit.h` / `plugin_guard.h`；后者是 **umbrella** 头 (包含
   pluginxx 头 + 业务部分)，并把通用名以逐条 `using` 引入 `agentxx::plugin` —— 因此
   插件源码的 `#include` 路径与 `agentxx::plugin::Xxx` 写法**零改动**；
@@ -226,7 +226,7 @@ auto b64 = utilxx_base::base64Encode(data);
 | 部分 | 位置 | 内容 |
 |---|---|---|
 | 通用 (与主程序业务无关) | `pluginxx/kit/kit.h`、`pluginxx/kit/guard.h` | `PluginStringView`/`PluginString`、通用接口表查询与聚合 `PluginIfaceCore`、`Logger`、`Task<T>` 与锚定原语 (`sleep`/`yield`/`offload`/`invoke_cap`)、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏、边界异常守卫 |
-| agentxx 业务 | `agentxx/plugin/api/plugin_kit.h`、`plugin_guard.h` | 接口表聚合 `AgentIfaces`/`ClientIfaces`、工具注册族 (`tool`/`fast_tool`/`blocking_tool`/`polled_tool`)、`ToolSchemaBuilder`、`providePoint`、图节点、工具权限声明、`call_tool`/`call_tool_blocking`、client 侧渲染与 `ClientPluginBase` |
+| agentxx 业务 | `agentxx/plugin/api/plugin_kit.h`、`plugin_guard.h` | 接口表聚合 `AgentIfaces`/`ClientIfaces`、工具注册族 (`tool`/`fast_tool`/`blocking_tool`/`polled_tool`)、`ToolSchemaBuilder`、`providePoint`、图节点、工具权限声明、`call_tool`、client 侧渲染与 `ClientPluginBase` |
 
 `agentxx::plugin::PluginBase` 即 `pluginxx::PluginBaseT<AgentIfaces>` 的 agentxx 派生类
 (补业务 helper 并在 `onHostReady()` 中挂钩会话轮次开始事件)。插件源码继续写
@@ -458,13 +458,30 @@ PluginxxOperatorHandle*(PLUGINXX_CALL* member)(
 当场回调** (注册类调用"登记后立刻可见"的语义与同步调用完全一致), 其它线程排队到 IO 线程。
 注册类调用必须 `co_await` (或等回调) 完成再继续。
 
-C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
+C++ 侧只有两种消费形态在 `agentxx/plugin/api/plugin_kit.h` (业务便捷层 `xxx(ctx, ...)`
+同样只给这两种形态):
 
 | 形态 | 入口 | 约束 |
 |---|---|---|
-| 协程 | `co_await tableOp(ctx, start)` → `TableOpResult{status, payload, startError}` | 生命周期入口与工具协程体可用; 业务失败不抛异常, 取消是其中一种状态 |
-| 回调 | `tableOpCallback(ctx, start, done)` | 任意线程; `done` 在 IO 线程恰好一次 |
-| 阻塞 | `tableOpBlocking(ctx, start, timeoutMs)` / `tableOpBlockingRaw(host, cancel, scheduler, start)` | 非 IO 线程真等待; IO 线程上先看是否已内联完成, 没完成就返回 `accepted() == false` (不会死锁) |
+| 调用即提交 | `xxx(ctx, args)` → `pluginxx::TableOpTicket`; `co_await` 它拿 `TableOpResult{status, payload, startError}` | 提交发生在调用内 (拿到 ticket 时已经在跑); 业务失败不抛异常, 取消是其中一种状态; 结果正文只能取一次 |
+| 回调 | `tableOpCallback(ctx, start, done)` | 任意线程; `done` 在 IO 线程恰好一次 (含未受理) |
+
+- 一条 ticket 可以之后才 `co_await`; 多条并发提交用 `pluginxx::whenAll(tickets)` 一次收齐;
+  `.forget()` = 提交完不管结果
+- **注册类调用仍要 `co_await` 完再继续** —— 登记本身提交就生效, 但失败原因只有结果里有
+- 生命周期入口 (`start` / `mount`) 里的注册事务因此写成协程: 入口用
+  `auto later = pluginxx::finishLater(notify)` 拿到凭据, `ctx.spawn(...)` 跑
+  `co_await xxxSetupAsync(...)`, 成功 `later.ok()` / 失败 `later.failed(why)`,
+  入口 `return later.provider()` (非空句柄 = 已受理)。挂载里有挂载级状态时, 入口返回
+  自己的状态对象 (unmount 收到的就是它), 完成通知仍走 `later`
+- 主程序的 `pluginxx.tasks` 表缺失时无法驱动注册协程, 入口直接报错而不是退回同步注册
+
+> **唯一的同步等待原语**: `pluginxx::tableOpSyncWait(host, cancel, scheduler, start, timeoutMs)`
+> (及 `tableOpSyncWait(ctx, ...)`)。它只给"必须当场拿到结果且不能写成协程"的地方用 ——
+> 目前只有 JS 运行时插件的桥 (QuickJS 是同步 C API, 脚本回调必须同步返回) 与 kit 内部
+> 几个同步便捷函数 (语言切换 / 工具权限声明这类)。之前那批阻塞包装
+> (`tableOpBlocking` / `invoke_capability_blocking` / `call_tool_blocking` / kit 侧 `*Blocking`)
+> 已删除; `boundaries` 的"插件表调用形态"规则会拦回退。
 
 > 当前进度: 阶段 A 的骨架与 `agentxx.agent.session` (v4), 阶段 B 的
 > `agentxx.agent.tools` (v5) / `permission` (v3) / `context` (v3) / `model` (v3) /
@@ -531,7 +548,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 > 插件接口表不再有"同步拿结果"的成员: 受理即返回 `PluginxxOperatorHandle*`, 结果 (正文 /
 > 句柄 id / 失败原因) 经 `PluginxxOperatorCallback` 恰好一次交回, 返回 `NULL` = 未受理 +
 > `error_out` (见 §8.0)。插件侧不需要协程的场合用 `plugin_kit.h` 的三种形态之一
-> (`co_await tableOp` / `tableOpCallback` / `tableOpBlocking`)。两端需同一代头文件重编。
+> (`co_await tableOp` / `tableOpCallback`)。两端需同一代头文件重编。
 > 更早的档位: v6 (2026-11 工具结果两段上报) —— `agentxx.agent.tools` 抬到 4: 工具结果拆成
 > "正文 (原样字节) + 元数据 JSON"两段, 完成通知器换成 `AgentxxPluginToolNotify`,
 > 插件互调回调换成 `AgentxxPluginToolCallback` (见 §8.4)。
@@ -554,7 +571,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 > 能力是"能力名 + JSON 载荷"的 RPC: 提供方在 `start` / `mount` 里用 kit 的
 > `capability(ctx, "名", fn, opts)` 登记 (`PluginxxCapabilitySpec`: `impls` / `merge` /
 > `phases` / `priority` / `timeoutMs` / `scope`), 调用方经 `agentxx.capabilities` 表的
-> `invoke_capability` 调用 (kit: `invoke_cap` 协程 awaiter / `invoke_capability_blocking`);
+> `invoke_capability` 调用 (kit: `co_await invoke_cap(ctx, ...)`);
 > 主程序侧查清单用 `PluginManager::capabilities()->infoJson/listJson`, 功能埋点走
 > `emitPoint` / `emitPointAsync`。调用必须携带**调用方插件实例** (主程序据此
 > 持有它的执行租约, 卸载等待覆盖本次调用)。FFI 的 C 接口目前没有单独的能力调用入口。
@@ -2466,7 +2483,7 @@ v4 起这 7 个成员都是**异步操作契约**（见 §8.0）：返回 `Plugi
 |---|---|
 | 声明 / 发布 | `declarePluginBroadcast(host, bc, id, anyonePublish=false, cacheLatest=true)`；`publishPluginBroadcast(host, bc, id, payload, anyonePublish=false)`（未声明时先补声明）。两者内部走阻塞形态, 返回 `bool` |
 | 订阅 | `subscribePluginBroadcast(host, bc, scope, id, handler, ud)`（需要结束回调时用表成员 `subscribe_broadcast_ex` + `pluginxx::pluginxxSubscriptionFromText`；撤销用 `unsubscribePluginBroadcast(host, bc, sub)`） |
-| 当前值 | 表成员 `read_broadcast`（阻塞形态：`tableOpBlocking` / `detail::tableOpText`） |
+| 当前值 | 表成员 `read_broadcast`（`co_await readBroadcast(ctx, ...)`；同步桥用 `tableOpSyncWait`） |
 | 结束 | 表成员 `end_broadcast`（阻塞形态） |
 
 存量调用形状 `iface.events->publish / subscribe` 与 `PluginEventsCompat` 已删：发布 / 订阅只有

@@ -8,11 +8,11 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | A | 框架层：ticket（调用即提交）+ `whenAll` + 顺序契约写进头文件 | 已完成 |
-| B | kit 改名与补形态：同步形态先改 `*Blocking`，主名让给 ticket / callback 形态 | 进行中（协程形态已补，改名与删阻塞待批 E） |
-| C | 迁移 25 个插件（含 chatbot 10 个工具改 `polled_tool`）+ 删 4 个私有 `netCallWait` | 待做 |
-| D | 生命周期异步完成（`finishLater`；不设时限、不加配置键） | 进行中（kit 部分完成） |
-| E | 删除全部阻塞形态 + `boundaries` 禁令 + 文档 | 待做 |
-| G | 收尾：文档、全量回归、卸载路径 ASan 复核、性能对比 | 待做 |
+| B | kit 改名与补形态：协程（ticket）形态补齐，同步重复形态删除 | 已完成 |
+| C | 迁移 25 个内部插件（含 chatbot 10 个工具） | 已完成（JS 引擎除外，只能走同步桥） |
+| D | 生命周期异步完成（`finishLater`；不设时限、不加配置键） | 已完成 |
+| E | 删除全部阻塞形态 + `boundaries` 规则 16 + 文档 | 已完成 |
+| G | 收尾：文档、全量回归、卸载路径 ASan 复核 | 进行中 |
 
 不做：client 侧回答型回调与 150 ms 同步桥（留给 `plugin-api-async` 的阶段 D/E）。
 
@@ -127,6 +127,66 @@
 后台任务、工具/图节点注册（`registerToolSync` / `tool` / `graph_node`）的协程形态；
 之后是插件调用点迁移、删阻塞形态、禁令与文档。
 
+### 批 C/D/E：插件迁移 + 删除阻塞形态（已完成）
+
+**D 的形态**（每个带注册事务的入口都按同一套写）：
+
+```cpp
+static pluginxx::Task<void> xxxSetupAsync(Ctx& ctx, AgentRef ref) {
+    co_await xxx(ctx, ref, ...);      // 每条注册都是“提交 + co_await”
+    co_return;
+}
+// 入口
+if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) { /* error + nullptr */ }
+auto later = finishLater(notify);
+const AgentRef agentRef(*spec);
+ctx.spawn([later, agentRef](Ctx& c, OpCtl&) -> pluginxx::Task<void> {
+    try { co_await xxxSetupAsync(c, agentRef); later.ok(); }
+    catch (const std::exception& e) { later.failed(e.what()); }
+    co_return;
+});
+return later.provider();   // 非空句柄 = 已受理
+```
+
+- 挂载带**挂载级状态**时，入口返回自己的状态对象（example_event 的
+  `EventMountState`、rag_search 的 `RagAgentState`、example_multi_mount 的
+  `shared_ptr<MountState>` 持有块），unmount 收到的就是它；完成通知仍走 `later`。
+  挂载失败时主程序不调 unmount，所以这些状态在协程的 `catch` 里释放
+- 没有 `pluginxx.tasks` 的宿主：入口直接报错（不再退回“同步注册”，那等于同一份注册
+  写两遍）；因此各插件的 `xxxSetupBlocking` 同批删除
+
+**已迁移的插件**（25 个内部插件全部）：
+
+| 批 | 插件 |
+|---|---|
+| D1 | `agentxx_filesystem`（21 处 `co_await`）、`agentxx_math`、`agentxx_string`、`agentxx_execute_command`、`agentxx_system_monitor`、`agentxx_system`、`agentxx_websearch` |
+| D2 | `agentxx_codegraph`（工具提示词读改写 + 5 个工具 + 事件订阅）、`example_plugin`（工具/广播/能力/提示词）、`agentxx_llm_uncensored`、`example_feature`、`example_graph_node`、`example_event`、`agentxx_rag_search`、`agentxx_planning` |
+| D3 | `agentxx_chatbot`（10 个工具 + 面板订阅）、`agentxx_computer_use`、`agentxx_screen_capture`、`agentxx_audio_stream`（当前平台不编译）、`agentxx_text_selection_monitor`、`example_resources`、`example_multi_mount`、`example_runtime`、`agentxx_system_monitor` 的 start 侧 |
+| 不动 | `agentxx_javascript_engine` / `example_js` / `example_js_execute_command`：QuickJS 是同步 C API，脚本回调必须同步拿结果，只能走同步桥原语 |
+
+**kit 同时补的协程形态**（原阻塞形态同批删）：`toolPromptOf` / `schemaOf` /
+`parseToolPromptJson`（工具提示词与模式构建）、`subscribePluginBroadcastEx`、
+`providePoint` / `capability` / `graph_node` 全部改成返回 `TableOpTicket`。
+
+**E：删阻塞形态**
+
+- 框架 `kit.h`：删除 `tableOpBlocking(ctx, ...)`、`invoke_capability_blocking`、
+  `call_tool_blocking`；`tableOpBlockingRaw` 改名 **`tableOpSyncWait`** 并写清用途
+  （只给必须同步回答外部同步 API 的桥，加上 `tableOpSyncWait(ctx, ...)` 重载）。
+- `plugin_kit.h`：删 `call_tool_blocking`、`registerToolPermissionBlocking` /
+  `registerReadPathPermissionBlocking` / `registerWritePathPermissionBlocking` /
+  `listMountsBlocking` / `mountInfoOfBlocking`。
+- `example_js` / `example_js_execute_command`：start 里那一次同步 `capability_info` 查
+  改为“直接 invoke —— 未注册就不受理”，不再需要同步等待。
+- `boundaries` 新增**规则 16「插件表调用形态」**：插件/lib 源码出现已删除的四个名字即失败；
+  `tableOpSyncWait` 只允许出现在 JS 运行时插件（同步桥）与 kit 内部。
+
+**验证**：`boundaries` 20 / `plugins` 704 / `plugin_host_mount` 147 / `plugin_bridge` 271 /
+`plugin_runtime` 742 / `plugin_sdk` 141 / `plugin_resources` 101 / `plugin_broadcast` 96 /
+`plugin_point` 68 / `plugin_feature` 34 / `plugin_cleanup` 90 / `plugin_multi_mount` 47 /
+`plugin_agent_runtime` 221 / `plugin_example_runtime` 50 / `plugin_example_chatbot` 265 /
+`client_plugins` 841 / `event_hub` 288 全绿（Debug + ASan）。
+
 ## 与计划的偏差
 
 - 计划里批 A 写的是“`tableOpBlocking*` 加 `[[deprecated]]`（暂留）”，实际**没有加**：这些阻塞形态
@@ -140,7 +200,9 @@
 
 ## 剩余事项
 
-（收尾时补）
+- 全量回归（全部测试模块）与卸载路径 ASan 复核
+- `docs/zh-cn/design/plugins.md` §8.0 已改成两形态 + 同步桥原语说明; §15（实例生命周期）
+  里 “mount 里同步注册后 `notify->done`” 的示例已由本节模板取代, 阅读时以 8.0 为准
 
 ### 批 B 开工前的两个决定（实施时按这个来）
 

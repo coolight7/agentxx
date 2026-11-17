@@ -47,8 +47,7 @@
 
 ## 状态
 
-规划已按反馈调整（2026-11-17）：去掉生命周期超时、`chatbot` 一并改、批 F 不做、不抬代次。
-等命名与 ticket 用法确认后从批 A 开始。
+已完成（2026-11-17）：批 A/B/C/D/E 全部落地，只差全量回归收尾。
 
 ## 关键决策
 
@@ -66,4 +65,27 @@
 
 ## 结论
 
-（完成后补：实际删了多少入口、迁移了多少调用点、测试与性能数据）
+2026-11-17 完成。插件侧只剩两种形态，阻塞包装全删：
+
+- **框架**: `tableOp(ctx, start)` 返回 `TableOpTicket`（调用即提交）+ `whenAll`；
+  `tableOpCallback` 保留为回调形态；`tableOpBlocking(ctx, ...)`、
+  `invoke_capability_blocking`、`call_tool_blocking` 删除；`tableOpBlockingRaw` 改名
+  `tableOpSyncWait`，只给“必须同步回答外部同步 API”的桥用（JS 运行时插件的 QuickJS 回调）
+  与 kit 内部几个同步便捷函数。
+- **主程序 kit**: `tool` / `fast_tool` / `blocking_tool` / `polled_tool` / `graph_node` /
+  `providePoint` / `capability` / 权限三件套 / 广播与提示词/图/资源类便捷函数全部只剩
+  ticket 形态（`co_await` 拿 `TableOpResult`），新增 `toolPromptOf` / `schemaOf` /
+  `subscribePluginBroadcastEx`；kit 侧 `*Blocking` 重复形态全部删除。
+- **生命周期**: `start` / `mount` 的注册事务写成协程（`finishLater` + `ctx.spawn` +
+  `return later.provider()`），带挂载级状态的入口返回自己的状态对象；没有
+  `pluginxx.tasks` 的宿主直接报错，不再保留“同步注册回退”副本。
+- **迁移范围**: 25 个内部插件；没动的只有 JS 运行时插件与两个 JS 壳（它们的桥必须同步）。
+  `agentxx_audio_stream` 在当前平台不参与编译，改动与其余插件同形。
+- **静态检查**: `boundaries` 新增规则 16「插件表调用形态」——已删除的四个名字回潮即失败，
+  `tableOpSyncWait` 只允许出现在 JS 运行时插件与 kit 内部。
+
+验证：`boundaries` 20 / `plugins` 704 / `plugin_host_mount` 147 / `plugin_bridge` 271 /
+`plugin_runtime` 742 / `plugin_sdk` 141 / `plugin_resources` 101 / `plugin_broadcast` 96 /
+`plugin_point` 68 / `plugin_feature` 34 / `plugin_cleanup` 90 / `plugin_multi_mount` 47 /
+`plugin_agent_runtime` 221 / `plugin_example_runtime` 50 / `plugin_example_chatbot` 265 /
+`client_plugins` 841 / `event_hub` 288 全绿（Debug + ASan）。接口表成员与 API 代次未变。

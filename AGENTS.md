@@ -795,6 +795,14 @@ path/to/agentxx_test --log-level warn string_util regex
   容器 io 线程、实例释放后不再进入插件代码。
   注: 提示词只按 **agent 级** 支持修改 (根 `config_json` 的 `prompt`), **不做**会话级
   提示词来源 —— 一个 agent 管理的会话、提示词、插件等保持一致
+- 插件表调用只有两种形态 (2026-11): **调用即提交** `xxx(ctx, args)` 返回
+  `pluginxx::TableOpTicket` (`co_await` 取 `TableOpResult`, 也可 `.forget()` / `whenAll`)
+  与 **回调** `tableOpCallback(ctx, start, done)`。阻塞包装 (`tableOpBlocking` /
+  `invoke_capability_blocking` / `call_tool_blocking` / kit 侧 `*Blocking`) 已删除;
+  唯一的同步等待原语 `pluginxx::tableOpSyncWait(...)` 只给必须同步回答外部同步 API 的桥
+  (JS 运行时插件的 QuickJS 回调) 与 kit 内部几个同步便捷函数, `boundaries` 规则 16 拦回退。
+  生命周期入口的注册事务写成协程: `finishLater(notify)` + `ctx.spawn(...)` +
+  `return later.provider()`; 挂载带挂载级状态时返回自己的状态对象 (unmount 收到它)
 - 接口表数量: agent 侧 19 张 (9 张通用表 `<应用名>.*` 即 `agentxx.*`: broadcasts/capabilities/
   scheduler/tasks/cancel/plugins/config/json/log + 10 张业务表 `agentxx.agent.*`,
   不含两侧都有的 `agentxx.net`;
