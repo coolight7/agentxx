@@ -3,13 +3,14 @@
 ## 1. 目标
 
 把插件与主程序之间"要跨线程拿结果"的调用统一成一种模型：**受理即返回、结果经完成回调交回**；
-SDK 层不再保留"阻塞等结果"的入口。三种消费形态各司其职：
+SDK 层不再保留"阻塞等结果"的入口。只剩两种形态：
 
 | 形态 | 用途 | 是否阻塞 |
 |---|---|---|
-| `co_await xxx(ctx, args)` | 要结果，或要"顺序点"（等它跑完再继续） | 不阻塞 |
-| `auto t = xxxSubmit(ctx, args)` | 动作先发出去，稍后 `co_await t` 等它；也可直接丢弃 | 不阻塞（`co_await t` 时才等） |
-| `xxxCallback(ctx, args, done)` | 没有协程的上下文（`start` / `mount` / 通知型回调）要结果 | 不阻塞 |
+| `xxx(ctx, args)` → `TableOpTicket` | **调用即提交**；`co_await` 拿结果 / 存起来稍后再 await / `.forget()` 提交完不管 | 不阻塞 |
+| `xxxCallback(ctx, args, done)` | 没有协程的上下文（`start` / `mount` / `stop` / 通知型回调）要结果 | 不阻塞 |
+
+`co_await whenAll(t1, t2, …)` 等一批已提交的 ticket 全部完成（总耗时是最慢那条，不是相加）。
 
 前置条件：`start` / `mount` / `stop` / `unmount` 允许**异步完成**（宿主早已支持 notify，见 §3.4），
 析构路径不再调接口表（收尾统一搬到 `stop` / `unmount`）。
@@ -34,7 +35,7 @@ SDK 层不再保留"阻塞等结果"的入口。三种消费形态各司其职�
 - 句柄按 `pluginxx/api/abi.h`（约 162 行）"**仅用于取消；不可轮询/收尸**" —— 所以
   "提交后稍后再等"必须在 SDK 侧做（见 §3.2）。
 
-### 2.3 kit 现状：三种形态 + 一批同步包装
+### 2.3 kit 现状：已有三种形态（改造后只剩两种）+ 一批同步包装
 
 框架 kit（`pluginxx/kit/kit.h`）已有：
 
@@ -117,32 +118,47 @@ SDK 层不再保留"阻塞等结果"的入口。三种消费形态各司其职�
 
 ## 3. 目标设计
 
-### 3.1 一个操作三种形态、命名统一
+### 3.1 一个操作两种形态、命名统一
 
-- `xxx(ctx, args…)` → 返回 awaiter（默认形态，推荐）
-- `xxxSubmit(ctx, args…)` → 立即受理，返回 `Ticket`（可 `co_await`，可丢弃）
-- `xxxCallback(ctx, args…, done)` → 无协程上下文用（`done(TableOpResult)`）
+- `xxx(ctx, args…)` → **调用即提交**，返回 `TableOpTicket`；`co_await` 拿结果，`.forget()` 放弃结果
+- `xxxCallback(ctx, args…, done)` → 无协程上下文用（`done(TableOpResult)`，主程序 io 线程恰好一次）
+
+不设 `xxxSubmit`：ticket 已经是"提交后返回的对象"，`co_await xxx(...)` 与
+`auto t = xxx(...)` 是同一个入口的两种用法。
 
 旧同步名 `xxx(...)`（阻塞实现）在迁移期改名为 `xxxBlocking(...)`（`[[deprecated]]`），
 E 批连同框架的 `tableOpBlocking*` 一起删除。改名由编译器驱动找齐调用点。
 
+**行为变化要写进文档**：
+
+1. 调用了就一定会执行（哪怕随后提前 `return`）—— 结果丢弃而已；
+2. `co_await` 只允许一次；重复 await 是 bug（运行期断言）；
+3. `~TableOpTicket` 不取消（取消是显式动作 `cancel()`）；
+4. 不要无界连发（提交进的是同一实例的 FIFO 队列）。
+
 ### 3.2 Ticket：提交即可等
 
 ```cpp
-class TableOpTicket {                      // move-only
+class [[nodiscard]] TableOpTicket {        // move-only
 public:
-    bool accepted() const noexcept;        // 受理成功?
+    bool        accepted() const noexcept; // 受理成功?
     std::string startError() const;        // 未受理的原因
-    void        cancel();                  // cancel.op_cancel (可选)
+    void        cancel();                  // cancel.op_cancel (显式取消)
+    void        forget();                  // 明确的"提交完不管"(丢弃结果)
     // co_await 它 → TableOpResult；已完成的立即恢复；重复 await 是 bug (断言)
 };
+
+// 等一批已提交的 ticket 全部完成 (按入参顺序返回结果)
+asio::awaitable<std::vector<TableOpResult>> whenAll(std::vector<TableOpTicket>&& tickets);
 ```
 
 实现要点：
 
 - 构造时**就提交**（`startTableOp`），状态放 `shared_ptr`（沿用 awaiter 的状态机）；
-- `co_await` 只是"等这个已提交的操作"，不再提交；
-- 丢弃 ticket = fire-and-forget，动作照常执行（与现在的 `cb = NULL` 等价）；
+- `co_await` 只是"等这个已提交的操作"，不再提交；调用方已在主程序 io 线程时工作体内联跑完，
+  `await_ready()` 直接为 true（一次挂起都不发生）；
+- `[[nodiscard]]` + `forget()`：防止"忘了 await"把失败原因默默吞掉；
+- `whenAll` 只需"逐个 await"：ticket 提交时不阻塞，总耗时 = 最慢那条；
 - 不取消即不取消：`~TableOpTicket` 不碰操作（取消是显式动作）。
 
 网络侧同一套：`NetTicket`（复用 `detail::NetAsyncState`）。
@@ -154,7 +170,8 @@ public:
 3. 把活交给别的线程的操作（网络服务、后台任务）**只保证入口按序**，完成顺序不保证 ——
    要完成顺序就 `co_await`（awaiter 或 ticket）。
 
-结论：`xxxSubmit` 之后立刻 `xxxSubmit` 下一个，执行顺序仍然有保证；**不保证的是"何时完成"**。
+结论：`xxx` 之后立刻 `xxx` 下一个，执行顺序仍然有保证；**不保证的是"何时完成"** ——
+要完成顺序就 `co_await`（awaiter 或 ticket 都行）。
 
 ### 3.4 生命周期异步完成
 
@@ -232,11 +249,13 @@ void* myStart(Ctx& ctx, const PluginxxOperatorNotify* n, PluginxxString* err) {
 
 ### 批 A：框架层 ticket 与顺序契约
 
-- `pluginxx/kit/kit.h`：新增 `tableOpSubmit(ctx, start)` / `TableOpTicket`；`tableOpBlocking*`
-  加 `[[deprecated]]`（暂留）；
+- `pluginxx/kit/kit.h`：`tableOp(ctx, start)` 改成**调用即提交**并返回 `TableOpTicket`
+  （`[[nodiscard]]` + `forget()` + `cancel()`；内部仍是现在那套状态机）；新增
+  `whenAll(std::vector<TableOpTicket>&&)`；`tableOpBlocking*` 加 `[[deprecated]]`（暂留）；
 - `pluginxx/host/table_op.h`：补顺序契约注释；确认 `cb = NULL` 路径无泄漏（已有测试覆盖）；
-- 测试：`plugin_sdk` 新增 ticket 用例（提交即返回 / 稍后 await / 已完成立即恢复 / 丢弃仍执行 /
-  未受理时 `accepted()==false`）；`plugin_runtime` 新增 FIFO 用例（A→B 提交顺序 = 执行顺序）；
+- 测试：`plugin_sdk` 新增 ticket 用例（调用即提交 / 稍后 await / 已完成立即恢复 / `forget()` 仍执行 /
+  `whenAll` 全部完成后返回 / 未受理时 `accepted()==false` / 重复 await 断言）；
+  `plugin_runtime` 新增 FIFO 用例（A→B 提交顺序 = 执行顺序）；
 - 提交：子模块 + 父仓库指针。
 
 ### 批 B：kit 补形态并改名（主程序侧）
@@ -248,13 +267,15 @@ void* myStart(Ctx& ctx, const PluginxxOperatorNotify* n, PluginxxString* err) {
 2. 提示词 / 图 / 模型 / 自身信息 / 资源登记 8 个；
 3. 权限 4 个 + share store 1 个 + 能力行与埋点 2 个；
 4. 会话运行时与后台任务 6 个；
-5. 网络：`netSubmit` 换成 `NetTicket`（`netCall` / `netFetch` 已经是 awaiter，不动）。
+5. 网络：`netCall` / `netFetch` 也改成"调用即提交 + 返回 `NetTicket`"；删掉 `netSubmit`
+   （它的语义就是 `netCall(...).forget()`）。
 
 每块提交前跑 `plugin_sdk` / `plugin_host_mount` / `boundaries`。
 
 ### 批 C：插件迁移（编译器驱动）
 
-1. 25 个插件按报错改调用点（`xxx(` → `co_await xxx(` / `xxxSubmit(` / `xxxCallback(`）；
+1. 25 个插件按报错改调用点（原来是同步调用的 → `co_await xxx(` / `xxx(` + `.forget()` /
+   `xxxCallback(`；原来就是 `co_await` 的形状不用改）；
 2. 删 4 个私有 `netCallWait`；`websearch` / `rag_search` / `text_selection_monitor` 的工具体改
    `polled_tool`：网络 `co_await netFetch`，CPU 重活 `co_await offload(ctx, …)`；
    `rag_search_impl.h` 的 `EmbedFn`、`websearch_impl.h` 的 `HttpFn` 改成返回 `awaitable`，
@@ -289,7 +310,7 @@ client 侧三个回答型回调与 150 ms 同步桥不在本轮：上一个任�
 ### 批 G：收尾
 
 - 全量回归 + 一次"插件卸载/禁用"路径的 ASan 复核（析构不再调表）；
-- 文档补"三种形态怎么选"与顺序契约；
+- 文档补"两种形态怎么选"（`xxx` 返回 ticket / `xxxCallback`）与顺序契约；
 - 本任务三个文件补结论，`AGENTS.md` 只留规则。
 
 ## 6. 验证计划
@@ -315,16 +336,12 @@ client 侧三个回答型回调与 150 ms 同步桥不在本轮：上一个任�
 | `polled_tool` 体内跑 CPU 重活占住宿主 IO 线程 | 规则写进文档；`websearch` / `rag_search` 用 `offload` |
 | 析构里仍有表调用（漏改） | `boundaries` 静态检查 + 卸载路径 ASan 复核 |
 | ticket 被重复 await / 跨协程 await | 运行期断言 + 文档说明"单次 await" |
-| client 150 ms 桥删除后首帧空 | 保留"先用默认内容"的降级，F 批单独回归 |
 
-## 8. 待确认的决策点
+## 8. 决策点（已定）
 
-已定（本轮不再讨论）：不做生命周期超时；`chatbot` 一并改（10 个工具全部）；
-不做 client 侧回答型回调（批 F）；不改表成员、不抬 API 代次（停在 7）。
-
-仍待确认：
-
-1. 命名：`xxx`（awaiter）/ `xxxSubmit`（ticket）/ `xxxCallback`（回调），
-   旧同步名迁移期叫 `xxxBlocking` 并在 E 批删除；
-2. ticket 是否允许"并发发起多条再统一等"（ticket 可放进容器，用一次 `whenAll` 等全部）——
-   推荐允许，这是 ticket 相对 awaiter 的主要价值。
+- 只保留 `xxx`（调用即提交、返回 ticket）与 `xxxCallback` 两种形态，**不设 `xxxSubmit`**；
+- ticket 类型 `[[nodiscard]]`，fire-and-forget 写 `.forget()`；
+- 支持并发多条 ticket 与 `whenAll`（逐个 await，总耗时 = 最慢那条）；
+- 旧同步名迁移期叫 `xxxBlocking`，E 批删除；
+- 不做生命周期超时；`chatbot` 10 个工具一并改；不做 client 侧回答型回调；
+- 不改表成员、不抬 API 代次（停在 7）。

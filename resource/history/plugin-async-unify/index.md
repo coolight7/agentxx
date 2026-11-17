@@ -3,10 +3,13 @@
 ## 目标
 
 插件调主程序的接口**只保留一种模型**：受理即返回、结果经完成回调交回；SDK 不再提供
-"阻塞等结果"的入口。三种消费形态：`co_await xxx(...)`（要结果 / 要顺序点）、
-`xxxSubmit(...)` 返回可等待的 ticket（先发出去、稍后等，也可并发发起多条再统一等）、
-`xxxCallback(..., done)`（没有协程的上下文）。为此 `start` / `mount` / `stop` / `unmount`
-允许异步完成，析构不再调接口表。
+"阻塞等结果"的入口。只剩两种形态：
+
+- `xxx(...)` → **调用即提交**，返回 `TableOpTicket`：`co_await` 拿结果（要顺序点就 await）、
+  存起来稍后再 await、`.forget()` 提交完不管；`co_await whenAll(t1, t2, …)` 等一批全部完成；
+- `xxxCallback(..., done)`：没有协程的上下文（`start` / `mount` / `stop` / 通知型回调）。
+
+为此 `start` / `mount` / `stop` / `unmount` 允许异步完成，析构不再调接口表。
 
 ## 范围
 
@@ -41,10 +44,12 @@
 
 ## 关键决策
 
-1. **一个操作三种形态、命名带后缀**：`xxx` = awaiter，`xxxSubmit` = ticket，
-   `xxxCallback` = 回调；旧同步名迁移期叫 `xxxBlocking`，最后整批删除。
-2. **ticket 在构造时就提交**，`co_await` 只是"等已提交的那次操作"；丢弃 = fire-and-forget。
+1. **一个操作两种形态**：`xxx(...)` 调用即提交并返回 ticket（`[[nodiscard]]`，放弃结果要写
+   `.forget()`），`xxxCallback(...)` 给没有协程的上下文；不设 `xxxSubmit`。
+   旧同步名迁移期叫 `xxxBlocking`，最后整批删除。
+2. **ticket 在构造时就提交**，`co_await` 只是"等已提交的那次操作"；`.forget()` = 提交完不管。
    接口表句柄按 ABI 只能取消，所以"稍后再等"必须由 SDK 侧的状态机实现。
+   因为提交不阻塞，`whenAll` 只需逐个 await，总耗时 = 最慢那条。
 3. **顺序有两层**：执行顺序由宿主 IO 线程队列保证（FIFO，调用方已在 IO 线程时内联）；
    完成顺序只有 `co_await` 能保证。交给别的线程的操作（网络）只保证入口按序。
 4. **生命周期改成异步完成、不设时限**：宿主 `awaitPluginLifecycle` 早就支持 notify；
