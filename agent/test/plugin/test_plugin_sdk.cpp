@@ -664,7 +664,7 @@ TestResult testPluginSdk() {
         SdkCtx ctx;
         ctx.init(&host);
         g_captured       = CapturedRegistration{};
-        const int32_t rc = agentxx::plugin::graph_node(
+        auto nodeTicket   = agentxx::plugin::graph_node(
             ctx,
             g_agentRef,
             "test.node.sync",
@@ -678,7 +678,9 @@ TestResult testPluginSdk() {
                 );
             }
         );
-        XX_TEST_EXPECT_EQ(rc, 0);
+        // 登记提交即生效; 假 host 的登记是内联完成的
+        XX_TEST_EXPECT_TRUE(nodeTicket.accepted());
+        XX_TEST_EXPECT_TRUE(nodeTicket.done());
         XX_TEST_EXPECT_TRUE(g_captured.hasGraphNode);
         XX_TEST_EXPECT_TRUE(g_captured.graphNode.run_start != nullptr);
         XX_TEST_EXPECT_TRUE(g_captured.graphNode.run_cancel != nullptr);
@@ -705,7 +707,7 @@ TestResult testPluginSdk() {
         SdkCtx ctx;
         ctx.init(&host);
         g_captured       = CapturedRegistration{};
-        const int32_t rc = agentxx::plugin::graph_node(
+        auto nodeTicket   = agentxx::plugin::graph_node(
             ctx,
             g_agentRef,
             "test.node.throw",
@@ -714,7 +716,9 @@ TestResult testPluginSdk() {
                 throw std::runtime_error("node boom");
             }
         );
-        XX_TEST_EXPECT_EQ(rc, 0);
+        // 登记提交即生效; 假 host 的登记是内联完成的
+        XX_TEST_EXPECT_TRUE(nodeTicket.accepted());
+        XX_TEST_EXPECT_TRUE(nodeTicket.done());
         auto        spec = g_captured.graphNode;
         NotifyProbe probe;
         auto        notify = probe.notify();
@@ -743,7 +747,7 @@ TestResult testPluginSdk() {
         SdkCtx ctx;
         ctx.init(&host);
         g_captured       = CapturedRegistration{};
-        const int32_t rc = agentxx::plugin::graph_node(
+        auto nodeTicket   = agentxx::plugin::graph_node(
             ctx,
             g_agentRef,
             "test.node.async",
@@ -760,7 +764,9 @@ TestResult testPluginSdk() {
                 co_return fmt::format(R"({{"async":"{}"}})", node);
             }
         );
-        XX_TEST_EXPECT_EQ(rc, 0);
+        // 登记提交即生效; 假 host 的登记是内联完成的
+        XX_TEST_EXPECT_TRUE(nodeTicket.accepted());
+        XX_TEST_EXPECT_TRUE(nodeTicket.done());
         XX_TEST_EXPECT_TRUE(g_captured.hasGraphNode);
         XX_TEST_EXPECT_TRUE(g_captured.graphNode.run_cancel != nullptr);
 

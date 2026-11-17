@@ -9,7 +9,7 @@
 /// - **本头只提供 agent 业务 helper**: 接口表聚合 (AgentIfaces / ClientIfaces)、
 ///   工具模式构建 (ToolSchemaBuilder)、工具注册 (tool / fast_tool / blocking_tool /
 ///   polled_tool)、图节点 (graph node)、工具权限声明、阻塞便捷调用
-///   (call_tool_blocking)、client 侧特化渲染与实例上下文 (ClientPluginBase)、
+///   (call_tool)、client 侧特化渲染与实例上下文 (ClientPluginBase)、
 ///   界面组件加载 (描述层 `pluginxx::ui` 与扩展 kit `agentxx::ui::kit`)。
 #pragma once
 #include "agentxx/plugin/api/agentxx_ui_kit.g.h"
@@ -87,7 +87,6 @@ using pluginxx::finishLater;
 using pluginxx::ifaceHas;
 using pluginxx::ifaceHasVersion;
 using pluginxx::invoke_cap;
-using pluginxx::invoke_capability_blocking;
 using pluginxx::Json;
 using pluginxx::jsonEscape;
 using pluginxx::JsonView;
@@ -108,9 +107,8 @@ using pluginxx::ScopeRef;
 using pluginxx::sleep;
 using pluginxx::spawn;
 using pluginxx::tableOp;
-using pluginxx::tableOpBlocking;
-using pluginxx::tableOpBlockingRaw;
 using pluginxx::tableOpCallback;
+using pluginxx::tableOpSyncWait;
 using pluginxx::TableOpResult;
 using pluginxx::TableOpTicket;
 using pluginxx::Task;
@@ -213,7 +211,7 @@ inline bool declarePluginBroadcast(
                              + (anyonePublish ? "anyone" : "owner") + "\"}";
     const auto declSv = PluginStringView::from(decl.data(), decl.size());
     const auto caps   = broadcastCallIfaces(host);
-    return pluginxx::tableOpBlockingRaw(
+    return pluginxx::tableOpSyncWait(
                host,
                caps.first,
                caps.second,
@@ -243,7 +241,7 @@ inline bool publishPluginBroadcast(
     declarePluginBroadcast(host, broadcasts, id, anyonePublish);
     const auto payloadSv = PluginStringView::from(payload.data(), payload.size());
     const auto caps      = broadcastCallIfaces(host);
-    return pluginxx::tableOpBlockingRaw(
+    return pluginxx::tableOpSyncWait(
                host,
                caps.first,
                caps.second,
@@ -267,7 +265,7 @@ inline bool unsubscribePluginBroadcast(
         return false;
     }
     const auto caps = broadcastCallIfaces(host);
-    return pluginxx::tableOpBlockingRaw(
+    return pluginxx::tableOpSyncWait(
                host,
                caps.first,
                caps.second,
@@ -293,7 +291,7 @@ inline PluginxxSubscription* subscribePluginBroadcast(
     }
     const auto idSv = PluginStringView::from(id.data(), id.size());
     const auto caps = broadcastCallIfaces(host);
-    auto       op   = pluginxx::tableOpBlockingRaw(
+    auto       op   = pluginxx::tableOpSyncWait(
         host,
         caps.first,
         caps.second,
@@ -637,7 +635,7 @@ inline std::string
     if (!host || !iface.prompt || !iface.prompt->get_prompt) {
         return {};
     }
-    auto res = pluginxx::tableOpBlockingRaw(
+    auto res = pluginxx::tableOpSyncWait(
         host,
         iface.cancel,
         iface.scheduler,
@@ -659,7 +657,7 @@ inline int32_t setPromptJson(
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto payloadSv = PluginStringView::from(json.data(), json.size());
-    auto res       = pluginxx::tableOpBlockingRaw(
+    auto res       = pluginxx::tableOpSyncWait(
         host,
         iface.cancel,
         iface.scheduler,
@@ -679,7 +677,7 @@ inline std::string modelConfigJson(
     if (!host || !iface.model || !iface.model->get_config) {
         return {};
     }
-    auto res = pluginxx::tableOpBlockingRaw(
+    auto res = pluginxx::tableOpSyncWait(
         host,
         iface.cancel,
         iface.scheduler,
@@ -696,7 +694,7 @@ inline std::string
     if (!host || !iface.graph || !iface.graph->get_graph_json) {
         return {};
     }
-    auto res = pluginxx::tableOpBlockingRaw(
+    auto res = pluginxx::tableOpSyncWait(
         host,
         iface.cancel,
         iface.scheduler,
@@ -713,7 +711,7 @@ inline std::string
     if (!host || !iface.graph || !iface.graph->get_graph_name) {
         return {};
     }
-    auto res = pluginxx::tableOpBlockingRaw(
+    auto res = pluginxx::tableOpSyncWait(
         host,
         iface.cancel,
         iface.scheduler,
@@ -735,7 +733,7 @@ inline int32_t setGraphJson(
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto payloadSv = PluginStringView::from(json.data(), json.size());
-    auto res       = pluginxx::tableOpBlockingRaw(
+    auto res       = pluginxx::tableOpSyncWait(
         host,
         iface.cancel,
         iface.scheduler,
@@ -755,7 +753,7 @@ inline std::string ownResourcesJson(
     if (!host || !iface.resources || !iface.resources->get_own_resources) {
         return {};
     }
-    auto res = pluginxx::tableOpBlockingRaw(
+    auto res = pluginxx::tableOpSyncWait(
         host,
         iface.cancel,
         iface.scheduler,
@@ -775,7 +773,7 @@ inline int32_t resourceOpSync(
     Fn&&                start
 ) {
     auto argSv = PluginStringView::from(arg.data(), arg.size());
-    auto res   = pluginxx::tableOpBlockingRaw(
+    auto res   = pluginxx::tableOpSyncWait(
         host,
         iface.cancel,
         iface.scheduler,
@@ -2063,7 +2061,7 @@ public:
         }
         auto           toolSv = PluginStringView::from(tool.data(), tool.size());
         // 表成员是异步契约: 生命周期/工具体里的同步取值走阻塞形态
-        auto op = pluginxx::tableOpBlockingRaw(
+        auto op = pluginxx::tableOpSyncWait(
             host,
             iface.cancel,
             iface.scheduler,
@@ -2094,9 +2092,9 @@ public:
 
     /// 写入会话共享存储 (经主程序 agentxx.agent.session 接口表; 返回新条目 id, 失败 -1)
     ///
-    /// - 阻塞形态, 适用工具实现体 / 插件自己的线程;
+    /// - **同步等待形态**: 只给工具实现体 / 插件自己的线程 (它们不能写成协程);
     /// - 在主程序 IO 线程上调用同样可用: 主程序的表操作在 IO 线程上是内联执行的
-    ///   (见 `tableOpBlocking` 的线程规则), 不会卡住;
+    ///   (见 `tableOpSyncWait` 的线程规则), 不会卡住;
     /// - 协程里请用 [addShareStoreAsync]。
     int64_t addShareStore(
         const ScopeRef&    agent,
@@ -2108,7 +2106,7 @@ public:
         }
         auto ref  = agent.raw();
         auto text = std::string{content};
-        auto out  = tableOpBlocking(
+        auto out  = tableOpSyncWait(
             *this,
             [this, &ref, &tid, &text](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 auto contentSv = PluginStringView::from(text.data(), text.size());
@@ -2156,7 +2154,7 @@ public:
         if (!host || !iface.session || !iface.session->get_session_work_dir) {
             return {};
         }
-        auto out = tableOpBlocking(
+        auto out = tableOpSyncWait(
             *this,
             [this, scope, &key](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return iface.session->get_session_work_dir(host, scope, &key, cb, ud, err);
@@ -2232,7 +2230,7 @@ public:
         auto           ref   = agent.raw();
         auto           tidSv = PluginStringView::from(tid.data(), tid.size());
         // 表成员是异步契约: 这里用阻塞形态等结果 (调用方在 IO 线程时是内联完成)
-        auto res = pluginxx::tableOpBlockingRaw(
+        auto res = pluginxx::tableOpSyncWait(
             host,
             iface.cancel,
             iface.scheduler,
@@ -2250,7 +2248,7 @@ public:
         }
         auto ref   = agent.raw();
         auto tidSv = PluginStringView::from(tid.data(), tid.size());
-        auto res   = pluginxx::tableOpBlockingRaw(
+        auto res   = pluginxx::tableOpSyncWait(
             host,
             iface.cancel,
             iface.scheduler,
@@ -2415,40 +2413,6 @@ private:
 
     std::map<std::string, std::unique_ptr<T>, std::less<>> items_;
 };
-
-/// 全部挂载的摘要 JSON 数组 (阻塞形态; 主程序不支持时返回 `[]`)
-inline std::string listMountsBlocking(const PluginBase& ctx) {
-    if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->list) {
-        return "[]";
-    }
-    // 表成员是异步契约: 生命周期/工具体里的同步取值走阻塞形态
-    auto op = pluginxx::tableOpBlockingRaw(
-        ctx.host,
-        ctx.iface.cancel,
-        ctx.iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ctx.iface.mount->list(ctx.host, cb, ud, err);
-        }
-    );
-    return op.ok() ? std::string(op.text()) : std::string{"[]"};
-}
-
-/// 按 agentId 查一个挂载的摘要 (阻塞形态; 没有这个挂载返回空串)
-inline std::string mountInfoOfBlocking(const PluginBase& ctx, std::string_view agentId) {
-    if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->get) {
-        return {};
-    }
-    auto idSv = PluginStringView::from(agentId.data(), agentId.size());
-    auto op   = pluginxx::tableOpBlockingRaw(
-        ctx.host,
-        ctx.iface.cancel,
-        ctx.iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ctx.iface.mount->get(ctx.host, &idSv, cb, ud, err);
-        }
-    );
-    return op.ok() ? std::string(op.text()) : std::string{};
-}
 
 /* ==================== 业务表便捷入口 (协程形态) ====================
  *
@@ -2753,7 +2717,7 @@ namespace detail {
 /// 调用方本来就在主程序 IO 线程时主程序内联完成, 不产生等待。
 template<typename Ctx, typename StartFn>
 inline int32_t runtimeCall(const Ctx& ctx, StartFn&& start) {
-    auto res = pluginxx::tableOpBlockingRaw(
+    auto res = pluginxx::tableOpSyncWait(
         ctx.host,
         ctx.iface.cancel,
         ctx.iface.scheduler,
@@ -2765,7 +2729,7 @@ inline int32_t runtimeCall(const Ctx& ctx, StartFn&& start) {
 /// runtime 表的同步形态: 结果正文 (JSON 或句柄 id 文本) 一起给回
 template<typename Ctx, typename StartFn>
 inline int32_t runtimeCallText(const Ctx& ctx, StartFn&& start, std::string& out) {
-    auto res = pluginxx::tableOpBlockingRaw(
+    auto res = pluginxx::tableOpSyncWait(
         ctx.host,
         ctx.iface.cancel,
         ctx.iface.scheduler,
@@ -2804,7 +2768,7 @@ inline std::string takeRuntimeText(
     SchedulerIface     scheduler,
     StartFn&&          start
 ) {
-    auto res = pluginxx::tableOpBlockingRaw(host, cancel, scheduler, std::forward<StartFn>(start));
+    auto res = pluginxx::tableOpSyncWait(host, cancel, scheduler, std::forward<StartFn>(start));
     return res.ok() ? std::string(res.text()) : std::string{};
 }
 
@@ -3883,7 +3847,7 @@ inline int32_t registerToolSync(
     if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    auto res = pluginxx::tableOpBlockingRaw(
+    auto res = pluginxx::tableOpSyncWait(
         ctx.host,
         ctx.iface.cancel,
         ctx.iface.scheduler,
@@ -5006,42 +4970,9 @@ struct ToolPermissionSpec {
     std::string_view category{}; ///< 权限分类文本 (空 = 按作用域生成)
 };
 
-/// 声明工具权限 (工具注册后调用); 返回 C ABI 状态码 (0 成功)
-///
-/// 阻塞形态 (没有实例上下文可查 cancel/scheduler); 协程/生命周期里用同名协程形态。
-inline int32_t registerToolPermissionBlocking(
-    const PluginxxHost*                 host,
-    const AgentxxPluginPermissionIface* iface,
-    const PluginxxScopeRef*             agent,
-    const ToolPermissionSpec&           spec
-) {
-    if (!host || !iface || !iface->register_tool_permission) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    if (spec.toolName.empty()) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    AgentxxPluginToolPermissionSpec abiSpec{};
-    abiSpec.tool_name   = PluginStringView::from(spec.toolName);
-    abiSpec.scope       = static_cast<int32_t>(spec.scope);
-    abiSpec.target_kind = static_cast<int32_t>(spec.target);
-    abiSpec.target_arg  = PluginStringView::from(spec.targetArg);
-    abiSpec.struct_size = sizeof(AgentxxPluginToolPermissionSpec);
-    abiSpec.category    = PluginStringView::from(spec.category);
-    // 表成员是异步契约: 这里没有实例上下文可查 cancel/scheduler, 直接等完成
-    // (调用方本来就在主程序 IO 线程时是内联完成, 不会真等)
-    auto res = pluginxx::tableOpBlockingRaw(
-        host,
-        nullptr,
-        nullptr,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface->register_tool_permission(host, agent, &abiSpec, cb, ud, err);
-        }
-    );
-    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
-}
-
 /// 声明工具权限 (**协程形态**: 调用即提交, `co_await` 后看 `.ok()`)
+///
+/// 工具注册后调用; 主程序未加载权限中间件时 ticket 是"未受理"(工具照常可用)。
 template<typename Ctx>
 inline pluginxx::TableOpTicket registerToolPermission(
     const Ctx&                ctx,
@@ -5079,37 +5010,10 @@ inline pluginxx::TableOpTicket registerToolPermission(
     );
 }
 
-/// 声明工具权限 (阻塞形态, 从插件实例上下文取主程序与接口表)
-template<typename Ctx>
-inline int32_t registerToolPermissionBlocking(
-    const Ctx&              ctx,
-    const ScopeRef&         agent,
-    const ToolPermissionSpec& spec
-) {
-    auto ref = agent.raw();
-    return registerToolPermissionBlocking(ctx.host, ctx.iface.permission, &ref, spec);
-}
-
-/// 便捷: 声明"路径参数 + 读作用域" (读取类工具, 目标参数值为路径)
+/// 便捷: 声明"路径参数 + 读作用域" (**协程形态**; 读取类工具, 目标参数值为路径)
 /// - 参数值为字符串数组时自动逐项判定 (如 `file_patterns`), 无需额外设置
 /// - 模式/前缀类参数 (glob 表达式) 建议配合 checkPathDecisions/filterPathPermissions
 ///   在工具内对展开出的实际路径逐项复核 (见"路径权限查询"一节)
-template<typename Ctx>
-inline int32_t registerReadPathPermissionBlocking(
-    const Ctx&       ctx,
-    const ScopeRef&  agent,
-    std::string_view toolName,
-    std::string_view pathArg
-) {
-    ToolPermissionSpec spec;
-    spec.toolName  = toolName;
-    spec.scope     = PermissionScope::Read;
-    spec.target    = PermissionTarget::Path;
-    spec.targetArg = pathArg;
-    return registerToolPermissionBlocking(ctx, agent, spec);
-}
-
-/// 声明"路径参数 + 读作用域" (**协程形态**)
 template<typename Ctx>
 inline pluginxx::TableOpTicket registerReadPathPermission(
     const Ctx&       ctx,
@@ -5125,23 +5029,7 @@ inline pluginxx::TableOpTicket registerReadPathPermission(
     return registerToolPermission(ctx, agent, spec);
 }
 
-/// 便捷: 声明"路径参数 + 写作用域" (写入/编辑类工具, 目标参数值为路径)
-template<typename Ctx>
-inline int32_t registerWritePathPermissionBlocking(
-    const Ctx&       ctx,
-    const ScopeRef&  agent,
-    std::string_view toolName,
-    std::string_view pathArg
-) {
-    ToolPermissionSpec spec;
-    spec.toolName  = toolName;
-    spec.scope     = PermissionScope::Write;
-    spec.target    = PermissionTarget::Path;
-    spec.targetArg = pathArg;
-    return registerToolPermissionBlocking(ctx, agent, spec);
-}
-
-/// 声明"路径参数 + 写作用域" (**协程形态**)
+/// 便捷: 声明"路径参数 + 写作用域" (**协程形态**; 写入/编辑类工具, 目标参数值为路径)
 template<typename Ctx>
 inline pluginxx::TableOpTicket registerWritePathPermission(
     const Ctx&       ctx,
@@ -5222,7 +5110,7 @@ inline std::vector<PathDecision> checkPathDecisions(
     std::vector<PathDecision> out;
     // 表成员是异步契约: 这里没有实例上下文可查 cancel/scheduler, 直接等完成
     // (调用方本来就在主程序 IO 线程时是内联完成, 不会真等)
-    auto res = pluginxx::tableOpBlockingRaw(
+    auto res = pluginxx::tableOpSyncWait(
         host,
         nullptr,
         nullptr,
@@ -5365,95 +5253,6 @@ inline std::vector<uint8_t> filterPathPermissions(
         paths,
         batchSize
     );
-}
-
-/* ==================== 阻塞便捷函数 (基于 condvar) ==================== */
-
-inline PluginxxString call_tool_blocking(
-    const PluginxxHost*            host,
-    const AgentxxPluginToolsIface* tools,
-    const PluginxxSchedulerIface*  sched,
-    const PluginxxScopeRef*        agent,
-    std::string_view               name,
-    std::string_view               args_json,
-    std::string_view               thread_id,
-    PluginxxString*                error_out
-) {
-    if (!host || !tools || !tools->call_tool) {
-        if (error_out) {
-            *error_out = PluginString::fromCstr(host, "tools iface not available");
-        }
-        return PluginxxString{nullptr, 0};
-    }
-    if (sched && sched->is_io_thread && sched->is_io_thread(host)) {
-        if (error_out) {
-            *error_out = PluginString::fromCstr(
-                host,
-                "call_tool_blocking cannot be called on io thread; use co_await call_tool instead"
-            );
-        }
-        return PluginxxString{nullptr, 0};
-    }
-
-    struct SyncState {
-        std::mutex              mtx;
-        std::condition_variable cv;
-        bool                    done   = false;
-        int32_t                 status = PLUGINXX_OPERATOR_OK;
-        std::string             result;
-        std::string             metadata;
-    } state;
-
-    auto nameSv = PluginStringView::from(name.data(), name.size());
-    auto argsSv = PluginStringView::from(args_json.data(), args_json.size());
-    auto tidSv  = PluginStringView::from(thread_id.data(), thread_id.size());
-
-    PluginxxOperatorHandle* handle = tools->call_tool(
-        host,
-        agent,
-        &nameSv,
-        &argsSv,
-        &tidSv,
-        [](void* ud, int32_t st, const PluginxxStringView* res, const PluginxxStringView* meta) {
-            auto*           s = static_cast<SyncState*>(ud);
-            std::lock_guard lk(s->mtx);
-            s->done   = true;
-            s->status = st;
-            if (res && res->data && res->size > 0) {
-                s->result.assign(res->data, static_cast<size_t>(res->size));
-            }
-            if (meta && meta->data && meta->size > 0) {
-                s->metadata.assign(meta->data, static_cast<size_t>(meta->size));
-            }
-            s->cv.notify_one();
-        },
-        &state,
-        error_out
-    );
-
-    if (!handle) {
-        return PluginxxString{nullptr, 0};
-    }
-
-    {
-        std::unique_lock lk(state.mtx);
-        state.cv.wait(lk, [&]() {
-            return state.done;
-        });
-    }
-
-    // 失败时把错误内容交给调用方; `metadata` 这里不返回 (需要附件请用
-    // `co_await call_tool_result`, 或在插件自己的挂载上处理)
-    if (state.status != PLUGINXX_OPERATOR_OK) {
-        if (error_out) {
-            auto paySv = PluginStringView::from(state.result.data(), state.result.size());
-            *error_out = PluginString::from(host, &paySv);
-        }
-        return PluginxxString{nullptr, 0};
-    }
-
-    auto paySv = PluginStringView::from(state.result.data(), state.result.size());
-    return PluginString::from(host, &paySv);
 }
 
 /* ==================== Client 侧工具特化渲染适配器 ==================== */

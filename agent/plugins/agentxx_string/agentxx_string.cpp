@@ -116,74 +116,6 @@ static void*
     return nullptr;
 }
 
-static void stringSetupBlocking(StringPluginCtx& ctx, const ScopeRef& ref) {
-    // 1. html_to_markdown
-    auto html2mdSchema = ctx.schema(kNameHtml2Md)
-                             .string("content", "The HTML string to convert.", /*required=*/true)
-                             .build();
-
-    blocking_tool(
-        ctx,
-        ref,
-        kNameHtml2Md,
-        kDepictHtml2Md,
-        html2mdSchema,
-        [](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
-            if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw agentxx::plugin::CanceledException("html2markdown Canceled");
-            }
-            ArgReader args(args_json);
-            auto      out = htmlToMarkdownExecute(args.raw());
-            if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw agentxx::plugin::CanceledException("html2markdown Canceled");
-            }
-            return out;
-        },
-        0,
-        kAutoSummary | kRepeatCheck
-    );
-
-    // 2. regexp
-    auto regexpSchema = ctx.schema(kNameRegexp)
-                            .string("content", "The input text to operate on.", /*required=*/true)
-                            .stringArray(
-                                "exps",
-                                kExpsDesc,
-                                /*required=*/true
-                            )
-                            .enumString(
-                                "opt",
-                                kOptDesc,
-                                {"search", "replace", "remove"},
-                                /*required=*/true
-                            )
-                            .string("replace_str", kReplaceStrDesc, false, "")
-                            .boolean("ignore_case", kIgnoreCaseDesc, false, false)
-                            .build();
-
-    blocking_tool(
-        ctx,
-        ref,
-        kNameRegexp,
-        kDepictRegexp,
-        regexpSchema,
-        [](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
-            if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw agentxx::plugin::CanceledException("regexp Canceled");
-            }
-            ArgReader args(args_json);
-            auto      out = regexpExecute(args.raw());
-            if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw agentxx::plugin::CanceledException("regexp Canceled");
-            }
-            return out;
-        },
-        0,
-        kAutoSummary
-    );
-
-}
-
 static void* stringMount(
     StringPluginCtx&                   ctx,
     const AgentxxPluginAgentMountSpec* spec,
@@ -197,12 +129,6 @@ static void* stringMount(
         return nullptr;
     }
     auto later = finishLater(notify);
-    if (!later.active()) {
-        // 老宿主: 没有 provider 句柄可返回, 退回同步注册 (IO 线程上内联完成)
-        const AgentRef ref(*spec);
-        stringSetupBlocking(ctx, ref);
-        return nullptr;
-    }
     if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         later.failed("agentxx_string mount: host has no pluginxx.tasks (spawn unavailable)");
         return later.provider();

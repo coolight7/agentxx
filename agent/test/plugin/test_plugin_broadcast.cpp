@@ -152,7 +152,7 @@ template<typename Fn>
 pluginxx::detail::TableOpResult broadcastOp(PluginInstance* inst, Fn&& start) {
     const auto* host   = inst->hostView();
     const auto  ifaces = agentxx::plugin::AgentIfaces::query(host);
-    return pluginxx::tableOpBlockingRaw(
+    return pluginxx::tableOpSyncWait(
         host,
         ifaces.cancel,
         ifaces.scheduler,

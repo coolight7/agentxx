@@ -406,7 +406,7 @@ mcp:
         // ---- 运行时注册 skill 目录 (冻结后应拒绝: 仅 yaml 与初始化时追加生效) ----
         // 表成员是异步契约: 每个调用都用阻塞形态在同一个栈上等结果
         auto resOk = [&](auto&& start) {
-            return agentxx::plugin::tableOpBlockingRaw(
+            return agentxx::plugin::tableOpSyncWait(
                        inst->hostView(),
                        nullptr,
                        nullptr,
@@ -437,7 +437,7 @@ mcp:
         // ---- 快照 JSON (get_own_resources) - 运行时 skill 未注册故不含 ----
         std::string ownJson;
         if (res3 && res3->get_own_resources) {
-            auto op = agentxx::plugin::tableOpBlockingRaw(
+            auto op = agentxx::plugin::tableOpSyncWait(
                 inst->hostView(),
                 nullptr,
                 nullptr,
@@ -511,7 +511,7 @@ mcp:
         {
             std::string j2;
             if (res3 && res3->get_own_resources) {
-                auto op = agentxx::plugin::tableOpBlockingRaw(
+                auto op = agentxx::plugin::tableOpSyncWait(
                     inst->hostView(),
                     nullptr,
                     nullptr,

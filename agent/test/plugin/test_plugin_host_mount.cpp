@@ -332,7 +332,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             // 只挂在 A 上
             // 表成员是异步契约: 用例跑在主程序 IO 线程上, 主程序内联完成
             auto refA = scopeRefOf("agent_a", seqA);
-            const auto regOp = pluginxx::tableOpBlockingRaw(
+            const auto regOp = pluginxx::tableOpSyncWait(
                 hostView,
                 static_cast<const PluginxxCancelIface*>(
                     queryTable(hostView, PLUGINXX_IFACE_CANCEL)
@@ -355,7 +355,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             XX_TEST_EXPECT_FALSE(valueB.has_value());
 
             // 收尾: 注销后 A 上也拿不到结果 (证明上面拿到的结果确实来自这行)
-            const auto unregOp = pluginxx::tableOpBlockingRaw(
+            const auto unregOp = pluginxx::tableOpSyncWait(
                 hostView,
                 static_cast<const PluginxxCancelIface*>(
                     queryTable(hostView, PLUGINXX_IFACE_CANCEL)
@@ -476,7 +476,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             );
             auto probeName = agentxx::plugin::PluginStringView::fromCstr("host_mount_probe");
             auto registerSync = [&](const PluginxxScopeRef* ref) {
-                return pluginxx::tableOpBlockingRaw(
+                return pluginxx::tableOpSyncWait(
                     hostView,
                     cancelTbl,
                     schedTbl,
@@ -486,7 +486,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
                 );
             };
             auto unregisterSync = [&](const PluginxxScopeRef* ref) {
-                return pluginxx::tableOpBlockingRaw(
+                return pluginxx::tableOpSyncWait(
                     hostView,
                     cancelTbl,
                     schedTbl,

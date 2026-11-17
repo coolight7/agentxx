@@ -294,112 +294,6 @@ static void* websearchStart(
     return nullptr;
 }
 
-static void websearchSetupBlocking(WebsearchPluginCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
-    if (ctx.iface.model && ctx.iface.model->get_config) {
-        std::string cfgJson = modelConfigJson(ctx.host, ctx.iface, ref.ptr());
-        if (!cfgJson.empty()) {
-            try {
-                auto cfg                  = utilxx_base::Json::parse(cfgJson);
-                ctx.convert_html2markdown = cfg.value("websearchConvertHtml2markdown", true);
-                ctx.search_api_url        = cfg.value("websearchApiUrl", std::string{});
-                if (cfg.contains("websearchModel") && cfg["websearchModel"].is_object()) {
-                    const auto& m           = cfg["websearchModel"];
-                    ctx.model_cfg.baseUrl   = m.value("baseUrl", std::string{});
-                    ctx.model_cfg.apiKey    = m.value("apiKey", std::string{"EMPTY"});
-                    ctx.model_cfg.modelName = m.value("modelName", std::string{"Agentxx"});
-                    ctx.model_cfg.readChunkTimeoutSeconds = m.value("readChunkTimeoutSeconds", 100);
-                    if (!ctx.model_cfg.baseUrl.empty()) {
-                        ctx.use_model_search = true;
-                    }
-                }
-            } catch (...) {
-            }
-        }
-    }
-
-    // 1. fetch (fetch 与 fetch_markdown: 由 `format` 选择返回形态)
-    auto fetchSchema
-        = ctx.schema(kNameFetch)
-              .string("url", kFetchUrlDesc, /*required=*/true)
-              .enumString("format", kFetchFormatDesc, {"markdown", "raw"}, false, "markdown")
-              .number("timeout", kFetchTimeoutDesc, false, 30.0)
-              .object("header", kHeaderArgDesc)
-              .build();
-
-    blocking_tool(
-        ctx,
-        ref,
-        kNameFetch,
-        kDepictFetch,
-        fetchSchema,
-        [](WebsearchPluginCtx&      c,
-           std::string_view         args_json,
-           const PluginxxCancelToken* cancel_token) -> ToolResult {
-            if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw CanceledException("web_fetch Canceled");
-            }
-            ArgReader args(args_json);
-            auto      http = [&c](const HttpRequestSpec& spec) {
-                return netHttpExecute(c, spec);
-            };
-            auto result = webFetchExecute(http, args.raw());
-            if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw CanceledException("web_fetch Canceled");
-            }
-            return ToolResult::ok(std::move(result));
-        },
-        0,
-        kAutoSummary
-    );
-
-    // 2. search
-    if (ctx.use_model_search || !ctx.search_api_url.empty()) {
-        auto searchSchema = ctx.schema(kNameSearch)
-                                .string("query", kSearchQueryDesc, /*required=*/true)
-                                .number("timeout", kSearchTimeoutDesc, false, 20.0)
-                                .object("header", kHeaderArgDesc)
-                                .build();
-
-        blocking_tool(
-            ctx,
-            ref,
-            kNameSearch,
-            kDepictSearch,
-            searchSchema,
-            [](WebsearchPluginCtx&      c,
-               std::string_view         args_json,
-               const PluginxxCancelToken* cancel_token) -> ToolResult {
-                if (pluginxx_cancel_is_requested(cancel_token)) {
-                    throw CanceledException("web_search Canceled");
-                }
-                ArgReader   args(args_json);
-                auto        http = [&c](const HttpRequestSpec& spec) {
-                    return netHttpExecute(c, spec);
-                };
-                std::string result;
-                if (c.use_model_search) {
-                    ModelSearchConfig mcfg = c.model_cfg;
-                    result                 = modelWebSearchExecute(http, args.raw(), mcfg);
-                } else {
-                    result = webSearchExecute(
-                        http,
-                        args.raw(),
-                        c.search_api_url,
-                        c.convert_html2markdown
-                    );
-                }
-                if (pluginxx_cancel_is_requested(cancel_token)) {
-                    throw CanceledException("web_search Canceled");
-                }
-                return ToolResult::ok(std::move(result));
-            },
-            0,
-            kAutoSummary
-        );
-    }
-
-}
-
 static void* websearchMount(
     WebsearchPluginCtx&                ctx,
     const AgentxxPluginAgentMountSpec* spec,
@@ -417,12 +311,6 @@ static void* websearchMount(
         return nullptr;
     }
     auto later = finishLater(notify);
-    if (!later.active()) {
-        // 老宿主: 没有 provider 句柄可返回, 退回同步注册 (IO 线程上内联完成)
-        const AgentRef ref(*spec);
-        websearchSetupBlocking(ctx, ref);
-        return nullptr;
-    }
     if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         later.failed("agentxx_websearch mount: host has no pluginxx.tasks (spawn unavailable)");
         return later.provider();

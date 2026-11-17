@@ -319,7 +319,7 @@ static void*
     auto capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
     // 表成员是异步契约: start 事务在主程序 IO 线程上, 主程序内联完成
     const bool hasCap
-        = agentxx::plugin::tableOpBlockingRaw(
+        = agentxx::plugin::tableOpSyncWait(
               ctx.host,
               ctx.iface.cancel,
               ctx.iface.scheduler,

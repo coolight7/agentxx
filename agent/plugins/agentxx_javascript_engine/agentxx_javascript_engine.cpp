@@ -4109,7 +4109,7 @@ int32_t JsEngine::registerGraphNodeRow(
     // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果;
     // 本函数没有接口表聚合, 取消/调度表按实例句柄查一次
     const auto nodeIfaces = agentxx::plugin::AgentIfaces::query(instanceHost);
-    auto       regOp      = agentxx::plugin::tableOpBlockingRaw(
+    auto       regOp      = agentxx::plugin::tableOpSyncWait(
         instanceHost,
         nodeIfaces.cancel,
         nodeIfaces.scheduler,
@@ -4155,7 +4155,7 @@ int32_t JsEngine::registerGraphNodeRow(
                 typeName.data(),
                 typeName.size()
             );
-            agentxx::plugin::tableOpBlockingRaw(
+            agentxx::plugin::tableOpSyncWait(
                 rawCtx->host,
                 nodeCancelIface,
                 nodeSchedIface,
@@ -4210,7 +4210,7 @@ void JsEngine::unregisterGraphNodeRow(
                 typeName.size()
             );
             const auto unregIfaces = agentxx::plugin::AgentIfaces::query(pctx->host);
-            agentxx::plugin::tableOpBlockingRaw(
+            agentxx::plugin::tableOpSyncWait(
                 pctx->host,
                 unregIfaces.cancel,
                 unregIfaces.scheduler,
@@ -4235,7 +4235,7 @@ void JsEngine::unregisterGraphNodeRow(
 /// 线程, 这里等到完成回调后返回。取消与调度表按 host 现查 (两侧都有, 是通用表)。
 template<typename StartFn>
 static pluginxx::detail::TableOpResult
-    capabilityOpBlocking(const PluginxxHost* host, StartFn&& start);
+    capabilitySyncWait(const PluginxxHost* host, StartFn&& start);
 
 void JsEngine::unprovideCapabilityRow(
     JSContext*                       ctx,
@@ -4271,7 +4271,7 @@ void JsEngine::unprovideCapabilityRow(
         auto tagSv = agentxx::plugin::PluginStringView::from(ownerTag.data(), ownerTag.size());
         // 用**脚本实例**的主程序句柄: 行归属于脚本所在插件 (不能落到引擎实例名下)
         // 表成员是异步契约: 撤销是就地完成的, 这里等完成回调 (失败只记日志)
-        (void)capabilityOpBlocking(
+        (void)capabilitySyncWait(
             pctx->host,
             [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return caps->unregister_capability(
@@ -4350,7 +4350,7 @@ int32_t JsEngine::provideCapabilityRow(
     // 都跟着脚本所在插件的挂载走 (引擎自己只拥有 `interpreter.js` 能力行)
     const PluginxxHost* instanceHost = pctx->host != nullptr ? pctx->host : engineHost_;
     // 表成员是异步契约: 登记结论经完成回调交回 (脚本线程等它)
-    auto regOp = capabilityOpBlocking(
+    auto regOp = capabilitySyncWait(
         instanceHost,
         [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return caps->register_capability(
@@ -4404,7 +4404,7 @@ int32_t JsEngine::provideCapabilityRow(
         }
         auto idSv2  = agentxx::plugin::PluginStringView::from(id.data(), id.size());
         auto tagSv2 = agentxx::plugin::PluginStringView::from(ownerTag.data(), ownerTag.size());
-        (void)capabilityOpBlocking(
+        (void)capabilitySyncWait(
             rawCtx->host,
             [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return caps->unregister_capability(
@@ -4669,7 +4669,7 @@ JSValue JsEngine::capabilityListValue(
     if (caps == nullptr || caps->list_capabilities == nullptr) {
         return JS_NewArray(ctx);
     }
-    const auto  op = capabilityOpBlocking(
+    const auto  op = capabilitySyncWait(
         host,
         [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return caps->list_capabilities(host, cb, ud, err);
@@ -4696,7 +4696,7 @@ JSValue JsEngine::capabilityInfoValue(
     }
     const std::string id   = jsToCppString(ctx, argv[0]);
     auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-    const auto        op   = capabilityOpBlocking(
+    const auto        op   = capabilitySyncWait(
         host,
         [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return caps->capability_info(host, &idSv, cb, ud, err);
@@ -4852,7 +4852,7 @@ static auto callRuntimeOp(
     const agentxx::plugin::AgentIfaces&        iface,
     StartFn&&                                  start
 ) {
-    return agentxx::plugin::tableOpBlockingRaw(
+    return agentxx::plugin::tableOpSyncWait(
         host,
         iface.cancel,
         iface.scheduler,
@@ -4902,7 +4902,7 @@ static bool broadcastDeclareOp(
     const PluginxxStringView& declJson,
     std::string*              errText
 ) {
-    auto op = agentxx::plugin::tableOpBlockingRaw(
+    auto op = agentxx::plugin::tableOpSyncWait(
         host,
         iface.cancel,
         iface.scheduler,
@@ -4918,8 +4918,8 @@ static bool broadcastDeclareOp(
 
 /// 能力表的一次阻塞调用 (agent / client 两侧通用; 声明在本文件前半)
 template<typename StartFn>
-static pluginxx::detail::TableOpResult capabilityOpBlocking(const PluginxxHost* host, StartFn&& start) {
-    return agentxx::plugin::tableOpBlockingRaw(
+static pluginxx::detail::TableOpResult capabilitySyncWait(const PluginxxHost* host, StartFn&& start) {
+    return agentxx::plugin::tableOpSyncWait(
         host,
         agentxx::plugin::queryInterface<PluginxxCancelIface>(host, PLUGINXX_IFACE_CANCEL),
         agentxx::plugin::queryInterface<PluginxxSchedulerIface>(host, PLUGINXX_IFACE_SCHEDULER),
@@ -4935,7 +4935,7 @@ static bool broadcastEndOp(
     const PluginxxStringView& id,
     const PluginxxStringView& reasonJson
 ) {
-    auto op = agentxx::plugin::tableOpBlockingRaw(
+    auto op = agentxx::plugin::tableOpSyncWait(
         host,
         iface.cancel,
         iface.scheduler,
@@ -4991,7 +4991,7 @@ JSValue JsEngine::bridgeCall(
         const PluginxxStringView* optPtr = optionsJson.empty() ? nullptr : &optSv;
         // 表成员是异步操作契约: 脚本线程不是主程序 io 线程, 这里阻塞等完成回调;
         // 订阅句柄以十进制文本放在 `payload` 里交回
-        auto op = agentxx::plugin::tableOpBlockingRaw(
+        auto op = agentxx::plugin::tableOpSyncWait(
             host,
             iface.cancel,
             iface.scheduler,
@@ -5182,7 +5182,7 @@ JSValue JsEngine::bridgeCall(
             int rc = 0;
             {
                 // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
-                auto reg = agentxx::plugin::tableOpBlockingRaw(
+                auto reg = agentxx::plugin::tableOpSyncWait(
                     host,
                     iface.cancel,
                     iface.scheduler,
@@ -5223,7 +5223,7 @@ JSValue JsEngine::bridgeCall(
                                              pctxRaw     = pctx,
                                              name]() {
                 auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-                agentxx::plugin::tableOpBlockingRaw(
+                agentxx::plugin::tableOpSyncWait(
                     host,
                     cancelIface,
                     schedIface,
@@ -5250,7 +5250,7 @@ JSValue JsEngine::bridgeCall(
             }
             auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
             // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
-            agentxx::plugin::tableOpBlockingRaw(
+            agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -5381,7 +5381,7 @@ JSValue JsEngine::bridgeCall(
             auto sidSv
                 = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
             // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
-            auto resp = agentxx::plugin::tableOpBlockingRaw(
+            auto resp = agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -5415,7 +5415,7 @@ JSValue JsEngine::bridgeCall(
             auto sidSv
                 = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
             auto txtSv = agentxx::plugin::PluginStringView::from(text.data(), text.size());
-            agentxx::plugin::tableOpBlockingRaw(
+            agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -5858,7 +5858,7 @@ JSValue JsEngine::bridgeCall(
             spec.category
                 = agentxx::plugin::PluginStringView::from(category.data(), category.size());
             // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
-            auto permRes = agentxx::plugin::tableOpBlockingRaw(
+            auto permRes = agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -5889,7 +5889,7 @@ JSValue JsEngine::bridgeCall(
                     }
                     auto nameSv
                         = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-                    agentxx::plugin::tableOpBlockingRaw(
+                    agentxx::plugin::tableOpSyncWait(
                         host,
                         cancelIface,
                         schedIface,
@@ -5919,7 +5919,7 @@ JSValue JsEngine::bridgeCall(
             std::string toolName = jsToCppString(ctx, argv[0]);
             auto        nameSv
                 = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-            auto permRes = agentxx::plugin::tableOpBlockingRaw(
+            auto permRes = agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -6165,7 +6165,7 @@ JSValue JsEngine::bridgeCall(
             }
             const std::string tool = jsToCppString(ctx, argv[0]);
             auto toolSv = agentxx::plugin::PluginStringView::from(tool.data(), tool.size());
-            auto op = agentxx::plugin::tableOpBlockingRaw(
+            auto op = agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -6189,7 +6189,7 @@ JSValue JsEngine::bridgeCall(
                 sessionId.data(),
                 sessionId.size()
             );
-            auto dir = agentxx::plugin::tableOpBlockingRaw(
+            auto dir = agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -6233,7 +6233,7 @@ JSValue JsEngine::bridgeCall(
                 sessionId.data(),
                 sessionId.size()
             );
-            auto op = agentxx::plugin::tableOpBlockingRaw(
+            auto op = agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -6262,7 +6262,7 @@ JSValue JsEngine::bridgeCall(
                 sessionId.data(),
                 sessionId.size()
             );
-            auto op = agentxx::plugin::tableOpBlockingRaw(
+            auto op = agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -6375,7 +6375,7 @@ JSValue JsEngine::bridgeCall(
                 return JS_NewArray(ctx);
             }
             // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
-            auto op = agentxx::plugin::tableOpBlockingRaw(
+            auto op = agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -6410,7 +6410,7 @@ JSValue JsEngine::bridgeCall(
                 agentId.data(),
                 agentId.size()
             );
-            auto op = agentxx::plugin::tableOpBlockingRaw(
+            auto op = agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -6877,7 +6877,7 @@ JSValue JsEngine::bridgeCall(
                                                              : valueToJsonString(ctx, argv[1]);
             auto sidSv = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
             auto conSv = agentxx::plugin::PluginStringView::from(content.data(), content.size());
-            auto added = agentxx::plugin::tableOpBlockingRaw(
+            auto added = agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -7002,7 +7002,7 @@ JSValue JsEngine::bridgeCall(
                 query.session_id  = sidSv;
                 query.paths       = views.data();
                 // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
-                auto op = agentxx::plugin::tableOpBlockingRaw(
+                auto op = agentxx::plugin::tableOpSyncWait(
                     host,
                     iface.cancel,
                     iface.scheduler,
@@ -8436,7 +8436,7 @@ JSValue JsEngine::clientBridgeCall(
             // client 侧没有 agent 作用域: 传 nullptr = 订阅主程序总线
             // 表成员是异步操作契约: 脚本线程不是主程序 io 线程, 这里阻塞等完成回调;
             // 订阅句柄以十进制文本放在 `payload` 里交回
-            auto op = agentxx::plugin::tableOpBlockingRaw(
+            auto op = agentxx::plugin::tableOpSyncWait(
                 host,
                 iface.cancel,
                 iface.scheduler,
@@ -9429,7 +9429,7 @@ static void* PLUGINXX_CALL jsEngineStart(
             spec.cancel      = nullptr;
             spec.user_data   = engine;
             // 表成员是异步契约: 本入口在 start 事务里跑 (主程序 IO 线程), 主程序内联完成
-            const auto regOp = capabilityOpBlocking(
+            const auto regOp = capabilitySyncWait(
                 host,
                 [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                     return iface.capabilities->register_capability(

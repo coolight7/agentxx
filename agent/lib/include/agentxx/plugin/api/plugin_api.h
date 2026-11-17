@@ -58,7 +58,7 @@
 ///
 /// C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
 /// `co_await tableOp(ctx, ...)` / `tableOpCallback(ctx, ..., done)` /
-/// `tableOpBlocking(ctx, ...)` (仅限非 io 线程)。
+/// `tableOpSyncWait(...)` (只给必须同步回答外部同步 API 的桥用, 且仅限非 io 线程)。
 #ifndef AGENTXX_PLUGIN_API_H
 #define AGENTXX_PLUGIN_API_H
 

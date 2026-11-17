@@ -69,41 +69,6 @@ static void*
     return nullptr;
 }
 
-/// 挂载: 每个 agent 一次 (本插件没有 per-agent 状态, 直接注册工具)
-static void mathSetupBlocking(MathPluginCtx& ctx, const ScopeRef& ref) {
-    auto schema
-        = ctx.schema(kNameCalculate)
-              .string(
-                  "expression",
-                  "The mathematical expression string to evaluate, e.g. '2 + 3 * 4', 'sin(pi / 4) ^ 2', 'sqrt(16) + log10(100)', '5!', 'gcd(48, 18)'.",
-                  /*required=*/true
-              )
-              .integer(
-                  "precision",
-                  "Optional decimal precision for floating point output (e.g. 2 for 2 decimal places, range 0 to 15)."
-              )
-              .enumString(
-                  "angle_unit",
-                  "Angle unit for trigonometric functions: 'rad' (radians, default) or 'deg' (degrees).",
-                  {"rad", "deg"},
-                  false,
-                  "rad"
-              )
-              .build();
-
-    fast_tool(
-        ctx,
-        ref,
-        kNameCalculate,
-        kDepictCalculate,
-        schema,
-        [](std::string_view args_json) -> ToolResult {
-            ArgReader args(args_json);
-            return mathCalculateExecute(args.raw());
-        }
-    );
-}
-
 static void* mathMount(
     MathPluginCtx&                     ctx,
     const AgentxxPluginAgentMountSpec* spec,
@@ -117,12 +82,6 @@ static void* mathMount(
         return nullptr;
     }
     auto later = finishLater(notify);
-    if (!later.active()) {
-        // 老宿主: 没有 provider 句柄可返回, 退回同步注册 (IO 线程上内联完成)
-        const AgentRef ref(*spec);
-        mathSetupBlocking(ctx, ref);
-        return nullptr;
-    }
     if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         later.failed("agentxx_math mount: host has no pluginxx.tasks (spawn unavailable)");
         return later.provider();

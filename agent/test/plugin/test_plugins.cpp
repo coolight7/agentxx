@@ -150,7 +150,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_EQ(ifaceConfig->version, PLUGINXX_IFACE_CONFIG_VERSION);
             const auto caps    = agentxx::plugin::AgentIfaces::query(inst->hostView());
             auto       langOf  = [&]() {
-                return pluginxx::tableOpBlockingRaw(
+                return pluginxx::tableOpSyncWait(
                     inst->hostView(),
                     caps.cancel,
                     caps.scheduler,
@@ -160,7 +160,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 );
             };
             auto setLang = [&](const PluginxxStringView* lang) {
-                return pluginxx::tableOpBlockingRaw(
+                return pluginxx::tableOpSyncWait(
                            inst->hostView(),
                            caps.cancel,
                            caps.scheduler,
@@ -211,7 +211,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto scopeRaw   = ref.raw();
             auto emptyKeySv = makeSv("");
             // 表成员是异步契约: 这里在测试线程上等结果 (测试线程不是主程序 IO 线程)
-            auto workDirRes = agentxx::plugin::tableOpBlockingRaw(
+            auto workDirRes = agentxx::plugin::tableOpSyncWait(
                 inst->hostView(),
                 agentxx::plugin::queryInterface<PluginxxCancelIface>(
                     inst->hostView(),
@@ -264,7 +264,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ifacePrompt->get_tool_prompt != nullptr);
             // 未配置的工具 → 完成回调给失败 (表成员是异步契约, 这里阻塞等结果)
             auto unknownSv = makeSv("no_such_tool");
-            auto promptOp  = agentxx::plugin::tableOpBlockingRaw(
+            auto promptOp  = agentxx::plugin::tableOpSyncWait(
                 inst->hostView(),
                 nullptr,
                 nullptr,
@@ -3253,7 +3253,7 @@ throw new Error("top-level rollback probe");
                 spec.tool_name = agentxx::plugin::PluginStringView::fromCstr("agentxx_share_store");
                 // 表成员是异步契约: 用阻塞形态在同一栈上等结果
                 auto permOp = [&]() {
-                    return agentxx::plugin::tableOpBlockingRaw(
+                    return agentxx::plugin::tableOpSyncWait(
                         fsInst->hostView(),
                         nullptr,
                         nullptr,
@@ -3447,7 +3447,7 @@ throw new Error("top-level rollback probe");
                     std::vector<int32_t> decisions;
                     const auto           pathRef = scopeRefOf(*ctx->pluginManager);
                     // 表成员是异步契约: 用阻塞形态在同一栈上等结果
-                    auto pathOp = agentxx::plugin::tableOpBlockingRaw(
+                    auto pathOp = agentxx::plugin::tableOpSyncWait(
                         fsInst->hostView(),
                         nullptr,
                         nullptr,
@@ -3479,7 +3479,7 @@ throw new Error("top-level rollback probe");
 
                     // 非法入参: 空数组 / 空指针 → 未受理 (调用方跳过过滤)
                     auto pathOpOf = [&]() {
-                        return agentxx::plugin::tableOpBlockingRaw(
+                        return agentxx::plugin::tableOpSyncWait(
                             fsInst->hostView(),
                             nullptr,
                             nullptr,
@@ -3546,7 +3546,7 @@ throw new Error("top-level rollback probe");
                     query.paths       = views.data();
                     const auto pathRef = scopeRefOf(*ctx->pluginManager);
                     // 表成员是异步契约: 权限中间件未加载时完成回调给失败
-                    auto pathOp = agentxx::plugin::tableOpBlockingRaw(
+                    auto pathOp = agentxx::plugin::tableOpSyncWait(
                         fsInst->hostView(),
                         nullptr,
                         nullptr,

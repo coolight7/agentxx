@@ -136,7 +136,7 @@ RuntimeReply callRuntime(
 ) {
     const auto caps  = agentxx::plugin::AgentIfaces::query(host);
     auto       tuple = std::make_tuple(std::forward<Args>(args)...);
-    const auto res   = pluginxx::tableOpBlockingRaw(
+    const auto res   = pluginxx::tableOpSyncWait(
         host,
         caps.cancel,
         caps.scheduler,

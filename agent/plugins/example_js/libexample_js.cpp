@@ -316,7 +316,7 @@ void* shellStart(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxSt
     // 表成员是异步契约: start 事务在主程序 IO 线程上, 主程序内联完成
     // 两侧的取消/调度表在各自的聚合里 (壳按 side 选用)
     const bool hasCap
-        = pluginxx::tableOpBlockingRaw(
+        = pluginxx::tableOpSyncWait(
               ctx.host,
               ctx.clientSide ? ctx.client.cancel : ctx.agent.cancel,
               ctx.clientSide ? ctx.client.scheduler : ctx.agent.scheduler,

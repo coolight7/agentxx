@@ -45,23 +45,6 @@ static void*
     return nullptr;
 }
 
-static void sysSetupBlocking(SysPluginCtx& ctx, const ScopeRef& ref) {
-    auto schema = ctx.schema(kNameDatetime).build();
-
-    fast_tool(
-        ctx,
-        ref,
-        kNameDatetime,
-        kDepictDatetime,
-        schema,
-        [](std::string_view) -> std::string {
-            return currentDatetimeExecute();
-        },
-        0,
-        kRepeatCheck
-    );
-}
-
 static void* sysMount(
     SysPluginCtx&                      ctx,
     const AgentxxPluginAgentMountSpec* spec,
@@ -75,12 +58,6 @@ static void* sysMount(
         return nullptr;
     }
     auto later = finishLater(notify);
-    if (!later.active()) {
-        // 老宿主: 没有 provider 句柄可返回, 退回同步注册 (IO 线程上内联完成)
-        const AgentRef ref(*spec);
-        sysSetupBlocking(ctx, ref);
-        return nullptr;
-    }
     if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         later.failed("agentxx_system mount: host has no pluginxx.tasks (spawn unavailable)");
         return later.provider();

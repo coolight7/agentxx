@@ -401,7 +401,7 @@ void* PLUGINXX_CALL
     ++probe.starts;
     if (probe.tools && probe.host) {
         // 表成员是异步契约: 生命周期入口在主程序 IO 线程上, 内联完成
-        auto res = pluginxx::tableOpBlockingRaw(
+        auto res = pluginxx::tableOpSyncWait(
             probe.host,
             probe.cancel,
             probe.scheduler,
@@ -423,7 +423,7 @@ void* PLUGINXX_CALL
         gspec.type       = agentxx::plugin::PluginStringView::fromCstr("probe_graph_type");
         gspec.run_start  = &probeGraphRunStart;
         gspec.user_data  = &probe;
-        auto gop = pluginxx::tableOpBlockingRaw(
+        auto gop = pluginxx::tableOpSyncWait(
             probe.host,
             probe.cancel,
             probe.scheduler,
@@ -454,7 +454,7 @@ void* PLUGINXX_CALL
     auto& probe = *static_cast<LifecycleProbe*>(ud);
     ++probe.stops;
     if (probe.tools && probe.host) {
-        pluginxx::tableOpBlockingRaw(
+        pluginxx::tableOpSyncWait(
             probe.host,
             probe.cancel,
             probe.scheduler,
@@ -1480,7 +1480,7 @@ TestResult testPluginRuntime() {
 
         // config.get_plugin_args 是异步操作契约: 受理 + 完成回调, 这里阻塞等结果
         auto argsOf = [&](const PluginxxHost* target) {
-            return pluginxx::tableOpBlockingRaw(
+            return pluginxx::tableOpSyncWait(
                 target,
                 ifaces.cancel,
                 ifaces.scheduler,
@@ -1820,7 +1820,7 @@ TestResult testPluginRuntime() {
         std::thread pluginThread([host, ifaces, spec, entered, rcPromise, ref] {
             entered->set_value();
             // 表成员是异步契约: 工作线程上用阻塞形态等结果 (入口拒绝或受理后失败)
-            auto res = pluginxx::tableOpBlockingRaw(
+            auto res = pluginxx::tableOpSyncWait(
                 host,
                 ifaces.cancel,
                 ifaces.scheduler,
@@ -2228,7 +2228,7 @@ TestResult testPluginRuntime() {
         };
         // 表成员是异步操作契约: 用例在主程序 IO 线程上, 主程序内联完成, 不产生等待
         auto broadcastOp = [&](auto&& start) {
-            return pluginxx::tableOpBlockingRaw(
+            return pluginxx::tableOpSyncWait(
                 host,
                 ifaces.cancel,
                 ifaces.scheduler,
