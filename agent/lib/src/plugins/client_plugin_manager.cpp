@@ -3,12 +3,13 @@
 /// 线程模型 (与 agent 侧 PluginManager 一致的无锁单线程模型):
 /// - 所有注册表/插件表/会话上下文状态仅 client io 线程读写
 /// - UI 注册表 (uiRegistry_) 例外: io 线程写, UI 线程经快照读 (mutex + COW shared_ptr)
-/// - dlopen/entry 卸载到内部 thread_pool; entry 的注册动作经 vtable ioCallSync
+/// - dlopen/entry 卸载到内部 thread_pool; entry 的注册动作经 vtable 异步表操作
 ///   投递回 io 线程串行执行 (插件无感)
-/// - 插件回调 (事件 handler / 命令 execute) 在 io 线程同步调用, 快速返回约定
+/// - 插件回调 (事件 handler / 命令 execute) 在 io 线程调用, 结果可立即交回或稍后交回
 /// - UI 线程从不直接调用插件代码: 命令触发经 postCommandInvocation 投递
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "pluginxx/host/table_op.h"
 #include "pluginxx/runtime/driver.h"
 #include "pluginxx/runtime/op_driver.h"
 #include "utilxx_base/container_util.h"
@@ -286,7 +287,12 @@ bool parseCommandAction(const std::string& jsonText, std::string& action) {
         }
         return true;
     } catch (const std::exception& e) {
-        XX_LOGE("[client_plugin] invalid command action json: {}", e.what());
+        XX_LOGE(
+            "[client_plugin] invalid command action json: {} (input {} bytes: {})",
+            e.what(),
+            jsonText.size(),
+            jsonText.substr(0, 120)
+        );
         return false;
     }
 }
@@ -1033,6 +1039,95 @@ void ClientPluginManager::setRegistryGeneration(
     uiRegistry_ = std::move(reg);
 }
 
+namespace {
+
+/// 回答型回调 (工具折叠/展开内容、命令 execute) 的一次性完成通知
+///
+/// 这些回调不是表成员, 但同样走 `PluginxxOperatorNotify*` 契约: 插件返回 0 表示已受理,
+/// 内容经 `done(status, payload)` 恰好一次交回。本对象负责
+/// - **恰好一次**: 重复 `done` 只生效第一次;
+/// - **快路径**: 插件在回调里立即 `done` 时 (常态) 就在本次调用栈上收尾,
+///   与改造前同步出参一样当帧拿到内容;
+/// - **晚到路径**: 插件从自己的线程 `done` 时投递回 client IO 线程再收尾。
+///
+/// 生命周期: 由第一次 `done` 自己释放 (每张票一对象, 不常驻)。插件既不 `done`
+/// 也不返回就是违约, 对象会留下一个 (与框架对违约的处理一致: 只记日志, 不崩溃)。
+class ReplySlot {
+public:
+
+    /// 收尾回调: `status` + 结果正文 (晚到路径下正文已拷成自有字符串)
+    using Finalize = std::function<void(int32_t, std::string_view)>;
+
+    ReplySlot(std::weak_ptr<ClientPluginManager> mgr, std::string label, Finalize fn) :
+        mgr_(std::move(mgr)),
+        label_(std::move(label)),
+        finalize_(std::move(fn)) {}
+
+    /// 交给插件的完成通知 (`done` 保证恰好一次)
+    PluginxxOperatorNotify notify() {
+        return PluginxxOperatorNotify{&ReplySlot::onDone, this};
+    }
+
+    static void PLUGINXX_CALL onDone(
+        void*                     ud,
+        int32_t                   status,
+        const PluginxxStringView* payload
+    ) {
+        auto* slot = static_cast<ReplySlot*>(ud);
+        if (slot == nullptr) {
+            return;
+        }
+        if (slot->claimed_.exchange(true, std::memory_order_acq_rel)) {
+            XX_LOGW("[client_plugin] `{}`: repeated completion ignored", slot->label_);
+            return;
+        }
+        std::string text;
+        if (payload != nullptr && payload->data != nullptr) {
+            text.assign(payload->data, static_cast<size_t>(payload->size));
+        }
+        auto mgr = slot->mgr_.lock();
+        if (!mgr) {
+            delete slot;
+            return;
+        }
+        if (mgr->isIoThread()) {
+            slot->finish(status, text);
+            delete slot;
+            return;
+        }
+        // 插件从自己的线程完成: 收尾统一回到 client IO 线程 (界面状态归它)
+        ReplySlot* raw = slot;
+        try {
+            mgr->postToIo([raw, status, text = std::move(text)]() {
+                raw->finish(status, text);
+                delete raw;
+            });
+        } catch (const std::exception& e) {
+            XX_LOGW("[client_plugin] `{}` completion dropped: {}", raw->label_, e.what());
+            delete raw;
+        }
+    }
+
+private:
+
+    void finish(int32_t status, std::string_view text) {
+        try {
+            finalize_(status, text);
+        } catch (const std::exception& e) {
+            XX_LOGW("[client_plugin] `{}` completion handler threw: {}", label_, e.what());
+        } catch (...) {
+            XX_LOGW("[client_plugin] `{}` completion handler threw", label_);
+        }
+    }
+
+    std::weak_ptr<ClientPluginManager>   mgr_;
+    std::string                          label_;
+    Finalize                             finalize_;
+    std::atomic<bool>                    claimed_{false};
+};
+
+} // namespace
+
 bool ClientPluginManager::toolRenderInFlight(std::string_view key, uint64_t inputHash) const {
     return toolRenderCache_ && toolRenderCache_->inFlight(std::string{key}, inputHash);
 }
@@ -1070,26 +1165,25 @@ std::shared_ptr<const ClientToolRenderEntry>
 /// 在 client io 线程执行自定义渲染器并把结果拷成主程序语义快照。
 /// - 按请求的 `part` 只调对应部分的回调 (折叠内容不触发展开体渲染)
 /// - 渲染器已摘除/失效/实例禁用 → 写入未命中条目 (UI 回退默认渲染)
-/// - 插件回调返回失败/内容为空 → 同样写未命中条目, 避免每帧重复请求
+/// - 插件回调没给内容 / 已摘除 / 实例禁用 → 写入未命中条目并清掉“进行中”标记,
+///   避免每帧重复请求
+/// - 插件回调可能当场完成 (常形), 也可能稍后才 `done`: 两种路径最终都走同一个
+///   收尾函数 (写缓存 + 通知 UI 重绘)
 void ClientPluginManager::performToolRender(
     ClientToolRenderRequest req,
     std::string             key,
     uint64_t                inputHash
 ) {
-    // 无论成功/失败/提前返回都要清掉"进行中"标记, 否则该键再也不会重新渲染
-    struct PendingGuard {
-        ClientToolRenderCache* cache;
-        std::string            key;
-        uint64_t               inputHash;
-
-        ~PendingGuard() {
-            cache->endRequest(key, inputHash);
-        }
-    } pendingGuard{toolRenderCache_.get(), key, inputHash};
-
     ClientToolRenderEntry entry;
     entry.key       = key;
     entry.inputHash = inputHash;
+
+    /// 本次没有自定义内容: 写一条未命中条目并清掉“进行中”标记
+    /// (不清标记的话该键再也不会重新渲染)
+    const auto storeUnmatched = [this, &entry, &key, inputHash]() {
+        toolRenderCache_->store(std::move(entry));
+        toolRenderCache_->endRequest(key, inputHash);
+    };
 
     std::shared_ptr<const ClientUiRegistry> snapshot;
     {
@@ -1099,10 +1193,10 @@ void ClientPluginManager::performToolRender(
     // 快照强引用保活: hit 指向快照内的注册记录, 后续插件回调期间不得失效
     // 查找顺序与 [renderClientToolCollapsed/Expanded] 一致: 插件注册项优先,
     // 未命中再查主程序内置项
-    const bool                 wantCollapsed = (req.part == ClientToolRenderPart::Collapsed);
+    const bool                 wantCollapsedFlag = (req.part == ClientToolRenderPart::Collapsed);
     const ClientToolRenderReg* hit           = nullptr;
-    const auto                 hasFn         = [wantCollapsed](const ClientToolRenderReg& r) {
-        return wantCollapsed ? (r.collapsedFn != nullptr) : (r.expandedFn != nullptr);
+    const auto                 hasFn         = [wantCollapsedFlag](const ClientToolRenderReg& r) {
+        return wantCollapsedFlag ? (r.collapsedFn != nullptr) : (r.expandedFn != nullptr);
     };
     for (const auto& r : snapshot->toolRenderers) {
         if (r.toolName == req.toolName && hasFn(r)) {
@@ -1119,100 +1213,133 @@ void ClientPluginManager::performToolRender(
         }
     }
     if (!hit) {
-        toolRenderCache_->store(std::move(entry));
+        storeUnmatched();
         return;
     }
     entry.plugin = hit->plugin;
 
-    /// 调用渲染器回调 → 拷贝输出 → 写缓存并通知 UI 重绘。
-    /// 定义成闭包: 插件渲染器分支的 InflightGuard 须存活到回调返回,
-    /// 用内部作用域 + 闭包调用可避免其在回调前析构。
-    auto runRenderer = [&]() {
-        AgentxxToolRenderInput input{};
-        input.struct_size  = sizeof(AgentxxToolRenderInput);
-        input.version      = 1;
-        input.tool_call_id = agentxx::plugin::PluginStringView::from(req.toolCallId);
-        input.tool_name    = agentxx::plugin::PluginStringView::from(req.toolName);
-        input.args_json    = agentxx::plugin::PluginStringView::from(req.argsJson);
-        input.result_text  = agentxx::plugin::PluginStringView::from(req.resultText);
-        input.is_finished  = req.isFinished ? 1 : 0;
-        input.is_error     = req.isError ? 1 : 0;
-        input.max_width    = req.maxWidth;
-
-        if (wantCollapsed) {
-            AgentxxToolCollapsedOutput output{};
-            int32_t                    rc = AGENTXX_RESULT_ERR_INTERNAL;
-            try {
-                rc = hit->collapsedFn(hit->userData, &input, &output);
-            } catch (...) {
-                rc = AGENTXX_RESULT_ERR_INTERNAL;
-            }
-            if (rc == AGENTXX_RESULT_OK && output.text.data) {
-                entry.text.assign(output.text.data, static_cast<size_t>(output.text.size));
-            }
-            hostMemoryFree(output.text.data);
-            entry.matched = !entry.text.empty();
-        } else {
-            AgentxxToolExpandedOutput output{};
-            int32_t                   rc = AGENTXX_RESULT_ERR_INTERNAL;
-            try {
-                rc = hit->expandedFn(hit->userData, &input, &output);
-            } catch (...) {
-                rc = AGENTXX_RESULT_ERR_INTERNAL;
-            }
-            if (rc == AGENTXX_RESULT_OK && output.items_json.data) {
-                const std::string_view itemsJson{
-                    output.items_json.data,
-                    static_cast<size_t>(output.items_json.size)
-                };
-                if (acceptUiJsonSize(itemsJson, "tool_renderer output", hit->plugin)) {
-                    try {
-                        entry.items = utilxx_base::Json::parse(itemsJson);
-                    } catch (...) {
-                    }
-                }
-            }
-            // 输出字段无论成功/失败/异常路径都由主程序释放
-            hostMemoryFree(output.items_json.data);
-            entry.matched = entry.items.is_array() && !entry.items.empty();
+    std::shared_ptr<ClientPluginInstance> owner;
+    if (!hit->builtin) {
+        if (!hit->lease || !hit->lease->alive.load(std::memory_order_acquire)) {
+            storeUnmatched();
+            return;
         }
+        owner = hit->lease->instance.lock();
+        if (!owner || !owner->enabled || !owner->lifetime || !owner->lifetime->acceptsOperations()) {
+            storeUnmatched();
+            return;
+        }
+        entry.generation = owner->lifetime ? owner->lifetime->generation() : 0;
+    }
 
+    AgentxxToolRenderInput input{};
+    input.struct_size  = sizeof(AgentxxToolRenderInput);
+    input.version      = 1;
+    input.tool_call_id = agentxx::plugin::PluginStringView::from(req.toolCallId);
+    input.tool_name    = agentxx::plugin::PluginStringView::from(req.toolName);
+    input.args_json    = agentxx::plugin::PluginStringView::from(req.argsJson);
+    input.result_text  = agentxx::plugin::PluginStringView::from(req.resultText);
+    input.is_finished  = req.isFinished ? 1 : 0;
+    input.is_error     = req.isError ? 1 : 0;
+    input.max_width    = req.maxWidth;
+
+    const std::string toolCallId    = req.toolCallId;
+    const std::string toolName      = req.toolName;
+    const bool        wantCollapsed = wantCollapsedFlag;
+    const std::string pluginName    = hit->plugin;
+
+    /// 实例仍可执行 (租约有效 + 启用中 + 生命周期允许)
+    const auto ownerReady = [&hit, &owner]() {
+        return hit->lease && hit->lease->alive.load(std::memory_order_acquire) && owner
+               && owner->enabled && owner->lifetime && owner->lifetime->acceptsOperations();
+    };
+    if (!hit->builtin && !ownerReady()) {
+        storeUnmatched();
+        return;
+    }
+
+    /// 收尾: 把插件结果拷成主程序文本/JSON 写入缓存并通知 UI 重绘
+    auto finish = [this,
+                   entry = std::move(entry),
+                   key,
+                   inputHash,
+                   toolCallId,
+                   toolName,
+                   wantCollapsed,
+                   pluginName](int32_t status, std::string_view text) mutable {
+        if (status == PLUGINXX_OPERATOR_OK && !text.empty()) {
+            if (wantCollapsed) {
+                entry.text    = std::string{text};
+                entry.matched = !entry.text.empty();
+            } else if (acceptUiJsonSize(text, "tool_renderer output", pluginName)) {
+                try {
+                    entry.items = utilxx_base::Json::parse(std::string{text});
+                } catch (...) {
+                }
+                entry.matched = entry.items.is_array() && !entry.items.empty();
+            }
+        }
         toolRenderCache_->store(std::move(entry));
+        toolRenderCache_->endRequest(key, inputHash);
         if (uiAdapter_) {
-            uiAdapter_->onToolRenderUpdated(req.toolCallId, req.toolName);
+            uiAdapter_->onToolRenderUpdated(toolCallId, toolName);
         }
     };
 
-    // 主程序内置渲染器: 进程生命周期函数 (主程序自身实现), 无插件实例/租约,
-    // 不经插件禁用/卸载路径, 直接执行
+    auto slot = std::make_unique<ReplySlot>(
+        weak_from_this(),
+        std::string{"client.ui.tool_render:"} + toolName,
+        std::move(finish)
+    );
+    auto           notify = slot->notify();
+    PluginxxString err{nullptr, 0};
+    int32_t        rc = AGENTXX_RESULT_ERR_INTERNAL;
+    const auto     cb = wantCollapsed ? hit->collapsedFn : hit->expandedFn;
+
     if (hit->builtin) {
-        runRenderer();
-        return;
+        // 主程序内置渲染器: 进程生命周期函数 (主程序自身实现), 无插件实例/租约,
+        // 不经插件禁用/卸载路径, 直接在 io 线程执行
+        try {
+            rc = cb(hit->userData, &input, &notify, &err);
+        } catch (...) {
+            rc = AGENTXX_RESULT_ERR_INTERNAL;
+        }
+    } else {
+        // 租约仍有效: 回调期间实例由 guard 保活 (禁止卸载 dlclose)
+        PluginInstanceBase::InflightGuard guard(owner);
+        if (!guard || !ownerReady()) {
+            auto* raw = slot.release();
+            ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
+            return;
+        }
+        try {
+            rc = cb(hit->userData, &input, &notify, &err);
+        } catch (const std::exception& e) {
+            XX_LOGW("[client_plugin] tool renderer `{}` threw: {}", toolName, e.what());
+        } catch (...) {
+            XX_LOGW("[client_plugin] tool renderer `{}` threw", toolName);
+        }
     }
 
-    if (auto rendererOwner = hit->lease ? hit->lease->instance.lock() : nullptr) {
-        entry.generation = rendererOwner->lifetime ? rendererOwner->lifetime->generation() : 0;
+    if (err.data) {
+        XX_LOGW(
+            "[client_plugin] tool renderer `{}` not accepted: {}",
+            toolName,
+            std::string{err.data, static_cast<size_t>(err.size)}
+        );
+        if (owner) {
+            agentxx::plugin::PluginString::free(owner->hostView(), &err);
+        }
     }
-
-    std::shared_ptr<ClientPluginInstance> owner;
-    if (!hit->lease || !hit->lease->alive.load(std::memory_order_acquire)) {
-        toolRenderCache_->store(std::move(entry));
+    if (rc != 0) {
+        // 未受理: 按“没有自定义内容”收尾 (写一条未命中条目 + 清掉“进行中”标记,
+        // 避免每帧重请求)
+        auto* raw = slot.release();
+        ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
         return;
     }
-    owner = hit->lease->instance.lock();
-    if (!owner || !owner->enabled || !owner->lifetime || !owner->lifetime->acceptsOperations()) {
-        toolRenderCache_->store(std::move(entry));
-        return;
-    }
-    PluginInstanceBase::InflightGuard guard(owner);
-    if (!guard || !hit->lease->alive.load(std::memory_order_acquire) || !owner->enabled
-        || !owner->lifetime->acceptsOperations()) {
-        toolRenderCache_->store(std::move(entry));
-        return;
-    }
-
-    // 租约仍有效: 回调期间实例由 guard 保活 (禁止卸载 dlclose)
-    runRenderer();
+    // 已受理: 快路径下对象已在回调里释放; 未完成时由回调自行释放
+    slot.release();
 }
 
 bool ClientPluginManager::hasCommand(std::string_view name) const {
@@ -1251,34 +1378,55 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
         return;
     }
 
-    PluginInstanceBase::InflightGuard guard(inst->self.lock());
-    PluginxxString                    err{nullptr, 0};
-    PluginxxString                    out{nullptr, 0};
-    try {
-        auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
-        cmd->execute(cmd->ud, &argsSv, &out, &err);
-    } catch (const std::exception& e) {
-        XX_LOGW("[client_plugin] command `{}` execute threw: {}", name, e.what());
-    } catch (...) {
-        XX_LOGW("[client_plugin] command `{}` execute threw unknown exception", name);
-    }
-    std::string actionJson;
-    if (!out.data) {
-        XX_LOGW(
-            "[client_plugin] command `{}` failed: {}",
-            name,
-            err.data ? std::string(err.data, err.size) : "(no error message)"
-        );
-    } else {
-        actionJson.assign(out.data, out.size);
+    /// 收尾: 解析动作 JSON 并分发到 UI 适配器 (可能稍后才到)
+    auto finish = [this](int32_t status, std::string_view text) {
+        if (status != PLUGINXX_OPERATOR_OK) {
+            if (!text.empty()) {
+                XX_LOGW("[client_plugin] command failed: {}", text);
+            }
+            return;
+        }
+        dispatchCommandAction(std::string{text});
+    };
+
+    auto slot = std::make_unique<ReplySlot>(
+        weak_from_this(),
+        std::string{"client.ui.command:"} + name,
+        std::move(finish)
+    );
+    auto           notify = slot->notify();
+    auto           owner  = inst->self.lock();
+    PluginxxString err{nullptr, 0};
+    int32_t        rc = AGENTXX_RESULT_ERR_INTERNAL;
+    if (owner) {
+        // 回调期间实例由 guard 保活 (禁止卸载 dlclose)
+        PluginInstanceBase::InflightGuard guard(owner);
+        auto                              argsSv = agentxx::plugin::PluginStringView::from(argsJson);
+        try {
+            rc = cmd->execute(cmd->ud, &argsSv, &notify, &err);
+        } catch (const std::exception& e) {
+            XX_LOGW("[client_plugin] command `{}` execute threw: {}", name, e.what());
+        } catch (...) {
+            XX_LOGW("[client_plugin] command `{}` execute threw unknown exception", name);
+        }
     }
     if (err.data) {
-        agentxx::plugin::PluginString::free(inst->hostView(), &err);
+        XX_LOGW(
+            "[client_plugin] command `{}` not accepted: {}",
+            name,
+            std::string{err.data, static_cast<size_t>(err.size)}
+        );
+        if (auto hostView = owner ? owner->hostView() : nullptr; hostView != nullptr) {
+            agentxx::plugin::PluginString::free(hostView, &err);
+        }
     }
-    if (out.data) {
-        agentxx::plugin::PluginString::free(inst->hostView(), &out);
+    if (rc != 0 || !owner) {
+        // 未受理: 本次命令什么也不做 (旧实现的“输出留空”)
+        auto* raw = slot.release();
+        ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
+        return;
     }
-    dispatchCommandAction(actionJson);
+    slot.release();
 }
 
 void ClientPluginManager::dispatchCommandAction(const std::string& actionJson) {
@@ -1618,64 +1766,93 @@ static ClientHostCall enterClientHost(const PluginxxHost* host, bool allowClosin
     return enterPluginHost<ClientPluginInstance, ClientPluginManager>(host, allowClosing);
 }
 
-/// 注册/写入类入口的公共骨架: 解析 host 上下文 → 把业务逻辑投递到 client IO 线程执行。
+/// 异步表调用的公共骨架 (契约见 pluginxx/host/table_op.h 与 client_plugin_api.h 文件头)
 ///
-/// - 参数视图只在本次调用内有效, 闭包必须按值捕获自己需要的拷贝;
-/// - `fallback` 是失败返回值 (句柄入口传 nullptr, 状态码入口传 -1);
-/// - `fn` 拿到实例与管理器 (投递期间由 `keep` 保活, 含 admission lease),
-///   业务参数校验由入口自己完成后传入。
-template<typename Ret, typename Fn>
-static Ret onClientIo(const PluginxxHost* host, Ret fallback, Fn&& fn) {
-    return agentxx::plugin::guardVtableCall(fallback, [&]() -> Ret {
-        auto call = enterClientHost(host);
-        if (!call.ok()) {
-            return fallback;
-        }
-        auto keep = call; // 投递期间持实例/管理器强引用与 admission lease
-        return ioCallSyncKeep<Ret>(
-            keep,
-            keep.manager(),
-            [keep, fn = std::forward<Fn>(fn)]() -> Ret {
-                return fn(keep.instance(), keep.manager());
-            }
-        );
-    });
-}
-
-/// 撤销类入口 (无返回值) 的公共骨架
-template<typename Fn>
-static void onClientIoVoid(const PluginxxHost* host, Fn&& fn) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
-        auto call = enterClientHost(host);
-        if (!call.ok()) {
-            return;
-        }
-        auto keep = call;
-        ioCallSyncVoidKeep(keep, keep.manager(), [keep, fn = std::forward<Fn>(fn)]() {
-            fn(keep.instance(), keep.manager());
-        });
-    });
-}
-
-/// 只读查询类入口的公共骨架 (允许关闭中查询):
-/// 在 IO 线程取字符串结果 → 经 host->alloc 写入 `out`; 结果为空按失败返回 -1。
-template<typename Fn>
-static int32_t queryClientString(const PluginxxHost* host, PluginxxString* out, Fn&& fn) {
-    if (!out) {
-        return AGENTXX_RESULT_ERR_ARG;
+/// - 入口只做“解析上下文 + 交给 [startTableOp]”: 业务校验在 `work` 里做
+///   (失败抛 [TableOpError], 经完成回调按 FAILED 交回);
+/// - `work` 返回结果正文 (句柄成员给 [clientHandleToText], 无结果类给空串);
+/// - `work` 在 client IO 线程执行, 调用方本来就在 IO 线程时**当场执行** ——
+///   “注册完立刻可见”的顺序与同步调用一致, 也省掉一次投递;
+/// - `allowClosing=true` 用于只读查询 (关闭中仍可查), 写入口用默认值。
+template<bool AllowClosing = false, typename Fn>
+static PluginxxOperatorHandle* asyncClientTableCall(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out,
+    std::string              label,
+    Fn&&                     work
+) {
+    auto call = enterClientHost(host, AllowClosing);
+    if (!call.ok()) {
+        pluginxx::setTableOpError(error_out, "plugin runtime is unavailable");
+        return nullptr;
     }
-    return onClientIo<int32_t>(
-        host,
-        AGENTXX_RESULT_ERR_INTERNAL,
-        [out, fn = std::forward<Fn>(fn)](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            auto text = fn(inst, mgr);
-            if (text.empty()) {
-                return AGENTXX_RESULT_ERR_NOT_FOUND;
-            }
-            hostMemorySetString(out, text);
-            return AGENTXX_RESULT_OK;
+    auto keep = call;
+    return pluginxx::startTableOp(
+        keep.manager(),
+        cb,
+        ud,
+        error_out,
+        std::move(label),
+        [keep, work = std::forward<Fn>(work)]() mutable -> std::string {
+            return work(keep.instance(), keep.manager());
         }
     );
+}
+
+/// 只读查询类入口的公共骨架 (允许关闭中查询): `work` 返回结果正文
+/// - 空结果照旧交回 (调用方按“没有值”处理), 不当作失败
+template<typename Fn>
+static PluginxxOperatorHandle* asyncClientQuery(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out,
+    std::string              label,
+    Fn&&                     work
+) {
+    return asyncClientTableCall<true>(
+        host,
+        cb,
+        ud,
+        error_out,
+        std::move(label),
+        std::forward<Fn>(work)
+    );
+}
+
+/// 句柄结果: 拿不到句柄时按业务失败交回 (旧实现的 NULL 返回值)
+/// - `what`: 成员名, 作为失败原因前缀
+template<typename Handle>
+static std::string clientHandleResult(Handle* handle, std::string_view what) {
+    if (handle == nullptr) {
+        throw TableOpError(fmt::format("{}: rejected", what));
+    }
+    return agentxx::plugin::clientHandleToText(handle);
+}
+
+/// 状态码结果: 非 0 按业务失败交回 (旧实现的返回码)
+static std::string clientStatusResult(int rc, std::string_view what) {
+    if (rc == 0) {
+        return std::string{};
+    }
+    throw TableOpError(
+        fmt::format("{}: {}", what, agentxx::plugin::resultName(static_cast<int32_t>(rc)))
+    );
+}
+
+/// ABI 字符串视图 → std::string
+///
+/// 表入参都是**借用视图**: 工作体可能稍后在 IO 线程执行 (调用方在别的线程时),
+/// 那时原内存已经失效 —— 捕获前必须先按值拷一份。
+static std::string copyView(const PluginxxStringView& sv) {
+    return sv.data ? std::string{sv.data, static_cast<size_t>(sv.size)} : std::string{};
+}
+
+static std::string copyView(const PluginxxStringView* sv) {
+    return (sv && sv->data) ? std::string{sv->data, static_cast<size_t>(sv->size)}
+                            : std::string{};
 }
 
 /// "agentxx.client.ui" 展示接口表访问器 (定义于下方接口表加载区, 需在
@@ -1741,474 +1918,999 @@ const void* PLUGINXX_CALL
 
 // ---- 状态栏项 ----
 
-AgentxxStatusItem* PLUGINXX_CALL xx_cregister_status_item(
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_status_item(
     const PluginxxHost*       host,
     const PluginxxStringView* id,
     const PluginxxStringView* initial_json,
     int32_t                   align,
-    int32_t                   order
+    int32_t                   order,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(id)) {
+    if (!id || !id->data || id->size == 0) {
+        pluginxx::setTableOpError(error_out, "register_status_item: id is required");
         return nullptr;
     }
-    auto idVal   = *id;
-    auto jsonVal = initial_json ? *initial_json : agentxx::plugin::PluginStringView::from("{}", 2);
-    return onClientIo<AgentxxStatusItem*>(
+    auto idCopy = copyView(*id);
+    auto json   = initial_json && initial_json->data
+                      ? copyView(*initial_json)
+                      : std::string{"{}"};
+    return asyncClientTableCall(
         host,
-        nullptr,
-        [idVal, jsonVal, align, order](ClientPluginInstance* inst, ClientPluginManager* mgr)
-            -> AgentxxStatusItem* {
-            return static_cast<AgentxxStatusItem*>(
-                mgr->registerStatusItem(inst, idVal, jsonVal, align, order)
+        cb,
+        ud,
+        error_out,
+        "client.ui.register_status_item",
+        [idCopy = std::move(idCopy), json = std::move(json), align, order](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            return clientHandleResult(
+                static_cast<AgentxxStatusItem*>(
+                    mgr->registerStatusItem(inst, idCopy, json, align, order)
+                ),
+                "register_status_item"
             );
         }
     );
 }
 
-int32_t PLUGINXX_CALL xx_cupdate_status_item(
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cupdate_status_item(
     const PluginxxHost*       host,
     AgentxxStatusItem*        item,
-    const PluginxxStringView* json
+    const PluginxxStringView* json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (!item || !json) {
-        return AGENTXX_RESULT_ERR_ARG;
+    if (!item || !json || !json->data) {
+        pluginxx::setTableOpError(error_out, "update_status_item: item and json are required");
+        return nullptr;
     }
-    auto jsonVal = *json;
-    return onClientIo<int32_t>(
+    auto jsonCopy = copyView(*json);
+    return asyncClientTableCall(
         host,
-        -1,
-        [item, jsonVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->updateStatusItem(inst, item, jsonVal);
+        cb,
+        ud,
+        error_out,
+        "client.ui.update_status_item",
+        [item, jsonCopy = std::move(jsonCopy)](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            return clientStatusResult(
+                mgr->updateStatusItem(inst, item, jsonCopy),
+                "update_status_item"
+            );
         }
     );
 }
 
-void PLUGINXX_CALL xx_cunregister_status_item(const PluginxxHost* host, AgentxxStatusItem* item) {
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_status_item(
+    const PluginxxHost*      host,
+    AgentxxStatusItem*       item,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
     if (!item) {
-        return;
+        pluginxx::setTableOpError(error_out, "unregister_status_item: item is required");
+        return nullptr;
     }
-    onClientIoVoid(host, [item](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-        mgr->unregisterStatusItem(inst, item);
-    });
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.unregister_status_item",
+        [item](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            mgr->unregisterStatusItem(inst, item);
+            return {};
+        }
+    );
 }
 
 // ---- 侧边栏面板 ----
 
-AgentxxPanel* PLUGINXX_CALL xx_cregister_panel(
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_panel(
     const PluginxxHost*       host,
     const PluginxxStringView* id,
-    const PluginxxStringView* props_json
+    const PluginxxStringView* props_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(id)) {
+    if (!id || !id->data || id->size == 0) {
+        pluginxx::setTableOpError(error_out, "register_panel: id is required");
         return nullptr;
     }
-    auto idVal    = *id;
-    auto propsVal = props_json ? *props_json : agentxx::plugin::PluginStringView::from("{}", 2);
-    return onClientIo<AgentxxPanel*>(
+    auto idCopy  = copyView(*id);
+    auto props   = props_json && props_json->data
+                       ? copyView(*props_json)
+                       : std::string{"{}"};
+    return asyncClientTableCall(
         host,
-        nullptr,
-        [idVal, propsVal](ClientPluginInstance* inst, ClientPluginManager* mgr) -> AgentxxPanel* {
-            return static_cast<AgentxxPanel*>(mgr->registerPanel(inst, idVal, propsVal));
-        }
-    );
-}
-
-int32_t PLUGINXX_CALL xx_cupdate_panel(
-    const PluginxxHost*       host,
-    AgentxxPanel*             panel,
-    const PluginxxStringView* items_json
-) {
-    if (!panel || !items_json) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto itemsVal = *items_json;
-    return onClientIo<int32_t>(
-        host,
-        -1,
-        [panel, itemsVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->updatePanel(inst, panel, itemsVal);
-        }
-    );
-}
-
-void PLUGINXX_CALL xx_cunregister_panel(const PluginxxHost* host, AgentxxPanel* panel) {
-    if (!panel) {
-        return;
-    }
-    onClientIoVoid(host, [panel](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-        mgr->unregisterPanel(inst, panel);
-    });
-}
-
-// ---- Info 栏段落 ----
-
-AgentxxInfoSection* PLUGINXX_CALL xx_cregister_info_section(
-    const PluginxxHost*       host,
-    const PluginxxStringView* id,
-    const PluginxxStringView* props_json
-) {
-    if (agentxx::plugin::PluginStringView::empty(id)) {
-        return nullptr;
-    }
-    auto idVal    = *id;
-    auto propsVal = props_json ? *props_json : agentxx::plugin::PluginStringView::from("{}", 2);
-    return onClientIo<AgentxxInfoSection*>(
-        host,
-        nullptr,
-        [idVal,
-         propsVal](ClientPluginInstance* inst, ClientPluginManager* mgr) -> AgentxxInfoSection* {
-            return static_cast<AgentxxInfoSection*>(mgr->registerInfoSection(inst, idVal, propsVal)
+        cb,
+        ud,
+        error_out,
+        "client.ui.register_panel",
+        [idCopy = std::move(idCopy), props = std::move(props)](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            return clientHandleResult(
+                static_cast<AgentxxPanel*>(mgr->registerPanel(inst, idCopy, props)),
+                "register_panel"
             );
         }
     );
 }
 
-int32_t PLUGINXX_CALL xx_cupdate_info_section(
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cupdate_panel(
+    const PluginxxHost*       host,
+    AgentxxPanel*             panel,
+    const PluginxxStringView* items_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    if (!panel || !items_json || !items_json->data) {
+        pluginxx::setTableOpError(error_out, "update_panel: panel and items are required");
+        return nullptr;
+    }
+    auto items = copyView(*items_json);
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.update_panel",
+        [panel, items = std::move(items)](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            return clientStatusResult(mgr->updatePanel(inst, panel, items), "update_panel");
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_panel(
+    const PluginxxHost*      host,
+    AgentxxPanel*            panel,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    if (!panel) {
+        pluginxx::setTableOpError(error_out, "unregister_panel: panel is required");
+        return nullptr;
+    }
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.unregister_panel",
+        [panel](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            mgr->unregisterPanel(inst, panel);
+            return {};
+        }
+    );
+}
+
+// ---- Info 栏段落 ----
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_info_section(
+    const PluginxxHost*       host,
+    const PluginxxStringView* id,
+    const PluginxxStringView* props_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    if (!id || !id->data || id->size == 0) {
+        pluginxx::setTableOpError(error_out, "register_info_section: id is required");
+        return nullptr;
+    }
+    auto idCopy = copyView(*id);
+    auto props  = props_json && props_json->data
+                      ? copyView(*props_json)
+                      : std::string{"{}"};
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.register_info_section",
+        [idCopy = std::move(idCopy), props = std::move(props)](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            return clientHandleResult(
+                static_cast<AgentxxInfoSection*>(mgr->registerInfoSection(inst, idCopy, props)),
+                "register_info_section"
+            );
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cupdate_info_section(
     const PluginxxHost*       host,
     AgentxxInfoSection*       section,
-    const PluginxxStringView* items_json
+    const PluginxxStringView* items_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (!section || !items_json) {
-        return AGENTXX_RESULT_ERR_ARG;
+    if (!section || !items_json || !items_json->data) {
+        pluginxx::setTableOpError(error_out, "update_info_section: section and items are required");
+        return nullptr;
     }
-    auto itemsVal = *items_json;
-    return onClientIo<int32_t>(
+    auto items = copyView(*items_json);
+    return asyncClientTableCall(
         host,
-        -1,
-        [section, itemsVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->updateInfoSection(inst, section, itemsVal);
+        cb,
+        ud,
+        error_out,
+        "client.ui.update_info_section",
+        [section, items = std::move(items)](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            return clientStatusResult(
+                mgr->updateInfoSection(inst, section, items),
+                "update_info_section"
+            );
         }
     );
 }
 
-void PLUGINXX_CALL
-    xx_cunregister_info_section(const PluginxxHost* host, AgentxxInfoSection* section) {
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_info_section(
+    const PluginxxHost*      host,
+    AgentxxInfoSection*      section,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
     if (!section) {
-        return;
+        pluginxx::setTableOpError(error_out, "unregister_info_section: section is required");
+        return nullptr;
     }
-    onClientIoVoid(host, [section](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-        mgr->unregisterInfoSection(inst, section);
-    });
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.unregister_info_section",
+        [section](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            mgr->unregisterInfoSection(inst, section);
+            return {};
+        }
+    );
 }
 
-int32_t PLUGINXX_CALL xx_cupdate_tool_decor(
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cupdate_tool_decor(
     const PluginxxHost*       host,
     const PluginxxStringView* tool_call_id,
-    const PluginxxStringView* decor_json
+    const PluginxxStringView* decor_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    auto tcidVal  = tool_call_id ? *tool_call_id : agentxx::plugin::PluginStringView::from("", 0);
-    auto decorVal = decor_json ? *decor_json : agentxx::plugin::PluginStringView::from("", 0);
-    return onClientIo<int32_t>(
+    auto tcid  = tool_call_id && tool_call_id->data
+                    ? copyView(*tool_call_id)
+                    : std::string{};
+    auto decor = decor_json && decor_json->data
+                     ? copyView(*decor_json)
+                     : std::string{};
+    return asyncClientTableCall(
         host,
-        -1,
-        [tcidVal, decorVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->updateToolDecor(inst, tcidVal, decorVal);
+        cb,
+        ud,
+        error_out,
+        "client.ui.update_tool_decor",
+        [tcid = std::move(tcid), decor = std::move(decor)](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            return clientStatusResult(
+                mgr->updateToolDecor(inst, tcid, decor),
+                "update_tool_decor"
+            );
         }
     );
 }
 
-int32_t PLUGINXX_CALL
-    xx_cregister_tool_renderer(const PluginxxHost* host, const AgentxxToolRenderSpec* spec) {
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_tool_renderer(
+    const PluginxxHost*          host,
+    const AgentxxToolRenderSpec* spec,
+    PluginxxOperatorCallback     cb,
+    void*                        ud,
+    PluginxxString*              error_out
+) {
     if (!spec) {
-        return AGENTXX_RESULT_ERR_ARG;
+        pluginxx::setTableOpError(error_out, "register_tool_renderer: spec is required");
+        return nullptr;
     }
-    return onClientIo<int32_t>(
+    // spec 里的字符串视图是借用视图: 投递前拷一份, 与 spec 一起交给工作体
+    struct SpecKeep {
+        AgentxxToolRenderSpec spec{};
+        std::string           toolName;
+        std::string           displayName;
+
+        explicit SpecKeep(const AgentxxToolRenderSpec* in) {
+            spec = *in;
+            if (in->tool_name.data != nullptr && in->tool_name.size > 0) {
+                toolName.assign(in->tool_name.data, static_cast<size_t>(in->tool_name.size));
+            }
+            if (in->display_name.data != nullptr && in->display_name.size > 0) {
+                displayName.assign(
+                    in->display_name.data,
+                    static_cast<size_t>(in->display_name.size)
+                );
+            }
+            spec.tool_name    = agentxx::plugin::PluginStringView::from(toolName);
+            spec.display_name = agentxx::plugin::PluginStringView::from(displayName);
+        }
+    };
+    auto keep = std::make_shared<SpecKeep>(spec);
+    return asyncClientTableCall(
         host,
-        -1,
-        [spec](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->registerToolRenderer(inst, spec);
+        cb,
+        ud,
+        error_out,
+        "client.ui.register_tool_renderer",
+        [keep](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return clientStatusResult(
+                mgr->registerToolRenderer(inst, &keep->spec),
+                "register_tool_renderer"
+            );
         }
     );
 }
 
-int32_t PLUGINXX_CALL
-    xx_cunregister_tool_renderer(const PluginxxHost* host, const PluginxxStringView* tool_name) {
-    if (!tool_name) {
-        return AGENTXX_RESULT_ERR_ARG;
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_tool_renderer(
+    const PluginxxHost*       host,
+    const PluginxxStringView* tool_name,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    if (!tool_name || !tool_name->data) {
+        pluginxx::setTableOpError(error_out, "unregister_tool_renderer: tool_name is required");
+        return nullptr;
     }
-    auto tnameVal = *tool_name;
-    return onClientIo<int32_t>(
+    auto tname = copyView(*tool_name);
+    return asyncClientTableCall(
         host,
-        -1,
-        [tnameVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->unregisterToolRenderer(inst, tnameVal);
+        cb,
+        ud,
+        error_out,
+        "client.ui.unregister_tool_renderer",
+        [tname = std::move(tname)](ClientPluginInstance* inst, ClientPluginManager* mgr)
+            -> std::string {
+            return clientStatusResult(
+                mgr->unregisterToolRenderer(inst, tname),
+                "unregister_tool_renderer"
+            );
         }
     );
 }
 
 // ---- 命令 ----
 
-int32_t PLUGINXX_CALL xx_cregister_command(
-    const PluginxxHost*       host,
-    const PluginxxStringView* name,
-    const PluginxxStringView* description,
-    int32_t(PLUGINXX_CALL*
-                execute)(void*, const PluginxxStringView*, PluginxxString*, PluginxxString*),
-    void* ud
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_command(
+    const PluginxxHost*          host,
+    const PluginxxStringView*    name,
+    const PluginxxStringView*    description,
+    AgentxxClientCommandExecuteFn execute,
+    void*                        command_ud,
+    PluginxxOperatorCallback     cb,
+    void*                        ud,
+    PluginxxString*              error_out
 ) {
-    if (!execute || agentxx::plugin::PluginStringView::empty(name)) {
-        return AGENTXX_RESULT_ERR_ARG;
+    if (!execute || !name || !name->data || name->size == 0) {
+        pluginxx::setTableOpError(
+            error_out,
+            "register_command: name and execute are required"
+        );
+        return nullptr;
     }
-    auto nameVal = *name;
-    auto descVal = description ? *description : agentxx::plugin::PluginStringView::from("", 0);
-    return onClientIo<int32_t>(
+    auto nameCopy = copyView(*name);
+    auto desc     = description && description->data
+                        ? copyView(*description)
+                        : std::string{};
+    return asyncClientTableCall(
         host,
-        -1,
-        [nameVal, descVal, execute, ud](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->registerCommand(inst, nameVal, descVal, execute, ud);
+        cb,
+        ud,
+        error_out,
+        "client.ui.register_command",
+        [nameCopy = std::move(nameCopy),
+         desc     = std::move(desc),
+         execute,
+         command_ud](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return clientStatusResult(
+                mgr->registerCommand(inst, nameCopy, desc, execute, command_ud),
+                "register_command"
+            );
         }
     );
 }
 
-int32_t PLUGINXX_CALL
-    xx_cunregister_command(const PluginxxHost* host, const PluginxxStringView* name) {
-    if (agentxx::plugin::PluginStringView::empty(name)) {
-        return AGENTXX_RESULT_ERR_ARG;
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_command(
+    const PluginxxHost*       host,
+    const PluginxxStringView* name,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    if (!name || !name->data || name->size == 0) {
+        pluginxx::setTableOpError(error_out, "unregister_command: name is required");
+        return nullptr;
     }
-    auto nameVal = *name;
-    return onClientIo<int32_t>(
+    auto nameCopy = copyView(*name);
+    return asyncClientTableCall(
         host,
-        -1,
-        [nameVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->unregisterCommand(inst, nameVal);
+        cb,
+        ud,
+        error_out,
+        "client.ui.unregister_command",
+        [nameCopy = std::move(nameCopy)](ClientPluginInstance* inst, ClientPluginManager* mgr)
+            -> std::string {
+            return clientStatusResult(
+                mgr->unregisterCommand(inst, nameCopy),
+                "unregister_command"
+            );
         }
     );
 }
 
 // ---- toast ----
 
-void PLUGINXX_CALL
-    xx_cshow_toast(const PluginxxHost* host, const PluginxxStringView* text, int32_t level) {
-    if (!text || !text->data) {
-        return;
-    }
-    std::string textStr{text->data, static_cast<size_t>(text->size)};
-    onClientIoVoid(host, [textStr, level](ClientPluginInstance*, ClientPluginManager* mgr) {
-        if (auto adapter = mgr->uiAdapter()) {
-            adapter->onToast(textStr, level);
-        }
-    });
-}
-
-// ---- 会话上下文 ----
-
-int32_t PLUGINXX_CALL xx_cget_client_state(const PluginxxHost* host, PluginxxString* out) {
-    return queryClientString(host, out, [](ClientPluginInstance*, ClientPluginManager* mgr) {
-        return mgr->clientStateJson();
-    });
-}
-
-// ---- 会话操作 ----
-
-int32_t PLUGINXX_CALL xx_csend_user_input(
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cshow_toast(
     const PluginxxHost*       host,
-    const PluginxxStringView* thread_id,
-    const PluginxxStringView* text
+    const PluginxxStringView* text,
+    int32_t                   level,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(text)) {
-        return AGENTXX_RESULT_ERR_ARG;
+    if (!text || !text->data) {
+        pluginxx::setTableOpError(error_out, "show_toast: text is required");
+        return nullptr;
     }
-    auto tidVal  = thread_id ? *thread_id : agentxx::plugin::PluginStringView::from("", 0);
-    auto textVal = *text;
-    return onClientIo<int32_t>(
+    auto textCopy = copyView(*text);
+    return asyncClientTableCall(
         host,
-        -1,
-        [tidVal, textVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            mgr->sendUserInputToPeer(inst, tidVal, textVal);
-            return AGENTXX_RESULT_OK;
+        cb,
+        ud,
+        error_out,
+        "client.ui.show_toast",
+        [textCopy = std::move(textCopy), level](
+            ClientPluginInstance*,
+            ClientPluginManager* mgr
+        ) -> std::string {
+            if (auto adapter = mgr->uiAdapter()) {
+                adapter->onToast(std::string{textCopy}, level);
+            }
+            return {};
         }
     );
 }
 
-void PLUGINXX_CALL
-    xx_crequest_cancel(const PluginxxHost* host, const PluginxxStringView* thread_id) {
-    auto tidVal = thread_id ? *thread_id : agentxx::plugin::PluginStringView::from("", 0);
-    onClientIoVoid(host, [tidVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-        mgr->requestCancelToPeer(inst, tidVal);
-    });
+// ---- 会话上下文 ----
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cget_client_state(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientQuery(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.session.get_client_state",
+        [](ClientPluginInstance*, ClientPluginManager* mgr) -> std::string {
+            return mgr->clientStateJson();
+        }
+    );
+}
+
+// ---- 会话操作 ----
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_csend_user_input(
+    const PluginxxHost*       host,
+    const PluginxxStringView* thread_id,
+    const PluginxxStringView* text,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    if (!text || !text->data || text->size == 0) {
+        pluginxx::setTableOpError(error_out, "send_user_input: text is required");
+        return nullptr;
+    }
+    auto tid  = thread_id && thread_id->data ? copyView(*thread_id)
+                                             : std::string{};
+    auto body = copyView(*text);
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.session.send_user_input",
+        [tid = std::move(tid), body = std::move(body)](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            mgr->sendUserInputToPeer(inst, tid, body);
+            return {};
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_crequest_cancel(
+    const PluginxxHost*       host,
+    const PluginxxStringView* thread_id,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    auto tid = thread_id && thread_id->data ? copyView(*thread_id)
+                                            : std::string{};
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.session.request_cancel",
+        [tid = std::move(tid)](ClientPluginInstance* inst, ClientPluginManager* mgr)
+            -> std::string {
+            mgr->requestCancelToPeer(inst, tid);
+            return {};
+        }
+    );
 }
 
 // ---- 跨端数据 ----
 
-int32_t PLUGINXX_CALL xx_csend_plugin_data(
+PluginxxOperatorHandle* PLUGINXX_CALL xx_csend_plugin_data(
     const PluginxxHost*       host,
     const PluginxxStringView* topic,
-    const PluginxxStringView* json
+    const PluginxxStringView* json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    if (agentxx::plugin::PluginStringView::empty(topic)) {
-        return AGENTXX_RESULT_ERR_ARG;
+    if (!topic || !topic->data || topic->size == 0) {
+        pluginxx::setTableOpError(error_out, "send_plugin_data: topic is required");
+        return nullptr;
     }
-    auto topicVal = *topic;
-    auto jsonVal  = json ? *json : agentxx::plugin::PluginStringView::from("{}", 2);
-    return onClientIo<int32_t>(
+    auto topicCopy = copyView(*topic);
+    auto payload   = json && json->data ? copyView(*json)
+                                        : std::string{"{}"};
+    return asyncClientTableCall(
         host,
-        -1,
-        [topicVal, jsonVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->sendPluginDataToPeer(inst, topicVal, jsonVal);
+        cb,
+        ud,
+        error_out,
+        "client.wire.send_plugin_data",
+        [topicCopy = std::move(topicCopy), payload = std::move(payload)](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            return clientStatusResult(
+                mgr->sendPluginDataToPeer(inst, topicCopy, payload),
+                "send_plugin_data"
+            );
         }
     );
 }
 
 // ---- 自描述 ----
 
-int32_t PLUGINXX_CALL xx_cget_own_info(const PluginxxHost* host, PluginxxString* out) {
-    return queryClientString(host, out, [](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-        return mgr->getOwnInfoJson(inst);
-    });
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cget_own_info(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientQuery(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.self.get_own_info",
+        [](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return mgr->getOwnInfoJson(inst);
+        }
+    );
 }
 
-int32_t PLUGINXX_CALL xx_cget_plugin_args(const PluginxxHost* host, PluginxxString* out) {
-    return queryClientString(host, out, [](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-        return mgr->getPluginArgsJson(inst);
-    });
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cget_plugin_args(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientQuery(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.self.get_plugin_args",
+        [](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return mgr->getPluginArgsJson(inst);
+        }
+    );
 }
 
-int32_t PLUGINXX_CALL xx_cget_plugin_config_path(const PluginxxHost* host, PluginxxString* out) {
-    return queryClientString(host, out, [](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-        return mgr->getPluginConfigPath(inst);
-    });
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cget_plugin_config_path(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientQuery(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.self.get_plugin_config_path",
+        [](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return mgr->getPluginConfigPath(inst);
+        }
+    );
 }
 
-static int32_t PLUGINXX_CALL xx_cget_language(const PluginxxHost* host, PluginxxString* out) {
-    return queryClientString(host, out, [](ClientPluginInstance*, ClientPluginManager* mgr) {
-        auto lang = mgr->getLanguage();
-        return lang.empty() ? std::string{"en"} : lang;
-    });
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_cget_language(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientQuery(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.self.get_language",
+        [](ClientPluginInstance*, ClientPluginManager* mgr) -> std::string {
+            auto lang = mgr->getLanguage();
+            return lang.empty() ? std::string{"en"} : lang;
+        }
+    );
 }
 
-static int32_t PLUGINXX_CALL
-    xx_cset_language(const PluginxxHost* host, const PluginxxStringView* language) {
+static PluginxxOperatorHandle* PLUGINXX_CALL
+    xx_cset_language(const PluginxxHost* host, const PluginxxStringView* language,
+                     PluginxxOperatorCallback cb, void* ud, PluginxxString* error_out) {
     std::string lang = (language && language->data)
                            ? std::string(language->data, static_cast<size_t>(language->size))
                            : std::string{};
-    return onClientIo<int32_t>(host, AGENTXX_RESULT_ERR_INTERNAL, [lang](ClientPluginInstance*, ClientPluginManager* mgr) {
-        mgr->setLanguage(lang);
-        return AGENTXX_RESULT_OK;
-    });
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.self.set_language",
+        [lang = std::move(lang)](ClientPluginInstance*, ClientPluginManager* mgr) -> std::string {
+            mgr->setLanguage(lang);
+            return {};
+        }
+    );
 }
 
 // ---- 通用交互: 动作绑定 / overlay ----
 
-int32_t PLUGINXX_CALL xx_cbind_action_handler(
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cbind_action_handler(
     const PluginxxHost*       host,
     const PluginxxStringView* target_id,
     AgentxxUiActionFn         on_action,
-    void*                     user_data
+    void*                     user_data,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
     if (!on_action) {
-        return AGENTXX_RESULT_ERR_ARG;
+        pluginxx::setTableOpError(error_out, "bind_action_handler: on_action is required");
+        return nullptr;
     }
-    auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
-    return onClientIo<int32_t>(
+    auto target = target_id && target_id->data
+                      ? copyView(*target_id)
+                      : std::string{};
+    return asyncClientTableCall(
         host,
-        -1,
-        [targetVal, on_action, user_data](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->bindActionHandler(inst, targetVal, on_action, user_data);
+        cb,
+        ud,
+        error_out,
+        "client.ui.bind_action_handler",
+        [target = std::move(target), on_action, user_data](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            return clientStatusResult(
+                mgr->bindActionHandler(inst, target, on_action, user_data),
+                "bind_action_handler"
+            );
         }
     );
 }
 
-int32_t PLUGINXX_CALL
-    xx_cunbind_action_handler(const PluginxxHost* host, const PluginxxStringView* target_id) {
-    auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
-    return onClientIo<int32_t>(
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cunbind_action_handler(
+    const PluginxxHost*       host,
+    const PluginxxStringView* target_id,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    auto target = target_id && target_id->data
+                      ? copyView(*target_id)
+                      : std::string{};
+    return asyncClientTableCall(
         host,
-        -1,
-        [targetVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->unbindActionHandler(inst, targetVal);
+        cb,
+        ud,
+        error_out,
+        "client.ui.unbind_action_handler",
+        [target = std::move(target)](ClientPluginInstance* inst, ClientPluginManager* mgr)
+            -> std::string {
+            return clientStatusResult(
+                mgr->unbindActionHandler(inst, target),
+                "unbind_action_handler"
+            );
         }
     );
 }
 
-int32_t PLUGINXX_CALL xx_copen_overlay(const PluginxxHost* host, const AgentxxOverlaySpec* spec) {
+PluginxxOperatorHandle* PLUGINXX_CALL xx_copen_overlay(
+    const PluginxxHost*       host,
+    const AgentxxOverlaySpec* spec,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
     if (!spec) {
-        return AGENTXX_RESULT_ERR_ARG;
+        pluginxx::setTableOpError(error_out, "open_overlay: spec is required");
+        return nullptr;
     }
-    return onClientIo<int32_t>(
+    // spec 里三个字符串视图是借用视图: 与 spec 一起放进同一个对象再捕获
+    struct SpecKeep {
+        AgentxxOverlaySpec spec{};
+        std::string        title;
+        std::string        payload;
+        std::string        extra;
+
+        explicit SpecKeep(const AgentxxOverlaySpec* in) {
+            spec = *in;
+            const auto copy = [](const PluginxxStringView& v, std::string& out) {
+                if (v.data != nullptr && v.size > 0) {
+                    out.assign(v.data, static_cast<size_t>(v.size));
+                }
+                return agentxx::plugin::PluginStringView::from(out);
+            };
+            spec.title      = copy(in->title, title);
+            spec.payload    = copy(in->payload, payload);
+            spec.extra_json = copy(in->extra_json, extra);
+        }
+    };
+    auto keep = std::make_shared<SpecKeep>(spec);
+    return asyncClientTableCall(
         host,
-        -1,
-        [spec](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->openOverlay(inst, spec);
+        cb,
+        ud,
+        error_out,
+        "client.ui.open_overlay",
+        [keep](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return clientStatusResult(mgr->openOverlay(inst, &keep->spec), "open_overlay");
         }
     );
 }
 
-void PLUGINXX_CALL xx_cclose_overlay(const PluginxxHost* host) {
-    onClientIoVoid(host, [](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-        mgr->closeOverlay(inst);
-    });
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cclose_overlay(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.close_overlay",
+        [](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            mgr->closeOverlay(inst);
+            return {};
+        }
+    );
 }
 
 // ---- 定时器 (agentxx.client.timer) ----
 
-AgentxxTimer* PLUGINXX_CALL xx_cset_timer(const PluginxxHost* host, const AgentxxTimerSpec* spec) {
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cset_timer(
+    const PluginxxHost*       host,
+    const AgentxxTimerSpec*   spec,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
     if (!spec) {
+        pluginxx::setTableOpError(error_out, "set_timer: spec is required");
         return nullptr;
     }
-    return onClientIo<AgentxxTimer*>(
+    // spec 的 owner_id 是借用视图: 拷一份后重新指向
+    struct SpecKeep {
+        AgentxxTimerSpec spec{};
+        std::string      ownerId;
+
+        explicit SpecKeep(const AgentxxTimerSpec* in) {
+            spec = *in;
+            if (in->owner_id.data != nullptr && in->owner_id.size > 0) {
+                ownerId.assign(in->owner_id.data, static_cast<size_t>(in->owner_id.size));
+            }
+            spec.owner_id = agentxx::plugin::PluginStringView::from(ownerId);
+        }
+    };
+    auto keep = std::make_shared<SpecKeep>(spec);
+    return asyncClientTableCall(
         host,
-        nullptr,
-        [spec](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->setTimer(inst, spec);
+        cb,
+        ud,
+        error_out,
+        "client.timer.set_timer",
+        [keep](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return clientHandleResult(
+                static_cast<AgentxxTimer*>(mgr->setTimer(inst, &keep->spec)),
+                "set_timer"
+            );
         }
     );
 }
 
-void PLUGINXX_CALL xx_ccancel_timer(const PluginxxHost* host, AgentxxTimer* timer) {
-    onClientIoVoid(host, [timer](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-        mgr->cancelTimer(inst, timer);
-    });
+PluginxxOperatorHandle* PLUGINXX_CALL xx_ccancel_timer(
+    const PluginxxHost*      host,
+    AgentxxTimer*            timer,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.timer.cancel_timer",
+        [timer](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            mgr->cancelTimer(inst, timer);
+            return {};
+        }
+    );
 }
 
-int32_t PLUGINXX_CALL xx_cis_visible(const PluginxxHost* host, const PluginxxStringView* owner_id) {
-    if (!owner_id || !owner_id->data) {
-        return 0;
-    }
-    std::string_view owner{owner_id->data, static_cast<size_t>(owner_id->size)};
-    // 只读查询 (允许关闭中查询), 与其它 get_* 入口同一形态
-    auto call = enterClientHost(host, /*allowClosing=*/true);
-    if (!call.ok()) {
-        return 0;
-    }
-    auto mgr = call.manager();
-    return (mgr && mgr->isRegionVisible(owner)) ? 1 : 0;
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cis_visible(
+    const PluginxxHost*       host,
+    const PluginxxStringView* owner_id,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    auto owner = owner_id && owner_id->data ? copyView(*owner_id)
+                                            : std::string{};
+    return asyncClientQuery(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.timer.is_visible",
+        [owner = std::move(owner)](ClientPluginInstance*, ClientPluginManager* mgr) -> std::string {
+            if (owner.empty() || mgr == nullptr) {
+                return std::string{"0"};
+            }
+            return mgr->isRegionVisible(owner) ? std::string{"1"} : std::string{"0"};
+        }
+    );
 }
 
 // ---- 全局快捷键 (agentxx.client.keybind) ----
 
-AgentxxKeybind* PLUGINXX_CALL
-    xx_cregister_keybind(const PluginxxHost* host, const AgentxxKeybindSpec* spec) {
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_keybind(
+    const PluginxxHost*       host,
+    const AgentxxKeybindSpec* spec,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
     if (!spec) {
+        pluginxx::setTableOpError(error_out, "register_keybind: spec is required");
         return nullptr;
     }
-    return onClientIo<AgentxxKeybind*>(
+    // spec 两个字符串视图是借用视图: 拷一份后重新指向
+    struct SpecKeep {
+        AgentxxKeybindSpec spec{};
+        std::string        keys;
+        std::string        description;
+
+        explicit SpecKeep(const AgentxxKeybindSpec* in) {
+            spec = *in;
+            if (in->keys.data != nullptr && in->keys.size > 0) {
+                keys.assign(in->keys.data, static_cast<size_t>(in->keys.size));
+            }
+            if (in->description.data != nullptr && in->description.size > 0) {
+                description.assign(
+                    in->description.data,
+                    static_cast<size_t>(in->description.size)
+                );
+            }
+            spec.keys        = agentxx::plugin::PluginStringView::from(keys);
+            spec.description = agentxx::plugin::PluginStringView::from(description);
+        }
+    };
+    auto keep = std::make_shared<SpecKeep>(spec);
+    return asyncClientTableCall(
         host,
-        nullptr,
-        [spec](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->registerKeybind(inst, spec);
+        cb,
+        ud,
+        error_out,
+        "client.keybind.register_keybind",
+        [keep](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return clientHandleResult(
+                static_cast<AgentxxKeybind*>(mgr->registerKeybind(inst, &keep->spec)),
+                "register_keybind"
+            );
         }
     );
 }
 
-void PLUGINXX_CALL xx_cunregister_keybind(const PluginxxHost* host, AgentxxKeybind* bind) {
-    onClientIoVoid(host, [bind](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-        mgr->unregisterKeybind(inst, bind);
-    });
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_keybind(
+    const PluginxxHost*      host,
+    AgentxxKeybind*          bind,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.keybind.unregister_keybind",
+        [bind](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            mgr->unregisterKeybind(inst, bind);
+            return {};
+        }
+    );
 }
 
-int32_t PLUGINXX_CALL xx_clist_keybinds(const PluginxxHost* host, PluginxxString* out) {
-    return queryClientString(host, out, [](ClientPluginInstance*, ClientPluginManager* mgr) {
-        auto binds = mgr->keybinds();
-        auto arr   = utilxx_base::Json::array();
-        for (const auto& b : binds) {
-            auto item           = utilxx_base::Json::object();
-            item["keys"]        = b.keys;
-            item["plugin"]      = b.plugin;
-            item["description"] = b.description;
-            arr.push_back(std::move(item));
+PluginxxOperatorHandle* PLUGINXX_CALL xx_clist_keybinds(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientQuery(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.keybind.list_keybinds",
+        [](ClientPluginInstance*, ClientPluginManager* mgr) -> std::string {
+            auto binds = mgr->keybinds();
+            auto arr   = utilxx_base::Json::array();
+            for (const auto& b : binds) {
+                auto item           = utilxx_base::Json::object();
+                item["keys"]        = b.keys;
+                item["plugin"]      = b.plugin;
+                item["description"] = b.description;
+                arr.push_back(std::move(item));
+            }
+            return arr.dump();
         }
-        return arr.dump();
-    });
+    );
 }
 
 /// "agentxx.client.ui" 展示接口表访问器: 表内成员恒非空 (函数实现存在), 子能力是否
@@ -2990,12 +3692,11 @@ int ClientPluginManager::updateToolDecor(
 }
 
 int ClientPluginManager::registerCommand(
-    ClientPluginInstance* inst,
-    PluginxxStringView    name,
-    PluginxxStringView    description,
-    int32_t(PLUGINXX_CALL*
-                exec)(void*, const PluginxxStringView*, PluginxxString*, PluginxxString*),
-    void* ud
+    ClientPluginInstance*        inst,
+    PluginxxStringView           name,
+    PluginxxStringView           description,
+    AgentxxClientCommandExecuteFn exec,
+    void*                        ud
 ) {
     if (!inst || !exec || agentxx::plugin::PluginStringView::empty(name)) {
         return AGENTXX_RESULT_ERR_ARG;
@@ -3582,7 +4283,7 @@ int ClientPluginManager::registerToolRenderer(
     ClientPluginInstance*        inst,
     const AgentxxToolRenderSpec* spec
 ) {
-    if (!inst || !spec || spec->version != 1
+    if (!inst || !spec || spec->version != 2
         || !agentxx::plugin::specSizeOk<AgentxxToolRenderSpec>(spec->struct_size)
         || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
         return AGENTXX_RESULT_ERR_ARG;
@@ -4024,6 +4725,52 @@ AgentxxToolRenderInput makeRenderInput(
     return input;
 }
 
+/// 没有渲染缓存时的“当场取结果”收尾 (单元测试 / 未挂载管理器)
+///
+/// 回调在本次调用栈上立即 `done` 时能拿到内容; 插件稍后才 `done` 时本次没有内容
+/// (这种环境没有地方接晚到的结果, 与旧的同步形态行为一致)。
+struct ImmediateReply {
+    int32_t     status = PLUGINXX_OPERATOR_FAILED;
+    std::string text;
+    bool        done = false;
+};
+
+void PLUGINXX_CALL immediateReplyDone(
+    void*                     ud,
+    int32_t                   status,
+    const PluginxxStringView* payload
+) {
+    auto* slot = static_cast<ImmediateReply*>(ud);
+    if (slot == nullptr || slot->done) {
+        return;
+    }
+    slot->done   = true;
+    slot->status = status;
+    if (payload != nullptr && payload->data != nullptr) {
+        slot->text.assign(payload->data, static_cast<size_t>(payload->size));
+    }
+}
+
+/// 直接调用一个渲染回调, 只收当场交回的内容 (`RendererFn` = 折叠或展开回调)
+template<typename RendererFn>
+std::string callRendererNow(RendererFn fn, void* userData, const AgentxxToolRenderInput* input) {
+    if (fn == nullptr || input == nullptr) {
+        return {};
+    }
+    ImmediateReply            slot;
+    const PluginxxOperatorNotify notify{&immediateReplyDone, &slot};
+    int32_t                   rc = AGENTXX_RESULT_ERR_INTERNAL;
+    try {
+        rc = fn(userData, input, &notify, nullptr);
+    } catch (...) {
+        rc = AGENTXX_RESULT_ERR_INTERNAL;
+    }
+    if (rc != 0 || !slot.done || slot.status != PLUGINXX_OPERATOR_OK) {
+        return {};
+    }
+    return slot.text;
+}
+
 } // namespace
 
 std::string_view toolDisplayNameFor(
@@ -4088,8 +4835,8 @@ ClientToolCollapsedResult renderClientToolCollapsed(
         return res; // 没注册 → 默认渲染
     }
     if (!cache) {
-        // 无语义缓存 (单元测试/未挂载管理器环境): 同步调用回调
-        auto                        input = makeRenderInput(
+        // 无语义缓存 (单元测试/未挂载管理器环境): 直接调回调, 只取当场交回的内容
+        auto input = makeRenderInput(
             toolCallId,
             toolName,
             argsJson,
@@ -4098,17 +4845,7 @@ ClientToolCollapsedResult renderClientToolCollapsed(
             isError,
             maxWidth
         );
-        AgentxxToolCollapsedOutput output{};
-        int32_t                    rc = AGENTXX_RESULT_ERR_INTERNAL;
-        try {
-            rc = r->collapsedFn(r->userData, &input, &output);
-        } catch (...) {
-            rc = AGENTXX_RESULT_ERR_INTERNAL;
-        }
-        if (rc == AGENTXX_RESULT_OK && output.text.data) {
-            res.text.assign(output.text.data, static_cast<size_t>(output.text.size));
-        }
-        hostMemoryFree(output.text.data);
+        res.text = callRendererNow(r->collapsedFn, r->userData, &input);
         return res;
     }
 
@@ -4180,8 +4917,8 @@ ClientToolExpandedResult renderClientToolExpanded(
         return res; // 没注册 → 默认展开体
     }
     if (!cache) {
-        // 无语义缓存 (单元测试/未挂载管理器环境): 同步调用回调
-        auto                       input = makeRenderInput(
+        // 无语义缓存 (单元测试/未挂载管理器环境): 直接调回调, 只取当场交回的内容
+        auto       input = makeRenderInput(
             toolCallId,
             toolName,
             argsJson,
@@ -4190,26 +4927,13 @@ ClientToolExpandedResult renderClientToolExpanded(
             isError,
             maxWidth
         );
-        AgentxxToolExpandedOutput output{};
-        int32_t                   rc = AGENTXX_RESULT_ERR_INTERNAL;
-        try {
-            rc = r->expandedFn(r->userData, &input, &output);
-        } catch (...) {
-            rc = AGENTXX_RESULT_ERR_INTERNAL;
-        }
-        if (rc == AGENTXX_RESULT_OK && output.items_json.data) {
-            const std::string_view itemsJson{
-                output.items_json.data,
-                static_cast<size_t>(output.items_json.size)
-            };
-            if (acceptUiJsonSize(itemsJson, "tool_renderer output", r->plugin)) {
-                try {
-                    res.items = utilxx_base::Json::parse(itemsJson);
-                } catch (...) {
-                }
+        const auto text  = callRendererNow(r->expandedFn, r->userData, &input);
+        if (acceptUiJsonSize(text, "tool_renderer output", r->plugin)) {
+            try {
+                res.items = utilxx_base::Json::parse(text);
+            } catch (...) {
             }
         }
-        hostMemoryFree(output.items_json.data);
         return res;
     }
 

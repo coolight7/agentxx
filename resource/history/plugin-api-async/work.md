@@ -13,7 +13,7 @@
 | B | `agentxx.agent` 业务表全部成员 | 完成（9 张表全部改异步操作契约） |
 | C | `agentxx.agent.runtime` 全部成员 | 完成（21 个成员改异步；lib / test / client / 25 个插件编译通过，插件相关测试 3983 条全绿） |
 | C2-表异步化 | 框架表其余成员（broadcasts / capabilities 登记 / config / plugins / `net.call`）改异步 | 完成（`config` v4 / `plugins` v2 / `broadcasts` v4 / `capabilities` v8 / `net` v2） |
-| D | `agentxx.client.*` 六张表 + 三个回答型回调 | 待做 |
+| D | `agentxx.client.*` 六张表 + 三个回答型回调 | 完成（client 六张表 v2、三个回调改 notify、6 个插件与 4 个测试文件迁移；`client_plugins` / `plugin_sdk` / `plugin_bridge` / `plugin_runtime` / `boundaries` / 两个挂载组全绿） |
 | E | 删残留同步路径与 client 侧 150 ms 同步桥、文档 | 部分完成（接口表数量与 §8.0 调用模型文档已同步） |
 
 ## 关键实现决定（与计划一致，落在代码里）
@@ -630,6 +630,69 @@ clearPluginOwnedRegistrations` 原先连 `inst->subscriptionHandles` 一起清�
 7. 文档: `plugins.md` §8.2 表行 / §22.1-§22.4、`AGENTS.md` 的网络段与 client 桥清单。
 
 验证: 框架 / lib / test 重编通过, 25 个插件重编通过, 插件相关 19 个模块 + 全量回归全绿。
+
+### 第 12 步：阶段 D —— `agentxx.client.*` 六张表 + 三个回答型回调
+
+计划 §6 / §7.5。client 侧与 agent 侧同一套异步操作契约，另加一条：client 表**没有**
+保留同步成员（连 `is_visible` 这类查询也走异步）。
+
+1. ABI (`client_plugin_api.h`): `AGENTXX_CLIENT_PLUGIN_API_VERSION` / `MIN` 7 → **8**；
+   六张表（ui / session / wire / self / timer / keybind）全部改异步（表尾追加
+   `cb` / `ud` / `error_out`，返回 `PluginxxOperatorHandle*`），`version` 抬到 2、
+   基线重置为完整布局；文件头新增“调用模型：表成员一律是异步操作契约”整段；
+   删除 `AgentxxToolCollapsedOutput` / `AgentxxToolExpandedOutput` 与同步出参形态的
+   两个渲染回调，改为 `(user_data, input, notify, error_out) -> int32_t`
+   (`AgentxxToolRenderSpec.version` 1 → 2)；`register_command` 新增 `command_ud` +
+   `AgentxxClientCommandExecuteFn`（动作 JSON 经自己的 `notify` 交回）。
+   新增 `agentxx/plugin/api/client_handle.h`（句柄 ↔ 地址十进制文本，与
+   `broadcast_handle.h` 同套路）。
+2. 管理器 (`client_plugin_manager.cpp`): 34 个 vtable 入口全部改异步，统一经
+   `pluginxx::startTableOp`；spec 类入参用 `SpecKeep`/`SharedSpec` 自持字符串视图；
+   新增 `ReplySlot`（一次性完成通知：恰好一次、IO 线程内联快路径、其他线程投递回尾）。
+   删除 `onClientIo` / `onClientIoVoid` / `queryClientString` 三个同步等待助手。
+3. kit (`plugin_kit.h`): `clientTableOp` / `clientTableText` / `clientTableHandle` /
+   `tableStatus` + `clientRegisterStatusItem` … `clientSendPluginData` 一组便捷入口；
+   本次又补了 **`clientRegisterCommand` / `clientUnregisterCommand`** 与完成助手
+   **`notifyText` / `notifyError`**（插件侧命令、渲染这类“回答型”回调统一用它收尾）。
+   `ClientPluginBase` 的方法与 `TimerHandle` / `KeybindHandle` 全部适配。
+4. JS 引擎: 删掉 150 ms 同步桥（`invokeRenderSync` / `invokeCallbackSync` 与
+   `kClientSyncTimeoutMs`），渲染与命令回调改成 notify + Promise（`then`/`catch`）；
+   新增 `callTableOk` / `callTableOp` / `callTableHandle` / `callTableJson`（脚本线程必须
+   同步回答，所以内部用 `tableOpSyncWait`）。
+5. 插件迁移：`example_plugin`（命令改 notify、注册/更新改 kit 入口）、
+   `agentxx_planning`（decor / Info 段落 / overlay / bind）、`agentxx_system_monitor`
+   （Info 段落 + `sysinfo` 命令）、`agentxx_codegraph`（Info 段落）、`agentxx_chatbot`
+   （面板注册 / 刷新请求）、`example_js`（`get_own_info`）。
+6. 测试迁移：`test_client_plugins`（新增 `ClientCall` 夹具：`clientCall` / `handleOf` +
+   一组与旧同步入口一一对应的包装 `uiBindAction` / `uiOpenOverlay` / `timerSet` /
+   `keybindRegister` …；断言从“返回值/出参”改成“受理 + 完成状态 + payload”）、
+   `test_plugin_sdk`（伪 client 表改 notify 形态并返回非 NULL 句柄）、
+   `test_tui_tool_header`（假渲染器改 notify）、`test_client_start_fail` DSO（自备
+   “提交 + 等完成”的 `CallResult`：start 不假设内联完成）。
+
+验证：25 个插件全部重编通过；`client_plugins` 839、`plugin_sdk` 141、
+`plugin_bridge` 271、`plugin_runtime` 742、`boundaries` 20、`plugin_host_mount` 147、
+`plugin_multi_mount` 47 → 全绿。
+
+遇到的问题（已解决）：
+
+- **`PluginStringView::str()` 是零拷贝视图，不是 `std::string`**：client 表入参都是
+  借用视图，工作体稍后在 IO 线程执行时原内存已失效 —— ASan 实测 `show_toast`
+  heap-use-after-free。改为投递前统一 `copyView()` 按值拷一份（22 处）。
+- 管理器仍校验 `AgentxxToolRenderSpec.version == 1`：spec 抬到 2 后所有插件注册渲染器
+  都失败（表现为工具行全走默认渲染、`List`/`Read` 不见了）。改为 `== 2`。
+- JS `JsReply::collapsed` 默认 `true`（给折叠渲染器用），`commandExecute` 忘了清掉：
+  命令返回的对象被按“折叠文本”取值，交回的是 `hello from JS` 而不是动作 JSON
+  （主程序报 `invalid command action json`）。命令收尾处补 `collapsed = false`。
+- 测试 DSO `test_client_start_fail` 原来假设“start 里表调用当场完成”：改造后工作体
+  经 `postToIo` 排队，`registerAll` 一律失败。改成自备条件变量等完成（带 10s 超时），
+  并把每步失败原因写进 start 的错误文本（定位问题靠它）。
+- **构建顺序又踩了一次**：`agentxx_test` 链接的是**安装前缀**里的 `agentxx_static`，
+  改了 `client_plugin_manager.cpp` 却只编 test 目录等于没改（现象：加了调试日志看不到、
+  修好的 bug 还在）。正确顺序：内层 lib → `cmake --install` → test（再拷 exe）→ 插件。
+- 命令类用例要“等一拍”：脚本的回答（动作 JSON / `showToast`）现在由 JS 线程异步交回，
+  原来“调用完立刻断言”的写法会读到旧计数；改成轮询到内容出现再断言（断言按内容，
+  不按精确次数，避免别的异步 toast 干扰）。
 
 ## 与计划的偏差
 

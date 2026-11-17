@@ -226,17 +226,16 @@ int createShell(const PluginxxHost* host, bool clientSide, void** plugin_ctx) {
         ctx->log->log(host, 4, &sv);
     };
 
-    // agent 侧 `plugins.get_own_info` 是异步操作契约: 用阻塞形态取回清单 JSON
-    // (client 侧的 `self.get_own_info` 仍是同步入口, 这里保持原样)
+    // 两侧 `get_own_info` 都是异步操作契约: 用同步形态取回清单 JSON
     std::string infoJson;
     if (clientSide) {
-        PluginxxString info{nullptr, 0};
-        if (ctx->client.self->get_own_info(host, &info) != 0 || !info.data) {
-            logE("example_js: get_own_info failed");
-            return -1;
-        }
-        infoJson.assign(info.data, static_cast<size_t>(info.size));
-        agentxx::plugin::PluginString::free(host, &info);
+        infoJson = agentxx::plugin::clientTableText(
+            host,
+            ctx->client,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ctx->client.self->get_own_info(host, cb, ud, err);
+            }
+        );
     } else {
         infoJson = agentxx::plugin::detail::tableOpText(
             host,
@@ -246,10 +245,10 @@ int createShell(const PluginxxHost* host, bool clientSide, void** plugin_ctx) {
                 return ctx->agent.plugins->get_own_info(host, cb, ud, err);
             }
         );
-        if (infoJson.empty()) {
-            logE("example_js: get_own_info failed");
-            return -1;
-        }
+    }
+    if (infoJson.empty()) {
+        logE("example_js: get_own_info failed");
+        return -1;
     }
     auto infoSv = agentxx::plugin::PluginStringView::from(infoJson.data(), infoJson.size());
     auto field  = [&](const char* key) -> std::string {

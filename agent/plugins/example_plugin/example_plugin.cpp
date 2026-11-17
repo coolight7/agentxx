@@ -583,12 +583,12 @@ static std::string clientJsonEscape(const ClientCtx& ctx, std::string_view text)
 }
 
 static int32_t PLUGINXX_CALL example_cmd_execute(
-    void*                     ud,
-    const PluginxxStringView* args_json,
-    PluginxxString*           actionOut,
-    PluginxxString*           errorOut
+    void*                         ud,
+    const PluginxxStringView*     args_json,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 ) {
-    (void)errorOut;
+    (void)error_out;
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     return agentxx::plugin::guardCall(clientGuardLogger(ctxRaw), -1, [&]() -> int {
         auto* ctx = static_cast<ClientCtx*>(ud);
@@ -615,21 +615,19 @@ static int32_t PLUGINXX_CALL example_cmd_execute(
         }
         const std::string out
             = fmt::format(R"_({{"action":"send","text":{}}})_", clientJsonEscape(*ctx, text));
-        auto outSv = agentxx::plugin::PluginStringView::from(out.data(), out.size());
-        if (actionOut) {
-            *actionOut = agentxx::plugin::PluginString::from(ctx->host, &outSv);
-        }
+        // 同步完成: 动作 JSON 直接经本次操作的回调交回
+        agentxx::plugin::notifyText(notify, out);
         return 0;
     });
 }
 
 static int32_t PLUGINXX_CALL example_toast_execute(
-    void*                     ud,
-    const PluginxxStringView* args_json,
-    PluginxxString*           actionOut,
-    PluginxxString*           errorOut
+    void*                         ud,
+    const PluginxxStringView*     args_json,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 ) {
-    (void)errorOut;
+    (void)error_out;
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     return agentxx::plugin::guardCall(clientGuardLogger(ctxRaw), -1, [&]() -> int {
         auto* ctx = static_cast<ClientCtx*>(ud);
@@ -655,10 +653,8 @@ static int32_t PLUGINXX_CALL example_toast_execute(
             R"_({{"action":"toast","text":{},"level":1}})_",
             clientJsonEscape(*ctx, text)
         );
-        auto outSv = agentxx::plugin::PluginStringView::from(out.data(), out.size());
-        if (actionOut) {
-            *actionOut = agentxx::plugin::PluginString::from(ctx->host, &outSv);
-        }
+        // 同步完成: 动作 JSON 直接经本次操作的回调交回
+        agentxx::plugin::notifyText(notify, out);
         return 0;
     });
 }
@@ -675,14 +671,12 @@ static void PLUGINXX_CALL on_client_ready(const PluginxxStringView* payload_json
             auto msgSv = agentxx::plugin::PluginStringView::fromCstr("client example: ready");
             ctx->iface.log->log(ctx->host, 2, &msgSv);
         }
-        if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
-            auto evtSv = agentxx::plugin::PluginStringView::fromCstr(
-                "agentxx.client.plugin.example_plugin.hello"
-            );
-            auto paySv
-                = agentxx::plugin::PluginStringView::fromCstr(R"_({"from":"client-example"})_");
-            ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
-        }
+        agentxx::plugin::clientSendPluginData(
+            ctx->host,
+            ctx->iface.wire,
+            "agentxx.client.plugin.example_plugin.hello",
+            R"_({"from":"client-example"})_"
+        );
     });
 }
 
@@ -700,8 +694,7 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
                 R"_({{"text":{}}})_",
                 clientJsonEscape(*ctx, fmt::format("turns: {}", ctx->turn_count))
             );
-            auto jsonSv = agentxx::plugin::PluginStringView::from(json.data(), json.size());
-            ctx->ui->update_status_item(ctx->host, ctx->status_item, &jsonSv);
+            ctx->setStatusJson(ctx->status_item, json);
         }
         if (ctx->info_section && ctx->ui && ctx->ui->update_info_section) {
             // 组件项用描述层与 kit 组装 (不必手写 JSON 字符串与转义)
@@ -712,11 +705,7 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
             items.push_back(agentxx::ui::kit::hint({
                 {"text", "Example Info section is live"}
             }));
-            utilxx_base::Json payload;
-            payload["items"]         = pluginxx::ui::dumpBlocks(items);
-            const std::string json   = payload.dump();
-            auto              jsonSv = agentxx::plugin::PluginStringView::fromCstr(json.c_str());
-            ctx->ui->update_info_section(ctx->host, ctx->info_section, &jsonSv);
+            ctx->setInfoSectionItems(ctx->info_section, items);
         }
     });
 }
@@ -744,12 +733,8 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
         items.push_back(agentxx::ui::kit::badge({
             {"text", "updated"}
         }));
-        if (ctx->ui && ctx->ui->update_panel) {
-            utilxx_base::Json payload;
-            payload["items"]         = pluginxx::ui::dumpBlocks(items);
-            const std::string json   = payload.dump();
-            auto              jsonSv = agentxx::plugin::PluginStringView::fromCstr(json.c_str());
-            ctx->ui->update_panel(ctx->host, ctx->panel, &jsonSv);
+        if (ctx->ui && ctx->panel) {
+            ctx->setPanelItems(ctx->panel, items);
         }
     });
 }
@@ -761,38 +746,48 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
 /// - destroy 只释放本地内存。
 static int exampleClientSetup(ClientCtx& ctx) {
     const PluginxxHost* host = ctx.host;
-    ctx.ui                   = ctx.iface.ui;
-    auto sidSv               = agentxx::plugin::PluginStringView::fromCstr("example_plugin.turns");
-    auto initSv     = agentxx::plugin::PluginStringView::fromCstr(R"_({"text":"turns: 0"})_");
-    ctx.status_item = ctx.ui && ctx.ui->register_status_item
-                          ? ctx.ui->register_status_item(host, &sidSv, &initSv, 0, 10)
-                          : nullptr;
+    ctx.ui      = ctx.iface.ui;
+    ctx.status_item = agentxx::plugin::clientRegisterStatusItem(
+        host,
+        ctx.ui,
+        "example_plugin.turns",
+        R"_({"text":"turns: 0"})_",
+        0,
+        10
+    );
+    ctx.panel = agentxx::plugin::clientRegisterPanel(
+        host,
+        ctx.ui,
+        "example_plugin.panel",
+        R"_({"title":"Example"})_"
+    );
+    ctx.info_section = agentxx::plugin::clientRegisterInfoSection(
+        host,
+        ctx.ui,
+        "example_plugin.info",
+        R"_({"title":"Example Info"})_"
+    );
 
-    auto pidSv   = agentxx::plugin::PluginStringView::fromCstr("example_plugin.panel");
-    auto ppropSv = agentxx::plugin::PluginStringView::fromCstr(R"_({"title":"Example"})_");
-    ctx.panel    = ctx.ui && ctx.ui->register_panel ? ctx.ui->register_panel(host, &pidSv, &ppropSv)
-                                                    : nullptr;
-
-    auto iidSv       = agentxx::plugin::PluginStringView::fromCstr("example_plugin.info");
-    auto ipropSv     = agentxx::plugin::PluginStringView::fromCstr(R"_({"title":"Example Info"})_");
-    ctx.info_section = ctx.ui && ctx.ui->register_info_section
-                           ? ctx.ui->register_info_section(host, &iidSv, &ipropSv)
-                           : nullptr;
-
-    if (!ctx.ui || !ctx.ui->register_command) {
+    // 命令回调是异步操作契约: 动作 JSON 经回调自己的 notify 交回 (本插件同步给).
+    // 主程序无命令能力 (精简客户端) 时注册失败, 不影响其余展示能力.
+    if (!agentxx::plugin::clientRegisterCommand(
+            host,
+            ctx.ui,
+            "example",
+            "Send a message from the example plugin",
+            example_cmd_execute,
+            &ctx
+        )) {
         return -1;
     }
-    auto cmd1NameSv = agentxx::plugin::PluginStringView::fromCstr("example");
-    auto cmd1DescSv
-        = agentxx::plugin::PluginStringView::fromCstr("Send a message from the example plugin");
-    if (ctx.ui->register_command(host, &cmd1NameSv, &cmd1DescSv, example_cmd_execute, &ctx) != 0) {
-        return -1;
-    }
-    auto cmd2NameSv = agentxx::plugin::PluginStringView::fromCstr("example_toast");
-    auto cmd2DescSv
-        = agentxx::plugin::PluginStringView::fromCstr("Show a toast from the example plugin");
-    if (ctx.ui->register_command(host, &cmd2NameSv, &cmd2DescSv, example_toast_execute, &ctx)
-        != 0) {
+    if (!agentxx::plugin::clientRegisterCommand(
+            host,
+            ctx.ui,
+            "example_toast",
+            "Show a toast from the example plugin",
+            example_toast_execute,
+            &ctx
+        )) {
         return -1;
     }
 

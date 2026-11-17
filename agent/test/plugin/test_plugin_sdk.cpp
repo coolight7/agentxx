@@ -207,26 +207,53 @@ struct ClientUiCapture {
 
 ClientUiCapture g_clientUiCapture;
 
-int32_t PLUGINXX_CALL
-    fakeUpdatePanel(const PluginxxHost*, AgentxxPanel*, const PluginxxStringView* items) {
+/// 伪主程序: 表入口必须返回非 NULL 句柄 (NULL = 未受理; 本模块只关心回调内容)
+PluginxxOperatorHandle* fakeAcceptedHandle() {
+    static char dummy = 0;
+    return reinterpret_cast<PluginxxOperatorHandle*>(&dummy);
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL fakeUpdatePanel(
+    const PluginxxHost*,
+    AgentxxPanel*,
+    const PluginxxStringView* items,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*
+) {
     ++g_clientUiCapture.panelUpdates;
     g_clientUiCapture.panelItems
         = (items && items->data) ? std::string{items->data, static_cast<size_t>(items->size)} : "";
-    return 0;
+    if (cb) {
+        cb(ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    return fakeAcceptedHandle();
 }
 
-int32_t PLUGINXX_CALL
-    fakeUpdateStatusItem(const PluginxxHost*, AgentxxStatusItem*, const PluginxxStringView* json) {
+PluginxxOperatorHandle* PLUGINXX_CALL fakeUpdateStatusItem(
+    const PluginxxHost*,
+    AgentxxStatusItem*,
+    const PluginxxStringView* json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*
+) {
     ++g_clientUiCapture.statusUpdates;
     g_clientUiCapture.statusJson
         = (json && json->data) ? std::string{json->data, static_cast<size_t>(json->size)} : "";
-    return 0;
+    if (cb) {
+        cb(ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    return fakeAcceptedHandle();
 }
 
-int32_t PLUGINXX_CALL fakeUpdateToolDecor(
+PluginxxOperatorHandle* PLUGINXX_CALL fakeUpdateToolDecor(
     const PluginxxHost*,
     const PluginxxStringView* toolCallId,
-    const PluginxxStringView* json
+    const PluginxxStringView* json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*
 ) {
     ++g_clientUiCapture.decorUpdates;
     g_clientUiCapture.decorToolCallId
@@ -235,12 +262,21 @@ int32_t PLUGINXX_CALL fakeUpdateToolDecor(
               : "";
     g_clientUiCapture.decorJson
         = (json && json->data) ? std::string{json->data, static_cast<size_t>(json->size)} : "";
-    return 0;
+    if (cb) {
+        cb(ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    return fakeAcceptedHandle();
 }
 
-int32_t PLUGINXX_CALL fakeOpenOverlay(const PluginxxHost*, const AgentxxOverlaySpec* spec) {
+PluginxxOperatorHandle* PLUGINXX_CALL fakeOpenOverlay(
+    const PluginxxHost*,
+    const AgentxxOverlaySpec* spec,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*
+) {
     if (!spec) {
-        return -1;
+        return nullptr;
     }
     ++g_clientUiCapture.overlays;
     g_clientUiCapture.overlayPayload
@@ -251,7 +287,10 @@ int32_t PLUGINXX_CALL fakeOpenOverlay(const PluginxxHost*, const AgentxxOverlayS
         = (spec->extra_json.data)
               ? std::string{spec->extra_json.data, static_cast<size_t>(spec->extra_json.size)}
               : "";
-    return 0;
+    if (cb) {
+        cb(ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    return fakeAcceptedHandle();
 }
 
 /// 伪 client UI 表 (只填本模块用到的成员; 其余为 NULL = 该子能力不支持)

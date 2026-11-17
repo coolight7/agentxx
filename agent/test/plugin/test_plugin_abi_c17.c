@@ -19,14 +19,15 @@
 /* ==================== 全局版本 ==================== */
 
 /* v7: 表成员统一成异步操作契约 (结果经 PluginxxOperatorCallback 交回,
-   返回 NULL 表示未受理) —— 两侧 API 与最低兼容版本一起抬到 7
-   (旧插件被拒, 必须重编) */
+   返回 NULL 表示未受理); v8: client 侧六张业务表也改成异步操作契约,
+   三个回答型回调 (工具折叠/展开内容、命令 execute) 改成 notify 形态
+   —— 两侧一起抬, 旧插件被拒, 必须重编 */
 _Static_assert(PLUGINXX_API_VERSION == 7, "agent 侧 ABI 版本必须为 7");
 _Static_assert(PLUGINXX_MIN_API_VERSION == 7, "agent 侧最低兼容 ABI 版本必须为 7");
-_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 7, "client 侧 ABI 版本必须为 7");
+_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 8, "client 侧 ABI 版本必须为 8");
 _Static_assert(
-    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 7,
-    "client 侧最低兼容 ABI 版本必须为 7"
+    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 8,
+    "client 侧最低兼容 ABI 版本必须为 8"
 );
 
 /* ==================== 8 字节对齐（全部跨边界结构体） ==================== */

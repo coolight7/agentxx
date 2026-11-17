@@ -31,7 +31,7 @@
 - 异步事件、任务的最新结果不再限制 linger_ms 存活时间，直接转存 share_store，并重构 share_store 增加命名空间，区分 tool、事件、插件调用 等添加到 share_store 时的命名空间划分
 - 透视UI，虚拟现实/玻璃显示(车挡风玻璃、眼镜)
 - 任务规划文件 关联 git commit 以便检索
-- subagent 注册的 tool
+- 长任务不必担心一次改动过大而中途停止，可以持续推进；planning 增加模式，自动在轮次完成时追加消息让模型确认停下
 
 - SVG绘制支持
 

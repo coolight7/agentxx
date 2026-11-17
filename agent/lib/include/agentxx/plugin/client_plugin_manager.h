@@ -100,13 +100,9 @@ struct ClientCommand {
     std::string plugin; ///< 所属插件名
     std::string name;   ///< 命令名 (用户输入 "/{name}" 触发)
     std::string description;
-    int32_t(PLUGINXX_CALL* execute)(
-        void*                     ud,
-        const PluginxxStringView* args_json,
-        PluginxxString*           action_out,
-        PluginxxString*           error_out
-    )        = nullptr;
-    void* ud = nullptr;
+    /// 执行回调 (异步操作契约: 动作 JSON 经它自己的 notify 交回, 可能稍后才回)
+    AgentxxClientCommandExecuteFn execute = nullptr;
+    void*                         ud      = nullptr;
 };
 
 /// 工具特化渲染器注册记录 (UI 注册表快照条目)
@@ -534,7 +530,8 @@ public:
 ///   → dlclose
 /// - UI 注册表: io 线程写, UI 线程经 uiRegistrySnapshot() 读 (COW, 短锁)
 /// - 命令执行: 任意线程可 hasCommand/postCommandInvocation; execute 回调在
-///   client io 线程同步调用, 返回值动作 JSON 由主程序解析并分发到 UI 适配器
+///   client io 线程调用, 动作 JSON 经它的完成回调交回 (可立即或稍后), 主程序解析
+///   并分发到 UI 适配器
 class ClientPluginManager : public agentxx::agent::ClientEventSink,
                             public pluginxx::PluginHostLifecycle<ClientPluginInstance>,
                             public pluginxx::DomainServices,
@@ -673,9 +670,10 @@ public:
     bool hasCommand(std::string_view name) const;
 
     /// 投递命令调用到 client io 线程执行 (任意线程):
-    /// - io 线程: 查表 → InflightGuard → execute 回调 → 解析动作 JSON →
-    ///   分发到 UI 适配器 (send → adapter->sendPluginMessage; toast →
-    ///   adapter->onToast; none/非法 → 记日志)
+    /// - io 线程: 查表 → InflightGuard → execute 回调 → (结果经它的 notify 交回,
+    ///   可能立即也可能稍后) 解析动作 JSON → 分发到 UI 适配器
+    ///   (send → adapter->sendPluginMessage; toast → adapter->onToast;
+    ///   none/非法 → 记日志)
     void postCommandInvocation(std::string name, std::string argsJson);
 
     /// 同步执行命令 (仅 io 线程; CLI 模式输入循环直接调用, 等价于
@@ -887,21 +885,19 @@ public:
 
     /// 注册命令; 返回 0 成功 (名字冲突返回非 0)
     int registerCommand(
-        ClientPluginInstance* inst,
-        PluginxxStringView    name,
-        PluginxxStringView    description,
-        int32_t(PLUGINXX_CALL*
-                    exec)(void*, const PluginxxStringView*, PluginxxString*, PluginxxString*),
-        void* ud
+        ClientPluginInstance*        inst,
+        PluginxxStringView           name,
+        PluginxxStringView           description,
+        AgentxxClientCommandExecuteFn exec,
+        void*                        ud
     );
 
     int registerCommand(
-        ClientPluginInstance* inst,
-        std::string_view      name,
-        std::string_view      description,
-        int32_t(PLUGINXX_CALL*
-                    exec)(void*, const PluginxxStringView*, PluginxxString*, PluginxxString*),
-        void* ud
+        ClientPluginInstance*        inst,
+        std::string_view             name,
+        std::string_view             description,
+        AgentxxClientCommandExecuteFn exec,
+        void*                        ud
     ) {
         return registerCommand(inst, strToSv(name), strToSv(description), exec, ud);
     }
@@ -1128,7 +1124,8 @@ private:
     /// 从当前注册表取自定义渲染器 (插件注册项优先, 未命中再查主程序内置项),
     /// 插件渲染器需复查 lease/实例状态后代次, 持 lease 调用插件回调;
     /// 主程序内置渲染器 (无插件归属) 直接调用。按请求的 `part` 只调对应部分的
-    /// 回调, 输出拷成主程序文本/JSON 写入缓存并通知 UI 重绘。
+    /// 回调, 结果到达 (回调内立即完成或稍后) 时拷成主程序文本/JSON 写入缓存
+    /// 并通知 UI 重绘。
     void performToolRender(ClientToolRenderRequest req, std::string key, uint64_t inputHash);
 
     /// 登记/清除插件实例代次 (io 线程; 供 UI 点击携带与复查; 见

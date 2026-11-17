@@ -531,9 +531,12 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
         return;
     }
     if (!ctx.section && ctx.iface.ui && ctx.iface.ui->register_info_section) {
-        auto idSv    = PluginStringView::fromCstr("agentxx_system_monitor.usage");
-        auto propsSv = PluginStringView::fromCstr(R"_({"title":"System"})_");
-        ctx.section  = ctx.iface.ui->register_info_section(ctx.host, &idSv, &propsSv);
+        ctx.section = agentxx::plugin::clientRegisterInfoSection(
+            ctx.host,
+            ctx.iface.ui,
+            "agentxx_system_monitor.usage",
+            R"_({"title":"System"})_"
+        );
     }
     if (!ctx.section || !ctx.iface.ui || !ctx.iface.ui->update_info_section
         || ctx.last_usage_json.empty()) {
@@ -547,8 +550,7 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
         off["items"] = utilxx_base::Json::array();
         json         = off.dump();
     }
-    auto jsonSv = PluginStringView::from(json.data(), json.size());
-    ctx.iface.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
+    agentxx::plugin::clientUpdateInfoSection(ctx.host, ctx.iface.ui, ctx.section, json);
 }
 
 /// client 侧注册事务 (start 的实际内容); 无 UI 能力时静默降级 (返回 0)。
@@ -557,9 +559,12 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
         return 0;
     }
 
-    auto idSv    = PluginStringView::fromCstr("agentxx_system_monitor.usage");
-    auto propsSv = PluginStringView::fromCstr(R"_({"title":"System"})_");
-    ctx.section  = ctx.iface.ui->register_info_section(ctx.host, &idSv, &propsSv);
+    ctx.section = agentxx::plugin::clientRegisterInfoSection(
+        ctx.host,
+        ctx.iface.ui,
+        "agentxx_system_monitor.usage",
+        R"_({"title":"System"})_"
+    );
 
     if (ctx.iface.broadcasts && ctx.iface.broadcasts->subscribe_broadcast) {
         agentxx::plugin::subscribePluginBroadcast(
@@ -581,16 +586,18 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
     }
 
     if (ctx.iface.ui->register_command) {
-        auto nameSv = PluginStringView::fromCstr("sysinfo");
-        auto descSv = PluginStringView::fromCstr(
-            "Toggle system resource usage display in sidebar Info section"
-        );
-        ctx.iface.ui->register_command(
+        // 命令回调是异步操作契约: 动作 JSON 经回调自己的 notify 交回 (本插件同步给)
+        agentxx::plugin::clientRegisterCommand(
             ctx.host,
-            &nameSv,
-            &descSv,
-            [](void* ud, const PluginxxStringView*, PluginxxString* actionOut, PluginxxString*)
-                -> int32_t {
+            ctx.iface.ui,
+            "sysinfo",
+            "Toggle system resource usage display in sidebar Info section",
+            [](void*                         ud,
+               const PluginxxStringView*     args_json,
+               const PluginxxOperatorNotify* notify,
+               PluginxxString*               error_out) -> int32_t {
+                (void)args_json;
+                (void)error_out;
                 auto* ctx = static_cast<SysMonClientCtx*>(ud);
                 if (!ctx) {
                     return -1;
@@ -598,14 +605,14 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
                 const bool next = !ctx->usage_enabled.load(std::memory_order_relaxed);
                 ctx->usage_enabled.store(next, std::memory_order_relaxed);
                 refreshUsageDisplay(*ctx);
-                if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
-                    std::string payload = next ? R"_({"enabled":true})_" : R"_({"enabled":false})_";
-                    auto        evtSv   = PluginStringView::fromCstr(
-                        "agentxx.client.plugin.agentxx_system_monitor.usage_enabled"
-                    );
-                    auto        paySv   = PluginStringView::from(payload.data(), payload.size());
-                    ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
-                }
+                const std::string payload
+                    = next ? R"_({"enabled":true})_" : R"_({"enabled":false})_";
+                agentxx::plugin::clientSendPluginData(
+                    ctx->host,
+                    ctx->iface.wire,
+                    "agentxx.client.plugin.agentxx_system_monitor.usage_enabled",
+                    payload
+                );
                 std::string text = next ? "System resource info: ON" : "System resource info: OFF";
                 std::string stateStr = ctx->clientState();
                 if (!stateStr.empty() && stateStr != "{}") {
@@ -631,11 +638,7 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
                 out["action"]      = "toast";
                 out["text"]        = text;
                 out["level"]       = 0;
-                std::string dumped = out.dump();
-                auto        paySv  = PluginStringView::from(dumped.data(), dumped.size());
-                if (actionOut) {
-                    *actionOut = PluginString::from(ctx->host, &paySv);
-                }
+                agentxx::plugin::notifyText(notify, out.dump());
                 return 0;
             },
             &ctx

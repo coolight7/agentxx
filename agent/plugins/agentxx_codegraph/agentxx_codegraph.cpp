@@ -1184,16 +1184,17 @@ static void refreshSection(ClientCtx& c) {
         return;
     }
     if (!c.section && c.ui->register_info_section) {
-        auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
-        auto titleSv = agentxx::plugin::PluginStringView::fromCstr(R"_({"title":"CodeGraph"})_");
-        c.section    = c.ui->register_info_section(c.host, &idSv, &titleSv);
+        c.section = agentxx::plugin::clientRegisterInfoSection(
+            c.host,
+            c.ui,
+            "agentxx_codegraph.status",
+            R"_({"title":"CodeGraph"})_"
+        );
     }
     if (!c.section) {
         return;
     }
-    const std::string json   = buildInfoItemsJson(c);
-    auto              jsonSv = agentxx::plugin::PluginStringView::from(json.data(), json.size());
-    c.ui->update_info_section(c.host, c.section, &jsonSv);
+    agentxx::plugin::clientUpdateInfoSection(c.host, c.ui, c.section, buildInfoItemsJson(c));
 }
 
 /// 取频道载荷 JSON 对象 (非法/空值返回空对象)
@@ -1294,9 +1295,12 @@ static void* codegraphClientStart(
     PluginxxString*               err
 ) {
     if (ctx.ui && ctx.ui->register_info_section) {
-        auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
-        auto titleSv = agentxx::plugin::PluginStringView::fromCstr(R"_({"title":"CodeGraph"})_");
-        ctx.section  = ctx.ui->register_info_section(ctx.host, &idSv, &titleSv);
+        ctx.section = agentxx::plugin::clientRegisterInfoSection(
+            ctx.host,
+            ctx.ui,
+            "agentxx_codegraph.status",
+            R"_({"title":"CodeGraph"})_"
+        );
         if (ctx.section) {
             refreshSection(ctx);
         }
@@ -1336,7 +1340,7 @@ static void* codegraphClientStart(
 static void*
     codegraphClientStop(ClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (ctx.section && ctx.ui && ctx.ui->unregister_info_section) {
-        ctx.ui->unregister_info_section(ctx.host, ctx.section);
+        agentxx::plugin::clientUnregisterInfoSection(ctx.host, ctx.ui, ctx.section);
         ctx.section = nullptr;
     }
     ctx.current_file.clear();

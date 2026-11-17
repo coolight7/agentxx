@@ -55,6 +55,26 @@ static PluginxxString makeTestString(std::string_view s) {
     return PluginxxString{buf, static_cast<uint64_t>(s.size())};
 }
 
+/// 折叠内容回调: 正文就是那一行文本 (空正文 = 不绐自定义内容)
+static int32_t testCollapsedText(const PluginxxOperatorNotify* notify, const std::string& text) {
+    if (!notify || !notify->done || text.empty()) {
+        return 0;
+    }
+    const PluginxxStringView view{text.data(), static_cast<uint64_t>(text.size())};
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
+    return 0;
+}
+
+/// 展开内容回调: 正文 = items JSON 数组文本
+static int32_t testExpandedItems(const PluginxxOperatorNotify* notify, const std::string& itemsJson) {
+    if (!notify || !notify->done || itemsJson.empty()) {
+        return 0;
+    }
+    const PluginxxStringView view{itemsJson.data(), static_cast<uint64_t>(itemsJson.size())};
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
+    return 0;
+}
+
 } // namespace
 
 std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
@@ -109,14 +129,15 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto pathCollapsed
         = [](void*,
                                        const AgentxxToolRenderInput* in,
-                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*) -> int32_t {
         auto j = argObject(in);
         if (!j) {
             return 0;
         }
         const std::string path = stringArg(*j, "path");
         if (!path.empty()) {
-            out->text = makeTestString(path);
+            return testCollapsedText(notify, path);
         }
         return 0;
     };
@@ -137,7 +158,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto readCollapsed
         = [](void*,
                                        const AgentxxToolRenderInput* in,
-                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*) -> int32_t {
         auto j = argObject(in);
         if (!j) {
             return 0;
@@ -166,7 +188,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             text += path;
         }
         if (!text.empty()) {
-            out->text = makeTestString(text);
+            return testCollapsedText(notify, text);
         }
         return 0;
     };
@@ -181,7 +203,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto globCollapsed
         = [](void*,
                                        const AgentxxToolRenderInput* in,
-                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*) -> int32_t {
         auto j = argObject(in);
         if (!j) {
             return 0;
@@ -199,7 +222,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             joined += (n > 0 ? ", ..." : "...");
         }
         if (!joined.empty()) {
-            out->text = makeTestString(joined);
+            return testCollapsedText(notify, joined);
         }
         return 0;
     };
@@ -214,7 +237,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto grepCollapsed
         = [](void*,
                                        const AgentxxToolRenderInput* in,
-                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*) -> int32_t {
         auto j = argObject(in);
         if (!j) {
             return 0;
@@ -258,7 +282,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         if (files.size() > 2) {
             joinedFiles += (n > 0 ? ", ..." : "...");
         }
-        out->text = makeTestString(fmt::format("[{}] {}", quoted, joinedFiles));
+        return testCollapsedText(notify, fmt::format("[{}] {}", quoted, joinedFiles));
         return 0;
     };
     reg->toolRenderers.push_back({
@@ -272,7 +296,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto editCollapsed
         = [](void*,
                                        const AgentxxToolRenderInput* in,
-                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*) -> int32_t {
         auto j = argObject(in);
         if (!j) {
             return 0;
@@ -293,14 +318,15 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             text += path;
         }
         if (!text.empty()) {
-            out->text = makeTestString(text);
+            return testCollapsedText(notify, text);
         }
         return 0;
     };
     static auto editExpanded
         = [](void*,
                                        const AgentxxToolRenderInput* in,
-                                       AgentxxToolExpandedOutput* out) -> int32_t {
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*) -> int32_t {
         auto j = argObject(in);
         if (!j) {
             return 0;
@@ -330,7 +356,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             firstSegment = false;
         }
         if (!arr.empty()) {
-            out->items_json = makeTestString(arr.dump());
+            return testExpandedItems(notify, arr.dump());
         }
         return 0;
     };
@@ -346,42 +372,45 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto queryCollapsed
         = [](void*,
                                        const AgentxxToolRenderInput* in,
-                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*) -> int32_t {
         auto j = argObject(in);
         if (!j) {
             return 0;
         }
         const std::string query = stringArg(*j, "query");
         if (!query.empty()) {
-            out->text = makeTestString(query);
+            return testCollapsedText(notify, query);
         }
         return 0;
     };
     static auto urlCollapsed
         = [](void*,
                                        const AgentxxToolRenderInput* in,
-                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*) -> int32_t {
         auto j = argObject(in);
         if (!j) {
             return 0;
         }
         const std::string url = stringArg(*j, "url");
         if (!url.empty()) {
-            out->text = makeTestString(url);
+            return testCollapsedText(notify, url);
         }
         return 0;
     };
     static auto commandCollapsed
         = [](void*,
                                        const AgentxxToolRenderInput* in,
-                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*) -> int32_t {
         auto j = argObject(in);
         if (!j) {
             return 0;
         }
         const std::string command = stringArg(*j, "command");
         if (!command.empty()) {
-            out->text = makeTestString(command);
+            return testCollapsedText(notify, command);
         }
         return 0;
     };
@@ -472,21 +501,23 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     static auto planningCollapsed
         = [](void*,
                                        const AgentxxToolRenderInput* in,
-                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*) -> int32_t {
         auto plan = planOf(in);
         if (!plan) {
             return 0;
         }
         const std::string summary = planSummaryOf(*plan);
         if (!summary.empty()) {
-            out->text = makeTestString(summary);
+            return testCollapsedText(notify, summary);
         }
         return 0;
     };
     static auto planningExpanded
         = [](void*,
                                        const AgentxxToolRenderInput* in,
-                                       AgentxxToolExpandedOutput* out) -> int32_t {
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*) -> int32_t {
         auto plan = planOf(in);
         if (!plan) {
             return 0;
@@ -528,7 +559,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             items.push_back(std::move(row));
         }
         if (!items.empty()) {
-            out->items_json = makeTestString(items.dump());
+            return testExpandedItems(notify, items.dump());
         }
         return 0;
     };
@@ -865,27 +896,28 @@ struct ToolHeaderFixture {
                      : agentxx::plugin::ClientToolRenderPart::Collapsed
         );
         entry.plugin = hit->plugin;
-        if (wantCollapsed) {
-            AgentxxToolCollapsedOutput out{};
-            hit->collapsedFn(hit->userData, &input, &out);
-            if (out.text.data) {
-                entry.text.assign(out.text.data, static_cast<size_t>(out.text.size));
+        // 渲染回调是异步操作契约: 内容经回调自己的 notify 交回 (此处同步收下)
+        std::string collectPayload;
+        PluginxxOperatorNotify collectNotify{};
+        collectNotify.host_ud = &collectPayload;
+        collectNotify.done    = [](void* ud, int32_t, const PluginxxStringView* payload) {
+            auto* out = static_cast<std::string*>(ud);
+            if (payload && payload->data && payload->size > 0) {
+                out->assign(payload->data, static_cast<size_t>(payload->size));
             }
-            agentxx::plugin::hostMemoryFree(out.text.data);
+        };
+        if (wantCollapsed) {
+            hit->collapsedFn(hit->userData, &input, &collectNotify, nullptr);
+            entry.text    = std::move(collectPayload);
             entry.matched = !entry.text.empty();
         } else {
-            AgentxxToolExpandedOutput out{};
-            hit->expandedFn(hit->userData, &input, &out);
-            if (out.items_json.data) {
+            hit->expandedFn(hit->userData, &input, &collectNotify, nullptr);
+            if (!collectPayload.empty()) {
                 try {
-                    entry.items = utilxx_base::Json::parse(std::string_view{
-                        out.items_json.data,
-                        static_cast<size_t>(out.items_json.size)
-                    });
+                    entry.items = utilxx_base::Json::parse(std::string_view{collectPayload});
                 } catch (...) {
                 }
             }
-            agentxx::plugin::hostMemoryFree(out.items_json.data);
             entry.matched = entry.items.is_array() && !entry.items.empty();
         }
         mgr->toolRenderCache()->store(std::move(entry));

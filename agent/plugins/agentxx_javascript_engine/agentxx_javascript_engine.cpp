@@ -189,14 +189,6 @@ constexpr size_t  kStackLimit         = 4 * 1024 * 1024;
 constexpr size_t  kTaskTimeoutMs      = 60000;  ///< 单任务 (工具执行等) 超时
 constexpr int64_t kPromiseWaitLimitMs = 120000; ///< Promise 等待上限 (绝对截止时间)
 
-/// client 侧同步回调的等待上限 (io 线程等 JS 线程)
-///
-/// 渲染内容回调与命令 execute 都要求在主程序 io 线程同步返回结果, 而 JS 只在 JS
-/// 线程执行 —— 只能阻塞等待。取一个短上限: 超时就当"这次没有结果" (渲染回退默认
-/// 内容 / 命令按失败处理), 不让界面卡在脚本上。脚本里做耗时计算应改为不依赖同步
-/// 回调的方式 (例如订阅事件后用 `updateToolDecor` 推数据)。
-constexpr int kClientSyncTimeoutMs = 150;
-
 /// 每个任务/定时器之后最多泵多少次 Promise 微任务
 /// - 业务回调通常不等待 Promise: `netFetch(...).then(...)` 的续体必须在这里被泵出去,
 ///   否则永远不会执行 (主循环不在其他地方执行 pending job)
@@ -518,16 +510,13 @@ struct JsCallbackHook {
     int64_t     token = 0; ///< JS 侧回调表的键
 };
 
-/// 一次同步渲染调用 (client io 线程创建, 交给 JS 线程执行)
+/// 一次渲染调用 (client io 线程创建, 交给 JS 线程执行)
 ///
 /// - 输入是主程序给的只读借用视图, 跨线程后生命周期不保证: 必须在这里拷一份
-/// - 槽在堆上 (`shared_ptr`): io 线程超时返回后任务仍持有它, 不会写已销毁的栈
-struct JsRenderSync {
-    std::mutex              m;
-    std::condition_variable cv;
-    bool                    done      = false; ///< JS 线程已写入结果
-    std::atomic<bool>       abandoned{false};  ///< 调用方已超时: 任务不必再执行
-    bool                    collapsed = true;  ///< true = 折叠内容, false = 展开内容
+/// - 结果不在这里等: 回调返回后由 [JsReply] 经完成通知交回主程序 (可能立即,
+///   也可能等脚本 Promise resolve)
+struct JsRenderCall {
+    bool        collapsed = true; ///< true = 折叠内容, false = 展开内容
     // 输入拷贝
     std::string toolCallId;
     std::string toolName;
@@ -536,9 +525,20 @@ struct JsRenderSync {
     bool        finished = false;
     bool        isError  = false;
     int32_t     maxWidth = 0;
-    // 输出
-    bool        failed = false; ///< 脚本抛异常 / 形态不对 / 引擎已停
-    std::string text;           ///< 折叠内容文本, 或展开内容的 items JSON
+};
+
+/// 回答型回调 (工具渲染 / 命令 execute) 的收尾凭据
+///
+/// 主程序要求“内容经完成通知恰好一次交回”。脚本侧可能
+/// - 直接返回字符串 / 数组 → 立即交回 (与改造前一样当帧拿到内容);
+/// - 返回 Promise → 挂 `then`/`catch`, resolve 后再交回。
+///
+/// 生命周期: 首次交回后自行释放。脚本返回的 Promise 永不 settle 时本对象会留下
+/// 一个 (与主程序对“插件不答”的处理一致: 只是那一条内容一直用默认渲染)。
+struct JsReply {
+    PluginxxOperatorNotify notify{};      ///< 主程序的完成通知
+    bool                   collapsed = true; ///< 折叠内容只认文本
+    bool                   command   = false; ///< 命令: 任意值转 JSON 文本
 };
 
 /// client 侧工具特化渲染注册项
@@ -575,15 +575,9 @@ struct JsClientCallback {
     std::string label;
 };
 
-/// 一次同步脚本回调 (命令 execute; io 线程要求同步返回动作 JSON)
-struct JsCallbackSync {
-    std::mutex              m;
-    std::condition_variable cv;
-    bool                    done = false;
-    std::atomic<bool>       abandoned{false};
-    std::string             argsJson;
-    bool                    failed = false;
-    std::string             text; ///< 脚本返回值 (对象/数组已序列化)
+/// 一次命令执行回调 (命令 execute: 脚本返回值经 [JsReply] 交回)
+struct JsCommandCall {
+    std::string argsJson;
 };
 
 /// client 侧句柄类别 (`JsPluginCtx::ClientHandle::kind`)
@@ -3311,33 +3305,34 @@ private:
         const PluginxxNetIface* net
     );
 
-    // ==================== client 侧工具特化渲染 (io 线程 ↔ JS 线程) ====================
+    // ==================== client 侧工具特化渲染 (io 线程 → JS 线程) ====================
 
-    /// 折叠内容回调 (client io 线程调用; 输出字符串由主程序释放)
+    /// 折叠内容回调 (client io 线程调用; 异步操作契约)
     static int32_t PLUGINXX_CALL renderCollapsed(
         void*                         ud,
         const AgentxxToolRenderInput* input,
-        AgentxxToolCollapsedOutput*   output
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
     );
 
     /// 展开内容回调 (client io 线程; 只在用户展开该工具行时调用)
     static int32_t PLUGINXX_CALL renderExpanded(
         void*                         ud,
         const AgentxxToolRenderInput* input,
-        AgentxxToolExpandedOutput*    output
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
     );
 
-    /// 把一次渲染调用投递到 JS 线程并同步等待结果
+    /// 把一次渲染调用投递到 JS 线程 (不等结果)
     ///
-    /// - 返回 false = 没拿到 JS 结果 (引擎停止 / 超时 / JS 线程正在等主程序),
-    ///   调用方按"这次没有自定义内容"处理
-    /// - 超时后任务仍可能稍后执行: 槽由任务自己持有 (堆上), 不引用调用方栈
+    /// - 返回 false = 没投递 (引擎停止); 调用方按“本次没有自定义内容”收尾
     /// - `reg` 的生命周期覆盖引擎 (摘除时移进 `retiredRenders_`, 不就地释放)
-    bool invokeRenderSync(JsRenderReg* reg, const std::shared_ptr<JsRenderSync>& slot);
+    /// - 结果经 `JsReply` 交回: 脚本直接返回时就在本次任务里 `done`,
+    ///   返回 Promise 时在 resolve 后的微任务里 `done`
+    bool postRenderCall(JsRenderReg* reg, std::unique_ptr<JsRenderCall> call, JsReply* reply);
 
-    /// 在 JS 线程执行一次渲染调用 (查实例 → 取脚本函数 → 调用 → 转换结果)
-    void runRenderSyncOnJsThread(JsRenderReg* reg, const std::shared_ptr<JsRenderSync>& slot
-    ) noexcept;
+    /// 在 JS 线程执行一次渲染调用 (查实例 → 取脚本函数 → 调用 → 交回结果)
+    void runRenderCallOnJsThread(JsRenderReg* reg, JsRenderCall* call, JsReply* reply) noexcept;
 
     /// 摘除一份渲染注册 (JS 线程调用): 标记失效并从索引里删除
     void retireRenderOnJsThread(const std::string& toolName);
@@ -3351,14 +3346,14 @@ private:
     /// - **只能 JS 线程调用** (`pctx->clientCallbacks` 只由该线程访问)
     JsClientCallback* newClientCallbackOnJsThread(JsPluginCtx* pctx, JSValueConst fn);
 
-    /// 同步调用一个脚本回调 (命令 execute; 拿不到结果返回 false)
-    bool invokeCallbackSync(JsClientCallback* cb, const std::string& argsJson, std::string& out);
+    /// 投递一次命令执行到 JS 线程 (不等结果; 动作经 `JsReply` 交回)
+    bool postCommandReply(JsClientCallback* cb, std::string argsJson, JsReply* reply);
 
     /// 投递式调用一个脚本回调 (动作 / 定时器 / 快捷键; fire-and-forget)
     void postCallback(JsClientCallback* cb, const std::string& argsJson);
 
-    /// 在 JS 线程执行同步回调 (查实例 → 取脚本函数 → 调用 → 转换结果)
-    void runCallbackSyncOnJsThread(JsClientCallback* cb, const std::shared_ptr<JsCallbackSync>& slot
+    /// 在 JS 线程执行命令回调 (查实例 → 取脚本函数 → 调用 → 交回动作)
+    void runCommandReplyOnJsThread(JsClientCallback* cb, std::string argsJson, JsReply* reply
     ) noexcept;
 
     /// 在 JS 线程执行投递式回调
@@ -3370,12 +3365,36 @@ private:
     /// 按 `clientCbByKey` 的键注销并移除登记 (JS 线程)
     void dropClientCallbackByKeyOnJsThread(JsPluginCtx* pctx, const std::string& key);
 
-    /// 命令 execute 回调 (client io 线程; 返回动作 JSON, 由主程序释放)
+    /// 把脚本回调的返回值交给主程序 (立即 / 等 Promise)
+    /// - 字符串 = 内容; 数组/对象 = JSON 文本; null/undefined = “本次无内容”
+    /// - 返回 thenable 时挂 `then`/`catch`, resolve 后交回
+    static void finishJsReply(JSContext* ctx, JsReply* reply, JSValue ret);
+
+    /// Promise 的 onFulfilled / onRejected (`magic`: 0 = 成功, 1 = 失败)
+    static JSValue jsReplySettled(
+        JSContext* ctx,
+        JSValueConst this_val,
+        int argc,
+        JSValueConst* argv,
+        int magic,
+        JSValueConst* func_data
+    );
+
+    /// 值 → 结果正文 (空串 = 本次没有自定义内容)
+    static std::string replyText(JSContext* ctx, const JsReply& reply, JSValueConst value);
+
+    /// 交回结果 (`payload` = 正文) 并释放凭据
+    static void deliverReply(JsReply* reply, const std::string& text);
+
+    /// 交回失败 (脚本抛异常 / 已卸载) 并释放凭据
+    static void failReply(JsReply* reply, std::string_view reason);
+
+    /// 命令 execute 回调 (client io 线程; 动作 JSON 经完成通知交回)
     static int32_t PLUGINXX_CALL commandExecute(
-        void*                     ud,
-        const PluginxxStringView* args_json,
-        PluginxxString*           actionOut,
-        PluginxxString*           errorOut
+        void*                         ud,
+        const PluginxxStringView*     args_json,
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
     );
     /// 按钮动作回调 (client io 线程; fire-and-forget)
     static void PLUGINXX_CALL uiActionFire(const AgentxxUiActionContext* ctx, void* ud);
@@ -4873,6 +4892,65 @@ static std::string callTableText(const PluginxxHost* host, const Ifaces& iface, 
         iface.scheduler,
         std::forward<StartFn>(start)
     );
+}
+
+/// 调一次表并只看成败 (阻塞形态)
+template<typename Ifaces, typename StartFn>
+static bool callTableOk(const PluginxxHost* host, const Ifaces& iface, StartFn&& start) {
+    return agentxx::plugin::tableOpSyncWait(
+               host,
+               iface.cancel,
+               iface.scheduler,
+               std::forward<StartFn>(start)
+    )
+        .ok();
+}
+
+/// 调一次表并取回完整结果 (阻塞形态)
+template<typename Ifaces, typename StartFn>
+static auto callTableOp(const PluginxxHost* host, const Ifaces& iface, StartFn&& start) {
+    return agentxx::plugin::tableOpSyncWait(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        std::forward<StartFn>(start)
+    );
+}
+
+/// 调一次注册类表成员并取回句柄 (阻塞形态; 结果正文 = 句柄地址的十进制文本)
+template<typename Handle, typename Ifaces, typename StartFn>
+static Handle* callTableHandle(const PluginxxHost* host, const Ifaces& iface, StartFn&& start) {
+    auto res = agentxx::plugin::tableOpSyncWait(
+        host,
+        iface.cancel,
+        iface.scheduler,
+        std::forward<StartFn>(start)
+    );
+    if (!res.ok()) {
+        return nullptr;
+    }
+    return agentxx::plugin::clientHandleFromText<Handle>(res.text());
+}
+
+/// 调一次查询类表成员并解析成 JS 值 (失败 / 空结果 → `null`)
+template<typename Ifaces, typename StartFn>
+static JSValue callTableJson(
+    JSContext*          ctx,
+    const PluginxxHost* host,
+    const Ifaces&       iface,
+    const char*         tag,
+    StartFn&&           start
+) {
+    const auto json = callTableText(host, iface, std::forward<StartFn>(start));
+    if (json.empty()) {
+        return JS_NULL;
+    }
+    JSValue out = JS_ParseJSON(ctx, json.data(), json.size(), tag);
+    if (JS_IsException(out)) {
+        JS_FreeValue(ctx, out);
+        return JS_NULL;
+    }
+    return out;
 }
 
 /// 读一条广播的当前值 (阻塞形态)
@@ -7529,44 +7607,39 @@ JSValue JsEngine::clientBridgeCall(
             if (!iface.self || !iface.self->get_own_info) {
                 return JS_NULL;
             }
-            PluginxxString out{nullptr, 0};
-            if (iface.self->get_own_info(host, &out) != 0) {
-                return JS_NULL;
-            }
-            return takeHostJson(out, "<own_info>");
+            return callTableJson(ctx, host, iface, "<own_info>", [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.self->get_own_info(host, cb, ud, err);
+            });
         }
 
         case B_GET_PLUGIN_ARGS: { // 与 agent 侧同名: client 侧走 self 表
             if (!iface.self || !iface.self->get_plugin_args) {
                 return JS_NULL;
             }
-            PluginxxString out{nullptr, 0};
-            if (iface.self->get_plugin_args(host, &out) != 0) {
-                return JS_NULL;
-            }
-            return takeHostJson(out, "<plugin_args>");
+            return callTableJson(ctx, host, iface, "<plugin_args>", [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.self->get_plugin_args(host, cb, ud, err);
+            });
         }
 
         case B_CLIENT_GET_CONFIG_PATH: {
             if (!iface.self || !iface.self->get_plugin_config_path) {
                 return JS_NewString(ctx, "");
             }
-            PluginxxString out{nullptr, 0};
-            if (iface.self->get_plugin_config_path(host, &out) != 0) {
-                return JS_NewString(ctx, "");
-            }
-            return takeHostText(out);
+            const auto text = callTableText(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.self->get_plugin_config_path(host, cb, ud, err);
+            });
+            return JS_NewStringLen(ctx, text.data(), text.size());
         }
 
         case B_GET_LANGUAGE: {
             if (!iface.self || !iface.self->get_language) {
                 return JS_NewString(ctx, "en");
             }
-            PluginxxString out{nullptr, 0};
-            if (iface.self->get_language(host, &out) != 0) {
-                return JS_NewString(ctx, "en");
-            }
-            return takeHostText(out);
+            const auto text = callTableText(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.self->get_language(host, cb, ud, err);
+            });
+            const auto lang = text.empty() ? std::string{"en"} : text;
+            return JS_NewStringLen(ctx, lang.data(), lang.size());
         }
 
         case B_SET_LANGUAGE: {
@@ -7575,18 +7648,20 @@ JSValue JsEngine::clientBridgeCall(
             }
             std::string lang   = jsToCppString(ctx, argv[0]);
             auto        langSv = agentxx::plugin::PluginStringView::from(lang.data(), lang.size());
-            return iface.self->set_language(host, &langSv) == 0 ? JS_TRUE : JS_FALSE;
+            return callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                       return iface.self->set_language(host, &langSv, cb, ud, err);
+                   })
+                       ? JS_TRUE
+                       : JS_FALSE;
         }
 
         case B_CLIENT_GET_STATE: {
             if (!iface.session || !iface.session->get_client_state) {
                 return JS_NULL;
             }
-            PluginxxString out{nullptr, 0};
-            if (iface.session->get_client_state(host, &out) != 0) {
-                return JS_NULL;
-            }
-            return takeHostJson(out, "<client_state>");
+            return callTableJson(ctx, host, iface, "<client_state>", [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.session->get_client_state(host, cb, ud, err);
+            });
         }
 
         case B_CLIENT_SEND_INPUT: {
@@ -7597,7 +7672,9 @@ JSValue JsEngine::clientBridgeCall(
             std::string text = jsToCppString(ctx, argv[1]);
             auto        sidSv = agentxx::plugin::PluginStringView::from(sid.data(), sid.size());
             auto        textSv = agentxx::plugin::PluginStringView::from(text.data(), text.size());
-            return iface.session->send_user_input(host, &sidSv, &textSv) == AGENTXX_RESULT_OK
+            return callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                       return iface.session->send_user_input(host, &sidSv, &textSv, cb, ud, err);
+                   })
                        ? JS_TRUE
                        : JS_FALSE;
         }
@@ -7608,7 +7685,8 @@ JSValue JsEngine::clientBridgeCall(
             }
             std::string sid   = argc >= 1 ? jsToCppString(ctx, argv[0]) : std::string{};
             auto        sidSv = agentxx::plugin::PluginStringView::from(sid.data(), sid.size());
-            iface.session->request_cancel(host, &sidSv);
+            // 不关心结果: 只提交 (cb = NULL)
+            iface.session->request_cancel(host, &sidSv, nullptr, nullptr, nullptr);
             return JS_UNDEFINED;
         }
 
@@ -7622,7 +7700,9 @@ JSValue JsEngine::clientBridgeCall(
                                        : valueToJsonString(ctx, argv[1]);
             auto topicSv = agentxx::plugin::PluginStringView::from(topic.data(), topic.size());
             auto paySv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-            return iface.wire->send_plugin_data(host, &topicSv, &paySv) == AGENTXX_RESULT_OK
+            return callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                       return iface.wire->send_plugin_data(host, &topicSv, &paySv, cb, ud, err);
+                   })
                        ? JS_TRUE
                        : JS_FALSE;
         }
@@ -7637,7 +7717,7 @@ JSValue JsEngine::clientBridgeCall(
                 JS_ToInt32(ctx, &level, argv[1]);
             }
             auto textSv = agentxx::plugin::PluginStringView::from(text.data(), text.size());
-            iface.ui->show_toast(host, &textSv, level);
+            iface.ui->show_toast(host, &textSv, level, nullptr, nullptr, nullptr);
             return JS_UNDEFINED;
         }
 
@@ -7651,7 +7731,9 @@ JSValue JsEngine::clientBridgeCall(
                                        : valueToJsonString(ctx, argv[1]);
             auto tcidSv  = agentxx::plugin::PluginStringView::from(tcid.data(), tcid.size());
             auto decorSv = agentxx::plugin::PluginStringView::from(decor.data(), decor.size());
-            return iface.ui->update_tool_decor(host, &tcidSv, &decorSv) == AGENTXX_RESULT_OK
+            return callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                       return iface.ui->update_tool_decor(host, &tcidSv, &decorSv, cb, ud, err);
+                   })
                        ? JS_TRUE
                        : JS_FALSE;
         }
@@ -7695,12 +7777,16 @@ JSValue JsEngine::clientBridgeCall(
             spec.payload = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
             spec.extra_json
                 = agentxx::plugin::PluginStringView::from(extraJson.data(), extraJson.size());
-            return iface.ui->open_overlay(host, &spec) == AGENTXX_RESULT_OK ? JS_TRUE : JS_FALSE;
+            return callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                       return iface.ui->open_overlay(host, &spec, cb, ud, err);
+                   })
+                       ? JS_TRUE
+                       : JS_FALSE;
         }
 
         case B_CLIENT_CLOSE_OVERLAY: {
             if (iface.ui && iface.ui->close_overlay) {
-                iface.ui->close_overlay(host);
+                iface.ui->close_overlay(host, nullptr, nullptr, nullptr);
             }
             return JS_UNDEFINED;
         }
@@ -7745,7 +7831,7 @@ JSValue JsEngine::clientBridgeCall(
 
             AgentxxToolRenderSpec spec{};
             spec.struct_size  = sizeof(AgentxxToolRenderSpec);
-            spec.version      = 1;
+            spec.version      = 2;
             spec.tool_name
                 = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
             spec.display_name
@@ -7753,8 +7839,11 @@ JSValue JsEngine::clientBridgeCall(
             spec.collapsed_fn = hasCollapsed ? &JsEngine::renderCollapsed : nullptr;
             spec.expanded_fn  = hasExpanded ? &JsEngine::renderExpanded : nullptr;
             spec.user_data    = reg.get();
-            const int32_t rc  = iface.ui->register_tool_renderer(host, &spec);
-            if (rc != AGENTXX_RESULT_OK) {
+            const bool accepted
+                = callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                      return iface.ui->register_tool_renderer(host, &spec, cb, ud, err);
+                  });
+            if (!accepted) {
                 // 主程序拒绝 (重复注册 / 参数非法): 不留下无人用的脚本函数
                 dropRenderCallbacksOnJsThread(pctx, reg.get());
                 return JS_FALSE;
@@ -7776,7 +7865,7 @@ JSValue JsEngine::clientBridgeCall(
                 if (ui && ui->unregister_tool_renderer) {
                     auto tn
                         = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-                    ui->unregister_tool_renderer(host, &tn);
+                    ui->unregister_tool_renderer(host, &tn, nullptr, nullptr, nullptr);
                 }
             });
             return JS_TRUE;
@@ -7795,8 +7884,11 @@ JSValue JsEngine::clientBridgeCall(
                 return JS_FALSE;
             }
             auto tn = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-            return iface.ui->unregister_tool_renderer(host, &tn) == AGENTXX_RESULT_OK ? JS_TRUE
-                                                                                     : JS_FALSE;
+            return callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                       return iface.ui->unregister_tool_renderer(host, &tn, cb, ud, err);
+                   })
+                       ? JS_TRUE
+                       : JS_FALSE;
         }
 
         // ---- 展示面: 状态栏项 / 面板 / Info 段落 ----
@@ -7849,19 +7941,53 @@ JSValue JsEngine::clientBridgeCall(
                     JS_FreeValue(ctx, v);
                     return out;
                 }();
-                handle = iface.ui->register_status_item(realHost, &idSv, &propsSv, align, order);
-                rc     = handle ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_FAILED;
+                handle = callTableHandle<AgentxxStatusItem>(
+                    realHost,
+                    iface,
+                    [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return iface.ui->register_status_item(
+                            realHost,
+                            &idSv,
+                            &propsSv,
+                            align,
+                            order,
+                            cb,
+                            ud,
+                            err
+                        );
+                    }
+                );
+                rc = handle ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_FAILED;
             } else if (
                 kind == ClientHandleKind::Panel && iface.ui && iface.ui->register_panel
             ) {
-                handle = iface.ui->register_panel(realHost, &idSv, &propsSv);
-                rc     = handle ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_FAILED;
+                handle = callTableHandle<AgentxxPanel>(
+                    realHost,
+                    iface,
+                    [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return iface.ui->register_panel(realHost, &idSv, &propsSv, cb, ud, err);
+                    }
+                );
+                rc = handle ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_FAILED;
             } else if (
                 kind == ClientHandleKind::InfoSection && iface.ui
                 && iface.ui->register_info_section
             ) {
-                handle = iface.ui->register_info_section(realHost, &idSv, &propsSv);
-                rc     = handle ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_FAILED;
+                handle = callTableHandle<AgentxxInfoSection>(
+                    realHost,
+                    iface,
+                    [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return iface.ui->register_info_section(
+                            realHost,
+                            &idSv,
+                            &propsSv,
+                            cb,
+                            ud,
+                            err
+                        );
+                    }
+                );
+                rc = handle ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_FAILED;
             }
             if (rc != AGENTXX_RESULT_OK || !handle) {
                 return JS_NewInt64(ctx, 0); ///< 0 = 失败 (主程序不支持或 id 冲突)
@@ -7882,16 +8008,32 @@ JSValue JsEngine::clientBridgeCall(
                 if (!uiForRollback) {
                     return;
                 }
+                // 只提交, 不等结果
                 if (kind == ClientHandleKind::StatusItem && uiForRollback->unregister_status_item) {
-                    uiForRollback->unregister_status_item(realHost, static_cast<AgentxxStatusItem*>(handle));
+                    uiForRollback->unregister_status_item(
+                        realHost,
+                        static_cast<AgentxxStatusItem*>(handle),
+                        nullptr,
+                        nullptr,
+                        nullptr
+                    );
                 } else if (kind == ClientHandleKind::Panel && uiForRollback->unregister_panel) {
-                    uiForRollback->unregister_panel(realHost, static_cast<AgentxxPanel*>(handle));
+                    uiForRollback->unregister_panel(
+                        realHost,
+                        static_cast<AgentxxPanel*>(handle),
+                        nullptr,
+                        nullptr,
+                        nullptr
+                    );
                 } else if (
                     kind == ClientHandleKind::InfoSection && uiForRollback->unregister_info_section
                 ) {
                     uiForRollback->unregister_info_section(
                         realHost,
-                        static_cast<AgentxxInfoSection*>(handle)
+                        static_cast<AgentxxInfoSection*>(handle),
+                        nullptr,
+                        nullptr,
+                        nullptr
                     );
                 }
             });
@@ -7934,25 +8076,46 @@ JSValue JsEngine::clientBridgeCall(
             auto contentSv = agentxx::plugin::PluginStringView::from(content.data(), content.size());
             int32_t rc     = AGENTXX_RESULT_ERR_UNSUPPORTED;
             if (kind == ClientHandleKind::StatusItem && iface.ui && iface.ui->update_status_item) {
-                rc = iface.ui->update_status_item(
-                    host,
-                    static_cast<AgentxxStatusItem*>(it->second.handle),
-                    &contentSv
-                );
+                rc = callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                         return iface.ui->update_status_item(
+                             host,
+                             static_cast<AgentxxStatusItem*>(it->second.handle),
+                             &contentSv,
+                             cb,
+                             ud,
+                             err
+                         );
+                     })
+                         ? AGENTXX_RESULT_OK
+                         : AGENTXX_RESULT_ERR_FAILED;
             } else if (kind == ClientHandleKind::Panel && iface.ui && iface.ui->update_panel) {
-                rc = iface.ui->update_panel(
-                    host,
-                    static_cast<AgentxxPanel*>(it->second.handle),
-                    &contentSv
-                );
+                rc = callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                         return iface.ui->update_panel(
+                             host,
+                             static_cast<AgentxxPanel*>(it->second.handle),
+                             &contentSv,
+                             cb,
+                             ud,
+                             err
+                         );
+                     })
+                         ? AGENTXX_RESULT_OK
+                         : AGENTXX_RESULT_ERR_FAILED;
             } else if (
                 kind == ClientHandleKind::InfoSection && iface.ui && iface.ui->update_info_section
             ) {
-                rc = iface.ui->update_info_section(
-                    host,
-                    static_cast<AgentxxInfoSection*>(it->second.handle),
-                    &contentSv
-                );
+                rc = callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                         return iface.ui->update_info_section(
+                             host,
+                             static_cast<AgentxxInfoSection*>(it->second.handle),
+                             &contentSv,
+                             cb,
+                             ud,
+                             err
+                         );
+                     })
+                         ? AGENTXX_RESULT_OK
+                         : AGENTXX_RESULT_ERR_FAILED;
             }
             return rc == AGENTXX_RESULT_OK ? JS_TRUE : JS_FALSE;
         }
@@ -7976,14 +8139,33 @@ JSValue JsEngine::clientBridgeCall(
             }
             void* handle = it->second.handle;
             pctx->clientHandles.erase(it);
+            // 只提交, 不等结果
             if (kind == ClientHandleKind::StatusItem && iface.ui && iface.ui->unregister_status_item) {
-                iface.ui->unregister_status_item(host, static_cast<AgentxxStatusItem*>(handle));
+                iface.ui->unregister_status_item(
+                    host,
+                    static_cast<AgentxxStatusItem*>(handle),
+                    nullptr,
+                    nullptr,
+                    nullptr
+                );
             } else if (kind == ClientHandleKind::Panel && iface.ui && iface.ui->unregister_panel) {
-                iface.ui->unregister_panel(host, static_cast<AgentxxPanel*>(handle));
+                iface.ui->unregister_panel(
+                    host,
+                    static_cast<AgentxxPanel*>(handle),
+                    nullptr,
+                    nullptr,
+                    nullptr
+                );
             } else if (
                 kind == ClientHandleKind::InfoSection && iface.ui && iface.ui->unregister_info_section
             ) {
-                iface.ui->unregister_info_section(host, static_cast<AgentxxInfoSection*>(handle));
+                iface.ui->unregister_info_section(
+                    host,
+                    static_cast<AgentxxInfoSection*>(handle),
+                    nullptr,
+                    nullptr,
+                    nullptr
+                );
             }
             return JS_TRUE;
         }
@@ -8012,9 +8194,20 @@ JSValue JsEngine::clientBridgeCall(
             cb->label = name;
             auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
             auto descSv = agentxx::plugin::PluginStringView::from(desc.data(), desc.size());
-            const int32_t rc
-                = iface.ui->register_command(host, &nameSv, &descSv, &JsEngine::commandExecute, cb);
-            if (rc != AGENTXX_RESULT_OK) {
+            const bool accepted
+                = callTableOk(host, iface, [&](PluginxxOperatorCallback doneCb, void* doneUd, PluginxxString* err) {
+                      return iface.ui->register_command(
+                          host,
+                          &nameSv,
+                          &descSv,
+                          &JsEngine::commandExecute,
+                          cb,
+                          doneCb,
+                          doneUd,
+                          err
+                      );
+                  });
+            if (!accepted) {
                 engine->dropClientCallbackOnJsThread(pctx, cb);
                 return JS_FALSE; ///< 名字冲突 / 参数非法
             }
@@ -8022,7 +8215,7 @@ JSValue JsEngine::clientBridgeCall(
             pctx->rollbackActions.push_back([engine, ui = iface.ui, host, name, pctx]() {
                 if (ui && ui->unregister_command) {
                     auto nv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-                    ui->unregister_command(host, &nv);
+                    ui->unregister_command(host, &nv, nullptr, nullptr, nullptr);
                 }
                 engine->dropClientCallbackByKeyOnJsThread(pctx, fmt::format("cmd:{}", name));
             });
@@ -8042,7 +8235,11 @@ JSValue JsEngine::clientBridgeCall(
                 return JS_FALSE;
             }
             auto nv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-            return iface.ui->unregister_command(host, &nv) == AGENTXX_RESULT_OK ? JS_TRUE : JS_FALSE;
+            return callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                       return iface.ui->unregister_command(host, &nv, cb, ud, err);
+                   })
+                       ? JS_TRUE
+                       : JS_FALSE;
         }
 
         // ---- 按钮动作绑定 (fire-and-forget) ----
@@ -8061,9 +8258,19 @@ JSValue JsEngine::clientBridgeCall(
             }
             cb->label  = target;
             auto tgtSv = agentxx::plugin::PluginStringView::from(target.data(), target.size());
-            const int32_t rc
-                = iface.ui->bind_action_handler(host, &tgtSv, &JsEngine::uiActionFire, cb);
-            if (rc != AGENTXX_RESULT_OK) {
+            const bool accepted
+                = callTableOk(host, iface, [&](PluginxxOperatorCallback doneCb, void* doneUd, PluginxxString* err) {
+                      return iface.ui->bind_action_handler(
+                          host,
+                          &tgtSv,
+                          &JsEngine::uiActionFire,
+                          cb,
+                          doneCb,
+                          doneUd,
+                          err
+                      );
+                  });
+            if (!accepted) {
                 engine->dropClientCallbackOnJsThread(pctx, cb);
                 return JS_FALSE;
             }
@@ -8075,7 +8282,7 @@ JSValue JsEngine::clientBridgeCall(
             pctx->rollbackActions.push_back([engine, ui = iface.ui, host, target, pctx]() {
                 if (ui && ui->unbind_action_handler) {
                     auto tv = agentxx::plugin::PluginStringView::from(target.data(), target.size());
-                    ui->unbind_action_handler(host, &tv);
+                    ui->unbind_action_handler(host, &tv, nullptr, nullptr, nullptr);
                 }
                 engine->dropClientCallbackByKeyOnJsThread(pctx, fmt::format("act:{}", target));
             });
@@ -8090,8 +8297,11 @@ JSValue JsEngine::clientBridgeCall(
                 return JS_FALSE;
             }
             auto tv = agentxx::plugin::PluginStringView::from(target.data(), target.size());
-            return iface.ui->unbind_action_handler(host, &tv) == AGENTXX_RESULT_OK ? JS_TRUE
-                                                                                 : JS_FALSE;
+            return callTableOk(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                       return iface.ui->unbind_action_handler(host, &tv, cb, ud, err);
+                   })
+                       ? JS_TRUE
+                       : JS_FALSE;
         }
 
         // ---- 定时器 (主程序驱动) ----
@@ -8142,7 +8352,13 @@ JSValue JsEngine::clientBridgeCall(
             spec.owner_id         = ownerSv;
             spec.on_timer         = &JsEngine::timerFire;
             spec.user_data        = cb;
-            auto* handle          = iface.timer->set_timer(host, &spec);
+            auto* handle          = callTableHandle<AgentxxTimer>(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback doneCb, void* doneUd, PluginxxString* err) {
+                    return iface.timer->set_timer(host, &spec, doneCb, doneUd, err);
+                }
+            );
             if (!handle) {
                 engine->dropClientCallbackOnJsThread(pctx, cb);
                 return JS_NewInt64(ctx, 0);
@@ -8160,7 +8376,7 @@ JSValue JsEngine::clientBridgeCall(
                 auto* handle = static_cast<AgentxxTimer*>(live->second.handle);
                 pctx->clientHandles.erase(live);
                 if (tm && tm->cancel_timer) {
-                    tm->cancel_timer(host, handle);
+                    tm->cancel_timer(host, handle, nullptr, nullptr, nullptr);
                 }
                 engine->dropClientCallbackByKeyOnJsThread(pctx, key);
             });
@@ -8182,7 +8398,13 @@ JSValue JsEngine::clientBridgeCall(
             pctx->clientHandles.erase(it);
             engine->dropClientCallbackByKeyOnJsThread(pctx, fmt::format("timer:{}", token));
             if (iface.timer && iface.timer->cancel_timer) {
-                iface.timer->cancel_timer(host, static_cast<AgentxxTimer*>(handle));
+                iface.timer->cancel_timer(
+                    host,
+                    static_cast<AgentxxTimer*>(handle),
+                    nullptr,
+                    nullptr,
+                    nullptr
+                );
             }
             return JS_TRUE;
         }
@@ -8194,7 +8416,10 @@ JSValue JsEngine::clientBridgeCall(
             const std::string ownerId = JS_IsString(argv[0]) ? jsToCppString(ctx, argv[0])
                                                               : std::string{};
             auto ownerSv = agentxx::plugin::PluginStringView::from(ownerId.data(), ownerId.size());
-            return iface.timer->is_visible(host, &ownerSv) != 0 ? JS_TRUE : JS_FALSE;
+            auto res     = callTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.timer->is_visible(host, &ownerSv, cb, ud, err);
+            });
+            return (res.ok() && res.flag()) ? JS_TRUE : JS_FALSE;
         }
 
         // ---- 全局快捷键 ----
@@ -8225,7 +8450,13 @@ JSValue JsEngine::clientBridgeCall(
             spec.description = descSv;
             spec.on_keybind  = &JsEngine::keybindFire;
             spec.user_data   = cb;
-            auto* handle     = iface.keybind->register_keybind(host, &spec);
+            auto* handle     = callTableHandle<AgentxxKeybind>(
+                host,
+                iface,
+                [&](PluginxxOperatorCallback doneCb, void* doneUd, PluginxxString* err) {
+                    return iface.keybind->register_keybind(host, &spec, doneCb, doneUd, err);
+                }
+            );
             if (!handle) {
                 engine->dropClientCallbackOnJsThread(pctx, cb);
                 return JS_NewInt64(ctx, 0); ///< 键位非法 / 已被占用 / 数量超限
@@ -8243,7 +8474,7 @@ JSValue JsEngine::clientBridgeCall(
                     auto* handle = static_cast<AgentxxKeybind*>(live->second.handle);
                     pctx->clientHandles.erase(live);
                     if (kb && kb->unregister_keybind) {
-                        kb->unregister_keybind(host, handle);
+                        kb->unregister_keybind(host, handle, nullptr, nullptr, nullptr);
                     }
                     engine->dropClientCallbackByKeyOnJsThread(pctx, key);
                 }
@@ -8266,7 +8497,13 @@ JSValue JsEngine::clientBridgeCall(
             pctx->clientHandles.erase(it);
             engine->dropClientCallbackByKeyOnJsThread(pctx, fmt::format("keybind:{}", token));
             if (iface.keybind && iface.keybind->unregister_keybind) {
-                iface.keybind->unregister_keybind(host, static_cast<AgentxxKeybind*>(handle));
+                iface.keybind->unregister_keybind(
+                    host,
+                    static_cast<AgentxxKeybind*>(handle),
+                    nullptr,
+                    nullptr,
+                    nullptr
+                );
             }
             return JS_TRUE;
         }
@@ -8275,11 +8512,18 @@ JSValue JsEngine::clientBridgeCall(
             if (!iface.keybind || !iface.keybind->list_keybinds) {
                 return JS_NewArray(ctx);
             }
-            PluginxxString out{nullptr, 0};
-            if (iface.keybind->list_keybinds(host, &out) != 0 || !out.data) {
+            const auto json = callTableText(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.keybind->list_keybinds(host, cb, ud, err);
+            });
+            if (json.empty()) {
                 return JS_NewArray(ctx);
             }
-            return takeHostJson(out, "<keybinds>");
+            JSValue out = JS_ParseJSON(ctx, json.data(), json.size(), "<keybinds>");
+            if (JS_IsException(out)) {
+                JS_FreeValue(ctx, out);
+                return JS_NewArray(ctx);
+            }
+            return out;
         }
 
         // ---- 网络 (`agentxx.net`: client 插件与 agent 插件同一张表) ----
@@ -8584,15 +8828,31 @@ JSValue JsEngine::clientBridgeCall(
 }
 
 // =====================================================================
-// client 侧工具特化渲染: io 线程 → JS 线程的同步桥
+// client 侧工具特化渲染: io 线程 → JS 线程 (结果经完成通知交回)
 // =====================================================================
+
+namespace {
+
+/// 完成通知里的快照: 渲染回调与命令 execute 共用一套 "值 → 正文" 规则
+std::unique_ptr<JsReply> takeReply(const PluginxxOperatorNotify* notify) {
+    if (!notify || !notify->done) {
+        return nullptr;
+    }
+    auto reply      = std::make_unique<JsReply>();
+    reply->notify   = *notify;
+    return reply;
+}
+
+} // namespace
 
 int32_t PLUGINXX_CALL JsEngine::renderCollapsed(
     void*                         ud,
     const AgentxxToolRenderInput* input,
-    AgentxxToolCollapsedOutput*   output
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 ) {
-    if (!ud || !input || !output) {
+    (void)error_out;
+    if (!ud || !input) {
         return AGENTXX_RESULT_ERR_ARG;
     }
     auto* reg    = static_cast<JsRenderReg*>(ud);
@@ -8601,27 +8861,30 @@ int32_t PLUGINXX_CALL JsEngine::renderCollapsed(
         || reg->collapsedToken.load(std::memory_order_acquire) == 0) {
         return AGENTXX_RESULT_ERR_STATE;
     }
+    auto reply = takeReply(notify);
+    if (!reply) {
+        return AGENTXX_RESULT_ERR_ARG;
+    }
+    reply->collapsed = true;
     try {
-        auto slot       = std::make_shared<JsRenderSync>();
-        slot->collapsed = true;
-        slot->toolCallId
-            = std::string(agentxx::plugin::PluginStringView::str(input->tool_call_id));
-        slot->toolName = std::string(agentxx::plugin::PluginStringView::str(input->tool_name));
-        slot->argsJson = std::string(agentxx::plugin::PluginStringView::str(input->args_json));
-        slot->resultText
+        auto call        = std::make_unique<JsRenderCall>();
+        call->collapsed  = true;
+        call->toolCallId = std::string(agentxx::plugin::PluginStringView::str(input->tool_call_id));
+        call->toolName   = std::string(agentxx::plugin::PluginStringView::str(input->tool_name));
+        call->argsJson   = std::string(agentxx::plugin::PluginStringView::str(input->args_json));
+        call->resultText
             = std::string(agentxx::plugin::PluginStringView::str(input->result_text));
-        slot->finished = input->is_finished != 0;
-        slot->isError  = input->is_error != 0;
-        slot->maxWidth = input->max_width;
-        if (!engine->invokeRenderSync(reg, slot)) {
-            return AGENTXX_RESULT_ERR_STATE; ///< 超时 / 引擎停止: 回退默认渲染
+        call->finished = input->is_finished != 0;
+        call->isError  = input->is_error != 0;
+        call->maxWidth = input->max_width;
+        JsReply* raw   = reply.release();
+        if (!engine->postRenderCall(reg, std::move(call), raw)) {
+            // 引擎已停止: 按"没有自定义内容"收尾
+            failReply(raw, "js engine stopped");
         }
-        if (slot->failed || slot->text.empty()) {
-            return AGENTXX_RESULT_OK; ///< 没有自定义内容 (空输出)
-        }
-        output->text = agentxx::plugin::PluginString::from(engine->host(), slot->text);
-        return AGENTXX_RESULT_OK;
+        return 0;
     } catch (...) {
+        failReply(reply.release(), "render callback failed");
         return AGENTXX_RESULT_ERR_INTERNAL;
     }
 }
@@ -8629,9 +8892,11 @@ int32_t PLUGINXX_CALL JsEngine::renderCollapsed(
 int32_t PLUGINXX_CALL JsEngine::renderExpanded(
     void*                         ud,
     const AgentxxToolRenderInput* input,
-    AgentxxToolExpandedOutput*    output
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 ) {
-    if (!ud || !input || !output) {
+    (void)error_out;
+    if (!ud || !input) {
         return AGENTXX_RESULT_ERR_ARG;
     }
     auto* reg    = static_cast<JsRenderReg*>(ud);
@@ -8640,94 +8905,78 @@ int32_t PLUGINXX_CALL JsEngine::renderExpanded(
         || reg->expandedToken.load(std::memory_order_acquire) == 0) {
         return AGENTXX_RESULT_ERR_STATE;
     }
+    auto reply = takeReply(notify);
+    if (!reply) {
+        return AGENTXX_RESULT_ERR_ARG;
+    }
+    reply->collapsed = false;
     try {
-        auto slot        = std::make_shared<JsRenderSync>();
-        slot->collapsed  = false;
-        slot->toolCallId
-            = std::string(agentxx::plugin::PluginStringView::str(input->tool_call_id));
-        slot->toolName = std::string(agentxx::plugin::PluginStringView::str(input->tool_name));
-        slot->argsJson = std::string(agentxx::plugin::PluginStringView::str(input->args_json));
-        slot->resultText
+        auto call        = std::make_unique<JsRenderCall>();
+        call->collapsed  = false;
+        call->toolCallId = std::string(agentxx::plugin::PluginStringView::str(input->tool_call_id));
+        call->toolName   = std::string(agentxx::plugin::PluginStringView::str(input->tool_name));
+        call->argsJson   = std::string(agentxx::plugin::PluginStringView::str(input->args_json));
+        call->resultText
             = std::string(agentxx::plugin::PluginStringView::str(input->result_text));
-        slot->finished = input->is_finished != 0;
-        slot->isError  = input->is_error != 0;
-        slot->maxWidth = input->max_width;
-        if (!engine->invokeRenderSync(reg, slot)) {
-            return AGENTXX_RESULT_ERR_STATE;
+        call->finished = input->is_finished != 0;
+        call->isError  = input->is_error != 0;
+        call->maxWidth = input->max_width;
+        JsReply* raw   = reply.release();
+        if (!engine->postRenderCall(reg, std::move(call), raw)) {
+            failReply(raw, "js engine stopped");
         }
-        if (slot->failed || slot->text.empty()) {
-            return AGENTXX_RESULT_OK;
-        }
-        output->items_json = agentxx::plugin::PluginString::from(engine->host(), slot->text);
-        return AGENTXX_RESULT_OK;
+        return 0;
     } catch (...) {
+        failReply(reply.release(), "render callback failed");
         return AGENTXX_RESULT_ERR_INTERNAL;
     }
 }
 
-bool JsEngine::invokeRenderSync(JsRenderReg* reg, const std::shared_ptr<JsRenderSync>& slot) {
-    if (!reg || !slot) {
+bool JsEngine::postRenderCall(
+    JsRenderReg*                 reg,
+    std::unique_ptr<JsRenderCall> call,
+    JsReply*                     reply
+) {
+    if (!reg || !call || !reply) {
         return false;
     }
-    // JS 线程正在等主程序 (client io 线程): 再让 io 线程等它就会互等, 直接放弃
-    if (jsHostCallDepth_.load(std::memory_order_acquire) > 0) {
-        return false;
-    }
-    if (!post([this, reg, slot]() {
-            if (slot->abandoned.load(std::memory_order_acquire)) {
-                return; ///< 调用方已超时: 不必再跑脚本
-            }
-            runRenderSyncOnJsThread(reg, slot);
-        })) {
-        return false; ///< 引擎已停止
-    }
-    std::unique_lock<std::mutex> lk(slot->m);
-    const bool                   ok = slot->cv.wait_for(
-        lk,
-        std::chrono::milliseconds(kClientSyncTimeoutMs),
-        [&slot]() {
-            return slot->done;
-        }
-    );
-    if (!ok) {
-        slot->abandoned.store(true, std::memory_order_release);
-        return false;
-    }
-    return true;
+    // 任务自己持有输入与凭据 (堆上), 不引用调用方栈
+    auto* raw = call.release();
+    return post([this, reg, raw, reply]() {
+        std::unique_ptr<JsRenderCall> own(raw);
+        runRenderCallOnJsThread(reg, raw, reply);
+    });
 }
 
-void JsEngine::runRenderSyncOnJsThread(
-    JsRenderReg*                        reg,
-    const std::shared_ptr<JsRenderSync>& slot
+void JsEngine::runRenderCallOnJsThread(
+    JsRenderReg*    reg,
+    JsRenderCall*   call,
+    JsReply*        reply
 ) noexcept {
-    auto finish = [&slot](bool failed, std::string text) {
-        {
-            std::lock_guard<std::mutex> lk(slot->m);
-            slot->failed = failed;
-            slot->text   = std::move(text);
-            slot->done   = true;
-        }
-        slot->cv.notify_all();
-    };
+    if (!reg || !call || !reply) {
+        failReply(reply, "bad render call");
+        return;
+    }
     try {
-        if (!reg || reg->dead.load(std::memory_order_acquire) || stopping()) {
-            finish(true, {});
+        if (reg->dead.load(std::memory_order_acquire) || stopping()) {
+            failReply(reply, "renderer retired");
             return;
         }
         auto pctx = findPlugin(reg->instanceKey);
         if (!pctx || pctx->deleted || !pctx->ctx) {
-            finish(true, {});
+            failReply(reply, "plugin instance gone");
             return;
         }
-        const int64_t token = slot->collapsed ? reg->collapsedToken.load(std::memory_order_acquire)
-                                              : reg->expandedToken.load(std::memory_order_acquire);
+        const int64_t token = call->collapsed
+                                  ? reg->collapsedToken.load(std::memory_order_acquire)
+                                  : reg->expandedToken.load(std::memory_order_acquire);
         if (token == 0) {
-            finish(true, {});
+            failReply(reply, "renderer not registered");
             return;
         }
         auto fit = pctx->clientCallbacks.find(token);
         if (fit == pctx->clientCallbacks.end()) {
-            finish(true, {});
+            failReply(reply, "renderer callback gone");
             return;
         }
         JSContext* ctx = pctx->ctx;
@@ -8748,35 +8997,30 @@ void JsEngine::runRenderSyncOnJsThread(
             ctx,
             input,
             "toolCallId",
-            JS_NewStringLen(ctx, slot->toolCallId.data(), slot->toolCallId.size())
+            JS_NewStringLen(ctx, call->toolCallId.data(), call->toolCallId.size())
         );
         JS_SetPropertyStr(
             ctx,
             input,
             "toolName",
-            JS_NewStringLen(ctx, slot->toolName.data(), slot->toolName.size())
+            JS_NewStringLen(ctx, call->toolName.data(), call->toolName.size())
         );
         JS_SetPropertyStr(
             ctx,
             input,
             "argsJson",
-            JS_NewStringLen(ctx, slot->argsJson.data(), slot->argsJson.size())
+            JS_NewStringLen(ctx, call->argsJson.data(), call->argsJson.size())
         );
-        JS_SetPropertyStr(
-            ctx,
-            input,
-            "args",
-            jsonTextToValue(ctx, slot->argsJson, "<tool_args>")
-        );
+        JS_SetPropertyStr(ctx, input, "args", jsonTextToValue(ctx, call->argsJson, "<tool_args>"));
         JS_SetPropertyStr(
             ctx,
             input,
             "resultText",
-            JS_NewStringLen(ctx, slot->resultText.data(), slot->resultText.size())
+            JS_NewStringLen(ctx, call->resultText.data(), call->resultText.size())
         );
-        JS_SetPropertyStr(ctx, input, "finished", slot->finished ? JS_TRUE : JS_FALSE);
-        JS_SetPropertyStr(ctx, input, "isError", slot->isError ? JS_TRUE : JS_FALSE);
-        JS_SetPropertyStr(ctx, input, "maxWidth", JS_NewInt32(ctx, slot->maxWidth));
+        JS_SetPropertyStr(ctx, input, "finished", call->finished ? JS_TRUE : JS_FALSE);
+        JS_SetPropertyStr(ctx, input, "isError", call->isError ? JS_TRUE : JS_FALSE);
+        JS_SetPropertyStr(ctx, input, "maxWidth", JS_NewInt32(ctx, call->maxWidth));
 
         JSValue argv[1] = {input};
         JSValue ret     = JS_Call(ctx, fit->second, JS_UNDEFINED, 1, argv);
@@ -8785,47 +9029,136 @@ void JsEngine::runRenderSyncOnJsThread(
             JSValue exc = JS_GetException(ctx);
             logAt(
                 3,
-                fmt::format(
-                    "interpreter.js: tool renderer threw: {}",
-                    valueToJsonString(ctx, exc)
-                )
+                fmt::format("interpreter.js: tool renderer threw: {}", valueToJsonString(ctx, exc))
                     .c_str()
             );
             JS_FreeValue(ctx, exc);
             JS_FreeValue(ctx, ret);
-            finish(true, {});
+            failReply(reply, "tool renderer threw");
             return;
         }
-
-        std::string text;
-        bool        shapeOk = true;
-        if (slot->collapsed) {
-            if (JS_IsString(ret)) {
-                text = jsToCppString(ctx, ret);
-            } else if (JS_IsObject(ret) && !JS_IsFunction(ctx, ret)) {
-                // {text: "..."} 形态 (方便回调顺带返回其它字段)
-                JSValue tv = JS_GetPropertyStr(ctx, ret, "text");
-                if (JS_IsString(tv)) {
-                    text = jsToCppString(ctx, tv);
-                }
-                JS_FreeValue(ctx, tv);
-            } else if (!JS_IsNull(ret) && !JS_IsUndefined(ret)) {
-                shapeOk = false; ///< 数组/数字/函数等形态: 按"没有自定义内容"处理
-            }
-        } else {
-            if (JS_IsString(ret)) {
-                text = jsToCppString(ctx, ret); ///< 已是 items JSON 文本
-            } else if (JS_IsArray(ret)) {
-                text = valueToJsonString(ctx, ret);
-            } else if (!JS_IsNull(ret) && !JS_IsUndefined(ret)) {
-                shapeOk = false;
-            }
-        }
-        JS_FreeValue(ctx, ret);
-        finish(!shapeOk, std::move(text));
+        finishJsReply(ctx, reply, ret);
     } catch (...) {
-        finish(true, {});
+        failReply(reply, "tool renderer failed");
     }
+}
+
+// =====================================================================
+// 完成通知: 值 → 正文, 以及 Promise 的后续交回
+// =====================================================================
+
+std::string JsEngine::replyText(JSContext* ctx, const JsReply& reply, JSValueConst value) {
+    if (JS_IsNull(value) || JS_IsUndefined(value)) {
+        return {};
+    }
+    if (JS_IsString(value)) {
+        return jsToCppString(ctx, value);
+    }
+    if (reply.collapsed) {
+        // 折叠内容只要一行文本: 对象允许用 {text: "..."} 形态 (方便顺带返回其它字段)
+        if (JS_IsObject(value) && !JS_IsFunction(ctx, value)) {
+            JSValue tv = JS_GetPropertyStr(ctx, value, "text");
+            if (JS_IsString(tv)) {
+                std::string text = jsToCppString(ctx, tv);
+                JS_FreeValue(ctx, tv);
+                return text;
+            }
+            JS_FreeValue(ctx, tv);
+        }
+        return {}; ///< 数组/数字/其它形态: 按"没有自定义内容"处理
+    }
+    // 展开内容 / 命令动作: 数组与对象都序列化成 JSON 文本
+    return valueToJsonString(ctx, value);
+}
+
+void JsEngine::deliverReply(JsReply* reply, const std::string& text) {
+    if (!reply) {
+        return;
+    }
+    const PluginxxStringView view{text.data(), static_cast<uint64_t>(text.size())};
+    if (reply->notify.done) {
+        reply->notify.done(reply->notify.host_ud, PLUGINXX_OPERATOR_OK, &view);
+    }
+    delete reply;
+}
+
+void JsEngine::failReply(JsReply* reply, std::string_view reason) {
+    if (!reply) {
+        return;
+    }
+    XX_LOGD("js reply failed: {}", reason);
+    const PluginxxStringView view{reason.data(), static_cast<uint64_t>(reason.size())};
+    if (reply->notify.done) {
+        reply->notify.done(reply->notify.host_ud, PLUGINXX_OPERATOR_FAILED, &view);
+    }
+    delete reply;
+}
+
+void JsEngine::finishJsReply(JSContext* ctx, JsReply* reply, JSValue ret) {
+    if (!reply) {
+        JS_FreeValue(ctx, ret);
+        return;
+    }
+    // thenable: 挂 then/catch, resolve 后再交回 (回调本身立即返回)
+    if (JS_IsObject(ret) && !JS_IsFunction(ctx, ret)) {
+        JSValue thenFn = JS_GetPropertyStr(ctx, ret, "then");
+        if (JS_IsFunction(ctx, thenFn)) {
+            JSValue data[1] = {JS_NewInt64(ctx, static_cast<int64_t>(reinterpret_cast<intptr_t>(reply)))};
+            JSValue onOk = JS_NewCFunctionData(ctx, &JsEngine::jsReplySettled, 1, 0, 1, data);
+            JSValue onErr = JS_NewCFunctionData(ctx, &JsEngine::jsReplySettled, 1, 1, 1, data);
+            JS_FreeValue(ctx, data[0]);
+            JSValue argv[2] = {onOk, onErr};
+            JSValue called  = JS_Call(ctx, thenFn, ret, 2, argv);
+            if (JS_IsException(called)) {
+                JSValue exc = JS_GetException(ctx);
+                XX_LOGW(
+                    "interpreter.js: thenable rejected: {}",
+                    valueToJsonString(ctx, exc)
+                );
+                JS_FreeValue(ctx, exc);
+                failReply(reply, "thenable rejected");
+            }
+            JS_FreeValue(ctx, called);
+            JS_FreeValue(ctx, thenFn);
+            JS_FreeValue(ctx, onOk);
+            JS_FreeValue(ctx, onErr);
+            JS_FreeValue(ctx, ret);
+            return;
+        }
+        JS_FreeValue(ctx, thenFn);
+    }
+    const std::string text = replyText(ctx, *reply, ret);
+    JS_FreeValue(ctx, ret);
+    deliverReply(reply, text);
+}
+
+JSValue JsEngine::jsReplySettled(
+    JSContext*    ctx,
+    JSValueConst  this_val,
+    int           argc,
+    JSValueConst* argv,
+    int           magic,
+    JSValueConst* func_data
+) {
+    (void)this_val;
+    int64_t raw = 0;
+    if (!func_data || JS_ToInt64Ext(ctx, &raw, func_data[0]) != 0) {
+        return JS_UNDEFINED;
+    }
+    auto* reply = reinterpret_cast<JsReply*>(static_cast<intptr_t>(raw));
+    if (!reply) {
+        return JS_UNDEFINED;
+    }
+    if (magic != 0) {
+        std::string reason = argc >= 1 ? valueToJsonString(ctx, argv[0]) : std::string{};
+        XX_LOGW("interpreter.js: client reply rejected: {}", reason);
+        failReply(reply, "script rejected");
+        return JS_UNDEFINED;
+    }
+    const JSValue value = argc >= 1 ? argv[0] : JS_UNDEFINED;
+    const std::string text = replyText(ctx, *reply, value);
+    deliverReply(reply, text);
+    return JS_UNDEFINED;
 }
 
 void JsEngine::retireRenderOnJsThread(const std::string& toolName) {
@@ -8917,46 +9250,18 @@ void JsEngine::dropClientCallbackByKeyOnJsThread(JsPluginCtx* pctx, const std::s
     pctx->clientCbByKey.erase(it);
 }
 
-bool JsEngine::invokeCallbackSync(
+bool JsEngine::postCommandReply(
     JsClientCallback* cb,
-    const std::string& argsJson,
-    std::string&       out
+    std::string       argsJson,
+    JsReply*          reply
 ) {
-    if (!cb || cb->dead.load(std::memory_order_acquire)
+    if (!cb || !reply || cb->dead.load(std::memory_order_acquire)
         || cb->fnToken.load(std::memory_order_acquire) == 0) {
         return false;
     }
-    // JS 线程正在等主程序: 再让主程序等它就会互等, 直接按失败处理
-    if (jsHostCallDepth_.load(std::memory_order_acquire) > 0) {
-        return false;
-    }
-    auto slot      = std::make_shared<JsCallbackSync>();
-    slot->argsJson = argsJson;
-    if (!post([this, cb, slot]() {
-            if (slot->abandoned.load(std::memory_order_acquire)) {
-                return;
-            }
-            runCallbackSyncOnJsThread(cb, slot);
-        })) {
-        return false; ///< 引擎已停止
-    }
-    std::unique_lock<std::mutex> lk(slot->m);
-    const bool                   ok = slot->cv.wait_for(
-        lk,
-        std::chrono::milliseconds(kClientSyncTimeoutMs),
-        [&slot]() {
-            return slot->done;
-        }
-    );
-    if (!ok) {
-        slot->abandoned.store(true, std::memory_order_release);
-        return false;
-    }
-    if (slot->failed) {
-        return false;
-    }
-    out = std::move(slot->text);
-    return true;
+    return post([this, cb, argsJson = std::move(argsJson), reply]() mutable {
+        runCommandReplyOnJsThread(cb, std::move(argsJson), reply);
+    });
 }
 
 void JsEngine::postCallback(JsClientCallback* cb, const std::string& argsJson) {
@@ -8968,33 +9273,25 @@ void JsEngine::postCallback(JsClientCallback* cb, const std::string& argsJson) {
     });
 }
 
-void JsEngine::runCallbackSyncOnJsThread(
-    JsClientCallback*             cb,
-    const std::shared_ptr<JsCallbackSync>& slot
+void JsEngine::runCommandReplyOnJsThread(
+    JsClientCallback* cb,
+    std::string       argsJson,
+    JsReply*          reply
 ) noexcept {
-    auto finish = [&slot](bool failed, std::string text) {
-        {
-            std::lock_guard<std::mutex> lk(slot->m);
-            slot->failed = failed;
-            slot->text   = std::move(text);
-            slot->done   = true;
-        }
-        slot->cv.notify_all();
-    };
     try {
         const int64_t token = cb ? cb->fnToken.load(std::memory_order_acquire) : 0;
         if (!cb || cb->dead.load(std::memory_order_acquire) || token == 0 || stopping()) {
-            finish(true, {});
+            failReply(reply, "command callback retired");
             return;
         }
         auto pctx = findPlugin(cb->instanceKey);
         if (!pctx || pctx->deleted || !pctx->ctx) {
-            finish(true, {});
+            failReply(reply, "plugin instance gone");
             return;
         }
         auto fit = pctx->clientCallbacks.find(token);
         if (fit == pctx->clientCallbacks.end()) {
-            finish(true, {});
+            failReply(reply, "command callback gone");
             return;
         }
         JSContext* ctx = pctx->ctx;
@@ -9010,7 +9307,7 @@ void JsEngine::runCallbackSyncOnJsThread(
             }
         } guard(pctx.get());
 
-        JSValue arg = jsonTextToValue(ctx, slot->argsJson, "<callback_args>");
+        JSValue arg = jsonTextToValue(ctx, argsJson, "<callback_args>");
         JSValue ret = JS_Call(ctx, fit->second, JS_UNDEFINED, 1, &arg);
         JS_FreeValue(ctx, arg);
         if (JS_IsException(ret)) {
@@ -9026,21 +9323,12 @@ void JsEngine::runCallbackSyncOnJsThread(
             );
             JS_FreeValue(ctx, exc);
             JS_FreeValue(ctx, ret);
-            finish(true, {});
+            failReply(reply, "command callback threw");
             return;
         }
-        std::string text;
-        if (JS_IsString(ret)) {
-            text = jsToCppString(ctx, ret);
-        } else if (JS_IsNull(ret) || JS_IsUndefined(ret)) {
-            text.clear();
-        } else {
-            text = valueToJsonString(ctx, ret);
-        }
-        JS_FreeValue(ctx, ret);
-        finish(false, std::move(text));
+        finishJsReply(ctx, reply, ret);
     } catch (...) {
-        finish(true, {});
+        failReply(reply, "command callback failed");
     }
 }
 
@@ -9093,40 +9381,39 @@ void JsEngine::runCallbackOnJsThread(JsClientCallback* cb, const std::string& ar
 }
 
 int32_t PLUGINXX_CALL JsEngine::commandExecute(
-    void*                     ud,
-    const PluginxxStringView* args_json,
-    PluginxxString*           actionOut,
-    PluginxxString*           errorOut
+    void*                         ud,
+    const PluginxxStringView*     args_json,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 ) {
+    (void)error_out;
     auto* cb = static_cast<JsClientCallback*>(ud);
     if (!cb || !cb->engine) {
         return AGENTXX_RESULT_ERR_STATE;
     }
     auto*               engine = cb->engine;
-    const PluginxxHost* host   = engine->host();
-    if (!host) {
+    if (!engine->host()) {
         return AGENTXX_RESULT_ERR_STATE;
     }
+    auto reply = takeReply(notify);
+    if (!reply) {
+        return AGENTXX_RESULT_ERR_ARG;
+    }
+    reply->command   = true;
+    reply->collapsed = false; ///< 命令动作是 JSON 文本, 不能按折叠文本取值
     try {
-        const std::string args
+        std::string args
             = (args_json && args_json->data)
                   ? std::string(args_json->data, static_cast<size_t>(args_json->size))
                   : std::string{"{}"};
-        std::string out;
-        if (!engine->invokeCallbackSync(cb, args, out)) {
-            if (errorOut) {
-                *errorOut = agentxx::plugin::PluginString::fromCstr(
-                    host,
-                    "script command callback failed"
-                );
-            }
-            return AGENTXX_RESULT_ERR_STATE;
+        JsReply* raw = reply.release();
+        if (!engine->postCommandReply(cb, std::move(args), raw)) {
+            // 引擎已停止 / 回调已注销: 本次命令什么也不做
+            failReply(raw, "command callback unavailable");
         }
-        if (actionOut) {
-            *actionOut = agentxx::plugin::PluginString::from(host, out);
-        }
-        return AGENTXX_RESULT_OK;
+        return 0;
     } catch (...) {
+        failReply(reply.release(), "command callback failed");
         return AGENTXX_RESULT_ERR_INTERNAL;
     }
 }

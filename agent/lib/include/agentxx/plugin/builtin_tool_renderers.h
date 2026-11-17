@@ -24,20 +24,21 @@ void registerBuiltinToolRenderers(ClientPluginManager& mgr);
 ///
 /// - 供 [registerBuiltinToolRenderers] 注册; 也供主程序/测试直接放入 UI 注册表
 ///   ([ClientUiRegistry::builtinToolRenderers]) 使用
-/// - 输出一行文本 (**不含**分隔符 `" · "`, 由界面统一补), 经主程序内存操作分配,
-///   由调用方统一释放
-/// - `return` 0 = 本次处理完成 (输出为空表示没有自定义内容);
-///   非 0 表示本次渲染不可用, 调用方走默认渲染
+/// - 输出一行文本 (**不含**分隔符 `" · "`, 由界面统一补), 经完成通知交回
+///   (回调内立即完成, 所以当帧就能拿到内容)
+/// - `return` 0 = 已受理; 非 0 表示本次渲染不可用, 调用方走默认渲染
 int32_t PLUGINXX_CALL builtinRenderShareStoreCollapsed(
     void*                         userData,
     const AgentxxToolRenderInput* input,
-    AgentxxToolCollapsedOutput*   output
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 );
 
 int32_t PLUGINXX_CALL builtinRenderSubagentCollapsed(
     void*                         userData,
     const AgentxxToolRenderInput* input,
-    AgentxxToolCollapsedOutput*   output
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 );
 
 } // namespace plugin

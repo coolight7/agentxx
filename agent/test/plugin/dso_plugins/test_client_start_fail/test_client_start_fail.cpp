@@ -17,8 +17,11 @@
 /// 仅使用纯 C ABI 头 (client_plugin_api.h); 不依赖 libagentxx。
 #include "agentxx/plugin/api/client_plugin_api.h"
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 
 namespace {
 
@@ -64,13 +67,88 @@ void PLUGINXX_CALL onReadyEvent(const PluginxxStringView*, void*) {
     // 回滚用例只关心订阅是否被撤销; handler 本身不做任何事。
 }
 
-int32_t PLUGINXX_CALL
-    probeCommandExecute(void*, const PluginxxStringView*, PluginxxString* actionOut, PluginxxString*) {
-    if (actionOut) {
-        actionOut->data = nullptr;
-        actionOut->size = 0;
+int32_t PLUGINXX_CALL probeCommandExecute(
+    void*                         userData,
+    const PluginxxStringView*     args,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               errorOut
+) {
+    (void)userData;
+    (void)args;
+    (void)errorOut;
+    // 同步完成但不给动作 (空正文 = 本次没有动作)
+    if (notify && notify->done) {
+        const PluginxxStringView empty{nullptr, 0};
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &empty);
     }
     return 0;
+}
+
+/// 一次表调用的完成结果
+///
+/// 表成员是异步操作契约: 工作体在主程序的 client io 线程执行。本插件的 start 事务
+/// 可能在别的线程 (加载线程) 里跑, 所以这里等完成通知而不是假设同步完成。
+struct CallResult {
+    std::mutex              mutex;
+    std::condition_variable cv;
+    char                    handleText[32] = {0}; ///< 句柄正文 (进程内地址的十进制文本)
+    bool                    done           = false;
+    int32_t                 status         = PLUGINXX_OPERATOR_FAILED;
+};
+
+void PLUGINXX_CALL callDone(void* ud, int32_t status, const PluginxxStringView* payload) {
+    auto* result = static_cast<CallResult*>(ud);
+    {
+        std::lock_guard<std::mutex> lock(result->mutex);
+        result->status = status;
+        if (payload && payload->data && payload->size > 0
+            && payload->size < sizeof(result->handleText)) {
+            std::memcpy(result->handleText, payload->data, static_cast<size_t>(payload->size));
+            result->handleText[payload->size] = '\0';
+        }
+        result->done = true;
+    }
+    result->cv.notify_all();
+}
+
+/// 等完成通知 (调用方可能已在 io 线程内联完成, 此时立即返回)
+bool waitCall(CallResult& call) {
+    std::unique_lock<std::mutex> lock(call.mutex);
+    return call.cv.wait_for(lock, std::chrono::seconds{10}, [&call] {
+        return call.done;
+    });
+}
+
+/// 结果正文 → 句柄指针 (调用方持锁; 空/非法给 nullptr)
+void* handleOfLocked(const CallResult& result) {
+    if (!result.done || result.status != PLUGINXX_OPERATOR_OK || result.handleText[0] == '\0') {
+        return nullptr;
+    }
+    return reinterpret_cast<void*>(static_cast<uintptr_t>(std::strtoull(result.handleText, nullptr, 10)));
+}
+
+/// 提交一次表调用, 只要"受理且成功" (不关心正文)
+template<typename StartFn>
+bool submitOk(StartFn&& start) {
+    CallResult     call;
+    PluginxxString err{nullptr, 0};
+    if (!start(&callDone, &call, &err) || !waitCall(call)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(call.mutex);
+    return call.status == PLUGINXX_OPERATOR_OK;
+}
+
+/// 提交一次表调用并取回句柄 (正文 = 地址十进制文本)
+template<typename StartFn>
+void* submitHandle(StartFn&& start) {
+    CallResult     call;
+    PluginxxString err{nullptr, 0};
+    if (!start(&callDone, &call, &err) || !waitCall(call)) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(call.mutex);
+    return handleOfLocked(call);
 }
 
 struct ProbeCtx {
@@ -78,70 +156,106 @@ struct ProbeCtx {
     bool                started = false;
 };
 
-/// 注册事务: 每步注册后立即用句柄操作自检, 失败返回 false。
-bool registerAll(const PluginxxHost* host, ProbeCtx* ctx) {
+/// 注册事务: 每步注册后立即用句柄操作自检; 失败时把步骤名写进 `error`
+bool registerAll(const PluginxxHost* host, ProbeCtx* ctx, PluginxxString* error) {
+    auto fail = [host, error](const char* what) {
+        setError(host, error, what);
+        return false;
+    };
     const auto* ui
         = static_cast<const AgentxxClientUiIface*>(queryIface(host, AGENTXX_IFACE_CLIENT_UI));
     if (!ui || !ui->register_status_item) {
-        return false;
+        return fail("client start: ui table missing register_status_item");
     }
 
     const auto statusInit = sv(R"({"text":"probe: 0"})");
     const auto statusId   = sv("test_client_start_fail.status");
-    auto*      status     = ui->register_status_item(host, &statusId, &statusInit, 0, 10);
+    auto*      status     = static_cast<AgentxxStatusItem*>(submitHandle(
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->register_status_item(host, &statusId, &statusInit, 0, 10, cb, ud, err);
+        }
+    ));
     if (!status) {
-        return false;
+        return fail("client start: register_status_item failed");
     }
     const auto statusUpdate = sv(R"({"text":"probe: 1"})");
-    if (ui->update_status_item && ui->update_status_item(host, status, &statusUpdate) != 0) {
-        return false;
+    if (ui->update_status_item
+        && !submitOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+               return ui->update_status_item(host, status, &statusUpdate, cb, ud, err);
+           })) {
+        return fail("client start: update_status_item failed");
     }
 
     if (!ui->register_panel) {
-        return false;
+        return fail("client start: ui table missing register_panel");
     }
     const auto panelId    = sv("test_client_start_fail.panel");
     const auto panelProps = sv(R"({"title":"Probe"})");
-    auto*      panel      = ui->register_panel(host, &panelId, &panelProps);
+    auto*      panel      = static_cast<AgentxxPanel*>(submitHandle(
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->register_panel(host, &panelId, &panelProps, cb, ud, err);
+        }
+    ));
     if (!panel) {
-        return false;
+        return fail("client start: register_panel failed");
     }
     const auto panelItems = sv(R"({"items":[{"kind":"text","text":"probe"}]})");
-    if (ui->update_panel && ui->update_panel(host, panel, &panelItems) != 0) {
-        return false;
+    if (ui->update_panel
+        && !submitOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+               return ui->update_panel(host, panel, &panelItems, cb, ud, err);
+           })) {
+        return fail("client start: update_panel failed");
     }
 
     if (!ui->register_info_section) {
-        return false;
+        return fail("client start: ui table missing register_info_section");
     }
     const auto infoId    = sv("test_client_start_fail.info");
     const auto infoProps = sv(R"({"title":"Probe Info"})");
-    auto*      info      = ui->register_info_section(host, &infoId, &infoProps);
+    auto*      info      = static_cast<AgentxxInfoSection*>(submitHandle(
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->register_info_section(host, &infoId, &infoProps, cb, ud, err);
+        }
+    ));
     if (!info) {
-        return false;
+        return fail("client start: register_info_section failed");
     }
     const auto infoItems = sv(R"({"items":[{"kind":"text","text":"probe"}]})");
-    if (ui->update_info_section && ui->update_info_section(host, info, &infoItems) != 0) {
-        return false;
+    if (ui->update_info_section
+        && !submitOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+               return ui->update_info_section(host, info, &infoItems, cb, ud, err);
+           })) {
+        return fail("client start: update_info_section failed");
     }
 
     if (!ui->register_command) {
-        return false;
+        return fail("client start: ui table missing register_command");
     }
     const auto cmdName = sv("test_client_start_fail_cmd");
     const auto cmdDesc = sv("client rollback probe command");
-    if (ui->register_command(host, &cmdName, &cmdDesc, &probeCommandExecute, ctx) != 0) {
-        return false;
+    if (!submitOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->register_command(
+                host,
+                &cmdName,
+                &cmdDesc,
+                &probeCommandExecute,
+                ctx,
+                cb,
+                ud,
+                err
+            );
+        })) {
+        return fail("client start: register_command failed");
     }
 
     const auto* broadcasts
         = static_cast<const PluginxxBroadcastsIface*>(queryIface(host, PLUGINXX_IFACE_BROADCASTS)
         );
     if (!broadcasts || !broadcasts->subscribe_broadcast) {
-        return false;
+        return fail("client start: broadcasts table missing subscribe_broadcast");
     }
     const auto readyId = sv("agentxx.client.ready");
-    // 表成员是异步契约: 不关心结果, 只受理 (本插件在 start 里跑, 主程序内联完成)
+    // 表成员是异步契约: 不关心结果, 只受理 (未受理时返回 NULL)
     if (!broadcasts->subscribe_broadcast(
             host,
             nullptr,
@@ -153,7 +267,7 @@ bool registerAll(const PluginxxHost* host, ProbeCtx* ctx) {
             nullptr,
             nullptr
         )) {
-        return false;
+        return fail("client start: subscribe_broadcast rejected");
     }
     return true;
 }
@@ -201,8 +315,7 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_start(
     const PluginxxHost* host = ctx->host;
 
     const char* okFlag = std::getenv("AGENTXX_TEST_CLIENT_START_OK");
-    if (!registerAll(host, ctx)) {
-        setError(host, error_out, "client start failed during registration transaction");
+    if (!registerAll(host, ctx, error_out)) {
         return nullptr;
     }
     if (okFlag && okFlag[0] == '1') {

@@ -55,6 +55,267 @@ static asio::awaitable<void> sleepMs(int ms) {
     co_await timer.async_wait(asio::use_awaitable);
 }
 
+/// client 表调用的结果 (测试夹具)
+///
+/// client 六张表都是异步操作契约。测试协程与 `ClientPluginManager` 的 io 线程是**同一个
+/// 线程**, 因此表操作在提交点内联完成: 提交返回时 `done` 已经是 true。
+struct ClientCall {
+    bool        accepted = false; ///< 入口是否受理 (false = 立即被拒, 原因在 payload)
+    bool        done     = false; ///< 是否已收到完成通知
+    int32_t     status   = PLUGINXX_OPERATOR_FAILED;
+    std::string payload; ///< 结果正文 (未受理时 = 拒绝原因)
+
+    bool ok() const noexcept {
+        return accepted && done && status == PLUGINXX_OPERATOR_OK;
+    }
+};
+
+/// 取回表操作的句柄 (payload = 进程内地址的十进制文本)
+template<typename Handle>
+Handle* handleOf(const ClientCall& call) {
+    return call.ok() ? agentxx::plugin::clientHandleFromText<Handle>(call.payload) : nullptr;
+}
+
+void PLUGINXX_CALL clientCallDone(void* ud, int32_t status, const PluginxxStringView* payload) {
+    auto* call   = static_cast<ClientCall*>(ud);
+    call->done   = true;
+    call->status = status;
+    if (payload && payload->data && payload->size > 0) {
+        call->payload.assign(payload->data, static_cast<size_t>(payload->size));
+    }
+}
+
+/// 提交一次 client 表调用并取回结果 (见 [ClientCall])
+template<typename StartFn>
+ClientCall clientCall(const PluginxxHost* host, StartFn&& start) {
+    ClientCall     call;
+    PluginxxString err{nullptr, 0};
+    call.accepted = start(&clientCallDone, &call, &err) != nullptr;
+    if (!call.accepted) {
+        call.done = true;
+        if (err.data) {
+            call.payload.assign(err.data, static_cast<size_t>(err.size));
+        }
+    }
+    if (err.data) {
+        agentxx::plugin::PluginString::free(host, &err);
+    }
+    return call;
+}
+
+/* ---------- client 表便捷包装 (测试侧: 提交即取结果) ----------
+ *
+ * 形态与改造前的同步入口一一对应, 便于用例本体保持原样; 实现走 [clientCall]。
+ */
+
+static int32_t uiBindAction(
+    const PluginxxHost*         host,
+    const AgentxxClientUiIface* ui,
+    std::string_view            target,
+    AgentxxUiActionFn           fn,
+    void*                       ud
+) {
+    if (!ui || !ui->bind_action_handler || !fn) {
+        return -1;
+    }
+    auto targetSv = agentxx::plugin::PluginStringView::from(target.data(), target.size());
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return ui->bind_action_handler(host, &targetSv, fn, ud, cb, cud, err);
+    });
+    return call.ok() ? 0 : -1;
+}
+
+static int32_t uiUnbindAction(
+    const PluginxxHost*         host,
+    const AgentxxClientUiIface* ui,
+    std::string_view            target
+) {
+    if (!ui || !ui->unbind_action_handler) {
+        return -1;
+    }
+    auto targetSv = agentxx::plugin::PluginStringView::from(target.data(), target.size());
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return ui->unbind_action_handler(host, &targetSv, cb, cud, err);
+    });
+    return call.ok() ? 0 : -1;
+}
+
+static int32_t uiOpenOverlay(
+    const PluginxxHost*         host,
+    const AgentxxClientUiIface* ui,
+    const AgentxxOverlaySpec*   spec
+) {
+    if (!ui || !ui->open_overlay || !spec) {
+        return -1;
+    }
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return ui->open_overlay(host, spec, cb, cud, err);
+    });
+    return call.ok() ? 0 : -1;
+}
+
+static int32_t uiCloseOverlay(const PluginxxHost* host, const AgentxxClientUiIface* ui) {
+    if (!ui || !ui->close_overlay) {
+        return -1;
+    }
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return ui->close_overlay(host, cb, cud, err);
+    });
+    return call.ok() ? 0 : -1;
+}
+
+static int32_t uiUpdateToolDecor(
+    const PluginxxHost*         host,
+    const AgentxxClientUiIface* ui,
+    std::string_view            toolCallId,
+    std::string_view            decorJson
+) {
+    if (!ui || !ui->update_tool_decor) {
+        return -1;
+    }
+    auto tcidSv  = agentxx::plugin::PluginStringView::from(toolCallId.data(), toolCallId.size());
+    auto decorSv = agentxx::plugin::PluginStringView::from(decorJson.data(), decorJson.size());
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return ui->update_tool_decor(host, &tcidSv, &decorSv, cb, cud, err);
+    });
+    return call.ok() ? 0 : -1;
+}
+
+static AgentxxStatusItem* uiRegisterStatusItem(
+    const PluginxxHost*         host,
+    const AgentxxClientUiIface* ui,
+    std::string_view            id,
+    std::string_view            initialJson,
+    int32_t                     align = 0,
+    int32_t                     order = 0
+) {
+    if (!ui || !ui->register_status_item) {
+        return nullptr;
+    }
+    auto idSv   = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+    auto jsonSv = agentxx::plugin::PluginStringView::from(initialJson.data(), initialJson.size());
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return ui->register_status_item(host, &idSv, &jsonSv, align, order, cb, cud, err);
+    });
+    return handleOf<AgentxxStatusItem>(call);
+}
+
+static void
+    uiUnregisterStatusItem(const PluginxxHost* host, const AgentxxClientUiIface* ui, AgentxxStatusItem* item) {
+    if (!ui || !ui->unregister_status_item || !item) {
+        return;
+    }
+    ui->unregister_status_item(host, item, nullptr, nullptr, nullptr);
+}
+
+static AgentxxPanel* uiRegisterPanel(
+    const PluginxxHost*         host,
+    const AgentxxClientUiIface* ui,
+    std::string_view            id,
+    std::string_view            propsJson
+) {
+    if (!ui || !ui->register_panel) {
+        return nullptr;
+    }
+    auto idSv    = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+    auto propsSv = agentxx::plugin::PluginStringView::from(propsJson.data(), propsJson.size());
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return ui->register_panel(host, &idSv, &propsSv, cb, cud, err);
+    });
+    return handleOf<AgentxxPanel>(call);
+}
+
+static int32_t uiUpdatePanel(
+    const PluginxxHost*         host,
+    const AgentxxClientUiIface* ui,
+    AgentxxPanel*               panel,
+    std::string_view            itemsJson
+) {
+    if (!ui || !ui->update_panel) {
+        return -1;
+    }
+    auto jsonSv = agentxx::plugin::PluginStringView::from(itemsJson.data(), itemsJson.size());
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return ui->update_panel(host, panel, &jsonSv, cb, cud, err);
+    });
+    return call.ok() ? 0 : -1;
+}
+
+static AgentxxTimer* timerSet(
+    const PluginxxHost*            host,
+    const AgentxxClientTimerIface* table,
+    const AgentxxTimerSpec*        spec
+) {
+    if (!table || !table->set_timer || !spec) {
+        return nullptr;
+    }
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return table->set_timer(host, spec, cb, cud, err);
+    });
+    return handleOf<AgentxxTimer>(call);
+}
+
+static void
+    timerCancel(const PluginxxHost* host, const AgentxxClientTimerIface* table, AgentxxTimer* timer) {
+    if (!table || !table->cancel_timer) {
+        return;
+    }
+    table->cancel_timer(host, timer, nullptr, nullptr, nullptr);
+}
+
+/// 关联区域是否可见; 未上报/非法 = 0 (与表成员的取值相同)
+static int32_t timerIsVisible(
+    const PluginxxHost*            host,
+    const AgentxxClientTimerIface* table,
+    std::string_view               ownerId
+) {
+    if (!table || !table->is_visible) {
+        return 0;
+    }
+    auto idSv = agentxx::plugin::PluginStringView::from(ownerId.data(), ownerId.size());
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return table->is_visible(host, &idSv, cb, cud, err);
+    });
+    return (call.ok() && call.payload == "1") ? 1 : 0;
+}
+
+static AgentxxKeybind* keybindRegister(
+    const PluginxxHost*              host,
+    const AgentxxClientKeybindIface* table,
+    const AgentxxKeybindSpec*        spec
+) {
+    if (!table || !table->register_keybind || !spec) {
+        return nullptr;
+    }
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return table->register_keybind(host, spec, cb, cud, err);
+    });
+    return handleOf<AgentxxKeybind>(call);
+}
+
+static void keybindUnregister(
+    const PluginxxHost*              host,
+    const AgentxxClientKeybindIface* table,
+    AgentxxKeybind*                  bind
+) {
+    if (!table || !table->unregister_keybind) {
+        return;
+    }
+    table->unregister_keybind(host, bind, nullptr, nullptr, nullptr);
+}
+
+/// 已注册快捷键列表 JSON (失败返回空串)
+static std::string
+    keybindList(const PluginxxHost* host, const AgentxxClientKeybindIface* table) {
+    if (!table || !table->list_keybinds) {
+        return {};
+    }
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return table->list_keybinds(host, cb, cud, err);
+    });
+    return call.ok() ? call.payload : std::string{};
+}
+
 /// 同步关闭路径无法等待 stop 事务: 该 hook 只用于断言“未被调用”。
 void* PLUGINXX_CALL fakeClientStopHook(void*, const PluginxxOperatorNotify*, PluginxxString*) {
     return nullptr;
@@ -741,34 +1002,37 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(ifaceSelf != nullptr);
         if (ifaceSelf) {
             XX_TEST_EXPECT_EQ(ifaceSelf->version, AGENTXX_IFACE_CLIENT_SELF_VERSION);
+            auto host  = inst->hostView();
+            auto getLanguage = [&]() {
+                return clientCall(host, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return ifaceSelf->get_language(host, cb, ud, err);
+                });
+            };            auto setLanguage = [&](std::string_view lang) {
+                auto sv = agentxx::plugin::PluginStringView::from(lang.data(), lang.size());
+                return clientCall(host, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return ifaceSelf->set_language(host, &sv, cb, ud, err);
+                });
+            };
             // 默认语言为 "en"
-            PluginxxString langOut{};
-            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(inst->hostView(), &langOut), 0);
-            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
-            if (langOut.data) {
-                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
+            {
+                const auto lang = getLanguage();
+                XX_TEST_EXPECT_TRUE(lang.ok());
+                XX_TEST_EXPECT_EQ(lang.payload, std::string("en"));
             }
-            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
-
             // 设置语言为 "zh-cn"
-            PluginxxStringView zhSv{"zh-cn", 5};
-            XX_TEST_EXPECT_EQ(ifaceSelf->set_language(inst->hostView(), &zhSv), 0);
-            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(inst->hostView(), &langOut), 0);
-            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
-            if (langOut.data) {
-                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("zh-cn"));
+            {
+                XX_TEST_EXPECT_TRUE(setLanguage("zh-cn").ok());
+                const auto lang = getLanguage();
+                XX_TEST_EXPECT_TRUE(lang.ok());
+                XX_TEST_EXPECT_EQ(lang.payload, std::string("zh-cn"));
             }
-            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
-
             // 不支持 auto, 传 auto 回退为 en
-            PluginxxStringView autoSv{"auto", 4};
-            XX_TEST_EXPECT_EQ(ifaceSelf->set_language(inst->hostView(), &autoSv), 0);
-            XX_TEST_EXPECT_EQ(ifaceSelf->get_language(inst->hostView(), &langOut), 0);
-            XX_TEST_EXPECT_TRUE(langOut.data != nullptr);
-            if (langOut.data) {
-                XX_TEST_EXPECT_EQ(std::string(langOut.data, langOut.size), std::string("en"));
+            {
+                XX_TEST_EXPECT_TRUE(setLanguage("auto").ok());
+                const auto lang = getLanguage();
+                XX_TEST_EXPECT_TRUE(lang.ok());
+                XX_TEST_EXPECT_EQ(lang.payload, std::string("en"));
             }
-            agentxx::plugin::PluginString::free(inst->hostView(), &langOut);
         }
     }
     XX_TEST_EXPECT_FALSE(mgr->hasCommand("no_such_command"));
@@ -853,25 +1117,25 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     {
         const auto wire = agentxx::plugin::ClientIfaces::query(inst->hostView()).wire;
         XX_TEST_EXPECT_TRUE(wire != nullptr && wire->send_plugin_data != nullptr);
+        auto host = inst->hostView();
         // 主题写全名: `agentxx.client.plugin.<本实例插件名>.<事件>`
-        auto evtSv = agentxx::plugin::PluginStringView::fromCstr(
-            "agentxx.client.plugin.example_plugin.rebuild"
-        );
-        auto paySv = agentxx::plugin::PluginStringView::fromCstr(R"({"x":1})");
-        int  rc    = wire ? wire->send_plugin_data(inst->hostView(), &evtSv, &paySv) : -1;
-        XX_TEST_EXPECT_EQ(rc, 0);
+        auto sendData = [&](std::string_view topic, std::string_view json) {
+            auto topicSv = agentxx::plugin::PluginStringView::from(topic.data(), topic.size());
+            auto jsonSv  = agentxx::plugin::PluginStringView::from(json.data(), json.size());
+            return clientCall(host, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return wire->send_plugin_data(host, &topicSv, &jsonSv, cb, ud, err);
+            });
+        };
+        const auto sent = sendData("agentxx.client.plugin.example_plugin.rebuild", R"({"x":1})");
+        XX_TEST_EXPECT_TRUE(sent.ok());
+
+        // 不在自己那一族里的主题被拒 (框架只校验不补前缀)
+        // - 形状合法但主题不在自己那一族: 受理后按失败交回 (主程序记警告)
+        const auto rejected = sendData("rebuild", "{}");
+        XX_TEST_EXPECT_FALSE(rejected.ok());
     }
     XX_TEST_EXPECT_TRUE(adapter->dataUpCount() >= 2);
     XX_TEST_EXPECT_EQ(adapter->lastDataTopic(), "agentxx.client.plugin.example_plugin.rebuild");
-
-    // 不在自己那一族里的主题被拒 (框架只校验不补前缀)
-    {
-        const auto wire = agentxx::plugin::ClientIfaces::query(inst->hostView()).wire;
-        auto       badSv = agentxx::plugin::PluginStringView::fromCstr("rebuild");
-        auto       paySv = agentxx::plugin::PluginStringView::fromCstr("{}");
-        int        rc    = wire ? wire->send_plugin_data(inst->hostView(), &badSv, &paySv) : -1;
-        XX_TEST_EXPECT_TRUE(rc != 0);
-    }
 
     // ---- 6. disable / enable ----
     mgr->disable("example_plugin");
@@ -1117,21 +1381,23 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         if (instCfg) {
             XX_TEST_EXPECT_EQ(instCfg->args.value("client_key", std::string{}), "client_val");
             // agentxx.client.self 接口表 get_plugin_args 返回实例 args
-            const auto     self9 = agentxx::plugin::ClientIfaces::query(instCfg->hostView()).self;
-            PluginxxString json{nullptr, 0};
+            const auto self9 = agentxx::plugin::ClientIfaces::query(instCfg->hostView()).self;
+            XX_TEST_EXPECT_TRUE(self9 != nullptr && self9->get_plugin_args != nullptr);
             if (self9 && self9->get_plugin_args) {
-                self9->get_plugin_args(instCfg->hostView(), &json);
-            }
-            XX_TEST_EXPECT_TRUE(json.data != nullptr);
-            if (json.data) {
+                const auto args = clientCall(
+                    instCfg->hostView(),
+                    [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                        return self9->get_plugin_args(instCfg->hostView(), cb, ud, err);
+                    }
+                );
+                XX_TEST_EXPECT_TRUE(args.ok());
                 try {
-                    auto j = utilxx_base::Json::parse(std::string{json.data, json.size});
+                    auto j = utilxx_base::Json::parse(args.payload);
                     XX_TEST_EXPECT_EQ(j["client_key"].get<std::string>(), "client_val");
                 } catch (const std::exception& e) {
                     XX_TEST_EXPECT_TRUE(false);
                     XX_LOGE("[client_plugin] 9.2 args json parse failed: {}", e.what());
                 }
-                agentxx::plugin::PluginString::free(instCfg->hostView(), &json);
             }
             bool unloadedCfg = co_await mgr->unloadAsync("example_plugin");
             XX_TEST_EXPECT_TRUE(unloadedCfg);
@@ -2218,27 +2484,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ui != nullptr && ui->bind_action_handler != nullptr);
             XX_TEST_EXPECT_TRUE(ui != nullptr && ui->unbind_action_handler != nullptr);
             if (ui && ui->bind_action_handler && ui->unbind_action_handler) {
+                auto exHost = exInst->hostView();
                 // cb 空 → 失败
-                auto emptySv = agentxx::plugin::PluginStringView::from("", 0);
-                XX_TEST_EXPECT_TRUE(
-                    ui->bind_action_handler(exInst->hostView(), &emptySv, nullptr, &hitsFallback)
-                    != 0
-                );
+                XX_TEST_EXPECT_TRUE(uiBindAction(exHost, ui, "", nullptr, &hitsFallback) != 0);
                 // bind fallback ("") + 精确 ("sec1")
-                auto secSv = agentxx::plugin::PluginStringView::fromCstr("sec1");
-                XX_TEST_EXPECT_EQ(
-                    ui->bind_action_handler(
-                        exInst->hostView(),
-                        &emptySv,
-                        fallbackFn,
-                        &hitsFallback
-                    ),
-                    0
-                );
-                XX_TEST_EXPECT_EQ(
-                    ui->bind_action_handler(exInst->hostView(), &secSv, exactFn, &hitsExact),
-                    0
-                );
+                XX_TEST_EXPECT_EQ(uiBindAction(exHost, ui, "", fallbackFn, &hitsFallback), 0);
+                XX_TEST_EXPECT_EQ(uiBindAction(exHost, ui, "sec1", exactFn, &hitsExact), 0);
                 // 快照可见 (UI 线程渲染依据)
                 {
                     auto reg = mgr->uiRegistrySnapshot();
@@ -2257,15 +2508,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_EQ(hitsFallback.load(), 1);
                 // 覆盖语义: 同 (plugin,target) 重绑覆盖
                 std::atomic<int> hitsExact2{0};
-                XX_TEST_EXPECT_EQ(
-                    ui->bind_action_handler(exInst->hostView(), &secSv, exactFn, &hitsExact2),
-                    0
-                );
+                XX_TEST_EXPECT_EQ(uiBindAction(exHost, ui, "sec1", exactFn, &hitsExact2), 0);
                 mgr->dispatchAction("example_plugin", "sec1", "a.do", "{}");
                 XX_TEST_EXPECT_EQ(hitsExact.load(), 1);
                 XX_TEST_EXPECT_EQ(hitsExact2.load(), 1);
                 // unbind 精确后回落 fallback
-                XX_TEST_EXPECT_EQ(ui->unbind_action_handler(exInst->hostView(), &secSv), 0);
+                XX_TEST_EXPECT_EQ(uiUnbindAction(exHost, ui, "sec1"), 0);
                 mgr->dispatchAction("example_plugin", "sec1", "a.do", "{}");
                 XX_TEST_EXPECT_EQ(hitsFallback.load(), 2);
                 // disable 保留 / enable 恢复
@@ -2288,10 +2536,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 for (int i = 0; i < 200 && !mgr->hasCommand("example"); ++i) {
                     co_await sleepMs(5);
                 }
-                XX_TEST_EXPECT_EQ(
-                    ui->bind_action_handler(exInst->hostView(), &secSv, exactFn, &hitsExact),
-                    0
-                );
+                XX_TEST_EXPECT_EQ(uiBindAction(exHost, ui, "sec1", exactFn, &hitsExact), 0);
                 {
                     auto reg = mgr->uiRegistrySnapshot();
                     bool any = false;
@@ -2325,10 +2570,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                         }
                     }
                 };
-                XX_TEST_EXPECT_EQ(
-                    ui->bind_action_handler(exInst->hostView(), &emptySv, capFn, &cap),
-                    0
-                );
+                XX_TEST_EXPECT_EQ(uiBindAction(exHost, ui, "", capFn, &cap), 0);
                 mgr->dispatchAction(
                     "example_plugin",
                     "toolCallX",
@@ -2371,16 +2613,17 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ui != nullptr && ui->open_overlay != nullptr);
             XX_TEST_EXPECT_TRUE(ui != nullptr && ui->close_overlay != nullptr);
             if (ui && ui->open_overlay && ui->close_overlay) {
+                auto exHost = exInst->hostView();
                 // version 非法 → 失败
                 AgentxxOverlaySpec badVer{};
                 badVer.version = 99;
                 badVer.type    = AGENTXX_OVERLAY_MERMAID;
-                XX_TEST_EXPECT_TRUE(ui->open_overlay(exInst->hostView(), &badVer) != 0);
+                XX_TEST_EXPECT_TRUE(uiOpenOverlay(exHost, ui, &badVer) != 0);
                 // type 越界 → 失败
                 AgentxxOverlaySpec badType{};
                 badType.version = 1;
                 badType.type    = 99;
-                XX_TEST_EXPECT_TRUE(ui->open_overlay(exInst->hostView(), &badType) != 0);
+                XX_TEST_EXPECT_TRUE(uiOpenOverlay(exHost, ui, &badType) != 0);
                 // MERMAID 成功 → 适配器收到信号
                 const char*        mermaid = "stateDiagram-v2\n[*] --> a\na --> [*]";
                 AgentxxOverlaySpec spec{};
@@ -2389,7 +2632,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 spec.title      = agentxx::plugin::PluginStringView::fromCstr("T");
                 spec.payload    = agentxx::plugin::PluginStringView::fromCstr(mermaid);
                 spec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
-                XX_TEST_EXPECT_EQ(ui->open_overlay(exInst->hostView(), &spec), 0);
+                XX_TEST_EXPECT_EQ(uiOpenOverlay(exHost, ui, &spec), 0);
                 XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), 1);
                 XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_MERMAID);
                 XX_TEST_EXPECT_EQ(adapter->lastOverlayPlugin(), "example_plugin");
@@ -2397,7 +2640,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     adapter->lastOverlayPayload().find("stateDiagram-v2") != std::string::npos
                 );
                 // close → 适配器收到信号 (不崩溃)
-                ui->close_overlay(exInst->hostView());
+                uiCloseOverlay(exHost, ui);
                 XX_TEST_EXPECT_EQ(adapter->overlayCloseCount(), 1);
                 // DIFF payload 原样转发 (主程序不解析, 仅校验类型)
                 AgentxxOverlaySpec diffSpec{};
@@ -2408,7 +2651,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     R"({"path":"a","old_str":"x","new_str":"y"})"
                 );
                 diffSpec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
-                XX_TEST_EXPECT_EQ(ui->open_overlay(exInst->hostView(), &diffSpec), 0);
+                XX_TEST_EXPECT_EQ(uiOpenOverlay(exHost, ui, &diffSpec), 0);
                 XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), 2);
                 XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_DIFF);
 
@@ -2852,20 +3095,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // 装饰 (update_tool_decor) 优先, 但缺某一项时回落注册项 (不是清空)
             {
-                auto                 self = mgr;
-                PluginxxStringView   emptyTcid{nullptr, 0};
-                PluginxxStringView   decorSv = agentxx::plugin::PluginStringView::fromCstr(
-                    R"({"displayName":"ReadDecor"})"
-                );
-                auto                 tcidSv
-                    = agentxx::plugin::PluginStringView::fromCstr("call_read_decor");
-                auto                 ui = agentxx::plugin::ClientIfaces::query(fsInst->hostView()).ui;
+                std::string decorJson = R"({"displayName":"ReadDecor"})";
+                auto        ui = agentxx::plugin::ClientIfaces::query(fsInst->hostView()).ui;
                 XX_TEST_EXPECT_TRUE(ui != nullptr && ui->update_tool_decor != nullptr);
-                (void)emptyTcid;
-                (void)self;
                 if (ui && ui->update_tool_decor) {
                     XX_TEST_EXPECT_EQ(
-                        ui->update_tool_decor(fsInst->hostView(), &tcidSv, &decorSv),
+                        uiUpdateToolDecor(fsInst->hostView(), ui, "call_read_decor", decorJson),
                         0
                     );
                     auto decorReg = mgr->uiRegistrySnapshot();
@@ -2946,7 +3181,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             if (ui && ui->bind_action_handler) {
                 auto secSv = agentxx::plugin::PluginStringView::fromCstr("gen_sec");
                 XX_TEST_EXPECT_EQ(
-                    ui->bind_action_handler(first->hostView(), &secSv, probeFn, &hits),
+                    uiBindAction(first->hostView(), ui, "gen_sec", probeFn, &hits),
                     0
                 );
                 auto           reg  = mgr->uiRegistrySnapshot();
@@ -2975,7 +3210,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(ui2 != nullptr && ui2->bind_action_handler != nullptr);
                     if (ui2 && ui2->bind_action_handler) {
                         XX_TEST_EXPECT_EQ(
-                            ui2->bind_action_handler(second->hostView(), &secSv, probeFn, &hits),
+                            uiBindAction(second->hostView(), ui2, "gen_sec", probeFn, &hits),
                             0
                         );
                     }
@@ -3200,11 +3435,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(ui != nullptr);
             if (ui) {
-                auto idSv = agentxx::plugin::PluginStringView::fromCstr("late.probe");
-                auto jsSv = agentxx::plugin::PluginStringView::fromCstr(R"({"text":"x"})");
                 // 迟到注册: 实例已销毁 -> 安全失败, 不访问已释放对象
                 XX_TEST_EXPECT_TRUE(
-                    ui->register_status_item(oldHost, &idSv, &jsSv, 0, 0) == nullptr
+                    uiRegisterStatusItem(oldHost, ui, "late.probe", R"({"text":"x"})") == nullptr
                 );
 
                 // 同名重载: 旧指针不得路由到新实例
@@ -3213,13 +3446,19 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 if (instB) {
                     XX_TEST_EXPECT_TRUE(instB->hostView() != oldHost);
                     XX_TEST_EXPECT_TRUE(
-                        ui->register_status_item(oldHost, &idSv, &jsSv, 0, 0) == nullptr
+                        uiRegisterStatusItem(oldHost, ui, "late.probe", R"({"text":"x"})")
+                        == nullptr
                     );
                     // 新实例自己的 host 视图可以注册 (证明失败来自指针失效而非环境)
-                    auto* item = ui->register_status_item(instB->hostView(), &idSv, &jsSv, 0, 0);
+                    auto* item = uiRegisterStatusItem(
+                        instB->hostView(),
+                        ui,
+                        "late.probe",
+                        R"({"text":"x"})"
+                    );
                     XX_TEST_EXPECT_TRUE(item != nullptr);
                     if (item) {
-                        ui->unregister_status_item(instB->hostView(), item);
+                        uiUnregisterStatusItem(instB->hostView(), ui, item);
                     }
                     XX_TEST_EXPECT_TRUE(
                         co_await mgr2->unloadAsync("example_plugin", std::chrono::seconds{5})
@@ -3616,10 +3855,18 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         // 28.10 匹配优先级: 插件注册项优先于主程序内置项 (同一 tool_name)
         {
-            auto pluginCollapsed = +[](void*,
-                                       const AgentxxToolRenderInput*,
-                                       AgentxxToolCollapsedOutput* out) -> int32_t {
-                agentxx::plugin::hostMemorySetString(&out->text, "plugin wins");
+            // 插件侧渲染回调是异步操作契约: 内容经回调自己的 notify 交回
+            auto pluginCollapsed = +[](void*                         ud,
+                                       const AgentxxToolRenderInput* input,
+                                       const PluginxxOperatorNotify* notify,
+                                       PluginxxString*               errorOut) -> int32_t {
+                (void)ud;
+                (void)input;
+                (void)errorOut;
+                auto text = agentxx::plugin::PluginStringView::fromCstr("plugin wins");
+                if (notify && notify->done) {
+                    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &text);
+                }
                 return 0;
             };
 
@@ -3830,30 +4077,30 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             {
                 auto bad    = makeSpec(60, 0, false);
                 bad.version = 2;
-                XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer(instT->hostView(), &bad) == nullptr);
+                XX_TEST_EXPECT_TRUE(timerSet(instT->hostView(), ifaceTimer, &bad) == nullptr);
                 bad.version  = 1;
                 bad.on_timer = nullptr;
-                XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer(instT->hostView(), &bad) == nullptr);
+                XX_TEST_EXPECT_TRUE(timerSet(instT->hostView(), ifaceTimer, &bad) == nullptr);
             }
 
             // 30.2 一次性定时器: 触发恰好一次 (间隔低于下限时按 50ms 收敛)
             {
                 counter.ticks = 0;
                 auto  spec    = makeSpec(10, 0, false);
-                auto* oneShot = ifaceTimer->set_timer(instT->hostView(), &spec);
+                auto* oneShot = timerSet(instT->hostView(), ifaceTimer, &spec);
                 XX_TEST_EXPECT_TRUE(oneShot != nullptr);
                 co_await sleepMs(200);
                 XX_TEST_EXPECT_EQ(counter.ticks, 1);
                 co_await sleepMs(120);
                 XX_TEST_EXPECT_EQ(counter.ticks, 1);                  // 不再触发
-                ifaceTimer->cancel_timer(instT->hostView(), oneShot); // 已结束: 幂等
+                timerCancel(instT->hostView(), ifaceTimer, oneShot); // 已结束: 幂等
             }
 
             // 30.3 周期定时器: repeat 次数上限到达后自动停止
             {
                 counter.ticks  = 0;
                 auto  spec     = makeSpec(50, 3, false);
-                auto* periodic = ifaceTimer->set_timer(instT->hostView(), &spec);
+                auto* periodic = timerSet(instT->hostView(), ifaceTimer, &spec);
                 XX_TEST_EXPECT_TRUE(periodic != nullptr);
                 co_await sleepMs(400);
                 XX_TEST_EXPECT_EQ(counter.ticks, 3);
@@ -3863,18 +4110,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // 30.4 区域可见性门控 (is_visible + pause_when_hidden)
             {
-                PluginxxStringView owner
-                    = agentxx::plugin::PluginStringView::from("example_plugin.panel", 20);
-                XX_TEST_EXPECT_EQ(ifaceTimer->is_visible(instT->hostView(), &owner), 0);
+                XX_TEST_EXPECT_EQ(timerIsVisible(instT->hostView(), ifaceTimer, "example_plugin.panel"), 0);
                 counter.ticks = 0;
                 auto  spec    = makeSpec(50, 0, true); // 不可见 → 跳过回调 (计时继续)
-                auto* hidden  = ifaceTimer->set_timer(instT->hostView(), &spec);
+                auto* hidden  = timerSet(instT->hostView(), ifaceTimer, &spec);
                 XX_TEST_EXPECT_TRUE(hidden != nullptr);
                 co_await sleepMs(160);
                 XX_TEST_EXPECT_EQ(counter.ticks, 0);
 
                 mgrT->reportRegionVisible("example_plugin.panel", true);
-                XX_TEST_EXPECT_EQ(ifaceTimer->is_visible(instT->hostView(), &owner), 1);
+                XX_TEST_EXPECT_EQ(timerIsVisible(instT->hostView(), ifaceTimer, "example_plugin.panel"), 1);
                 XX_TEST_EXPECT_TRUE(mgrT->isRegionVisible("example_plugin.panel"));
                 // 可见性变化不影响已在计时的一次性定时器: 它会在下一次到期时回调
                 counter.ticks = 0;
@@ -3886,10 +4131,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 // 不可见时取消 (cancel_timer 任何时候都有效)
                 counter.ticks  = 0;
                 auto  spec2    = makeSpec(50, 5, false);
-                auto* cancelMe = ifaceTimer->set_timer(instT->hostView(), &spec2);
+                auto* cancelMe = timerSet(instT->hostView(), ifaceTimer, &spec2);
                 XX_TEST_EXPECT_TRUE(cancelMe != nullptr);
-                ifaceTimer->cancel_timer(instT->hostView(), cancelMe);
-                ifaceTimer->cancel_timer(instT->hostView(), cancelMe); // 重复取消幂等
+                timerCancel(instT->hostView(), ifaceTimer, cancelMe);
+                timerCancel(instT->hostView(), ifaceTimer, cancelMe); // 重复取消幂等
                 co_await sleepMs(200);
                 XX_TEST_EXPECT_EQ(counter.ticks, 0);
             }
@@ -3899,11 +4144,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 mgrT->setAnimationEnabled(false);
                 XX_TEST_EXPECT_FALSE(mgrT->animationEnabled());
                 auto spec = makeSpec(50, 0, false);
-                XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer(instT->hostView(), &spec) == nullptr);
+                XX_TEST_EXPECT_TRUE(timerSet(instT->hostView(), ifaceTimer, &spec) == nullptr);
                 mgrT->setAnimationEnabled(true);
-                auto ok = ifaceTimer->set_timer(instT->hostView(), &spec);
+                auto ok = timerSet(instT->hostView(), ifaceTimer, &spec);
                 XX_TEST_EXPECT_TRUE(ok != nullptr);
-                ifaceTimer->cancel_timer(instT->hostView(), ok);
+                timerCancel(instT->hostView(), ifaceTimer, ok);
             }
 
             // 30.6 单实例数量上限 (超出返回 NULL, 插件自行降级)
@@ -3911,16 +4156,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 std::vector<AgentxxTimer*> timers;
                 for (size_t i = 0; i < 8; ++i) {
                     auto  spec = makeSpec(1000, 0, false);
-                    auto* t    = ifaceTimer->set_timer(instT->hostView(), &spec);
+                    auto* t    = timerSet(instT->hostView(), ifaceTimer, &spec);
                     if (t) {
                         timers.push_back(t);
                     }
                 }
                 XX_TEST_EXPECT_EQ(timers.size(), size_t{8});
                 auto spec = makeSpec(1000, 0, false);
-                XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer(instT->hostView(), &spec) == nullptr);
+                XX_TEST_EXPECT_TRUE(timerSet(instT->hostView(), ifaceTimer, &spec) == nullptr);
                 for (auto* t : timers) {
-                    ifaceTimer->cancel_timer(instT->hostView(), t);
+                    timerCancel(instT->hostView(), ifaceTimer, t);
                 }
             }
 
@@ -3928,7 +4173,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             {
                 counter.ticks = 0;
                 auto  spec    = makeSpec(50, 100, false);
-                auto* live    = ifaceTimer->set_timer(instT->hostView(), &spec);
+                auto* live    = timerSet(instT->hostView(), ifaceTimer, &spec);
                 XX_TEST_EXPECT_TRUE(live != nullptr);
                 XX_TEST_EXPECT_TRUE(co_await mgrT->unloadAsync("example_plugin"));
                 XX_TEST_EXPECT_EQ(instT->timers.size(), size_t{0});
@@ -4000,7 +4245,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             // 31.2 注册/查询/派发/注销
             {
                 auto  spec = makeSpec("ctrl+alt+k", "test keybind");
-                auto* bind = ifaceKey->register_keybind(instK->hostView(), &spec);
+                auto* bind = keybindRegister(instK->hostView(), ifaceKey, &spec);
                 XX_TEST_EXPECT_TRUE(bind != nullptr);
                 XX_TEST_EXPECT_TRUE(mgrK->hasKeybind("ctrl+alt+k"));
                 XX_TEST_EXPECT_FALSE(mgrK->hasKeybind("ctrl+alt+j"));
@@ -4015,18 +4260,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
                 // list_keybinds 表接口 (JSON)
                 {
-                    PluginxxString out{};
-                    XX_TEST_EXPECT_EQ(ifaceKey->list_keybinds(instK->hostView(), &out), 0);
-                    if (out.data) {
-                        const std::string json(out.data, out.size);
-                        XX_TEST_EXPECT_TRUE(json.find("ctrl+alt+k") != std::string::npos);
-                        XX_TEST_EXPECT_TRUE(json.find("example_plugin") != std::string::npos);
-                        agentxx::plugin::PluginString::free(instK->hostView(), &out);
-                    }
+                    const std::string json = keybindList(instK->hostView(), ifaceKey);
+                    XX_TEST_EXPECT_TRUE(!json.empty());
+                    XX_TEST_EXPECT_TRUE(json.find("ctrl+alt+k") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(json.find("example_plugin") != std::string::npos);
                 }
                 // 冲突: 同键位重复注册 (同实例或跨实例) 一律拒绝
                 auto dup = makeSpec("ctrl+alt+k", "dup");
-                XX_TEST_EXPECT_TRUE(ifaceKey->register_keybind(instK->hostView(), &dup) == nullptr);
+                XX_TEST_EXPECT_TRUE(
+                    keybindRegister(instK->hostView(), ifaceKey, &dup) == nullptr
+                );
 
                 keyCounter.hits = 0;
                 mgrK->postKeybindInvocation("ctrl+alt+k");
@@ -4037,29 +4280,31 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 co_await sleepMs(50);
                 XX_TEST_EXPECT_EQ(keyCounter.hits, 1);
 
-                ifaceKey->unregister_keybind(instK->hostView(), bind);
+                keybindUnregister(instK->hostView(), ifaceKey, bind);
                 XX_TEST_EXPECT_FALSE(mgrK->hasKeybind("ctrl+alt+k"));
                 XX_TEST_EXPECT_EQ(mgrK->keybinds().size(), size_t{0});
                 mgrK->postKeybindInvocation("ctrl+alt+k");
                 co_await sleepMs(50);
                 XX_TEST_EXPECT_EQ(keyCounter.hits, 1);                 // 已注销: 不再回调
-                ifaceKey->unregister_keybind(instK->hostView(), bind); // 重复注销幂等
+                keybindUnregister(instK->hostView(), ifaceKey, bind);  // 重复注销幂等
             }
 
             // 31.3 非法键位注册被拒绝
             {
                 auto bad = makeSpec("q", "no modifier");
-                XX_TEST_EXPECT_TRUE(ifaceKey->register_keybind(instK->hostView(), &bad) == nullptr);
+                XX_TEST_EXPECT_TRUE(
+                    keybindRegister(instK->hostView(), ifaceKey, &bad) == nullptr
+                );
                 auto bad2 = makeSpec("ctrl+nosuchkey", "bad key");
                 XX_TEST_EXPECT_TRUE(
-                    ifaceKey->register_keybind(instK->hostView(), &bad2) == nullptr
+                    keybindRegister(instK->hostView(), ifaceKey, &bad2) == nullptr
                 );
             }
 
             // 31.4 卸载: 注册表摘除 (按键不再派发)
             {
                 auto  spec = makeSpec("ctrl+shift+p", "unload case");
-                auto* bind = ifaceKey->register_keybind(instK->hostView(), &spec);
+                auto* bind = keybindRegister(instK->hostView(), ifaceKey, &spec);
                 XX_TEST_EXPECT_TRUE(bind != nullptr);
                 XX_TEST_EXPECT_TRUE(mgrK->hasKeybind("ctrl+shift+p"));
                 keyCounter.hits = 0;
@@ -4174,16 +4419,20 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 = agentxx::plugin::PluginStringView::from(std::string_view{"example_plugin.big"});
             PluginxxStringView propSv
                 = agentxx::plugin::PluginStringView::from(std::string_view{"{\"title\":\"Big\"}"});
-            auto* panel = ifaceUi->register_panel(inst->hostView(), &idSv, &propSv);
+            auto* panel = uiRegisterPanel(
+                inst->hostView(),
+                ifaceUi,
+                "example_plugin.big",
+                std::string_view{propSv.data, static_cast<size_t>(propSv.size)}
+            );
+            (void)idSv;
             XX_TEST_EXPECT_TRUE(panel != nullptr);
             if (panel) {
                 // 正常大小先写一次: 后续"拒绝"要与这次的内容对比
                 const std::string small{"{\"items\":[{\"kind\":\"text\",\"text\":\"ok\"}]}"};
-                auto smallSv = agentxx::plugin::PluginStringView::from(small.data(), small.size());
-                XX_TEST_EXPECT_EQ(ifaceUi->update_panel(inst->hostView(), panel, &smallSv), 0);
+                XX_TEST_EXPECT_EQ(uiUpdatePanel(inst->hostView(), ifaceUi, panel, small), 0);
 
-                auto hugeSv = agentxx::plugin::PluginStringView::from(huge.data(), huge.size());
-                XX_TEST_EXPECT_TRUE(ifaceUi->update_panel(inst->hostView(), panel, &hugeSv) != 0);
+                XX_TEST_EXPECT_TRUE(uiUpdatePanel(inst->hostView(), ifaceUi, panel, huge) != 0);
 
                 // 注册表内容保持为上一次成功写入 (拒绝不留半截状态)
                 {
@@ -4265,7 +4514,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 };
                 blocker.user_data = &probe;
                 // 先注册阻塞定时器: 两个定时器同一时刻到期, 阻塞回调先执行
-                (void)ifaceTimerC->set_timer(instC->hostView(), &blocker);
+                (void)timerSet(instC->hostView(), ifaceTimerC, &blocker);
 
                 AgentxxTimerSpec periodic{};
                 periodic.version     = 1;
@@ -4285,7 +4534,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     }
                 };
                 periodic.user_data = &probe;
-                (void)ifaceTimerC->set_timer(instC->hostView(), &periodic);
+                (void)timerSet(instC->hostView(), ifaceTimerC, &periodic);
                 loaded.store(true);
             }),
             asio::detached
@@ -4449,10 +4698,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(mgrJs->hasCommand("jsdemo"));
                 }
 
-                // 命令: 脚本 execute 同步返回动作 JSON (io 线程等 JS 线程拿结果)
+                // 命令: 脚本 execute 返回动作 JSON; 脚本里的 showToast 是表调用
+                // (JS 线程 → io 线程), 稍后才到达 —— 等它一下再断言
                 {
                     const int before = adapterJs->toastCount();
                     mgrJs->invokeCommand("jsdemo", "{}");
+                    for (int i = 0; i < 500 && adapterJs->toastCount() == before; ++i) {
+                        co_await sleepMs(4);
+                    }
                     XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 1);
                     XX_TEST_EXPECT_EQ(adapterJs->lastToast(), std::string{"hello from JS"});
                 }
@@ -4546,14 +4799,21 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
                 // 网络: 要结果的动作给 Promise (`net.info` / `netCall`), 结果经 toast 补上
                 // - 表入口是异步操作契约: 命令回调只同步返回一句"探测中"
+                // - 命令动作由脚本异步交回 (JS 线程 → io 线程), 先等第一条 toast
                 {
                     const int before = adapterJs->toastCount();
                     mgrJs->invokeCommand("jsnet", "{}");
-                    XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 1);
-                    for (int i = 0; i < 300 && adapterJs->toastCount() < before + 2; ++i) {
+                    for (int i = 0; i < 100 && adapterJs->toastCount() == before; ++i) {
+                        co_await sleepMs(5);
+                    }
+                    XX_TEST_EXPECT_TRUE(adapterJs->toastCount() >= before + 1);
+                    // 第二条来自 Promise 链 (`netInfo` → `netCall` 失败也按 `ok` 回)
+                    for (int i = 0; i < 300
+                         && adapterJs->lastToast().rfind("net info ok=", 0) != 0;
+                         ++i) {
                         co_await sleepMs(10);
                     }
-                    XX_TEST_EXPECT_EQ(adapterJs->toastCount(), before + 2);
+                    XX_TEST_EXPECT_TRUE(adapterJs->toastCount() >= before + 2);
                     XX_TEST_EXPECT_TRUE(
                         adapterJs->lastToast().rfind("net info ok=true", 0) == 0
                     );

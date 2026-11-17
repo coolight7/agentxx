@@ -979,9 +979,7 @@ static void
     decor["items"]              = parts.items;
     const std::string decorJson = decor.dump();
 
-    auto tcidSv  = agentxx::plugin::PluginStringView::from(toolCallId.data(), toolCallId.size());
-    auto decorSv = agentxx::plugin::PluginStringView::from(decorJson.data(), decorJson.size());
-    ctx.ui->update_tool_decor(ctx.host, &tcidSv, &decorSv);
+    agentxx::plugin::clientUpdateToolDecor(ctx.host, ctx.ui, toolCallId, decorJson);
 }
 
 /// 按规划 JSON 推送装饰 (实时路径; 内容与类型级渲染器同源)
@@ -1030,9 +1028,7 @@ static void clearToolDecors(ClientCtx& ctx) {
     if (!ctx.ui || !ctx.ui->update_tool_decor || !ctx.host) {
         return;
     }
-    PluginxxStringView emptyTcid{nullptr, 0};
-    PluginxxStringView emptyDecor{nullptr, 0};
-    ctx.ui->update_tool_decor(ctx.host, &emptyTcid, &emptyDecor);
+    agentxx::plugin::clientUpdateToolDecor(ctx.host, ctx.ui, {}, {});
 }
 
 /// 懒注册 Info 栏段落 (主程序不支持 info_section 时保持 NULL 静默降级)
@@ -1040,15 +1036,14 @@ static void ensureSection(ClientCtx& ctx) {
     if (ctx.section || !ctx.ui || !ctx.ui->register_info_section || !ctx.host) {
         return;
     }
-    auto idSv    = agentxx::plugin::PluginStringView::fromCstr(kSectionId);
-    auto propsSv = agentxx::plugin::PluginStringView::fromCstr(R"_({"title":"Plan"})_");
-    ctx.section  = ctx.ui->register_info_section(ctx.host, &idSv, &propsSv);
+    ctx.section
+        = agentxx::plugin::clientRegisterInfoSection(ctx.host, ctx.ui, kSectionId, R"_({"title":"Plan"})_");
 }
 
 /// 注销 Info 段落并清空缓存 (回到 "无规划" 态: 无 plan 时侧栏不显示空段落)
 static void clearSection(ClientCtx& ctx) {
     if (ctx.section && ctx.ui && ctx.ui->unregister_info_section && ctx.host) {
-        ctx.ui->unregister_info_section(ctx.host, ctx.section);
+        agentxx::plugin::clientUnregisterInfoSection(ctx.host, ctx.ui, ctx.section);
     }
     ctx.section = nullptr;
     ctx.last_plan_json.clear();
@@ -1085,8 +1080,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
     utilxx_base::Json payload = utilxx_base::Json::object();
     payload["items"]          = items;
     const std::string json    = payload.dump();
-    auto              jsonSv  = agentxx::plugin::PluginStringView::from(json.data(), json.size());
-    ctx.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
+    agentxx::plugin::clientUpdateInfoSection(ctx.host, ctx.ui, ctx.section, json);
 }
 
 /// 规划频道 (`plugin.agentxx_planning.planning`): 对端发布的规划 JSON
@@ -1272,16 +1266,15 @@ static int planningClientSetup(ClientCtx* ctx) {
             spec.title       = agentxx::plugin::PluginStringView::fromCstr("Planning Roadmap");
             spec.payload = agentxx::plugin::PluginStringView::from(roadmap.data(), roadmap.size());
             spec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
-            c->ui->open_overlay(c->host, &spec);
+            agentxx::plugin::clientOpenOverlay(c->host, c->ui, &spec);
         });
-        auto emptySv = agentxx::plugin::PluginStringView::from("", 0);
-        if (ctx->ui->bind_action_handler(
+        if (!agentxx::plugin::clientBindAction(
                 host,
-                &emptySv,
+                ctx->ui,
+                {},
                 &agentxx::plugin::kit::ActionController::dispatch,
                 &ctx->actions
-            )
-            != 0) {
+            )) {
             auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
                 "agentxx_planning client: bind open_graph failed (buttons static)"
             );

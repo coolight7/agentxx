@@ -231,25 +231,27 @@ std::string renderSubagentCollapsed(const AgentxxToolRenderInput& in) {
     return !name.empty() ? name : task;
 }
 
-/// 渲染回调公共外壳: 调用具体折叠内容逻辑 → 经主程序堆字符串写入 C ABI 输出
-/// - 输出字符串只在内容非空时分配 (空内容 = 本次无自定义内容, 界面走默认渲染)
+/// 渲染回调公共外壳: 调用具体折叠内容逻辑 → 经完成回调交回结果
+/// - 空内容 = 本次无自定义内容 (界面走默认渲染)
+/// - 回调内部立即 `done` 就是同步完成, 与改造前一样当帧拿到内容
 template<typename Fn>
 int32_t runCollapsedRenderer(
-    void*                       userData,
+    void*                         userData,
     const AgentxxToolRenderInput* input,
-    AgentxxToolCollapsedOutput* output,
-    Fn&&                        fn
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out,
+    Fn&&                          fn
 ) {
-    if (!input || !output) {
+    (void)error_out;
+    if (!input || !notify || !notify->done) {
         return AGENTXX_RESULT_ERR_ARG;
     }
     (void)userData; // 内置渲染器无实例状态 (多实例契约: 不依赖可变全局)
 
     const std::string text = fn(*input);
-    if (!text.empty()) {
-        hostMemorySetString(&output->text, text);
-    }
-    return AGENTXX_RESULT_OK;
+    const PluginxxStringView view{text.data(), static_cast<uint64_t>(text.size())};
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
+    return 0;
 }
 
 } // namespace
@@ -257,17 +259,19 @@ int32_t runCollapsedRenderer(
 int32_t PLUGINXX_CALL builtinRenderShareStoreCollapsed(
     void*                         userData,
     const AgentxxToolRenderInput* input,
-    AgentxxToolCollapsedOutput*   output
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 ) {
-    return runCollapsedRenderer(userData, input, output, renderShareStoreCollapsed);
+    return runCollapsedRenderer(userData, input, notify, error_out, renderShareStoreCollapsed);
 }
 
 int32_t PLUGINXX_CALL builtinRenderSubagentCollapsed(
     void*                         userData,
     const AgentxxToolRenderInput* input,
-    AgentxxToolCollapsedOutput*   output
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
 ) {
-    return runCollapsedRenderer(userData, input, output, renderSubagentCollapsed);
+    return runCollapsedRenderer(userData, input, notify, error_out, renderSubagentCollapsed);
 }
 
 void registerBuiltinToolRenderers(ClientPluginManager& mgr) {

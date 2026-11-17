@@ -83,12 +83,7 @@ struct ChatbotClientCtx : public agentxx::plugin::ClientPluginBase {
 
     /// 让 agent 侧重发一份快照 (未连接时主程序直接丢弃并记日志)
     void requestRefresh() {
-        if (!host || !iface.wire || !iface.wire->send_plugin_data) {
-            return;
-        }
-        auto eventSv = PluginStringView::fromCstr(kRefreshTopic);
-        auto dataSv  = PluginStringView::fromCstr("{}");
-        iface.wire->send_plugin_data(host, &eventSv, &dataSv);
+        agentxx::plugin::clientSendPluginData(host, iface.wire, kRefreshTopic, "{}");
     }
 };
 
@@ -144,10 +139,12 @@ int32_t chatbotClientSetup(ChatbotClientCtx& ctx) {
     if (ctx.iface.ui->register_panel) {
         utilxx_base::Json props = utilxx_base::Json::object();
         props["title"]          = kPanelTitle;
-        const std::string propsText = props.dump();
-        auto              idSv      = PluginStringView::fromCstr(kPanelId);
-        auto              propsSv   = PluginStringView::from(propsText.data(), propsText.size());
-        ctx.panel = ctx.iface.ui->register_panel(ctx.host, &idSv, &propsSv);
+        ctx.panel = agentxx::plugin::clientRegisterPanel(
+            ctx.host,
+            ctx.iface.ui,
+            kPanelId,
+            props.dump()
+        );
         if (ctx.panel == nullptr) {
             ctx.log.warn("register panel `agentxx_chatbot.bots` failed (id taken or no sidebar)");
         }
