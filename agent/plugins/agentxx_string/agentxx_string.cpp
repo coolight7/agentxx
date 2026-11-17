@@ -39,7 +39,84 @@ constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
 struct StringPluginCtx : public PluginBase {};
 
 /// 注册事务 (mount 的实际内容; 每个 agent 各自一份)。
-static int32_t stringSetup(StringPluginCtx& ctx, const ScopeRef& ref) {
+static pluginxx::Task<void> stringSetupAsync(StringPluginCtx& ctx, ScopeRef ref) {
+    // 1. html_to_markdown
+    auto html2mdSchema = ctx.schema(kNameHtml2Md)
+                             .string("content", "The HTML string to convert.", /*required=*/true)
+                             .build();
+
+    co_await blocking_tool(
+        ctx,
+        ref,
+        kNameHtml2Md,
+        kDepictHtml2Md,
+        html2mdSchema,
+        [](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
+                throw agentxx::plugin::CanceledException("html2markdown Canceled");
+            }
+            ArgReader args(args_json);
+            auto      out = htmlToMarkdownExecute(args.raw());
+            if (pluginxx_cancel_is_requested(cancel_token)) {
+                throw agentxx::plugin::CanceledException("html2markdown Canceled");
+            }
+            return out;
+        },
+        0,
+        kAutoSummary | kRepeatCheck
+    );
+
+    // 2. regexp
+    auto regexpSchema = ctx.schema(kNameRegexp)
+                            .string("content", "The input text to operate on.", /*required=*/true)
+                            .stringArray(
+                                "exps",
+                                kExpsDesc,
+                                /*required=*/true
+                            )
+                            .enumString(
+                                "opt",
+                                kOptDesc,
+                                {"search", "replace", "remove"},
+                                /*required=*/true
+                            )
+                            .string("replace_str", kReplaceStrDesc, false, "")
+                            .boolean("ignore_case", kIgnoreCaseDesc, false, false)
+                            .build();
+
+    co_await blocking_tool(
+        ctx,
+        ref,
+        kNameRegexp,
+        kDepictRegexp,
+        regexpSchema,
+        [](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
+            if (pluginxx_cancel_is_requested(cancel_token)) {
+                throw agentxx::plugin::CanceledException("regexp Canceled");
+            }
+            ArgReader args(args_json);
+            auto      out = regexpExecute(args.raw());
+            if (pluginxx_cancel_is_requested(cancel_token)) {
+                throw agentxx::plugin::CanceledException("regexp Canceled");
+            }
+            return out;
+        },
+        0,
+        kAutoSummary
+    );
+
+    co_return;
+}
+
+static void*
+    stringStart(StringPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    // 无进程级工作 (无连接/线程/定时器)。
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    (void)ctx;
+    return nullptr;
+}
+
+static void stringSetupBlocking(StringPluginCtx& ctx, const ScopeRef& ref) {
     // 1. html_to_markdown
     auto html2mdSchema = ctx.schema(kNameHtml2Md)
                              .string("content", "The HTML string to convert.", /*required=*/true)
@@ -105,15 +182,6 @@ static int32_t stringSetup(StringPluginCtx& ctx, const ScopeRef& ref) {
         kAutoSummary
     );
 
-    return 0;
-}
-
-static void*
-    stringStart(StringPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // 无进程级工作 (无连接/线程/定时器)。
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    (void)ctx;
-    return nullptr;
 }
 
 static void* stringMount(
@@ -128,15 +196,29 @@ static void* stringMount(
         }
         return nullptr;
     }
-    const AgentRef ref(*spec);
-    if (stringSetup(ctx, ref) != 0) {
-        if (error) {
-            PluginString::set(ctx.host, error, "agentxx_string mount: registration failed");
-        }
+    auto later = finishLater(notify);
+    if (!later.active()) {
+        // 老宿主: 没有 provider 句柄可返回, 退回同步注册 (IO 线程上内联完成)
+        const AgentRef ref(*spec);
+        stringSetupBlocking(ctx, ref);
         return nullptr;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        later.failed("agentxx_string mount: host has no pluginxx.tasks (spawn unavailable)");
+        return later.provider();
+    }
+    const AgentRef agentRef(*spec);
+    // 注册事务交给协程: 每个注册都是"提交 + co_await", 全部生效后再放行挂载
+    ctx.spawn([later, agentRef](StringPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await stringSetupAsync(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 static void* stringUnmount(

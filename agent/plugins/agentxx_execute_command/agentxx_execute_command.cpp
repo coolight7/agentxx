@@ -86,7 +86,249 @@ static void
     );
 }
 
-static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
+static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef ref) {
+    // 环境/提示词/工具注册全部是 agent 级工作 (提示词按 agent 贡献, 工具进该 agent
+    // 的工具表)。环境探测本身与 agent 无关, 但只在首次挂载时做一次即可, 这里仍按
+    // 挂载做, 保证多 agent 不会共享一份过期结果。
+    // 环境探测结果已由 start 写入 ctx.env; 这里只做与它相关的提示词与工具注册
+
+#if XX_IS_WIN_D
+    // Windows 侧命令的语法指引随实际执行路径变化: boost.process v2 直传 argv
+    // (命令作为单个 -Command 参数) 与 popen 回退 (命令经外层 shell 解析) 的
+    // 引号/转义要求不同, 故按编译期路径选择对应描述
+    const bool viaProcessSpawn =
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+        true;
+#else
+        false;
+#endif
+    const auto winPrompt = windowsToolPrompt(ctx.env, viaProcessSpawn);
+    // 先注入提示词再注册: polled_tool/blocking_tool 注册时经 ctx.toolPrompt(name)
+    // 读取主程序提示词的 depict 作为工具描述, 注册后无法再改
+    publishToolPrompt(ctx, ref, kNameWindows, winPrompt);
+
+    auto winSchema
+        = ctx.schema(kNameWindows)
+              .string(
+                  "command",
+                  argDescOr(winPrompt, "command", kWindowsCommandArgDescFallback),
+                  /*required=*/true
+              )
+              .integer("timeout", argDescOr(winPrompt, "timeout", kTimeoutArgDesc), false, 60)
+              .string("cwd", argDescOr(winPrompt, "cwd", kCwdArgDesc), false)
+              .boolean(
+                  "full_output",
+                  argDescOr(winPrompt, "full_output", kFullOutputArgDesc),
+                  false,
+                  true
+              )
+              .build();
+
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+    co_await polled_tool(
+        ctx,
+        ref,
+        kNameWindows,
+        winPrompt.depict,
+        winSchema,
+        [ref](ExecPluginCtx&             c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel_token) -> asio::awaitable<ToolResult> {
+            ArgReader   args(args_json);
+            std::string tidStr(tid);
+            if (pluginxx_cancel_is_requested(cancel_token)) {
+                c.cancelRegistry.cancel(tidStr);
+            }
+            auto isCanceled = [&c, tidStr, cancel_token]() -> bool {
+                if (pluginxx_cancel_is_requested(cancel_token)) {
+                    return true;
+                }
+                return c.cancelRegistry.isCanceled(tidStr);
+            };
+            StoreFn storeFn = nullptr;
+            if (!tidStr.empty() && c.iface.session && c.iface.session->add_share_store) {
+                storeFn = [&c, ref, tidStr](std::string_view content) -> long long {
+                    return c.addShareStore(ref, tidStr, content);
+                };
+            }
+            // 子进程管道/计时器绑定到本协程的 executor (= 插件本地 reactor),
+            // 由受控轮询推进; workDir 用局部量保证整个 co_await 期间有效。
+            std::string workDirStr(workDir);
+            co_return co_await windowsExecuteAsync(
+                args.raw(),
+                workDirStr,
+                isCanceled,
+                storeFn,
+                &c.cancelRegistry,
+                tidStr
+            );
+        }
+    );
+#else
+    co_await blocking_tool(
+        ctx,
+        ref,
+        kNameWindows,
+        winPrompt.depict,
+        winSchema,
+        [ref](ExecPluginCtx&             c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel_token) -> ToolResult {
+            ArgReader   args(args_json);
+            std::string tidStr(tid);
+            if (pluginxx_cancel_is_requested(cancel_token)) {
+                c.cancelRegistry.cancel(tidStr);
+            }
+            auto isCanceled = [&c, tidStr, cancel_token]() -> bool {
+                if (pluginxx_cancel_is_requested(cancel_token)) {
+                    return true;
+                }
+                return c.cancelRegistry.isCanceled(tidStr);
+            };
+            StoreFn storeFn = nullptr;
+            if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
+                storeFn = [&c, tidStr](std::string_view content) -> long long {
+                    return c.addShareStore(tidStr, content);
+                };
+            }
+            return windowsExecute(
+                args.raw(),
+                std::string(workDir),
+                isCanceled,
+                storeFn,
+                &c.cancelRegistry,
+                tidStr
+            );
+        }
+    );
+#endif
+
+#else // Linux / POSIX
+    const auto bashPrompt = bashToolPrompt(ctx.env);
+    // 先注入提示词再注册: polled_tool/blocking_tool 注册时经 ctx.toolPrompt(name)
+    // 读取主程序提示词的 depict 作为工具描述, 注册后无法再改
+    publishToolPrompt(ctx, kNameBash, bashPrompt);
+
+    auto bashSchema
+        = ctx.schema(kNameBash)
+              .string(
+                  "command",
+                  argDescOr(bashPrompt, "command", kBashToolDepict),
+                  /*required=*/true
+              )
+              .integer("timeout", argDescOr(bashPrompt, "timeout", kTimeoutArgDesc), false, 60)
+              .string("cwd", argDescOr(bashPrompt, "cwd", kCwdArgDesc), false)
+              .boolean(
+                  "full_output",
+                  argDescOr(bashPrompt, "full_output", kFullOutputArgDesc),
+                  false,
+                  true
+              )
+              .build();
+
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+    co_await polled_tool(
+        ctx,
+        ref,
+        kNameBash,
+        bashPrompt.depict,
+        bashSchema,
+        [ref](ExecPluginCtx&             c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel_token) -> asio::awaitable<ToolResult> {
+            ArgReader   args(args_json);
+            std::string tidStr(tid);
+            if (pluginxx_cancel_is_requested(cancel_token)) {
+                c.cancelRegistry.cancel(tidStr);
+            }
+            auto isCanceled = [&c, tidStr, cancel_token]() -> bool {
+                if (pluginxx_cancel_is_requested(cancel_token)) {
+                    return true;
+                }
+                return c.cancelRegistry.isCanceled(tidStr);
+            };
+            StoreFn storeFn = nullptr;
+            if (!tidStr.empty() && c.iface.session && c.iface.session->add_share_store) {
+                storeFn = [&c, tidStr](std::string_view content) -> long long {
+                    return c.addShareStore(tidStr, content);
+                };
+            }
+            // 子进程管道/计时器绑定到本协程的 executor (= 插件本地 reactor),
+            // 由受控轮询推进; workDir 用局部量保证整个 co_await 期间有效。
+            std::string workDirStr(workDir);
+            co_return co_await bashExecuteAsync(
+                args.raw(),
+                workDirStr,
+                isCanceled,
+                storeFn,
+                &c.cancelRegistry,
+                tidStr
+            );
+        }
+    );
+#else
+    co_await blocking_tool(
+        ctx,
+        ref,
+        kNameBash,
+        bashPrompt.depict,
+        bashSchema,
+        [ref](ExecPluginCtx&             c,
+           std::string_view           args_json,
+           std::string_view           tid,
+           std::string_view           workDir,
+           const PluginxxCancelToken* cancel_token) -> ToolResult {
+            ArgReader   args(args_json);
+            std::string tidStr(tid);
+            if (pluginxx_cancel_is_requested(cancel_token)) {
+                c.cancelRegistry.cancel(tidStr);
+            }
+            auto isCanceled = [&c, tidStr, cancel_token]() -> bool {
+                if (pluginxx_cancel_is_requested(cancel_token)) {
+                    return true;
+                }
+                return c.cancelRegistry.isCanceled(tidStr);
+            };
+            StoreFn storeFn = nullptr;
+            if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
+                storeFn = [&c, tidStr](std::string_view content) -> long long {
+                    return c.addShareStore(tidStr, content);
+                };
+            }
+            return bashExecute(
+                args.raw(),
+                std::string(workDir),
+                isCanceled,
+                storeFn,
+                &c.cancelRegistry,
+                tidStr
+            );
+        }
+    );
+#endif
+#endif
+    co_return;
+}
+
+static void*
+    execStart(ExecPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    // 进程级只做环境探测 (与 agent 无关); 提示词与工具注册在 mount 里
+    ctx.env = detectExecEnv();
+    XX_LOGI(
+        "agentxx_execute_command: child env policy: {}",
+        agentxx_execmd_plugin::detail::resolveExecEnvPolicy().describe
+    );
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void setupExecPluginBlocking(ExecPluginCtx& ctx, const ScopeRef& ref) {
     // 环境/提示词/工具注册全部是 agent 级工作 (提示词按 agent 贡献, 工具进该 agent
     // 的工具表)。环境探测本身与 agent 无关, 但只在首次挂载时做一次即可, 这里仍按
     // 挂载做, 保证多 agent 不会共享一份过期结果。
@@ -313,19 +555,6 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
     );
 #endif
 #endif
-    return 0;
-}
-
-static void*
-    execStart(ExecPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // 进程级只做环境探测 (与 agent 无关); 提示词与工具注册在 mount 里
-    ctx.env = detectExecEnv();
-    XX_LOGI(
-        "agentxx_execute_command: child env policy: {}",
-        agentxx_execmd_plugin::detail::resolveExecEnvPolicy().describe
-    );
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
 }
 
 static void* execMount(
@@ -340,19 +569,29 @@ static void* execMount(
         }
         return nullptr;
     }
-    const AgentRef ref(*spec);
-    if (setupExecPlugin(ctx, ref) != 0) {
-        if (error) {
-            PluginString::set(
-                ctx.host,
-                error,
-                "agentxx_execute_command mount: registration failed"
-            );
-        }
+    auto later = finishLater(notify);
+    if (!later.active()) {
+        // 老宿主: 没有 provider 句柄可返回, 退回同步注册 (IO 线程上内联完成)
+        const AgentRef ref(*spec);
+        setupExecPluginBlocking(ctx, ref);
         return nullptr;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        later.failed("agentxx_execute_command mount: host has no pluginxx.tasks (spawn unavailable)");
+        return later.provider();
+    }
+    const AgentRef agentRef(*spec);
+    // 注册事务交给协程: 每个注册都是"提交 + co_await", 全部生效后再放行挂载
+    ctx.spawn([later, agentRef](ExecPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await setupExecPluginAsync(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 static void*

@@ -227,10 +227,10 @@ struct SysMonCtx : public PluginBase {
 
 /// 挂载事务 (mount 的实际内容); 失败由主程序按拒绝处理并回滚。
 /// - `ref` 为本次挂载的 agent 引用, 工具注册记在该 agent 名下
-static int32_t sysMonMountSetup(SysMonCtx& ctx, const ScopeRef& ref) {
+static pluginxx::Task<void> sysMonMountSetupAsync(SysMonCtx& ctx, ScopeRef ref) {
     // 1. 工具
     auto schema = ctx.schema("agentxx_get_system_core_info").build();
-    blocking_tool(
+    co_await blocking_tool(
          ctx,
          ref,
         "agentxx_get_system_core_info",
@@ -242,7 +242,7 @@ static int32_t sysMonMountSetup(SysMonCtx& ctx, const ScopeRef& ref) {
         }
     );
 
-    return 0;
+    co_return;
 }
 
 /// 进程级启动工作: 能力、事件订阅与后台采样任务 (与挂载数无关)
@@ -382,6 +382,23 @@ static void*
 }
 
 /// 挂载: 把系统信息工具注册到本 agent 名下
+static void sysMonMountSetupBlocking(SysMonCtx& ctx, const ScopeRef& ref) {
+    // 1. 工具
+    auto schema = ctx.schema("agentxx_get_system_core_info").build();
+    blocking_tool(
+         ctx,
+         ref,
+        "agentxx_get_system_core_info",
+        "Get system resource usage: CPU utilization and core count, memory usage, GPU utilization, and GPU memory usage.",
+        schema,
+        [](SysMonCtx& c, std::string_view) -> std::string {
+            auto usage = c.querySync();
+            return formatUsageText(usage);
+        }
+    );
+
+}
+
 static void* sysMonMount(
     SysMonCtx&                         ctx,
     const AgentxxPluginAgentMountSpec* spec,
@@ -394,15 +411,29 @@ static void* sysMonMount(
         }
         return nullptr;
     }
-    const AgentRef ref(*spec);
-    if (sysMonMountSetup(ctx, ref) != 0) {
-        if (error) {
-            PluginString::set(ctx.host, error, "agentxx_system_monitor mount: registration failed");
-        }
+    auto later = finishLater(notify);
+    if (!later.active()) {
+        // 老宿主: 没有 provider 句柄可返回, 退回同步注册 (IO 线程上内联完成)
+        const AgentRef ref(*spec);
+        sysMonMountSetupBlocking(ctx, ref);
         return nullptr;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        later.failed("agentxx_system_monitor mount: host has no pluginxx.tasks (spawn unavailable)");
+        return later.provider();
+    }
+    const AgentRef agentRef(*spec);
+    // 注册事务交给协程: 每个注册都是"提交 + co_await", 全部生效后再放行挂载
+    ctx.spawn([later, agentRef](SysMonCtx& c, OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await sysMonMountSetupAsync(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 /// 卸载: 无 per-agent 状态 (工具由主程序按挂载记录撤销)

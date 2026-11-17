@@ -26,7 +26,51 @@ Supports:
 struct MathPluginCtx : public PluginBase {};
 
 /// 注册事务 (mount 的实际内容); 失败由主程序只回滚这一个 agent。
-static int32_t mathSetup(MathPluginCtx& ctx, const ScopeRef& ref) {
+static pluginxx::Task<void> mathSetupAsync(MathPluginCtx& ctx, ScopeRef ref) {
+    auto schema
+        = ctx.schema(kNameCalculate)
+              .string(
+                  "expression",
+                  "The mathematical expression string to evaluate, e.g. '2 + 3 * 4', 'sin(pi / 4) ^ 2', 'sqrt(16) + log10(100)', '5!', 'gcd(48, 18)'.",
+                  /*required=*/true
+              )
+              .integer(
+                  "precision",
+                  "Optional decimal precision for floating point output (e.g. 2 for 2 decimal places, range 0 to 15)."
+              )
+              .enumString(
+                  "angle_unit",
+                  "Angle unit for trigonometric functions: 'rad' (radians, default) or 'deg' (degrees).",
+                  {"rad", "deg"},
+                  false,
+                  "rad"
+              )
+              .build();
+
+    co_await fast_tool(
+        ctx,
+        ref,
+        kNameCalculate,
+        kDepictCalculate,
+        schema,
+        [](std::string_view args_json) -> ToolResult {
+            ArgReader args(args_json);
+            return mathCalculateExecute(args.raw());
+        }
+    );
+    co_return;
+}
+
+static void*
+    mathStart(MathPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    // 本插件没有进程级工作 (无连接/线程/定时器): start 只给出完成信号。
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    (void)ctx;
+    return nullptr;
+}
+
+/// 挂载: 每个 agent 一次 (本插件没有 per-agent 状态, 直接注册工具)
+static void mathSetupBlocking(MathPluginCtx& ctx, const ScopeRef& ref) {
     auto schema
         = ctx.schema(kNameCalculate)
               .string(
@@ -58,18 +102,8 @@ static int32_t mathSetup(MathPluginCtx& ctx, const ScopeRef& ref) {
             return mathCalculateExecute(args.raw());
         }
     );
-    return 0;
 }
 
-static void*
-    mathStart(MathPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // 本插件没有进程级工作 (无连接/线程/定时器): start 只给出完成信号。
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    (void)ctx;
-    return nullptr;
-}
-
-/// 挂载: 每个 agent 一次 (本插件没有 per-agent 状态, 直接注册工具)
 static void* mathMount(
     MathPluginCtx&                     ctx,
     const AgentxxPluginAgentMountSpec* spec,
@@ -82,15 +116,29 @@ static void* mathMount(
         }
         return nullptr;
     }
-    const AgentRef ref(*spec);
-    if (mathSetup(ctx, ref) != 0) {
-        if (error) {
-            PluginString::set(ctx.host, error, "agentxx_math mount: registration failed");
-        }
+    auto later = finishLater(notify);
+    if (!later.active()) {
+        // 老宿主: 没有 provider 句柄可返回, 退回同步注册 (IO 线程上内联完成)
+        const AgentRef ref(*spec);
+        mathSetupBlocking(ctx, ref);
         return nullptr;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        later.failed("agentxx_math mount: host has no pluginxx.tasks (spawn unavailable)");
+        return later.provider();
+    }
+    const AgentRef agentRef(*spec);
+    // 注册事务交给协程: 每个注册都是"提交 + co_await", 全部生效后再放行挂载
+    ctx.spawn([later, agentRef](MathPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await mathSetupAsync(c, agentRef);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
+    return later.provider();
 }
 
 static void* mathUnmount(
