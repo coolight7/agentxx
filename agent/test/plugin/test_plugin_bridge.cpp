@@ -330,6 +330,26 @@ const AgentxxPluginToolsIface g_fakeTools = {
     /* call_tool */ nullptr,
 };
 
+/// 伪 `pluginxx.tasks`: 只为 `spawn` 提供"已受理"句柄 (不跟踪任务, 也不取消)。
+PluginxxOperatorHandle* PLUGINXX_CALL fakeRegisterTask(
+    const PluginxxHost*,
+    PluginxxOperatorCancelFunction,
+    void*,
+    PluginxxOperatorNotify*,
+    PluginxxString*
+) {
+    return reinterpret_cast<PluginxxOperatorHandle*>(1);
+}
+
+void PLUGINXX_CALL fakeCancelTask(PluginxxOperatorHandle*) {}
+
+const PluginxxTasksIface g_fakeTasks = {
+    /* version */ PLUGINXX_IFACE_TASKS_VERSION,
+    /* struct_size */ sizeof(PluginxxTasksIface),
+    /* register_task */ fakeRegisterTask,
+    /* cancel_task */ fakeCancelTask,
+};
+
 /// 用例可临时置空来验证"主程序不提供驱动时"的回退路径。
 const PluginxxSchedulerIface* g_schedulerForTest = &g_fakeScheduler;
 
@@ -349,6 +369,9 @@ const void* PLUGINXX_CALL fakeQueryInterface(const PluginxxHost*, const Pluginxx
     }
     if (name == AGENTXX_PLUGIN_IFACE_AGENT_TOOLS) {
         return &g_fakeTools;
+    }
+    if (name == PLUGINXX_IFACE_TASKS) {
+        return &g_fakeTasks;
     }
     return nullptr;
 }
@@ -467,6 +490,26 @@ struct NotifyProbe {
 };
 
 struct BridgeCtx : PluginBase {};
+
+/// 主程序"操作完成"通知探针 (`PluginxxOperatorNotify`: 生命周期入口/后台任务用)
+struct OperatorNotifyProbe {
+    int         calls  = 0;
+    int32_t     status = -1;
+    std::string payload;
+
+    static void PLUGINXX_CALL done(void* ud, int32_t status, const PluginxxStringView* body) {
+        auto& p = *static_cast<OperatorNotifyProbe*>(ud);
+        ++p.calls;
+        p.status = status;
+        if (body && body->data && body->size > 0) {
+            p.payload.assign(body->data, static_cast<size_t>(body->size));
+        }
+    }
+
+    PluginxxOperatorNotify notify() {
+        return PluginxxOperatorNotify{&done, this};
+    }
+};
 
 /// 通过桥放行的挂起点: 模拟"外部完成回调到达"。
 ///
@@ -1641,6 +1684,46 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
         XX_TEST_EXPECT_EQ(probe.result, std::string{"inline"});
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{0});
+    }
+
+    /// 20. 生命周期"稍后完成"凭据 (finishLater): 交回恰好一次; 忘了完成时自动 FAILED。
+    {
+        harness.clear();
+        OperatorNotifyProbe probe;
+        BridgeCtx            ctx;
+        ctx.init(&host);
+
+        auto notify = probe.notify();
+        auto later  = pluginxx::finishLater(&notify);
+        XX_TEST_EXPECT_TRUE(later.active());
+        XX_TEST_EXPECT_FALSE(later.completed());
+
+        // 入口把活交给协程后立刻返回, 结果由协程完成时交回
+        pluginxx::spawn(ctx, [&later](BridgeCtx& c, OpCtl&) -> Task<std::string> {
+            co_await pluginxx::yield(c);
+            later.ok("started");
+            co_return std::string{"done"};
+        });
+        XX_TEST_EXPECT_EQ(probe.calls, 0);
+        harness.runPending();
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(probe.payload, std::string{"started"});
+        XX_TEST_EXPECT_TRUE(later.completed());
+
+        // 重复完成不再回调主程序
+        later.ok("again");
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+
+        // 忘了完成: 凭据全部销毁时补一次 FAILED, 主程序不会永远等
+        OperatorNotifyProbe dropped;
+        {
+            auto n     = dropped.notify();
+            auto loose = pluginxx::finishLater(&n);
+        }
+        XX_TEST_EXPECT_EQ(dropped.calls, 1);
+        XX_TEST_EXPECT_EQ(dropped.status, PLUGINXX_OPERATOR_FAILED);
+        XX_TEST_EXPECT_TRUE(dropped.payload.find("did not complete") != std::string::npos);
     }
 
     harness.clear();

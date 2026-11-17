@@ -10,7 +10,7 @@
 | A | 框架层：ticket（调用即提交）+ `whenAll` + 顺序契约写进头文件 | 已完成 |
 | B | kit 改名与补形态：同步形态先改 `*Blocking`，主名让给 ticket / callback 形态 | 待做 |
 | C | 迁移 25 个插件（含 chatbot 10 个工具改 `polled_tool`）+ 删 4 个私有 `netCallWait` | 待做 |
-| D | 生命周期异步完成（`finishLater`；不设时限、不加配置键） | 待做 |
+| D | 生命周期异步完成（`finishLater`；不设时限、不加配置键） | 进行中（kit 部分完成） |
 | E | 删除全部阻塞形态 + `boundaries` 禁令 + 文档 | 待做 |
 | G | 收尾：文档、全量回归、卸载路径 ASan 复核、性能对比 | 待做 |
 
@@ -84,6 +84,24 @@
   `plugin_feature` / `plugin_point` / `plugin_dispatch` / `plugin_cleanup` 共 1411 条全绿；
   `boundaries` / `plugin_multi_mount` / `event_subagent` / `async_tools` 共 296 条全绿。
 
+### 批 D（部分）：kit 的“稍后完成”凭据 `finishLater`（已完成）
+
+生命周期四个入口（`start` / `mount` / `stop` / `unmount`）都是“受理 + 完成后 notify”的契约；
+插件里要把注册类调用改成 `co_await`，就需要一个能跨挂起持有 notify 的凭据。新增：
+
+- `detail::LifecycleFinisher`（对外别名 `pluginxx::LifecycleFinisher`）：内部持
+  `shared_ptr<CompletionGuard>`，`ok` / `failed` / `canceled` / `fromCurrentException` 恰好一次；
+  **所有副本都销毁时仍未完成就自动补 `FAILED`**（复用 `CompletionGuard` 的析构语义），
+  主程序不会因为插件忘了通知而永远等下去。
+- `pluginxx::finishLater(notify)` 便捷构造；`agentxx::plugin` 补 `using pluginxx::finishLater;`
+  与 `using pluginxx::LifecycleFinisher;`。
+- 测试 `plugin_bridge` 第 20 段：入口把活交给协程后立刻返回、协程 `co_await yield` 后
+  `later.ok("started")` → 主程序收到一次 `OK`；重复 `ok()` 不再回调；忘了完成 → 一次 `FAILED`
+  （正文含 `did not complete`）。为让 `spawn` 在伪主程序里可用，夹具补了伪 `pluginxx.tasks` 表
+  （`register_task` 只返回一个非空句柄）。
+
+结果：`plugin_bridge` 270 条全绿（原 259 + 新增 11）。
+
 ## 与计划的偏差
 
 - 计划里批 A 写的是“`tableOpBlocking*` 加 `[[deprecated]]`（暂留）”，实际**没有加**：这些阻塞形态
@@ -98,3 +116,14 @@
 ## 剩余事项
 
 （收尾时补）
+
+### 批 B 开工前的两个决定（实施时按这个来）
+
+1. **没有 ctx 的便捷函数**（`promptJson` / `graphJson` / `registerSkillDir` / 权限 /
+   广播等自由函数）拿不到协程驱动桥，做不出 ticket。因此每个都补一个 `Ctx&` 形态：
+   `template<typename Ctx> TableOpTicket xxx(Ctx& ctx, const ScopeRef& agent, ...)`，
+   内部 `return tableOp(ctx, ...)`；`host` / `iface` 从 `ctx` 取，参数比现在更短。
+2. **改名与插件调用点同一批提交**：`xxx(...)` → `xxxBlocking(...)` 会让 25 个插件的
+   100 多个调用点立刻编译不过，所以 B（kit 改名 + 补 ctx 形态）与 C（插件迁移）必须
+   在同一个编译循环里完成；生命周期回调里的调用点先继续用 `*Blocking`，等批 D 把
+   生命周期改成可异步完成后再迁。
