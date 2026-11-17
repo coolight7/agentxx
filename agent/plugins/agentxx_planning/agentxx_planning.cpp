@@ -378,9 +378,11 @@ extern "C" PLUGINXX_EXPORT const PluginxxInfo* PLUGINXX_CALL agentxx_plugin_agen
     );
 }
 
-/// 挂载事务 (mount 的实际内容): prompt 贡献 + 规划工具注册 + client_attached 订阅。
+/// 挂载事务 (mount 的实际内容): prompt 贡献 + 规划工具注册 + client_attached 订阅 (**协程形态**)。
 /// - `ref` 为本次挂载的 agent 引用, 提示词/工具/订阅都记在该 agent 名下
-static int planningSetup(PluginCtx* ctx, const agentxx::plugin::ScopeRef& ref) {
+/// - 每条登记都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到失败原因
+static pluginxx::Task<void>
+    planningSetup(PluginCtx* ctx, agentxx::plugin::AgentRef ref) {
     const PluginxxHost* host = ctx->host;
     // 注入 planning 附加提示词至主程序 (经通用 appendSystemPrompts 与 toolPrompt)
     if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
@@ -400,9 +402,17 @@ static int planningSetup(PluginCtx* ctx, const agentxx::plugin::ScopeRef& ref) {
         toolPrompt[std::string{kNamePlanning}] = std::move(planningPrompt);
         j["toolPrompt"]                        = std::move(toolPrompt);
 
-        std::string js       = j.dump();
-        if (agentxx::plugin::setPromptJson(host, ctx->iface, ref.ptr(), js) != 0) {
-            pluginLog(ctx, 3, "agentxx_planning: set prompts failed");
+        std::string js = j.dump();
+        auto        wr = co_await agentxx::plugin::setPromptJson(*ctx, ref.ptr(), js);
+        if (!wr.ok()) {
+            pluginLog(
+                ctx,
+                3,
+                fmt::format(
+                    "agentxx_planning: set prompts failed: {}",
+                    wr.accepted() ? std::string(wr.text()) : wr.startError
+                )
+            );
         } else {
             pluginLog(
                 ctx,
@@ -416,7 +426,7 @@ static int planningSetup(PluginCtx* ctx, const agentxx::plugin::ScopeRef& ref) {
 
     {
         std::string schema
-            = ctx->schema(kNamePlanning)
+            = (co_await agentxx::plugin::schemaOf(*ctx, kNamePlanning))
                   .enumString(
                       "mode",
                       kArgModeDesc,
@@ -450,7 +460,7 @@ static int planningSetup(PluginCtx* ctx, const agentxx::plugin::ScopeRef& ref) {
                   .string("notes", kArgNotesDesc)
                   .build();
 
-        agentxx::plugin::fast_tool(
+        co_await agentxx::plugin::fast_tool(
             *ctx,
             ref,
             kNamePlanning,
@@ -541,25 +551,26 @@ static int planningSetup(PluginCtx* ctx, const agentxx::plugin::ScopeRef& ref) {
 
     // 主程序约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
     if (ctx->iface.broadcasts) {
-        auto topicSv
-            = agentxx::plugin::PluginStringView::fromCstr("agentxx.agent.host.client_attached");
-        if (!agentxx::plugin::subscribePluginBroadcast(
-                host,
-                ctx->iface.broadcasts,
-                ref.ptr(),
-                topicSv,
-                on_client_attached,
-                ctx
-            )) {
+        auto subResult = co_await agentxx::plugin::subscribePluginBroadcast(
+            *ctx,
+            ref.ptr(),
+            "agentxx.agent.host.client_attached",
+            on_client_attached,
+            ctx
+        );
+        if (!subResult.ok()) {
             pluginLog(
                 ctx,
                 3,
-                "agentxx_planning: subscribe client_attached failed (UI resnapshot disabled)"
+                fmt::format(
+                    "agentxx_planning: subscribe client_attached failed (UI resnapshot disabled): {}",
+                    subResult.accepted() ? std::string(subResult.text()) : subResult.startError
+                )
             );
         }
     }
 
-    return 0;
+    co_return;
 }
 
 extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
@@ -629,17 +640,27 @@ extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_mount(
                 );
                 return nullptr;
             }
-            const agentxx::plugin::AgentRef ref(*spec);
-            if (planningSetup(ctx, ref) != 0) {
+            if (!ctx->iface.tasks || !ctx->iface.tasks->register_task) {
                 agentxx::plugin::PluginString::set(
                     ctx->host,
                     error_out,
-                    "agentxx_planning mount: registration failed"
+                    "agentxx_planning mount: host has no pluginxx.tasks (spawn unavailable)"
                 );
                 return nullptr;
             }
-            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-            return nullptr;
+            auto later = agentxx::plugin::finishLater(notify);
+            // 注册事务交给协程: 提示词/工具/订阅逐条“提交 + co_await”, 全部生效后再放行挂载
+            const agentxx::plugin::AgentRef agentRef(*spec);
+            ctx->spawn([later, agentRef](PluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+                try {
+                    co_await planningSetup(&c, agentRef);
+                    later.ok();
+                } catch (const std::exception& e) {
+                    later.failed(e.what());
+                }
+                co_return;
+            });
+            return later.provider();
         }
     );
 }

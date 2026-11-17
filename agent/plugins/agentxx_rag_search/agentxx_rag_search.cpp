@@ -76,21 +76,22 @@ struct RagAgentState {
     }
 };
 
-/// 注册事务 (mount 的实际内容): 读取配置、构建索引并注册检索工具。
-static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
+/// 挂载事务 (mount 的实际内容): 读取配置、构建索引并注册检索工具 (**协程形态**)
+/// - 表调用 (读模型配置/注册工具) 都是“提交 + `co_await`”
+static pluginxx::Task<void> ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
     if (!ctx.iface.model || !ctx.iface.model->get_config) {
         ctx.log.warn(fmt::format(
             "agentxx_rag_search: host model iface unavailable, `{}` not registered",
             kNameSearch
         ));
-        return 0;
+        co_return;
     }
-    std::string    cfgJson = modelConfigJson(ctx.host, ctx.iface, st.ref.ptr());
+    auto cfgResult = co_await modelConfigJson(ctx, st.ref.ptr());
     utilxx_base::Json cfg;
     bool              hasCfg = false;
-    if (!cfgJson.empty()) {
+    if (cfgResult.ok() && !cfgResult.text().empty()) {
         try {
-            cfg    = utilxx_base::Json::parse(cfgJson);
+            cfg    = utilxx_base::Json::parse(std::string{cfgResult.text()});
             hasCfg = true;
         } catch (...) {
             hasCfg = false;
@@ -115,7 +116,7 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
         ctx.log.info(
             "agentxx_rag_search: `ragDocsPaths` not configured or empty, search tool skipped"
         );
-        return 0;
+        co_return;
     }
 
     st.store = std::make_unique<VectorStore>(
@@ -124,10 +125,10 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
     st.docsPaths = std::move(ragDocsPaths);
 
     if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
-        return 0;
+        co_return;
     }
 
-    auto schema = ctx.schema(kNameSearch)
+    auto schema = (co_await schemaOf(ctx, kNameSearch))
                       .string(
                           "query",
                           "Search query to find relevant documents.",
@@ -141,7 +142,7 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
                       )
                       .build();
 
-    blocking_tool(
+    co_await blocking_tool(
         ctx,
         st.ref,
         kNameSearch,
@@ -197,7 +198,7 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
         kAutoSummary
     );
 
-    return 0;
+    co_return;
 }
 
 static void*
@@ -219,15 +220,27 @@ static void* ragMount(
         }
         return nullptr;
     }
-    auto* st = new RagAgentState{AgentRef(*spec), nullptr};
-    if (ragSetup(ctx, *st) != 0) {
-        delete st;
-        if (error) {
-            PluginString::set(ctx.host, error, "agentxx_rag_search mount: setup failed");
-        }
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        PluginString::set(
+            ctx.host,
+            error,
+            "agentxx_rag_search mount: host has no pluginxx.tasks (spawn unavailable)"
+        );
         return nullptr;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    auto* st   = new RagAgentState{AgentRef(*spec), nullptr};
+    auto  later = finishLater(notify);
+    // 配置读取/索引构建/工具注册逐条“提交 + co_await”; 完成通知经 later 异步发出
+    ctx.spawn([later, st](RagPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await ragSetup(c, *st);
+            later.ok();
+        } catch (const std::exception& e) {
+            delete st;
+            later.failed(e.what());
+        }
+        co_return;
+    });
     return st;
 }
 
