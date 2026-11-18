@@ -179,7 +179,8 @@ static HttpResult netHttpExecute(WebsearchPluginCtx& ctx, const HttpRequestSpec&
 /// 等待期间只占一个工作线程, 不在主程序 io 线程上阻塞。
 static pluginxx::Task<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRef ref) {
     if (ctx.iface.model && ctx.iface.model->get_config) {
-        std::string cfgJson = modelConfigJson(ctx.host, ctx.iface, ref.ptr());
+        auto        cfgRes  = co_await agentxx::plugin::modelConfigJson(ctx, ref.ptr());
+        std::string cfgJson = cfgRes.ok() ? std::string{cfgRes.text()} : std::string{};
         if (!cfgJson.empty()) {
             try {
                 auto cfg                  = utilxx_base::Json::parse(cfgJson);
@@ -202,7 +203,7 @@ static pluginxx::Task<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRe
 
     // 1. fetch (fetch 与 fetch_markdown: 由 `format` 选择返回形态)
     auto fetchSchema
-        = ctx.schema(kNameFetch)
+        = (co_await agentxx::plugin::schemaOf(ctx, kNameFetch))
               .string("url", kFetchUrlDesc, /*required=*/true)
               .enumString("format", kFetchFormatDesc, {"markdown", "raw"}, false, "markdown")
               .number("timeout", kFetchTimeoutDesc, false, 30.0)
@@ -237,7 +238,7 @@ static pluginxx::Task<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRe
 
     // 2. search
     if (ctx.use_model_search || !ctx.search_api_url.empty()) {
-        auto searchSchema = ctx.schema(kNameSearch)
+        auto searchSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameSearch))
                                 .string("query", kSearchQueryDesc, /*required=*/true)
                                 .number("timeout", kSearchTimeoutDesc, false, 20.0)
                                 .object("header", kHeaderArgDesc)

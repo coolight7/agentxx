@@ -248,7 +248,7 @@ PluginxxSubscription* ChatbotNet::subscribeEvents(
         return nullptr;
     }
     // 频道要先声明才能订阅; 网络事件的频道归本插件 (主程序代发时按属主身份发布)
-    agentxx::plugin::declarePluginBroadcast(
+    agentxx::plugin::declarePluginBroadcastNoWait(
         host,
         broadcasts,
         eventTopic,
@@ -267,7 +267,7 @@ PluginxxSubscription* ChatbotNet::subscribeEvents(
 
 bool ChatbotNet::unsubscribeEvents(PluginxxSubscription* sub) const {
     // 阻塞形态退订 (调用方是插件 io 线程, 不是主程序 io 线程)
-    return agentxx::plugin::unsubscribePluginBroadcast(host, broadcasts, sub);
+    return agentxx::plugin::unsubscribePluginBroadcastNoWait(host, broadcasts, sub);
 }
 
 } // namespace chatbot

@@ -25,6 +25,37 @@ namespace agentxx {
 namespace plugin {
 
 // =====================================================================
+// 加载线程: dlopen / create 不占客户端 io 线程
+// =====================================================================
+
+asio::awaitable<std::string> ClientPluginManager::runLoaderTask(std::function<std::string()> fn) {
+    if (!fn) {
+        co_return std::string{};
+    }
+    // 与 agent 侧同一写法: 工作体只写结果, 叫醒 io 线程靠一次定时器取消,
+    // 不在 io 线程上执行任何插件代码
+    auto result = std::make_shared<std::string>();
+    auto ex     = co_await asio::this_coro::executor;
+    auto timer  = std::make_shared<asio::steady_timer>(
+        ex,
+        std::chrono::steady_clock::time_point::max()
+    );
+    const bool posted = postToWorkerThread([result, fn, timer, ex]() {
+        *result = fn();
+        asio::post(ex, [timer] {
+            timer->cancel();
+        });
+    });
+    if (!posted) {
+        // 没有可用线程池: 退回调用线程执行 (与框架默认行为一致)
+        XX_LOGW("[client_plugin] plugin load runs on the caller thread: no worker pool");
+        co_return fn();
+    }
+    co_await timer->async_wait(asio::as_tuple(asio::use_awaitable));
+    co_return *result;
+}
+
+// =====================================================================
 // 调度表 (阻塞工作的工作线程池)
 // =====================================================================
 

@@ -1059,12 +1059,12 @@ asio::awaitable<TestResult> run_plugin_tests() {
             {
                 std::ofstream f(scriptPath, std::ios::binary);
                 f << R"JS(
-agentxx.registerTool({
+await agentxx.registerTool({
   name: "rollback_probe_tool",
   description: "registered before the top-level failure",
   execute: () => "should never run",
 });
-agentxx.subscribe("plugin.rollback_probe.topic", () => {});
+await agentxx.subscribe("plugin.rollback_probe.topic", () => {});
 setTimeout(() => agentxx.log(2, "rollback probe timer"), 60000);
 throw new Error("top-level rollback probe");
 )JS";

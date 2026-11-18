@@ -412,7 +412,7 @@ void ChatbotCtx::onPanelDrive() {
     if (!json.empty() && iface.broadcasts && host) {
         auto topicSv = PluginStringView::fromCstr(kPanelTopic);
         auto jsonSv  = PluginStringView::from(json.data(), json.size());
-        agentxx::plugin::publishPluginBroadcast(host, iface.broadcasts, topicSv, jsonSv);
+        agentxx::plugin::publishPluginBroadcastNoWait(host, iface.broadcasts, topicSv, jsonSv);
     }
 
     // 发布期间插件 io 线程可能又攒了一份: 再要一张票
@@ -1360,17 +1360,19 @@ std::vector<ac::PanelTaskView> panelTaskViewsOf(const ac::ChatbotTaskManager& ta
 
 /* ==================== 生命周期 ==================== */
 
-/// 进程级启动: 校验配置 → 挂人设根 → 起平台连接
-void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {    if (!notify || !notify->done) {
-        PluginString::set(ctx.host, error, "start: notify required");
-        return nullptr;
-    }
-    // ---- 1. 读配置 (args + 可选 config 文件) ----
-    std::string argsJson = ctx.argsJson();
+/// 进程级启动主体 (实例参数与配置文件路径已取到): 校验配置 → 挂人设根 → 起平台连接
+///
+/// - 失败时把原因写进 `errorOut` 并返回 false; 本函数内已起的线程与已挂的根会自行回滚
+bool chatbotStartBody(
+    ChatbotCtx&        ctx,
+    std::string        argsJson,
+    const std::string& configPath,
+    std::string&       errorOut
+) {
     if (argsJson.empty()) {
         argsJson = "{}";
     }
-    const auto configPath = ctx.configPath();
+    // ---- 1. 读配置 (args + 可选 config 文件) ----
     if (!configPath.empty()) {
         ac::ConfigError mergeErr;
         if (!ac::mergeConfigFile(configPath, argsJson, mergeErr)) {
@@ -1381,8 +1383,8 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
                 mergeErr.message
             );
             ctx.log.error(message);
-            PluginString::set(ctx.host, error, message);
-            return nullptr;
+            errorOut = message;
+            return false;
         }
     }
     ac::ChatbotConfig config;
@@ -1391,8 +1393,8 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
         const auto message
             = fmt::format("start: 配置错误 {}: {}", configErr.where, configErr.message);
         ctx.log.error(message);
-        PluginString::set(ctx.host, error, message);
-        return nullptr;
+        errorOut = message;
+        return false;
     }
     // 根预算: 主程序侧上限由运行时表把关 (超出时 mountRoot 会返回失败), 这里用 8 作为
     // 缺省的保守值参与校验 (AgentHost::Config::maxRoots 的默认值)
@@ -1400,8 +1402,8 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
         const auto message
             = fmt::format("start: 配置错误 {}: {}", configErr.where, configErr.message);
         ctx.log.error(message);
-        PluginString::set(ctx.host, error, message);
-        return nullptr;
+        errorOut = message;
+        return false;
     }
     // 主程序配置 (dataDir 等) 必须在填本实例的 `config` 成员**之前**取:
     // 成员名 `config` 会遮蔽基类的 `config()` 方法, 所以这里用限定调用
@@ -1422,9 +1424,9 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
         const char* message
             = "start: 主程序没有提供网络能力 (`.net` 表): 平台连接无法建立";
         ctx.log.error(message);
-        PluginString::set(ctx.host, error, message);
+        errorOut = message;
         ctx.stopIo();
-        return nullptr;
+        return false;
     }
     const auto dataDir = [&mainConfigJson]() {
         try {
@@ -1467,9 +1469,9 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
             mountOk = true;
         });
         if (!mountOk) {
-            PluginString::set(ctx.host, error, "start: 插件 io 线程启动失败");
+            errorOut = "start: 插件 io 线程启动失败";
             ctx.stopIo();
-            return nullptr;
+            return false;
         }
     }
 
@@ -1485,9 +1487,9 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
                 account.type
             );
             ctx.log.error(message);
-            PluginString::set(ctx.host, error, message);
+            errorOut = message;
             ctx.stopIo();
-            return nullptr;
+            return false;
         }
         runtime->sink.onInbound = [&ctx](ac::InboundEvent event) {
             // 平台回调已经在插件 io 线程上 (平台对象由本线程驱动)
@@ -1546,7 +1548,7 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
                 persona.name
             );
             ctx.log.error(message);
-            PluginString::set(ctx.host, error, message);
+            errorOut = message;
             // 回滚已挂的根与平台
             for (auto& [name, id] : ctx.personaRoots) {
                 agentxx::plugin::unmountRoot(ctx, id);
@@ -1567,7 +1569,7 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
                 std::lock_guard lock(ctx.accountsMutex);
                 ctx.accounts.clear();
             }
-            return nullptr;
+            return false;
         }
         ctx.personaRoots[persona.name] = rootId;
         ctx.log.info(fmt::format("人设 '{}' 的根已挂载: {}", persona.name, rootId));
@@ -1661,14 +1663,36 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
         ac::timezoneLabel(ctx.config.behavior.timezoneSpec, ac::systemNowMs()),
         ctx.config.behavior.timezone
     ));
-    // 面板频道的订阅走协程 (表调用是“提交 + co_await”), 完成通知经 later 异步发出
+    return true;
+}
+
+/// 进程级启动: 取实例参数与配置文件路径 (表调用) → 跑启动主体 → 订阅面板事件
+///
+/// 三件事都靠协程串起来: `start` 跑在插件执行线程上, 不允许同步等主程序。
+void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+    if (!notify || !notify->done) {
+        PluginString::set(ctx.host, error, "start: notify required");
+        return nullptr;
+    }
     if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         PluginString::set(ctx.host, error, "start: host has no pluginxx.tasks (spawn unavailable)");
         return nullptr;
     }
     auto later = agentxx::plugin::finishLater(notify);
+    if (!later.active()) {
+        return nullptr;
+    }
     ctx.spawn([later](ChatbotCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
         try {
+            // 实例参数与配置文件路径在实例生命周期内不变
+            std::string argsJson   = co_await c.argsJsonAsync();
+            std::string configPath = co_await c.configPathAsync();
+            std::string message;
+            if (!chatbotStartBody(c, std::move(argsJson), configPath, message)) {
+                later.failed(message);
+                co_return;
+            }
+            // 面板频道的订阅同样逐条 co_await, 全部生效后才算启动完成
             co_await subscribePanelEvents(c);
             later.ok();
         } catch (const std::exception& e) {

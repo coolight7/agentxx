@@ -28,7 +28,7 @@ struct MathPluginCtx : public PluginBase {};
 /// 注册事务 (mount 的实际内容); 失败由主程序只回滚这一个 agent。
 static pluginxx::Task<void> mathSetupAsync(MathPluginCtx& ctx, ScopeRef ref) {
     auto schema
-        = ctx.schema(kNameCalculate)
+        = (co_await agentxx::plugin::schemaOf(ctx, kNameCalculate))
               .string(
                   "expression",
                   "The mathematical expression string to evaluate, e.g. '2 + 3 * 4', 'sin(pi / 4) ^ 2', 'sqrt(16) + log10(100)', '5!', 'gcd(48, 18)'.",

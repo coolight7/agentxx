@@ -138,6 +138,15 @@ inline std::string takeHostString(const PluginxxHost* host, Fn&& fn) {
     return text;
 }
 
+/// 取一段字符串的实际内容 (接受 `std::string_view` 与跨边界的 `PluginxxStringView`)
+inline std::string_view textOfView(std::string_view v) noexcept {
+    return v;
+}
+
+inline std::string_view textOfView(const PluginxxStringView& v) noexcept {
+    return PluginStringView::str(v);
+}
+
 } // namespace detail
 
 /* ==================== 广播便捷入口 (插件侧) ==================== *
@@ -211,17 +220,15 @@ inline bool declarePluginBroadcast(
                              + (anyonePublish ? "anyone" : "owner") + "\"}";
     const auto declSv = PluginStringView::from(decl.data(), decl.size());
     const auto caps   = broadcastCallIfaces(host);
-    // 频道表的工作体只改注册表 (发布时把处理器投给别人, 自己不等待), 不会派回调用方的
-    // 执行线程, 因此插件执行线程上同步等是安全的 (见 pluginxx/api/sync_bridge.h)
+    // 阻塞形态: 只在 create 或不跑插件代码的线程上可用 (插件执行线程上会被拒绝,
+    // 见 pluginxx/api/sync_bridge.h); 需要提交即返回时用 *NoWait 形态
     return pluginxx::tableOpSyncWait(
                host,
                caps.first,
                caps.second,
                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                    return broadcasts->declare_broadcast(host, &declSv, cb, ud, err);
-               },
-               0,
-               pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
+               }
     )
         .ok();
 }
@@ -250,9 +257,7 @@ inline bool publishPluginBroadcast(
                caps.second,
                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                    return broadcasts->publish_broadcast(host, &idSv, &payloadSv, cb, ud, err);
-               },
-               0,
-               pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
+               }
     )
         .ok();
 }
@@ -275,9 +280,7 @@ inline bool unsubscribePluginBroadcast(
                caps.second,
                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                    return broadcasts->unsubscribe_broadcast(host, sub, cb, ud, err);
-               },
-               0,
-               pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
+               }
     )
         .ok();
 }
@@ -303,12 +306,109 @@ inline PluginxxSubscription* subscribePluginBroadcast(
         [&](PluginxxOperatorCallback cb, void* opUd, PluginxxString* err) {
             return broadcasts->subscribe_broadcast(host, scope, &idSv, handler, ud, nullptr, cb,
                                                    opUd, err);
-        },
-        0,
-        pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
+        }
     );
     // 表成员是异步契约: 订阅句柄以十进制文本放在 `payload` 里交回
     return op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
+}
+
+/* ---- 提交即返回形态 ---- *
+ *
+ * 只发起、不等结果: 调用即返回, 任何线程都不等, 也不需要协程。适用于只有副作用、
+ * 不需要句柄/成败的广播动作 (发一条状态、订阅一条频道、退订一条频道)。
+ * 订阅与声明失败时主程序侧会记日志; 订阅句柄由主程序随实例卸载一并回收, 因此
+ * 不保存句柄也不会泄漏。
+ */
+
+/// 声明一条广播频道 (**提交即返回**)
+template<typename IdView>
+inline bool declarePluginBroadcastNoWait(
+    const PluginxxHost*            host,
+    const PluginxxBroadcastsIface* broadcasts,
+    const IdView&                  idView,
+    bool                           anyonePublish = false,
+    bool                           cacheLatest   = true
+) {
+    const std::string id   = std::string{detail::textOfView(idView)};
+    if (!host || !broadcasts || !broadcasts->declare_broadcast || id.empty()) {
+        return false;
+    }
+    const std::string decl = "{\"id\":\"" + id + "\",\"cache\":\""
+                             + (cacheLatest ? "latest" : "none") + "\",\"publish\":\""
+                             + (anyonePublish ? "anyone" : "owner") + "\"}";
+    auto              declSv = PluginStringView::from(decl.data(), decl.size());
+    PluginxxString    err{nullptr, 0};
+    auto*             handle = broadcasts->declare_broadcast(host, &declSv, nullptr, nullptr, &err);
+    if (err.data != nullptr) {
+        PluginString::free(host, &err);
+    }
+    return handle != nullptr;
+}
+
+/// 发布一条广播 (**提交即返回**; 频道不存在时先声明)
+template<typename IdView, typename PayloadView>
+inline bool publishPluginBroadcastNoWait(
+    const PluginxxHost*            host,
+    const PluginxxBroadcastsIface* broadcasts,
+    const IdView&                  idView,
+    const PayloadView&             payloadView,
+    bool                           anyonePublish = false
+) {
+    const std::string id       = std::string{detail::textOfView(idView)};
+    const std::string payload  = std::string{detail::textOfView(payloadView)};
+    if (!host || !broadcasts || !broadcasts->publish_broadcast || id.empty()) {
+        return false;
+    }
+    declarePluginBroadcastNoWait(host, broadcasts, id, anyonePublish);
+    auto           idSv      = PluginStringView::from(id.data(), id.size());
+    auto           payloadSv = PluginStringView::from(payload.data(), payload.size());
+    PluginxxString err{nullptr, 0};
+    auto*          handle = broadcasts->publish_broadcast(host, &idSv, &payloadSv, nullptr, nullptr, &err);
+    if (err.data != nullptr) {
+        PluginString::free(host, &err);
+    }
+    return handle != nullptr;
+}
+
+/// 订阅一条广播 (**提交即返回**; 句柄由主程序随实例卸载回收)
+template<typename IdView>
+inline bool subscribePluginBroadcastNoWait(
+    const PluginxxHost*            host,
+    const PluginxxBroadcastsIface* broadcasts,
+    const PluginxxScopeRef*        scope,
+    const IdView&                  idView,
+    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
+    void* ud
+) {
+    const std::string id = std::string{detail::textOfView(idView)};
+    if (!host || !broadcasts || !broadcasts->subscribe_broadcast || id.empty() || !handler) {
+        return false;
+    }
+    auto           idSv = PluginStringView::from(id.data(), id.size());
+    PluginxxString err{nullptr, 0};
+    auto*          handle
+        = broadcasts->subscribe_broadcast(host, scope, &idSv, handler, ud, nullptr, nullptr, nullptr, &err);
+    if (err.data != nullptr) {
+        PluginString::free(host, &err);
+    }
+    return handle != nullptr;
+}
+
+/// 撤销一条广播订阅 (**提交即返回**; 幂等)
+inline bool unsubscribePluginBroadcastNoWait(
+    const PluginxxHost*            host,
+    const PluginxxBroadcastsIface* broadcasts,
+    PluginxxSubscription*          sub
+) {
+    if (!host || !broadcasts || !broadcasts->unsubscribe_broadcast || sub == nullptr) {
+        return false;
+    }
+    PluginxxString err{nullptr, 0};
+    auto*          handle = broadcasts->unsubscribe_broadcast(host, sub, nullptr, nullptr, &err);
+    if (err.data != nullptr) {
+        PluginString::free(host, &err);
+    }
+    return handle != nullptr;
 }
 
 /// 发布一条广播 (**协程形态**: 调用即提交, 发布前先声明频道)
@@ -633,17 +733,20 @@ struct ClientIfaces {
 
 /* ==================== client 表便捷调用 (插件侧) ====================
  *
- * client 侧六张表也是异步契约。下面三个助手给**同步写法**用 (渲染器回调这类无法写成
- * 协程的地方, 以及主程序侧的同步桥):
- * - 调用方本来就在 client io 线程时主程序是**内联完成**的, 不产生任何等待;
- * - 调用方在其他线程 (含 client 插件执行线程) 时真等到完成回调: 完成回调经
- *   **同步桥**就地调用 (见 pluginxx/api/sync_bridge.h), 因此不会自己等自己;
- * - client 表的工作体只碰 client 注册表, 不会派发回本插件的执行线程, 所以这里显式
- *   放行插件执行线程 (`allowOnPluginThread`); agent 侧的表仍默认拒绝。
- * 需要“提交完不管”的地方 (toast / 装饰 / 取消订阅等) 直接传 `cb = nullptr`, 不等待。
+ * client 侧六张表也是异步契约。插件侧按“要不要结果”选三种写法:
+ * - **不要结果** (toast / 更新面板 / 打开 overlay …): 传 `cb = nullptr` 提交,
+ *   调用即返回, 任何线程都不等 (`*NoWait` 系列与 [clientTableCall]);
+ * - **要结果, 且在协程里**: `co_await clientTableOpAsync(ctx, ...)` 或下面的
+ *   `*Async` 便捷入口;
+ * - **要结果, 但不在协程里** (`create` 这类加载线程上的一次性查询): [clientTableOp]
+ *   用阻塞形态。它**不允许**在插件执行线程上等 —— 插件线程与主程序 io 线程是两条
+ *   线程, 等待会把它卡住 (见 `pluginxx::SyncWaitThreadPolicy`), 该调用直接失败并
+ *   带上原因文本。
  */
 
-/// client 表调用 (同步形态)
+/// client 表调用 (阻塞形态; 插件执行线程上直接失败)
+///
+/// 只在确实无法写成协程的地方用 (`create` 里的实例级查询), 插件执行线程上会被拒绝。
 template<typename StartFn>
 inline pluginxx::detail::TableOpResult clientTableOp(
     const PluginxxHost*        host,
@@ -654,10 +757,21 @@ inline pluginxx::detail::TableOpResult clientTableOp(
         host,
         iface.cancel,
         iface.scheduler,
-        std::forward<StartFn>(start),
-        0,
-        pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
+        std::forward<StartFn>(start)
     );
+}
+
+/// client 表调用 (**提交即返回**): 只要发起, 不要结果, 任何线程都不等
+///
+/// 失败原因由主程序自己记日志 (插件拿不到, 也不需要)。
+template<typename StartFn>
+inline bool clientTableCall(const PluginxxHost* host, const ClientIfaces&, StartFn&& start) {
+    PluginxxString err{nullptr, 0};
+    auto*          handle = start(nullptr, nullptr, &err);
+    if (err.data != nullptr && host != nullptr) {
+        PluginString::free(host, &err);
+    }
+    return handle != nullptr;
 }
 
 /// client 表调用 (**协程形态**): 提交即开始, `co_await` 拿结果
@@ -760,11 +874,10 @@ inline int32_t clientUpdateStatusItem(
     }
     const auto iface = ClientIfaces::query(host);
     auto       sv    = PluginStringView::from(json.data(), json.size());
-    return tableStatus(
-        clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->update_status_item(host, item, &sv, cb, ud, err);
-        })
-    );
+    clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ui->update_status_item(host, item, &sv, cb, ud, err);
+    });
+    return AGENTXX_RESULT_OK;
 }
 
 /// 注销状态栏项 (只提交, 不等结果)
@@ -813,11 +926,10 @@ inline int32_t clientUpdatePanel(
     }
     const auto iface = ClientIfaces::query(host);
     auto       sv    = PluginStringView::from(itemsJson.data(), itemsJson.size());
-    return tableStatus(
-        clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->update_panel(host, panel, &sv, cb, ud, err);
-        })
-    );
+    clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ui->update_panel(host, panel, &sv, cb, ud, err);
+    });
+    return AGENTXX_RESULT_OK;
 }
 
 /// 注销侧边栏面板 (只提交, 不等结果)
@@ -866,11 +978,10 @@ inline int32_t clientUpdateInfoSection(
     }
     const auto iface = ClientIfaces::query(host);
     auto       sv    = PluginStringView::from(itemsJson.data(), itemsJson.size());
-    return tableStatus(
-        clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->update_info_section(host, section, &sv, cb, ud, err);
-        })
-    );
+    clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ui->update_info_section(host, section, &sv, cb, ud, err);
+    });
+    return AGENTXX_RESULT_OK;
 }
 
 /// 注销 Info 栏段落 (只提交, 不等结果)
@@ -898,14 +1009,13 @@ inline int32_t clientUpdateToolDecor(
     const auto iface = ClientIfaces::query(host);
     auto       tcid  = PluginStringView::from(toolCallId.data(), toolCallId.size());
     auto       decor = PluginStringView::from(decorJson.data(), decorJson.size());
-    return tableStatus(
-        clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->update_tool_decor(host, &tcid, &decor, cb, ud, err);
-        })
-    );
+    clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ui->update_tool_decor(host, &tcid, &decor, cb, ud, err);
+    });
+    return AGENTXX_RESULT_OK;
 }
 
-/// 打开通用 overlay; 返回 0 成功
+/// 打开通用 overlay (**提交即返回**); 返回 `AGENTXX_RESULT_OK` 表示已提交
 inline int32_t clientOpenOverlay(
     const PluginxxHost*        host,
     const AgentxxClientUiIface* ui,
@@ -915,14 +1025,13 @@ inline int32_t clientOpenOverlay(
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     const auto iface = ClientIfaces::query(host);
-    return tableStatus(
-        clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->open_overlay(host, spec, cb, ud, err);
-        })
-    );
+    clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ui->open_overlay(host, spec, cb, ud, err);
+    });
+    return AGENTXX_RESULT_OK;
 }
 
-/// 绑定动作处理器; 返回是否已受理
+/// 绑定动作处理器 (**提交即返回**); 返回是否已提交
 inline bool clientBindAction(
     const PluginxxHost*        host,
     const AgentxxClientUiIface* ui,
@@ -935,13 +1044,12 @@ inline bool clientBindAction(
     }
     const auto iface  = ClientIfaces::query(host);
     auto       target = PluginStringView::from(targetId.data(), targetId.size());
-    return clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-               return ui->bind_action_handler(host, &target, onAction, userData, cb, ud, err);
-           })
-        .ok();
+    return clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ui->bind_action_handler(host, &target, onAction, userData, cb, ud, err);
+    });
 }
 
-/// 发一条跨端事件到 agent 侧; 返回是否已受理
+/// 发一条跨端事件到 agent 侧 (**提交即返回**); 返回是否已提交
 inline bool clientSendPluginData(
     const PluginxxHost*          host,
     const AgentxxClientWireIface* wire,
@@ -954,10 +1062,9 @@ inline bool clientSendPluginData(
     const auto iface   = ClientIfaces::query(host);
     auto       t       = PluginStringView::from(topic.data(), topic.size());
     auto       payload = PluginStringView::from(json.data(), json.size());
-    return clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-               return wire->send_plugin_data(host, &t, &payload, cb, ud, err);
-           })
-        .ok();
+    return clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return wire->send_plugin_data(host, &t, &payload, cb, ud, err);
+    });
 }
 
 /// 注册斜杠命令; 返回是否已受理
@@ -2439,6 +2546,62 @@ inline detail::ToolSchemaAwaiter schemaOf(const Ctx& ctx, std::string_view tool)
 /// (addShareStore), 并在 [onHostReady] 中挂钩业务事件。
 class PluginBase : public pluginxx::PluginBaseT<AgentIfaces> {
 public:
+
+    /// 主程序配置 JSON (**协程形态**; 插件执行线程上用这个, 得到 `{}` 表失败)
+    pluginxx::Task<std::string> configAsync() const {
+        if (!host || !iface.config || !iface.config->get_config) {
+            co_return std::string{"{}"};
+        }
+        auto r = co_await pluginxx::tableOp(
+            *this,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.config->get_config(host, cb, ud, err);
+            }
+        );
+        co_return r.ok() ? std::string{r.text()} : std::string{"{}"};
+    }
+
+    /// 实例参数 JSON (**协程形态**)
+    pluginxx::Task<std::string> argsJsonAsync() const {
+        if (!host || !iface.config || !iface.config->get_plugin_args) {
+            co_return std::string{"{}"};
+        }
+        auto r = co_await pluginxx::tableOp(
+            *this,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.config->get_plugin_args(host, cb, ud, err);
+            }
+        );
+        co_return r.ok() ? std::string{r.text()} : std::string{"{}"};
+    }
+
+    /// 实例配置文件路径 (**协程形态**; 未配置时为空串)
+    pluginxx::Task<std::string> configPathAsync() const {
+        if (!host || !iface.config || !iface.config->get_plugin_config_path) {
+            co_return std::string{};
+        }
+        auto r = co_await pluginxx::tableOp(
+            *this,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.config->get_plugin_config_path(host, cb, ud, err);
+            }
+        );
+        co_return r.ok() ? std::string{r.text()} : std::string{};
+    }
+
+    /// 当前语言代码 (**协程形态**; 未取到时为 `en`)
+    pluginxx::Task<std::string> languageAsync() const {
+        if (!host || !iface.config || !iface.config->get_language) {
+            co_return std::string{"en"};
+        }
+        auto r = co_await pluginxx::tableOp(
+            *this,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.config->get_language(host, cb, ud, err);
+            }
+        );
+        co_return (r.ok() && !r.text().empty()) ? std::string{r.text()} : std::string{"en"};
+    }
 
     /// 声明式工具模式构建器 (基于工具提示词描述)
     ToolSchemaBuilder schema(std::string_view toolName) const {
@@ -4304,11 +4467,11 @@ inline pluginxx::TableOpTicket tool(
     int64_t          default_timeout_ms = 0,
     int32_t          flags              = 0
 ) {
-    auto&       storage     = ctx.storage_;
-    std::string finalDepict = ctx.toolPrompt(name).depict;
-    if (finalDepict.empty()) {
-        finalDepict = depict;
-    }
+    auto& storage = ctx.storage_;
+    // 工具描述用插件自己的字面量: 注册时不再回读主程序的提示词表 —— 那是一次表调用,
+    // 插件执行线程上不允许等它 (协作方式: 需要按表里的文本注册就先 co_await
+    // 	oolPromptOf, 再把取到的描述传进来)
+    std::string finalDepict(depict);
     storage.push_back(std::move(finalDepict));
     storage.push_back(std::string(schema));
 
@@ -4440,11 +4603,11 @@ inline pluginxx::TableOpTicket fast_tool(
     int64_t          default_timeout_ms = 0,
     int32_t          flags              = 0
 ) {
-    auto&       storage     = ctx.storage_;
-    std::string finalDepict = ctx.toolPrompt(name).depict;
-    if (finalDepict.empty()) {
-        finalDepict = depict;
-    }
+    auto& storage = ctx.storage_;
+    // 工具描述用插件自己的字面量: 注册时不再回读主程序的提示词表 —— 那是一次表调用,
+    // 插件执行线程上不允许等它 (协作方式: 需要按表里的文本注册就先 co_await
+    // 	oolPromptOf, 再把取到的描述传进来)
+    std::string finalDepict(depict);
     storage.push_back(std::move(finalDepict));
     storage.push_back(std::string(schema));
 
@@ -4546,11 +4709,11 @@ inline pluginxx::TableOpTicket blocking_tool(
     int64_t          default_timeout_ms = 0,
     int32_t          flags              = 0
 ) {
-    auto&       storage     = ctx.storage_;
-    std::string finalDepict = ctx.toolPrompt(name).depict;
-    if (finalDepict.empty()) {
-        finalDepict = depict;
-    }
+    auto& storage = ctx.storage_;
+    // 工具描述用插件自己的字面量: 注册时不再回读主程序的提示词表 —— 那是一次表调用,
+    // 插件执行线程上不允许等它 (协作方式: 需要按表里的文本注册就先 co_await
+    // 	oolPromptOf, 再把取到的描述传进来)
+    std::string finalDepict(depict);
     storage.push_back(std::move(finalDepict));
     storage.push_back(std::string(schema));
 
@@ -4996,11 +5159,11 @@ inline pluginxx::TableOpTicket polled_tool(
         "or ToolResult>"
     );
 
-    auto&       storage     = ctx.storage_;
-    std::string finalDepict = ctx.toolPrompt(name).depict;
-    if (finalDepict.empty()) {
-        finalDepict = depict;
-    }
+    auto& storage = ctx.storage_;
+    // 工具描述用插件自己的字面量: 注册时不再回读主程序的提示词表 —— 那是一次表调用,
+    // 插件执行线程上不允许等它 (协作方式: 需要按表里的文本注册就先 co_await
+    // 	oolPromptOf, 再把取到的描述传进来)
+    std::string finalDepict(depict);
     storage.push_back(std::move(finalDepict));
     storage.push_back(std::string(schema));
 
@@ -5792,14 +5955,14 @@ inline int32_t registerToolRenderer(
     spec.expanded_fn  = shim->renderers.expanded ? expandedCb : nullptr;
     spec.user_data    = shim;
 
-    auto res = clientTableOp(
+    auto res = clientTableCall(
         host,
         ClientIfaces::query(host),
         [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return ui->register_tool_renderer(host, &spec, cb, ud, err);
         }
     );
-    return tableStatus(res);
+    return res ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
 }
 
 /* ==================== Client 侧通用交互: ActionController (header-only) ====================
@@ -5954,6 +6117,10 @@ public:
         return lifeToken_;
     }
 
+    /// 客户端会话状态 JSON (**阻塞形态**; 只在 `create` 这类加载线程上用)
+    ///
+    /// 插件执行线程上请用 [clientStateAsync]: 插件线程与 client io 线程是两条线程,
+    /// 在那里等结果会把它卡住 (阻塞形态会被拒绝并返回 `{}`)。
     std::string clientState() const {
         if (!host || !iface.session || !iface.session->get_client_state) {
             return "{}";
@@ -5962,6 +6129,20 @@ public:
             return iface.session->get_client_state(host, cb, ud, err);
         });
         return text.empty() ? std::string{"{}"} : text;
+    }
+
+    /// 客户端会话状态 JSON (**协程形态**)
+    pluginxx::Task<std::string> clientStateAsync() const {
+        if (!host || !iface.session || !iface.session->get_client_state) {
+            co_return std::string{"{}"};
+        }
+        auto r = co_await pluginxx::tableOp(
+            *this,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.session->get_client_state(host, cb, ud, err);
+            }
+        );
+        co_return r.ok() ? std::string{r.text()} : std::string{"{}"};
     }
 
     std::string argsJson() const {
@@ -5981,6 +6162,48 @@ public:
         return clientTableText(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return iface.self->get_plugin_config_path(host, cb, ud, err);
         });
+    }
+
+    /// 实例参数 JSON (**协程形态**)
+    pluginxx::Task<std::string> argsJsonAsync() const {
+        if (!host || !iface.config || !iface.config->get_plugin_args) {
+            co_return std::string{"{}"};
+        }
+        auto r = co_await pluginxx::tableOp(
+            *this,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.config->get_plugin_args(host, cb, ud, err);
+            }
+        );
+        co_return r.ok() ? std::string{r.text()} : std::string{"{}"};
+    }
+
+    /// 实例配置文件路径 (**协程形态**)
+    pluginxx::Task<std::string> configPathAsync() const {
+        if (!host || !iface.config || !iface.config->get_plugin_config_path) {
+            co_return std::string{};
+        }
+        auto r = co_await pluginxx::tableOp(
+            *this,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.config->get_plugin_config_path(host, cb, ud, err);
+            }
+        );
+        co_return r.ok() ? std::string{r.text()} : std::string{};
+    }
+
+    /// 当前语言代码 (**协程形态**)
+    pluginxx::Task<std::string> languageAsync() const {
+        if (!host || !iface.config || !iface.config->get_language) {
+            co_return std::string{"en"};
+        }
+        auto r = co_await pluginxx::tableOp(
+            *this,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.config->get_language(host, cb, ud, err);
+            }
+        );
+        co_return (r.ok() && !r.text().empty()) ? std::string{r.text()} : std::string{"en"};
     }
 
     std::string language() const {
@@ -6013,7 +6236,80 @@ public:
         iface.ui->show_toast(host, &sv, level, nullptr, nullptr, nullptr);
     }
 
-    /// 代发用户消息; 返回是否已受理 (未连接等失败情况返回 false)
+    /// 懒注册 Info 栏段落 (**提交即返回**)
+    ///
+    /// 频道/动作回调这类不能写成协程的地方用它: 注册请求立刻提交, 句柄由主程序受理后
+    /// 写回本实例的槽位。注册是异步的, 所以**同一轮**里 [infoSection] 可能还拿不到句柄 ——
+    /// 内容推送本身也是提交即返回, 下一轮事件补上即可。
+    ///
+    /// - 同一个 id 重复调用只提交一次 (受理前重入直接返回)
+    /// - 主程序不支持 Info 段落时静默降级 (永远拿不到句柄)
+    void ensureInfoSection(std::string_view id, std::string_view propsJson) {
+        if (id.empty() || !host || !iface.ui || !iface.ui->register_info_section) {
+            return;
+        }
+        const std::string key{id};
+        if (infoSections_.find(key) != infoSections_.end()) {
+            return;
+        }
+        auto slot                     = std::make_shared<std::atomic<AgentxxInfoSection*>>(nullptr);
+        infoSections_[key]            = slot;
+        auto  idSv                    = PluginStringView::from(id.data(), id.size());
+        auto  propsSv                 = PluginStringView::from(propsJson.data(), propsJson.size());
+        // 完成回调在主程序 io 线程: 只把句柄写进原子槽位, 不碰其它实例状态
+        auto* holder = new std::shared_ptr<std::atomic<AgentxxInfoSection*>>(slot);
+        PluginxxString err{nullptr, 0};
+        auto*          handle = iface.ui->register_info_section(
+            host,
+            &idSv,
+            &propsSv,
+            [](void* ud, int32_t status, const PluginxxStringView* payload) {
+                std::unique_ptr<std::shared_ptr<std::atomic<AgentxxInfoSection*>>> keep(
+                    static_cast<std::shared_ptr<std::atomic<AgentxxInfoSection*>>*>(ud)
+                );
+                if (status != PLUGINXX_OPERATOR_OK || payload == nullptr || payload->data == nullptr) {
+                    return;
+                }
+                auto* section = clientHandleFromText<AgentxxInfoSection>(
+                    std::string_view{payload->data, static_cast<size_t>(payload->size)}
+                );
+                (*keep)->store(section, std::memory_order_release);
+            },
+            holder,
+            &err
+        );
+        if (err.data != nullptr) {
+            PluginString::free(host, &err);
+        }
+        if (handle == nullptr) {
+            // 未受理: 完成回调不会被调用, 包装块自己收
+            delete holder;
+            infoSections_.erase(key);
+        }
+    }
+
+    /// 取 [ensureInfoSection] 注册出来的段落句柄 (尚未受理/不支持时为 nullptr)
+    AgentxxInfoSection* infoSection(std::string_view id) const {
+        const auto it = infoSections_.find(std::string{id});
+        if (it == infoSections_.end() || !it->second) {
+            return nullptr;
+        }
+        return it->second->load(std::memory_order_acquire);
+    }
+
+    /// 注销 [ensureInfoSection] 的段落 (**提交即返回**; 同时忘掉句柄)
+    void clearInfoSection(std::string_view id) {
+        AgentxxInfoSection* section = infoSection(id);
+        infoSections_.erase(std::string{id});
+        if (section == nullptr || !host || !iface.ui || !iface.ui->unregister_info_section) {
+            return;
+        }
+        clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return iface.ui->unregister_info_section(host, section, cb, ud, err);
+        });
+    }
+
+    /// 代发用户消息 (**阻塞形态**; 只在 `create` 这类加载线程上用; 插件线程上用 [sendUserInputAsync])
     bool sendUserInput(std::string_view sessionId, std::string_view text) const {
         if (!host || !iface.session || !iface.session->send_user_input) {
             return false;
@@ -6024,6 +6320,22 @@ public:
             return iface.session->send_user_input(host, &sidSv, &txtSv, cb, ud, err);
         });
         return res.ok();
+    }
+
+    /// 代发用户消息 (**协程形态**); 返回是否已受理
+    pluginxx::Task<bool> sendUserInputAsync(std::string sessionId, std::string text) const {
+        if (!host || !iface.session || !iface.session->send_user_input) {
+            co_return false;
+        }
+        auto sidSv = PluginStringView::from(sessionId);
+        auto txtSv = PluginStringView::from(text);
+        auto r     = co_await pluginxx::tableOp(
+            *this,
+            [this, &sidSv, &txtSv](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.session->send_user_input(host, &sidSv, &txtSv, cb, ud, err);
+            }
+        );
+        co_return r.ok();
     }
 
     /// 请求取消当前轮次 (只提交, 不等结果)
@@ -6054,8 +6366,10 @@ public:
     //
     // 这些方法是展示注册接口的薄封装: 用界面描述层 (cxx_pluginxx_ui, `pluginxx::ui`)
     // 的构建器 (`pluginxx::ui::build` / kit) 或直接构造组件项后提交给面板/Info 段落/
-    // overlay, 避免各处手写 JSON 拼装。主程序不支持对应子能力时返回非 0, 插件应
-    // 按返回值降级 (通常是改用更简单的组件或纯文本)。
+    // overlay, 避免各处手写 JSON 拼装。
+    //
+    // 更新类方法一律**提交即返回** (面板内容/状态栏文本/Info 段落是单向推送, 插件不需要
+    // 结果), 因此它们可以从任何线程调用, 包括插件执行线程与渲染回调 —— 不会等 io 线程。
     //
     // 插件可用 `agentxx::ui` 指代描述层与扩展 kit (`agentxx::ui::kit`)。
 
@@ -6066,61 +6380,52 @@ public:
         return j.dump();
     }
 
-    /// 更新面板内容 (组件树直接提交)
+    /// 更新面板内容 (组件树直接提交; 提交即返回)
     int32_t setPanelItems(AgentxxPanel* panel, const std::vector<pluginxx::ui::Item>& items) const {
         return setPanelJson(panel, itemsJson(items));
     }
 
     /// 更新面板内容 (原始 items JSON, 形态同 `{"items":[...]}` 或裸数组)
     int32_t setPanelJson(AgentxxPanel* panel, std::string_view itemsJson) const {
-        if (!host || !iface.ui || !iface.ui->update_panel) {
+        if (!host || !iface.ui || !iface.ui->update_panel || panel == nullptr) {
             return AGENTXX_RESULT_ERR_UNSUPPORTED;
         }
-        if (panel == nullptr) {
-            return AGENTXX_RESULT_ERR_ARG;
-        }
-        auto sv  = PluginStringView::from(itemsJson.data(), itemsJson.size());
-        auto res = clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        auto sv = PluginStringView::from(itemsJson.data(), itemsJson.size());
+        clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return iface.ui->update_panel(host, panel, &sv, cb, ud, err);
         });
-        return tableStatus(res);
+        return AGENTXX_RESULT_OK;
     }
 
-    /// 更新 Info 栏段落内容 (组件树直接提交)
+    /// 更新 Info 栏段落内容 (组件树直接提交; 提交即返回)
     int32_t setInfoSectionItems(
         AgentxxInfoSection*                    section,
         const std::vector<pluginxx::ui::Item>& items
     ) const {
-        if (!host || !iface.ui || !iface.ui->update_info_section) {
+        if (!host || !iface.ui || !iface.ui->update_info_section || section == nullptr) {
             return AGENTXX_RESULT_ERR_UNSUPPORTED;
-        }
-        if (section == nullptr) {
-            return AGENTXX_RESULT_ERR_ARG;
         }
         const std::string json = itemsJson(items);
         auto              sv   = PluginStringView::from(json.data(), json.size());
-        auto              res  = clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return iface.ui->update_info_section(host, section, &sv, cb, ud, err);
         });
-        return tableStatus(res);
+        return AGENTXX_RESULT_OK;
     }
 
-    /// 更新状态栏项文本 (参数为 `{"text":"...","tooltip":"..."}` 形态的 JSON)
+    /// 更新状态栏项文本 (参数为 `{"text":"...","tooltip":"..."}` 形态的 JSON; 提交即返回)
     int32_t setStatusJson(AgentxxStatusItem* item, std::string_view json) const {
-        if (!host || !iface.ui || !iface.ui->update_status_item) {
+        if (!host || !iface.ui || !iface.ui->update_status_item || item == nullptr) {
             return AGENTXX_RESULT_ERR_UNSUPPORTED;
         }
-        if (item == nullptr) {
-            return AGENTXX_RESULT_ERR_ARG;
-        }
-        auto sv  = PluginStringView::from(json.data(), json.size());
-        auto res = clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        auto sv = PluginStringView::from(json.data(), json.size());
+        clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return iface.ui->update_status_item(host, item, &sv, cb, ud, err);
         });
-        return tableStatus(res);
+        return AGENTXX_RESULT_OK;
     }
 
-    /// 更新状态栏项文本 (仅文本, 由本方法组装 JSON)
+    /// 更新状态栏项文本 (仅文本, 由本方法组装 JSON; 提交即返回)
     int32_t setStatusText(AgentxxStatusItem* item, std::string_view text) const {
         utilxx_base::Json json = utilxx_base::Json::object();
         json["text"]           = text;
@@ -6154,10 +6459,10 @@ public:
         spec.title       = PluginStringView::from(title.data(), title.size());
         spec.payload     = PluginStringView::from(payload.data(), payload.size());
         spec.extra_json  = PluginStringView::from(extraJson.data(), extraJson.size());
-        auto res         = clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return iface.ui->open_overlay(host, &spec, cb, ud, err);
         });
-        return tableStatus(res);
+        return AGENTXX_RESULT_OK;
     }
 
     /// 打开 diff overlay (单段或多段, 每段一次替换; 主程序按逐行差异渲染)
@@ -6659,6 +6964,8 @@ private:
 
     std::shared_ptr<std::atomic<bool>> lifeToken_ = std::make_shared<std::atomic<bool>>(true);
     std::vector<std::unique_ptr<void, void (*)(void*)>> shims_;
+    /// 懒注册的 Info 段落槽位 (id → 句柄; 句柄由主程序受理后写回, 只在插件执行线程上读写)
+    std::map<std::string, std::shared_ptr<std::atomic<AgentxxInfoSection*>>> infoSections_;
     /// 界面能力段解析结果 (能力在客户端生命周期内不变; 见 [uiCapabilities])
     mutable bool                       uiCapsCached_ = false;
     mutable pluginxx::ui::Capabilities uiCapsCache_{};

@@ -21,7 +21,7 @@ struct SysPluginCtx : public PluginBase {};
 
 /// 注册事务 (mount 的实际内容; 每个 agent 各自一份)。
 static pluginxx::Task<void> sysSetupAsync(SysPluginCtx& ctx, ScopeRef ref) {
-    auto schema = ctx.schema(kNameDatetime).build();
+    auto schema = (co_await agentxx::plugin::schemaOf(ctx, kNameDatetime)).build();
 
     co_await fast_tool(
         ctx,

@@ -229,7 +229,7 @@ struct SysMonCtx : public PluginBase {
 /// - `ref` 为本次挂载的 agent 引用, 工具注册记在该 agent 名下
 static pluginxx::Task<void> sysMonMountSetupAsync(SysMonCtx& ctx, ScopeRef ref) {
     // 1. 工具
-    auto schema = ctx.schema("agentxx_get_system_core_info").build();
+    auto schema = (co_await agentxx::plugin::schemaOf(ctx, "agentxx_get_system_core_info")).build();
     co_await blocking_tool(
          ctx,
          ref,
@@ -320,7 +320,7 @@ static pluginxx::Task<void> sysMonStartSetup(SysMonCtx& ctx) {
                             auto        topicSv
                                 = PluginStringView::fromCstr("plugin.agentxx_system_monitor.usage");
                             auto jsonSv = PluginStringView::from(json.data(), json.size());
-                            agentxx::plugin::publishPluginBroadcast(c->host, c->iface.broadcasts, topicSv, jsonSv);
+                            agentxx::plugin::publishPluginBroadcastNoWait(c->host, c->iface.broadcasts, topicSv, jsonSv);
                             delete u;
                         } else {
                             delete static_cast<CpuGpuUsage*>(res);
@@ -349,7 +349,7 @@ static pluginxx::Task<void> sysMonStartSetup(SysMonCtx& ctx) {
                 auto        topicSv = PluginStringView::fromCstr("plugin.agentxx_system_monitor.usage");
                 auto        jsonSv  = PluginStringView::from(json.data(), json.size());
                 if (c.iface.broadcasts && c.iface.broadcasts->publish_broadcast) {
-                    agentxx::plugin::publishPluginBroadcast(c.host, c.iface.broadcasts, topicSv, jsonSv);
+                    agentxx::plugin::publishPluginBroadcastNoWait(c.host, c.iface.broadcasts, topicSv, jsonSv);
                 }
             }
             co_await sleep(c, kUsageIntervalSec * 1000);
@@ -530,14 +530,7 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
     if (!ctx.host) {
         return;
     }
-    if (!ctx.section && ctx.iface.ui && ctx.iface.ui->register_info_section) {
-        ctx.section = agentxx::plugin::clientRegisterInfoSection(
-            ctx.host,
-            ctx.iface.ui,
-            "agentxx_system_monitor.usage",
-            R"_({"title":"System"})_"
-        );
-    }
+    // 段落注册归 client start 事务 (协程里 co_await 注册); 这里只推内容 (提交即返回)
     if (!ctx.section || !ctx.iface.ui || !ctx.iface.ui->update_info_section
         || ctx.last_usage_json.empty()) {
         return;
@@ -650,34 +643,41 @@ static pluginxx::Task<void> sysMonClientSetupAsync(SysMonClientCtx& ctx) {
                             "agentxx.client.plugin.agentxx_system_monitor.usage_enabled",
                             payload
                         );
-                        std::string text
-                            = next ? "System resource info: ON" : "System resource info: OFF";
-                        std::string stateStr = ctx->clientState();
-                        if (!stateStr.empty() && stateStr != "{}") {
-                            try {
-                                auto st = utilxx_base::Json::parse(stateStr);
-                                if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
-                                    bool found = false;
-                                    for (const auto& v : st["agentPlugins"]) {
-                                        if (v.is_object()
-                                            && v.value("name", std::string{})
-                                                   == "agentxx_system_monitor") {
-                                            found = true;
+                        // 客户端状态要问 client io 线程: 交给协程等 (不阻塞插件执行线程),
+                        // 结果到了再交回动作。`notify` 的两个字段按值带走, 回调返回后
+                        // 指针本身不再可用。
+                        const auto done = *notify;
+                        ctx->spawn([next, done](SysMonClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+                            std::string text
+                                = next ? "System resource info: ON" : "System resource info: OFF";
+                            const std::string stateStr = co_await c.clientStateAsync();
+                            if (!stateStr.empty() && stateStr != "{}") {
+                                try {
+                                    auto st = utilxx_base::Json::parse(stateStr);
+                                    if (st.contains("agentPlugins")
+                                        && st["agentPlugins"].is_array()) {
+                                        bool found = false;
+                                        for (const auto& v : st["agentPlugins"]) {
+                                            if (v.is_object()
+                                                && v.value("name", std::string{})
+                                                       == "agentxx_system_monitor") {
+                                                found = true;
+                                            }
+                                        }
+                                        if (!found) {
+                                            text += " (warn: plugin missing on server side; toggle "
+                                                    "is local only)";
                                         }
                                     }
-                                    if (!found) {
-                                        text += " (warn: plugin missing on server side; toggle is "
-                                                "local only)";
-                                    }
+                                } catch (...) {
                                 }
-                            } catch (...) {
                             }
-                        }
-                        utilxx_base::Json out;
-                        out["action"] = "toast";
-                        out["text"]   = text;
-                        out["level"]  = 0;
-                        agentxx::plugin::notifyText(notify, out.dump());
+                            utilxx_base::Json out;
+                            out["action"] = "toast";
+                            out["text"]   = text;
+                            out["level"]  = 0;
+                            agentxx::plugin::notifyText(&done, out.dump());
+                        });
                         return 0;
                     },
                     &ctx,

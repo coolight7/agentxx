@@ -315,7 +315,7 @@ void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
     }
     auto topicSv = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_planning.planning");
     auto planSv  = agentxx::plugin::PluginStringView::from(planJson.data(), planJson.size());
-    agentxx::plugin::publishPluginBroadcast(ctx.host, ctx.iface.broadcasts, topicSv, planSv);
+    agentxx::plugin::publishPluginBroadcastNoWait(ctx.host, ctx.iface.broadcasts, topicSv, planSv);
 }
 
 /// 主程序约定事件 client_attached: 客户端接入/重连 → 重发当前会话已保存规划
@@ -720,13 +720,13 @@ extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL agentxx_plugin_agent_destroy(void*
 /// =====================================================================
 
 /// client 侧每实例上下文 (多实例契约: 状态挂本实例, 回调经 ud 恢复)
-struct ClientCtx {
-    const PluginxxHost*           host = nullptr;
-    agentxx::plugin::ClientIfaces iface{};
+///
+/// 继承 [agentxx::plugin::ClientPluginBase]: 表调用一律经它的异步入口/提交即返回入口,
+/// 插件执行线程上不等 client io 线程。
+struct ClientCtx : agentxx::plugin::ClientPluginBase {
     /// "agentxx.client.ui" 展示接口表 (Info 段落/工具装饰/action/overlay;
     /// CLI 等不支持时成员 NULL 降级: planning 仍推送内容, 只是按钮不可点)
-    const AgentxxClientUiIface* ui      = nullptr;
-    AgentxxInfoSection*         section = nullptr; ///< 懒注册句柄 (null=未展示)
+    const AgentxxClientUiIface* ui = nullptr;
     std::string                 last_plan_json;    ///< 最近一次规划内容缓存 (Info 段落)
     /// 进行中 planning 工具调用的参数缓存 (tool_call_id → arguments JSON;
     /// 工具行插入时缓存, 完成后摘除)
@@ -1032,20 +1032,19 @@ static void clearToolDecors(ClientCtx& ctx) {
 }
 
 /// 懒注册 Info 栏段落 (主程序不支持 info_section 时保持 NULL 静默降级)
+///
+/// 注册是表调用: 这里**提交即返回**, 句柄受理后写回实例槽位 (见
+/// `ClientPluginBase::ensureInfoSection`) —— 插件执行线程上不等 client io 线程。
 static void ensureSection(ClientCtx& ctx) {
-    if (ctx.section || !ctx.ui || !ctx.ui->register_info_section || !ctx.host) {
+    if (!ctx.ui || !ctx.ui->register_info_section || !ctx.host) {
         return;
     }
-    ctx.section
-        = agentxx::plugin::clientRegisterInfoSection(ctx.host, ctx.ui, kSectionId, R"_({"title":"Plan"})_");
+    ctx.ensureInfoSection(kSectionId, R"_({"title":"Plan"})_");
 }
 
 /// 注销 Info 段落并清空缓存 (回到 "无规划" 态: 无 plan 时侧栏不显示空段落)
 static void clearSection(ClientCtx& ctx) {
-    if (ctx.section && ctx.ui && ctx.ui->unregister_info_section && ctx.host) {
-        agentxx::plugin::clientUnregisterInfoSection(ctx.host, ctx.ui, ctx.section);
-    }
-    ctx.section = nullptr;
+    ctx.clearInfoSection(kSectionId);
     ctx.last_plan_json.clear();
 }
 
@@ -1058,7 +1057,8 @@ static void refreshPlanSection(ClientCtx& ctx) {
         return;
     }
     ensureSection(ctx);
-    if (!ctx.section || ctx.last_plan_json.empty()) {
+    AgentxxInfoSection* section = ctx.infoSection(kSectionId);
+    if (!section || ctx.last_plan_json.empty()) {
         return;
     }
     utilxx_base::Json plan;
@@ -1080,7 +1080,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
     utilxx_base::Json payload = utilxx_base::Json::object();
     payload["items"]          = items;
     const std::string json    = payload.dump();
-    agentxx::plugin::clientUpdateInfoSection(ctx.host, ctx.ui, ctx.section, json);
+    agentxx::plugin::clientUpdateInfoSection(ctx.host, ctx.ui, section, json);
 }
 
 /// 规划频道 (`plugin.agentxx_planning.planning`): 对端发布的规划 JSON
@@ -1204,6 +1204,10 @@ extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* PLUGINXX_CALL
 static int planningClientSetup(ClientCtx* ctx) {
     const PluginxxHost* host = ctx->host;
 
+    // Info 段落先提交注册 (提交即返回): 句柄到了由 refreshPlanSection 使用,
+    // 规划事件到达时通常已经就绪
+    ensureSection(*ctx);
+
     // 类型级工具渲染器 (按 tool_name 注册): 由工具参数/结果直接推导折叠内容与
     // 展开体, **重启恢复/重连/切换会话后由 Sync 回放的历史工具消息同样特化
     // 渲染** (这些消息没有 EVT_DELTA 装饰推送)。显示名注册时定下, 折叠内容与
@@ -1293,9 +1297,7 @@ static int planningClientSetup(ClientCtx* ctx) {
         }
     };
     if (ctx->iface.broadcasts && ctx->iface.broadcasts->subscribe_broadcast) {
-        if (!agentxx::plugin::subscribePluginBroadcast(
-                host,
-                ctx->iface.broadcasts,
+        if (!agentxx::plugin::subscribePluginBroadcastNoWait(host, ctx->iface.broadcasts,
                 nullptr,
                 agentxx::plugin::broadcasts::ClientDelta,
                 on_client_delta,
@@ -1303,9 +1305,7 @@ static int planningClientSetup(ClientCtx* ctx) {
             )) {
             subWarn("agentxx_planning client: subscribe `client.delta` failed");
         }
-        if (!agentxx::plugin::subscribePluginBroadcast(
-                host,
-                ctx->iface.broadcasts,
+        if (!agentxx::plugin::subscribePluginBroadcastNoWait(host, ctx->iface.broadcasts,
                 nullptr,
                 "plugin.agentxx_planning.planning",
                 on_client_plan,
@@ -1313,9 +1313,7 @@ static int planningClientSetup(ClientCtx* ctx) {
             )) {
             subWarn("agentxx_planning client: subscribe planning topic failed");
         }
-        if (!agentxx::plugin::subscribePluginBroadcast(
-                host,
-                ctx->iface.broadcasts,
+        if (!agentxx::plugin::subscribePluginBroadcastNoWait(host, ctx->iface.broadcasts,
                 nullptr,
                 agentxx::plugin::broadcasts::ClientSessionSwitch,
                 on_client_session_switch,
@@ -1347,10 +1345,9 @@ extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
                 return -1;
             }
             auto ctx   = std::make_unique<ClientCtx>();
-            ctx->host  = host;
-            ctx->iface = agentxx::plugin::ClientIfaces::query(host);
-            ctx->ui    = ctx->iface.ui;
-            raw        = ctx.get();
+            ctx->init(host);
+            ctx->ui = ctx->iface.ui;
+            raw     = ctx.get();
 
             *plugin_ctx = ctx.release(); ///< 所有权移交主程序 (destroy 时取回归还)
             return 0;

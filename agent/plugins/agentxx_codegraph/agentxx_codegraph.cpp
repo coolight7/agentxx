@@ -753,7 +753,7 @@ static void
                     = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.status");
                 auto payloadSv
                     = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-                agentxx::plugin::publishPluginBroadcast(ctx->host, ctx->iface.broadcasts, statusTopic, payloadSv);
+                agentxx::plugin::publishPluginBroadcastNoWait(ctx->host, ctx->iface.broadcasts, statusTopic, payloadSv);
                 if (files && *files > 0) {
                     codegraph::Json p = codegraph::Json::object();
                     p["processed"]    = *files;
@@ -763,7 +763,7 @@ static void
                     auto        progTopic
                         = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.progress");
                     auto ppSv = agentxx::plugin::PluginStringView::from(pp.data(), pp.size());
-                    agentxx::plugin::publishPluginBroadcast(ctx->host, ctx->iface.broadcasts, progTopic, ppSv);
+                    agentxx::plugin::publishPluginBroadcastNoWait(ctx->host, ctx->iface.broadcasts, progTopic, ppSv);
                 }
             }
         }
@@ -898,8 +898,7 @@ extern "C" PLUGINXX_EXPORT int
                         = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.progress");
                     auto payloadSv
                         = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-                    agentxx::plugin::publishPluginBroadcast(
-                        ctxRaw->host,
+                    agentxx::plugin::publishPluginBroadcastNoWait(ctxRaw->host,
                         ctxRaw->iface.broadcasts,
                         progTopic,
                         payloadSv
@@ -1000,7 +999,7 @@ static int codegraphAgentStartSetup(PluginCtx& ctx) {
         std::string payload = j.dump();
         auto statusTopic = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.status");
         auto payloadSv   = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-        agentxx::plugin::publishPluginBroadcast(ctx.host, ctx.iface.broadcasts, statusTopic, payloadSv);
+        agentxx::plugin::publishPluginBroadcastNoWait(ctx.host, ctx.iface.broadcasts, statusTopic, payloadSv);
     }
     pluginLog(ctx.host, ctx.iface.log, 2, "agentxx_codegraph started (6 tools)");
     return 0;
@@ -1181,14 +1180,7 @@ static void refreshSection(ClientCtx& c) {
     if (!c.host || !c.ui || !c.ui->update_info_section) {
         return;
     }
-    if (!c.section && c.ui->register_info_section) {
-        c.section = agentxx::plugin::clientRegisterInfoSection(
-            c.host,
-            c.ui,
-            "agentxx_codegraph.status",
-            R"_({"title":"CodeGraph"})_"
-        );
-    }
+    // 段落注册归 client start 事务 (协程里 co_await 注册); 这里只推内容 (提交即返回)
     if (!c.section) {
         return;
     }
@@ -1377,10 +1369,26 @@ static void* codegraphClientStart(
 }
 
 /// client 侧 stop: 撤销 Info 段落 (可重复调用)
+///
+/// 注销是表调用, 这里提交即返回 (主程序在 stop 之后也会按记录撤销, 不依赖这一次)。
 static void*
     codegraphClientStop(ClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    if (ctx.section && ctx.ui && ctx.ui->unregister_info_section) {
-        agentxx::plugin::clientUnregisterInfoSection(ctx.host, ctx.ui, ctx.section);
+    if (ctx.section) {
+        if (ctx.iface.ui && ctx.iface.ui->unregister_info_section && ctx.host) {
+            agentxx::plugin::clientTableCall(
+                ctx.host,
+                ctx.iface,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return ctx.iface.ui->unregister_info_section(
+                        ctx.host,
+                        ctx.section,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
+        }
         ctx.section = nullptr;
     }
     ctx.current_file.clear();

@@ -276,7 +276,7 @@ static pluginxx::Task<void> fsSetupAsync(FsPluginCtx& ctx, ScopeRef ref) {
 
     // 1. List
     auto listSchema
-        = ctx.schema(kNameList)
+        = (co_await agentxx::plugin::schemaOf(ctx, kNameList))
               .string("path", kPathDescList, /*required=*/true)
               .boolean(
                   "recursive",
@@ -336,7 +336,7 @@ static pluginxx::Task<void> fsSetupAsync(FsPluginCtx& ctx, ScopeRef ref) {
 
     // 2. Read
     auto readSchema
-        = ctx.schema(kNameRead)
+        = (co_await agentxx::plugin::schemaOf(ctx, kNameRead))
               .string("path", kPathDesc, /*required=*/true)
               .integer(
                   "offset",
@@ -404,7 +404,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
 
     // 2.1 Read Media
     auto readMediaSchema
-        = ctx.schema(kNameReadMedia)
+        = (co_await agentxx::plugin::schemaOf(ctx, kNameReadMedia))
               .string("path", kPathDescMedia, /*required=*/true)
               .build();
 
@@ -435,7 +435,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
 
     // 3. Write
     auto writeSchema
-        = ctx.schema(kNameWrite)
+        = (co_await agentxx::plugin::schemaOf(ctx, kNameWrite))
               .string(
                   "path",
                   "Path to the target file. Relative paths are resolved against the current working directory; `~` expands to the home directory.",
@@ -502,7 +502,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     // 单段 `old_str`/`new_str` (兼容旧写法); 两处同时给出时工具报错。
     // 每段只替换第一处匹配 (要改多处就写多段)
     auto editSchema
-        = ctx.schema(kNameEdit)
+        = (co_await agentxx::plugin::schemaOf(ctx, kNameEdit))
               .string(
                   "path",
                   "Path to the text file. Relative paths are resolved against the current working directory; `~` expands to the home directory.",
@@ -576,7 +576,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     // (目标是模式表达的扫描起点); 模式实际展开出的路径在工具内用
     // makeReadPathFilter 逐项复核 (拒绝/未获批准的路径不进入结果), 防止
     // `**` 之类模式绕过针对子目录的拒绝规则
-    auto globSchema = ctx.schema(kNameGlob)
+    auto globSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameGlob))
                           .stringArray(
                               "file_patterns",
                               kGlobFilePatternsDesc,
@@ -621,7 +621,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     co_await registerReadPathPermission(ctx, ref, kNameGlob, "file_patterns");
 
     // 6. Grep
-    auto grepSchema = ctx.schema(kNameGrep)
+    auto grepSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameGrep))
                           .stringArray(
                               "file_patterns",
                               kGrepFilePatternsDesc,
@@ -678,7 +678,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     co_await registerReadPathPermission(ctx, ref, kNameGrep, "file_patterns");
 
     // 7. Move
-    auto moveSchema = ctx.schema(kNameMove)
+    auto moveSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameMove))
                           .string("src", kMoveSrcDesc, /*required=*/true)
                           .string("dst", kMoveDstDesc, /*required=*/true)
                           .boolean("overwrite", kReplaceOverwriteDesc, false, false)
@@ -717,7 +717,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     co_await registerWritePathPermission(ctx, ref, kNameMove, "src");
 
     // 8. Copy
-    auto copySchema = ctx.schema(kNameCopy)
+    auto copySchema = (co_await agentxx::plugin::schemaOf(ctx, kNameCopy))
                           .string("src", kCopySrcDesc, /*required=*/true)
                           .string("dst", kCopyDstDesc, /*required=*/true)
                           .boolean("overwrite", kReplaceOverwriteDesc, false, false)
@@ -755,7 +755,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     co_await registerWritePathPermission(ctx, ref, kNameCopy, "src");
 
     // 9. Remove
-    auto removeSchema = ctx.schema(kNameRemove)
+    auto removeSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameRemove))
                             .string("path", kRemovePathDesc, /*required=*/true)
                             .boolean("recursive", kRemoveRecursiveDesc, false, false)
                             .build();

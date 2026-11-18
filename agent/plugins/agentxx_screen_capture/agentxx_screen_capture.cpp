@@ -68,7 +68,7 @@ inline bool ScreenCaptureHolder::startStreaming(int frameRate) {
                         );
                     auto payloadSv
                         = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-                    agentxx::plugin::publishPluginBroadcast(ctx->host, ctx->iface.broadcasts, topicSv, payloadSv);
+                    agentxx::plugin::publishPluginBroadcastNoWait(ctx->host, ctx->iface.broadcasts, topicSv, payloadSv);
                 }
             } catch (...) {
             }
@@ -289,25 +289,38 @@ static void* screenCaptureAgentStart(
     ctx.holder      = std::make_unique<ScreenCaptureHolder>();
     ctx.holder->ctx = &ctx;
 
-    std::string cfgStr = ctx.config();
-    if (!cfgStr.empty() && cfgStr != "{}") {
-        try {
-            auto        j       = utilxx_base::Json::parse(cfgStr);
-            std::string dataDir = j.value("dataDir", std::string{});
-            if (!dataDir.empty()) {
-                namespace fs              = std::filesystem;
-                fs::path        targetDir = fs::path(dataDir) / "captures";
-                std::error_code ec;
-                fs::create_directories(targetDir, ec);
-                if (!ec) {
-                    ctx.captures_dir = targetDir.string();
-                }
-            }
-        } catch (...) {
-        }
+    // 主程序配置要问 io 线程: 交给协程等 (插件执行线程上不等), 完事后再放行 start
+    auto later = pluginxx::finishLater(notify);
+    if (!later.active()) {
+        return nullptr;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        // 主程序没有 tasks 表 (旧版): 不能 spawn, 跳过取配置直接放行
+        later.ok();
+        return later.provider();
+    }
+    ctx.spawn([later](ScreenCapturePluginCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+        const std::string cfgStr = co_await c.configAsync();
+        if (!cfgStr.empty() && cfgStr != "{}") {
+            try {
+                auto        j       = utilxx_base::Json::parse(cfgStr);
+                std::string dataDir = j.value("dataDir", std::string{});
+                if (!dataDir.empty()) {
+                    namespace fs              = std::filesystem;
+                    fs::path        targetDir = fs::path(dataDir) / "captures";
+                    std::error_code ec;
+                    fs::create_directories(targetDir, ec);
+                    if (!ec) {
+                        c.captures_dir = targetDir.string();
+                    }
+                }
+            } catch (...) {
+            }
+        }
+        later.ok();
+        co_return;
+    });
+    return later.provider();
 }
 
 static void* screenCaptureAgentMount(

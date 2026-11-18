@@ -117,8 +117,7 @@ bool AudioStreamHolder::start(
                 = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_audio_stream.audio");
             auto payloadSv
                 = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-            agentxx::plugin::publishPluginBroadcast(
-                ctx->host,
+            agentxx::plugin::publishPluginBroadcastNoWait(ctx->host,
                 ctx->iface.broadcasts,
                 topicSv,
                 payloadSv

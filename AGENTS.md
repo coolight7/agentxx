@@ -305,6 +305,20 @@ path/to/agentxx_test --log-level warn string_util regex
   `addSkillDir` / `registerToolPermission` / `getConfig` / `scope()` / `netCall` / `netFetch` /
   `submitAsyncWork` / `getPrompt` / `getMessages` / `getGraphJson` / `mountRoot` /
   `openChannel` / `registerTrigger` 等)。详见 plugins.md §12
+  - **表成员一律返回 Promise, 脚本顶层可以写 `await`** (2026-11): 脚本整体包进 async 函数体
+    执行 (`JS_EVAL_TYPE_GLOBAL`, 不用 module 模式 —— 同一 runtime 上 module 按文件名缓存,
+    同一脚本的第二个实例会卡住), 所以注册事务写成 `await agentxx.registerTool(...)`. 业务失败
+    (未受理/执行期失败/取消) 一律 resolve 成 `null`/`false`/空串 (永不 reject), 参数写错仍同步抛
+    `TypeError`; 纯本地函数保持同步 (`log`/`jsonEscape`/`jsonGetString`/`scope()`/`setTimeout`/
+    `clearTimeout`/`showToast`/`closeOverlay`/`requestCancel`); 必须当场给内容的回调仍同步
+    (渲染器 `collapsed`/`expanded`、命令 `execute`)。旧的全套同步等待 (`tableOpSyncWait`,
+    已从引擎与 `kSyncWaitAllowed` 白名单删除) 不再出现
+  - **引擎侧不变式 (改它时必看)**: ① 实例先登记再执行脚本 (脚本中途 await 时工具可能已被调用);
+    ② 表调用桥由引擎持有, `user_data` 是堆上的 `JsBridgeToken` (序号不能当指针 —— 主程序会
+    按指针读 8 字节标记); ③ 收尾要“取消结算 + 泵 job”循环到没有在飞桥 (桥的 transform 可能
+    持着脚本引用, 直接丢会留下 gc 对象 → `JS_FreeRuntime` 断言); ④ 上下文/实例/桥的释放统一
+    延后到“队列空 + 无待执行 job”时 (promise 续体会经 opaque 回到实例); ⑤ 定时器只持实例的
+    `weak_ptr` (加载期实例还没进 `plugins_`)。详见 plugins.md §15.5
   - **client 侧脚本 (2026-11 完成, client 六张表已全部上桥)**: 同一动态库另导
     `agentxx_plugin_client_*` (`JsEngine::Side::Client`), 一份脚本一个实例 (client 表不带
     `PluginxxScopeRef`, 实例键 = `脚本名@client`); 脚本按 `agentxx.side` (`"agent"`|`"client"`)
@@ -793,20 +807,19 @@ path/to/agentxx_test --log-level warn string_util regex
   容器 io 线程、实例释放后不再进入插件代码。
   注: 提示词只按 **agent 级** 支持修改 (根 `config_json` 的 `prompt`), **不做**会话级
   提示词来源 —— 一个 agent 管理的会话、提示词、插件等保持一致
-- 插件表调用只有两种形态 (2026-11): **调用即提交** `xxx(ctx, args)` 返回
-  `pluginxx::TableOpTicket` (`co_await` 取 `TableOpResult`, 也可 `.forget()` / `whenAll`)
+- 插件表调用只有两种形态 (2026-11): **调用即提交** `xxx(ctx, args)` 返回  `pluginxx::TableOpTicket` (`co_await` 取 `TableOpResult`, 也可 `.forget()` / `whenAll`)
   与 **回调** `tableOpCallback(ctx, start, done)`。阻塞包装 (`tableOpBlocking` /
   `invoke_capability_blocking` / `call_tool_blocking` / kit 侧 `*Blocking`) 已删除;
-  唯一的同步等待原语 `pluginxx::tableOpSyncWait(...)` 只给必须同步回答外部同步 API 的桥
-  (JS 运行时插件的 QuickJS 回调) 与 kit 内部几个同步便捷函数, `boundaries` 规则 16 拦回退。
-  **在插件执行线程上默认拒绝等待**, 但 kit 现在用**同步桥**把这件事做成可用:
-  `tableOpSyncWait` 把完成回调包成 `pluginxx::SyncBridgeCallback` (固定标记 + 唤醒体 + ud),
-  主程序 `OpCore::commit` 识别标记后**在完成线程 (io) 就地调用** —— 就地跑的只是唤醒体,
-  插件业务代码仍在插件线程上继续。准入看末参 `SyncWaitThreadPolicy`: 默认
-  `refuseOnPluginThread` (agent 跨插件调用可能把工作体派回同一条线程), client 表与广播表
-  显式 `allowOnPluginThread`。能写异步时仍优先 `finishLater(notify)` + `ctx.spawn(...)` +
-  `return later.provider()` (agent 侧内置插件都已是这种写法); 挂载带挂载级状态时返回
-  自己的状态对象 (unmount 收到它)
+  唯一保留的同步等待原语是 `pluginxx::tableOpSyncWait(...)`, `boundaries` 规则 16 拦回退。
+  **全部 kit 入口都用默认的 `refuseOnPluginThread`: 插件执行线程上不再等待**, 直接返回
+  失败并带原因文本 (操作已提交但拿不到结果)。同步桥 (`SyncBridgeCallback` +
+  `OpCore::commit` 就地调用) 仍是它拿结果的机制, 但现在只为 `create` 期查询与
+  `blocking_tool` 一类已在线程池上的实现体服务 (JS 引擎已不再用它: 脚本侧表调用
+  也改成了 Promise)。`tableOpCallback` 的 `user_data` 必须是一块至少 8 字节的真实内存
+  (主程序会对它按指针读标记), 因此内部用带 `magic` 字段的 `Holder` 包住函子 ——
+  直接 `new Done(...)` 时空函子只有 1 字节, ASan 会报 heap-buffer-overflow。插件代码一律异步/提交即返回: `finishLater(notify)` + `ctx.spawn(...)` +
+  `return later.provider()`, 表调用逐条 `co_await`; 挂载带挂载级状态时返回自己的状态对象
+  (unmount 收到它)
 - **插件执行线程 (2026-11)**: 插件代码不再跑在主程序 io 线程上。`PluginRuntime::pluginExecutor`
   (空 = 与改造前完全一致) 由主程序绑定: agent 侧 `AgentHost::loadPluginsAsync` 起一条
   `pluginxx::PluginExecutorThread` (`agentxx-plugin`), client 侧由
@@ -814,7 +827,11 @@ path/to/agentxx_test --log-level warn string_util regex
   所有"主程序 → 插件"的调用经
   `pluginxx::dispatchToPlugin(inst, label, fn, opts)` 投到那条线程 (派发时取 `InstanceLease`,
   拿不到就丢弃并计数; 同实例 FIFO, `stop` 也走同一条队列); 状态仍只在 io 线程。
-  io 线程永不阻塞等插件线程; 反向的"插件线程同步等 io"经同步桥放行。
+  io 线程永不阻塞等插件线程; 反向的"插件线程同步等 io"也不再放行 (kit 全部入口是
+  `refuseOnPluginThread`), 插件要结果就写协程或回调形态。
+  **加载期与卸载期**：`dlopen`/`create` 走 `runLoaderTask`（agent 侧与 client 侧都投
+  线程池，没有线程池时退回调用线程），`get_info` 只返静态元数据；`destroy` 在卸载线程
+  上执行，约定只释放本地对象（不调表、不起线程，线程与注册已在 `stop` 收完）。
   `scheduler.is_io_thread` 名字未改, 语义变成"当前线程是不是该插件的执行线程"。
   目标线程模型: agent io + agent 插件 + client io + client UI + client 插件 + 后台任务池。
   诊断: `pluginCallbackStats()` (次数/平均/最大/超预算/dropped/unschedulable;
@@ -824,13 +841,16 @@ path/to/agentxx_test --log-level warn string_util regex
 - client 侧六张表同一套契约 (2026-11): `agentxx.client.ui` / `session` / `wire` / `self` /
   `timer` / `keybind` 全部 v2 异步, **没有保留的同步成员** (连 `is_visible` 也走异步);
   渲染回调与命令 `execute` 也是异步 (主程序给 `PluginxxOperatorNotify`, 回调可立即
-  `notify` 交出内容 = 同步完成)。插件用 kit 的 `clientTableOp` / `clientTableText` /
-  `clientTableHandle` 与展示面入口 (`clientRegisterStatusItem` / `clientUpdatePanel` /
-  `clientRegisterCommand` / `clientUpdateToolDecor` / `clientOpenOverlay` / `clientBindAction` /
-  `clientSendPluginData` …); 回答型回调收尾用 `notifyText` / `notifyError`。
-  **同步助手在插件执行线程上可用**: client 表工作体只碰 client 注册表、不会派回本插件
-  的执行线程, 所以 kit 显式放行 (`SyncWaitThreadPolicy::allowOnPluginThread`), 完成回调经
-  同步桥在 io 就地调用。新写的注册事务**优先协程形态**: `ClientPluginBase` 继承
+  `notify` 交出内容 = 同步完成)。插件按“要不要结果”选写法: **不要结果**用
+  `clientTableCall(...)` 或 `ClientPluginBase` 的提交即返回方法 (`setPanelJson` /
+  `setStatusJson` / `setInfoSectionItems` / `showOverlay` / `open*`), **要结果**用
+  `co_await clientTableOpAsync(ctx, ...)` + `clientHandleOf<T>` (只在 `create` 这类加载
+  线程上才用阻塞的 `clientTableOp` / `clientTableText` / `clientTableHandle`, 插件执行
+  线程上会被拒绝且 `boundaries` 禁止插件源码直接使用它们)。
+  懒注册 Info 段落用 `ClientPluginBase::ensureInfoSection(id, props)` (提交即返回, 句柄
+  受理后写回槽位, 用 `infoSection(id)` 取); 回答型回调收尾用 `notifyText` / `notifyError`
+  (回调要把 `notify` 的两个字段按值带走再传给协程, 指针在回调返回后不再可用)。
+  新写的注册事务用协程形态: `ClientPluginBase` 继承
   `pluginxx::PluginBaseT<ClientIfaces>` (有 `ctx.spawn(...)` / `bridge()`), 用
   `finishLater(notify)` + `co_await clientTableOpAsync(ctx, ...)` + `clientHandleOf<T>`
   (参考 `example_plugin` 的 client start); `ClientIfaces` 的 `tasks` 供 `spawn` 登记取消。

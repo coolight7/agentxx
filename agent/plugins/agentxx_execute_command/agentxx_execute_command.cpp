@@ -49,7 +49,7 @@ struct ExecPluginCtx : public PluginBase {
 /// - 主程序按所有者记录贡献 (见 PluginManager::setPromptJson), 插件卸载/禁用时
 ///   自动撤销并恢复基础值; 同一工具由多个插件实例贡献时互不覆盖
 /// - 主程序未提供 prompt 接口表 (精简主程序) 时跳过: 描述文本仍随工具注册直接生效
-static void
+static pluginxx::Task<void>
     publishToolPrompt(ExecPluginCtx& ctx, const ScopeRef& ref, std::string_view toolName, const ExecPromptText& prompt) {
     if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->set_prompt) {
         pluginLog(
@@ -57,7 +57,7 @@ static void
             2,
             "agentxx_execute_command: host has no prompt iface, tool prompt skipped"
         );
-        return;
+        co_return;
     }
     utilxx_base::Json args = utilxx_base::Json::object();
     for (const auto& [name, desc] : prompt.args) {
@@ -75,9 +75,10 @@ static void
 
     const std::string js   = patch.dump();
     auto              agentRef = ref.raw();
-    if (setPromptJson(ctx.host, ctx.iface, &agentRef, js) != 0) {
+    auto              wr       = co_await setPromptJson(ctx, &agentRef, js);
+    if (!wr.ok()) {
         pluginLog(&ctx, 3, fmt::format("agentxx_execute_command: set_prompt({}) failed", toolName));
-        return;
+        co_return;
     }
     pluginLog(
         &ctx,
@@ -103,12 +104,12 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
         false;
 #endif
     const auto winPrompt = windowsToolPrompt(ctx.env, viaProcessSpawn);
-    // 先注入提示词再注册: polled_tool/blocking_tool 注册时经 ctx.toolPrompt(name)
-    // 读取主程序提示词的 depict 作为工具描述, 注册后无法再改
-    publishToolPrompt(ctx, ref, kNameWindows, winPrompt);
+    // 先注入提示词再注册: 描述文本取自主程序提示词表 (协程里 co_await, 插件执行线程
+    // 上不等主程序), 注册时用同一份字面量, 注册后无法再改
+    co_await publishToolPrompt(ctx, ref, kNameWindows, winPrompt);
 
     auto winSchema
-        = ctx.schema(kNameWindows)
+        = (co_await agentxx::plugin::schemaOf(ctx, kNameWindows))
               .string(
                   "command",
                   argDescOr(winPrompt, "command", kWindowsCommandArgDescFallback),
@@ -209,12 +210,12 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
 
 #else // Linux / POSIX
     const auto bashPrompt = bashToolPrompt(ctx.env);
-    // 先注入提示词再注册: polled_tool/blocking_tool 注册时经 ctx.toolPrompt(name)
-    // 读取主程序提示词的 depict 作为工具描述, 注册后无法再改
-    publishToolPrompt(ctx, kNameBash, bashPrompt);
+    // 先注入提示词再注册: 描述文本取自主程序提示词表 (协程里 co_await, 插件执行线程
+    // 上不等主程序), 注册时用同一份字面量, 注册后无法再改
+    co_await publishToolPrompt(ctx, kNameBash, bashPrompt);
 
     auto bashSchema
-        = ctx.schema(kNameBash)
+        = (co_await agentxx::plugin::schemaOf(ctx, kNameBash))
               .string(
                   "command",
                   argDescOr(bashPrompt, "command", kBashToolDepict),

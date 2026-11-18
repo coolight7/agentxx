@@ -324,8 +324,11 @@ asio::awaitable<void> test_dispatch_thread_and_order() {
     }
 
     // 统计: 派发次数 (夹具启动时已派发过一次探针)
+    // - 计数在回调返回后才累加, 而 `finished` 是在回调内部置位的, 所以等计数到齐再断言
     const auto& stats = f.mgr->pluginCallbackStats();
-    XX_TEST_EXPECT_EQ(stats.callbacks.load(), static_cast<uint64_t>(kCount) + 1);
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return stats.callbacks.load() >= static_cast<uint64_t>(kCount) + 1;
+    }));
 
     // isPluginThread: io 线程上为 false, 插件线程上为 true
     XX_TEST_EXPECT_FALSE(f.mgr->isPluginThread());
@@ -831,6 +834,50 @@ asio::awaitable<void> test_sync_bridge() {
         XX_TEST_EXPECT_TRUE(box.thread.load() == ioThreadId);
         XX_TEST_EXPECT_EQ(static_cast<int>(box.status.load()), int32_t{PLUGINXX_OPERATOR_OK});
         XX_TEST_EXPECT_EQ(box.text, std::string{"table-ok"});
+    }
+
+    // 9.4 插件执行线程上默认拒绝等待: 直接回原因文本, 不把线程挂住
+    //
+    // kit 的全部入口都用默认策略 (refuseOnPluginThread): 插件线程上调表只提交、不等结果，
+    // 拿不到就带原因返回。这里用一个“受理但永不完成”的表操作验证不会卡住。
+    {
+        static PluginxxSchedulerIface fakeScheduler{};
+        fakeScheduler.is_io_thread = +[](const PluginxxHost*) -> int32_t { return 1; };
+
+        std::atomic<bool> ran{false};
+        std::atomic<int>  accepted{-1};
+        std::string       startError;
+        const bool        queued = pluginxx::dispatchToPlugin(
+            f.inst,
+            "plugin_executor: 拒绝同步等待",
+            [&] {
+                ran.store(true);
+                auto res = pluginxx::tableOpSyncWait(
+                    static_cast<const PluginxxHost*>(nullptr),
+                    nullptr,
+                    &fakeScheduler,
+                    [](PluginxxOperatorCallback, void*, PluginxxString*)
+                        -> PluginxxOperatorHandle* {
+                        // 受理但永不完成: 真等就会挂住这条线程
+                        return reinterpret_cast<PluginxxOperatorHandle*>(
+                            static_cast<intptr_t>(1)
+                        );
+                    }
+                );
+                accepted.store(res.accepted() ? 1 : 0);
+                startError = std::string{res.startError};
+            },
+            pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
+        );
+        XX_TEST_EXPECT_TRUE(queued);
+        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+            return ran.load();
+        }));
+        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+            return accepted.load() >= 0;
+        }));
+        XX_TEST_EXPECT_EQ(accepted.load(), 0);
+        XX_TEST_EXPECT_TRUE(startError.find("plugin execution thread") != std::string::npos);
     }
 }
 

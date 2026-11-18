@@ -7,7 +7,7 @@
 // 顶层 registerTool 注册的就是“本 agent 的那一份工具”；脚本里的全局变量天然按 agent 隔离。
 // 进程级状态（连接 / 线程 / 文件句柄）请写在 C++ 壳的 start 里, 不要放脚本顶层。
 
-(function () {
+await (async function () {
   var kName = "example_js_execute_command";
   var kMaxStdOut = 30000; // 字符数限制，对齐 execute_command_impl.h kMaxStdOutUtf8Length
   var kMaxStdErr = 30000;
@@ -274,10 +274,10 @@
     execute: executeJavascript
   };
 
-  agentxx.registerTool(toolSpec);
+  await agentxx.registerTool(toolSpec);
 
   try {
-    agentxx.registerTool({
+    await agentxx.registerTool({
       name: "agentxx_execute_javascript",
       description: "Alias of example_js_execute_command — execute JavaScript code in QuickJS sandbox.",
       parameters: toolSpec.parameters,
@@ -286,7 +286,7 @@
   } catch (_) { }
 
   try {
-    agentxx.registerTool({
+    await agentxx.registerTool({
       name: "agentxx_execute_js",
       description: "Alias of example_js_execute_command — execute JavaScript code in QuickJS sandbox.",
       parameters: toolSpec.parameters,

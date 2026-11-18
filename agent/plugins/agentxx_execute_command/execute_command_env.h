@@ -17,7 +17,7 @@
 ///   同一动态库多实例并存的约束 (多实例三铁律)。
 ///
 /// 提示词文本与工具 schema 由同一份 [ExecPromptText] 提供 (插件入口传给
-/// `ctx.schema(...)`), 保证注入主程序的提示词与实际注册的 schema 一致。
+/// `co_await schemaOf(ctx, ...)`), 保证注入主程序的提示词与实际注册的 schema 一致。
 #pragma once
 
 #include "fmt/format.h"

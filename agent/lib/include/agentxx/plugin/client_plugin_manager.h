@@ -1280,6 +1280,12 @@ public:
     /// 把一段阻塞工作投递到客户端插件工作线程池
     bool postToWorkerThread(std::function<void()> fn) override;
 
+    /// 加载线程: dlopen / create 不占客户端 io 线程
+    ///
+    /// 插件 `create` 是构造期 (允许读配置/建索引), 它跑在插件执行线程之外 —— 客户端侧
+    /// 没有自带线程池的嵌入方 (测试) 会在调用线程上直接执行。
+    asio::awaitable<std::string> runLoaderTask(std::function<std::string()> fn) override;
+
     /// 主程序配置 JSON (`get_config` 的业务部分)
     std::string configJson() override;
 

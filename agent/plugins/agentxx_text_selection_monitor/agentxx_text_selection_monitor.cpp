@@ -236,8 +236,7 @@ std::string cdpWsRoundTrip(
     state.connId = fmt::format("{}-{}", kPluginId, seq.fetch_add(1) + 1);
 
     const std::string topic = agentxx::plugin::netEventTopic(kPluginId);
-    agentxx::plugin::declarePluginBroadcast(
-        ctx.host,
+    agentxx::plugin::declarePluginBroadcastNoWait(ctx.host,
         ctx.iface.broadcasts,
         topic,
         /*anyonePublish=*/false,
@@ -262,7 +261,7 @@ std::string cdpWsRoundTrip(
             state.alive = false;
         }
         // 阻塞形态退订 (插件 io 线程不是主程序 io 线程)
-        agentxx::plugin::unsubscribePluginBroadcast(ctx.host, ctx.iface.broadcasts, sub);
+        agentxx::plugin::unsubscribePluginBroadcastNoWait(ctx.host, ctx.iface.broadcasts, sub);
     };
 
     std::string out;
@@ -368,7 +367,7 @@ bool TextSelectionHolder::start(int debounceMs) {
                 auto topicSv
                     = PluginStringView::fromCstr("plugin.agentxx_text_selection_monitor.selection");
                 auto payloadSv = PluginStringView::from(payload.data(), payload.size());
-                agentxx::plugin::publishPluginBroadcast(ctx->host, ctx->iface.broadcasts, topicSv, payloadSv);
+                agentxx::plugin::publishPluginBroadcastNoWait(ctx->host, ctx->iface.broadcasts, topicSv, payloadSv);
             } catch (...) {
             }
         }

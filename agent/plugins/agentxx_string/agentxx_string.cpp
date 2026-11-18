@@ -41,7 +41,7 @@ struct StringPluginCtx : public PluginBase {};
 /// 注册事务 (mount 的实际内容; 每个 agent 各自一份)。
 static pluginxx::Task<void> stringSetupAsync(StringPluginCtx& ctx, ScopeRef ref) {
     // 1. html_to_markdown
-    auto html2mdSchema = ctx.schema(kNameHtml2Md)
+    auto html2mdSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameHtml2Md))
                              .string("content", "The HTML string to convert.", /*required=*/true)
                              .build();
 
@@ -67,7 +67,7 @@ static pluginxx::Task<void> stringSetupAsync(StringPluginCtx& ctx, ScopeRef ref)
     );
 
     // 2. regexp
-    auto regexpSchema = ctx.schema(kNameRegexp)
+    auto regexpSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameRegexp))
                             .string("content", "The input text to operate on.", /*required=*/true)
                             .stringArray(
                                 "exps",

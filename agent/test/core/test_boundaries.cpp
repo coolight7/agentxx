@@ -1383,8 +1383,12 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
 ///
 /// 阻塞形态 (`tableOpBlocking*` / `invoke_capability_blocking` / `call_tool_blocking`)
 /// 已删除, 再出现就是回退。同步等待原语 `tableOpSyncWait` 只允许出现在必须同步回答
-/// 外部同步 API 的地方 —— 目前只有 JS 运行时插件 (QuickJS 是同步 C API):
-/// 它在脚本回调里必须当场拿到结果, 没有可以挂起的协程。
+/// 外部同步 API 的地方 —— 目前只剩内嵌脚本引擎的示例插件 (`example_js`)。
+///
+/// kit 里还有几个用阻塞形态实现的便捷函数 (client 表的 `clientTableOp` /
+/// `clientTableText` / `clientTableHandle`): 它们只在 `create` 这类加载线程上用,
+/// 插件执行线程上会被拒绝。插件日常写法有对应替代 —— 要结果用 `clientTableOpAsync`,
+/// 不要结果用 `clientTableCall` / `*NoWait`, 所以插件源码里不应再出现三个阻塞入口。
 void checkPluginTableCallShape(const fs::path& root, Violations& v) {
     static constexpr std::string_view kForbidden[] = {
         "tableOpBlocking(",
@@ -1392,10 +1396,19 @@ void checkPluginTableCallShape(const fs::path& root, Violations& v) {
         "invoke_capability_blocking",
         "call_tool_blocking",
     };
-    // 同步等待原语: 只有这些文件可以用 (路径片段)
+    /// 阻塞式 client 表入口 (插件里改用 Async / 提交即返回形态)
+    static constexpr std::string_view kBlockingClientHelpers[] = {
+        "clientTableOp(",
+        "clientTableText(",
+        "clientTableHandle(",
+    };
+    // 同步等待原语与阻塞式 client 表入口: 只有这些文件可以用 (路径片段)
+    //
+    // JS 引擎已经全部走 Promise 桥 (脚本侧表调用一律返回 Promise, 不再阻塞 JS 线程),
+    // 所以它不再享有豁免 —— 再出现同步等待就是回退。
     static constexpr std::string_view kSyncWaitAllowed[] = {
-        "plugins/agentxx_javascript_engine/",
-        "plugins\\agentxx_javascript_engine\\",
+        "plugins/example_js/libexample_js.cpp",
+        "plugins\\example_js\\libexample_js.cpp",
     };
 
     std::vector<fs::path> files;
@@ -1427,7 +1440,7 @@ void checkPluginTableCallShape(const fs::path& root, Violations& v) {
                 }
             }
         }
-        // 同步等待原语只能用在使用方必须同步拿到结果的地方
+        // 同步等待原语与阻塞式 client 表入口只能用在使用方必须同步拿到结果的地方
         if (!inBridge) {
             const auto pos = text.find("tableOpSyncWait(");
             if (pos != std::string::npos) {
@@ -1444,6 +1457,16 @@ void checkPluginTableCallShape(const fs::path& root, Violations& v) {
                     + ": `tableOpSyncWait` 只给必须同步回答外部同步 API 的桥用"
                       " (插件里请 `co_await tableOp(...)`)"
                 );
+            }
+            if (!isKit) {
+                for (const auto& name : kBlockingClientHelpers) {
+                    if (text.find(name) != std::string::npos) {
+                        v.push_back(
+                            rel + ": 使用了阻塞式 client 表入口 `" + std::string{name}
+                            + "` (要结果用 `clientTableOpAsync`, 不要结果用 `clientTableCall`)"
+                        );
+                    }
+                }
             }
         }
     }
