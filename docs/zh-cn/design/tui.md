@@ -305,7 +305,7 @@ struct UiActionItem {
   按本端能力适配后统一渲染为 Element, 并把元素内可点位置登记为可命中区域 (按钮/表格单元格/折叠标题/控件)。
 - 命中与派发: 侧边栏内容经 `Scrollable::hitTestItem` 定位子项 + 局部坐标后判定区域
   (不用子项内的 `reflect`, 见 3.1); 命中后经 `ClientPluginManager::dispatchAction`
-  投递回 io 线程, 二次校验插件存在/启用/实例代次后调用插件回调。
+  派发到插件执行线程 (默认 = client io 线程), 二次校验插件存在/启用/实例代次后调用插件回调。
 - 表单: 控件 (checkbox/select/buttons/number/text) 与提交行的状态由主程序维护, 提交经
   动作通道回传 `__submit` (参数 `{"values":{控件 id: 值}}`), 取消回传 `__cancel`,
   `commitOnPick` 的候选项点击即提交。插件不接触 UI 线程, 只收结果。
@@ -344,13 +344,13 @@ struct UiActionItem {
   agent 侧 `preset::permissionCard` 为内置分类给 i18n 键 (`读取文件`/`写入文件`),
   **读/写只靠颜色区分** (`hint` / `thinking`), 不加粗、不加括号或背景色
 - **定时器与快捷键**: 插件不能自己起线程/定时器, 需要"按时间刷新"或"响应按键"时经
-  `agentxx.client.timer` / `agentxx.client.keybind` 两张表注册 (回调都在 client io
-  线程执行, 插件代码永不进 UI 线程):
+  `agentxx.client.timer` / `agentxx.client.keybind` 两张表注册 (回调都在插件执行线程
+  执行 —— 默认就是 client io 线程, 插件代码永不进 UI 线程):
   - 定时器: `pause_when_hidden` 关联的面板/Info 段落不可见时顺延不触发; 主程序动画等级
     `Disabled` 时拒绝注册; 插件禁用/卸载时主程序全部取消
   - 快捷键: UI 线程按 `keybindOfEvent(event)` 得到的规范化键位查表
     (`ClientPluginManager::hasKeybind`) 命中后拦截事件, 经 `postKeybindInvocation`
-    投递回 io 线程执行插件回调; 优先级为"全局快捷键 > 表单控件焦点 > 普通按键",
+    派发到插件执行线程执行插件回调; 优先级为"全局快捷键 > 表单控件焦点 > 普通按键",
     模态弹窗打开时不触发; 无修饰键的可打印字符不参与匹配 (不影响输入框打字)
   - 快捷键列表 (只读): 设置弹窗的「快捷键」条目显示插件已注册的条数, 激活后打开
     `KeybindListOverlay` (键位 + 说明 + 归属插件; 抢不到键位的尝试列在"键位冲突"段,

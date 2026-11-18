@@ -77,6 +77,8 @@ AgentSessionRuntime::AgentSessionRuntime(
     serverIO_->setTransport(std::shared_ptr<AgentIOTransportBase>(std::move(serverTrans)));
 
     host_ = std::move(cfg_.host);
+    // 容器是本次运行自建的时候（调用方没传 host）, 收尾时要自己等插件停完
+    ownsHost_ = (host_ == nullptr);
 }
 
 AgentSessionRuntime::~AgentSessionRuntime() = default;
@@ -197,6 +199,12 @@ asio::awaitable<void> AgentSessionRuntime::runMain() {
 
     // ---- 会话驱动循环 (取输入 → 跑一轮 → 推事件) ----
     co_await serverIO_->run();
+    // 插件实例的 stop 事务派发在插件执行线程上: 自建的容器要等完再让它释放
+    if (ownsHost_ && host_) {
+        if (auto pluginHost = host_->pluginHost()) {
+            co_await pluginHost->shutdownAsync();
+        }
+    }
     finishMain();
 }
 

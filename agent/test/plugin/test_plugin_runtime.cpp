@@ -861,7 +861,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
     }
 
-    /// 管理器先于完成包释放: 已受理的回调仍旧交付, lease 正常回收。
+    /// 管理器先于完成包释放: 已受理的回调仍旧执行, lease 正常回收。
     /// (原用例走 `postCallback`; 该入口已删 —— 插件不再有“往 io 线程投递任意
     /// 代码”的能力, 这里改用 `sleep` 验证同一套投递协议。)
     {
@@ -1126,7 +1126,8 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(returned.get_future().get());
     }
 
-    /// 真实 worker 由事件释放；Closing 期间不能提前 idle，done 在 IO 调用。
+    /// 真实 worker 由事件释放；Closing 期间不能提前 idle，done 派发给插件
+    /// (本夹具没有插件执行器 ⇒ 仍在 io 执行; 有执行器时在那条线程上)
     {
         auto           ctx = std::make_shared<agentxx::agent::AgentContext>();
         RuntimeFixture f(ctx);
@@ -1150,8 +1151,9 @@ TestResult testPluginRuntime() {
                 auto& state = *static_cast<State*>(ud);
                 state.done  = status == PLUGINXX_OPERATOR_OK && value == ud;
                 state.onIo  = state.fixture->manager->isIoThread();
+                // 派发本身也持一份 lease (op 一份 + 派发项一份), 因此这里只判 "非零"
                 state.protectedDuringCallback
-                    = state.fixture->provider->lifetime->leaseCount() == 1;
+                    = state.fixture->provider->lifetime->leaseCount() != 0;
             },
             &state,
             &error

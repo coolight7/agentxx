@@ -44,7 +44,7 @@
 /// ```
 /// - 返回 `NULL` = **未受理** (参数错 / 实例正在关闭), 原因写进 `error_out`,
 ///   且 `cb` 不会被调用;
-/// - 返回非 NULL = 已受理, 结果经 `cb` **恰好一次**交回 (client io 线程);
+/// - 返回非 NULL = 已受理, 结果经 `cb` **恰好一次**交回 (插件执行线程, 见下方“线程模型”);
 ///   `payload` 就是该成员的业务结果 —— 注册类成员给句柄的十进制文本
 ///   (用 `agentxx::plugin::clientHandleFromText` 转回), 查询类给 JSON / 纯文本,
 ///   无结果类给空串;
@@ -54,6 +54,17 @@
 ///   拿到句柄再继续;
 /// - client 侧没有保留的同步成员: 连 `is_visible` 这类查询也走异步
 ///   (高频值请在 `start` / 定时器回调里取一次自行缓存)。
+///
+/// ══════════════════════════════════════════════════════════════════
+/// 线程模型: 插件代码只在“插件执行线程”上跑
+/// ══════════════════════════════════════════════════════════════════
+/// 下文成员说明里的“插件执行线程”指主程序调用插件回调的那条线程:
+/// - 默认 = client io 线程 (主程序没有单独起插件线程时);
+/// - 调 `ClientPluginManager::startPluginThread()` 起线程后 = 那条专用线程。
+/// 两种形态下约定相同: 插件代码**不在 UI 线程上**执行 (UI 只经投递间接触发),
+/// 同一实例的调用按受理顺序串行, 表调用的完成回调也投回这条线程。
+/// 因此在这里可以放心用插件自己的成员变量与锁, 不必为 UI 线程加跨线程保护;
+/// 也**不要**在回调里长时间阻塞 (它卡住的是本插件后续全部回调)。
 #ifndef AGENTXX_CLIENT_PLUGIN_API_H
 #define AGENTXX_CLIENT_PLUGIN_API_H
 
@@ -140,7 +151,7 @@ typedef struct AgentxxToolRenderInput {
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
 #define AGENTXX_TOOL_RENDER_INPUT_BASELINE_SIZE sizeof(AgentxxToolRenderInput)
 
-/// 折叠内容渲染回调 (client io 线程调用; 不得抛异常出边界, 主程序统一保护)
+/// 折叠内容渲染回调 (插件执行线程调用; 不得抛异常出边界, 主程序统一保护)
 ///
 /// 异步操作契约 (与工具 `execute_start` 同构):
 /// - 返回 0 = 已受理, 内容经 [notify] 恰好一次交回:
@@ -159,7 +170,7 @@ typedef int32_t(PLUGINXX_CALL* AgentxxToolCollapsedRenderFn)(
     PluginxxString*               error_out
 );
 
-/// 展开内容渲染回调 (client io 线程调用; 只在用户展开该工具行时调用)
+/// 展开内容渲染回调 (插件执行线程调用; 只在用户展开该工具行时调用)
 ///
 /// 契约同 [AgentxxToolCollapsedRenderFn], 区别只在 `payload`: 这里是 items JSON 数组
 /// (界面描述层 schema, 如 Text/Button/Diagram/Divider/Diff); 空 = 走默认展开体
@@ -193,7 +204,7 @@ typedef struct AgentxxToolRenderSpec {
 
 /* ==================== 通用交互: 动作回调与 overlay ==================== */
 
-/// 动作派发上下文 (主程序在 client io 线程构造, 仅本次回调有效; 全部只读借用)
+/// 动作派发上下文 (主程序在插件执行线程构造, 仅本次回调有效; 全部只读借用)
 typedef struct AgentxxUiActionContext {
     uint32_t           struct_size; ///< 主程序填 sizeof; 0 = 基线布局
     int32_t            version;     ///< 结构体版本 (当前 == 1)
@@ -205,10 +216,10 @@ typedef struct AgentxxUiActionContext {
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
 #define AGENTXX_UI_ACTION_CONTEXT_BASELINE_SIZE sizeof(AgentxxUiActionContext)
 
-/// 动作处理器 (client io 线程同步调用; 不得抛异常出边界, 主程序统一保护)
+/// 动作处理器 (插件执行线程同步调用; 不得抛异常出边界, 主程序统一保护)
 typedef void(PLUGINXX_CALL* AgentxxUiActionFn)(const AgentxxUiActionContext* ctx, void* user_data);
 
-/// 斜杠命令执行回调 (client io 线程调用; 不得抛异常出边界, 主程序统一保护)
+/// 斜杠命令执行回调 (插件执行线程调用; 不得抛异常出边界, 主程序统一保护)
 ///
 /// 异步操作契约: 回调返回 0 = 已受理, 动作 JSON 经 [notify] 恰好一次交回
 /// (`status = PLUGINXX_OPERATOR_OK` 且 `payload` 非空 = 动作 JSON, 语义见文件头;
@@ -330,7 +341,7 @@ typedef struct AgentxxClientUiIface {
     ///   拼装即可, 不必手写 JSON
     /// - 未知组件与本客户端不支持的组件由主程序按自身能力降级 (最多降到文本),
     ///   不会因此清空面板; 客户端支持哪些组件见 `get_client_state().ui`
-    /// - button 项被用户点击时: 主程序 post 到 client io 线程按动作派发
+    /// - button 项被用户点击时: 主程序投递到插件执行线程按动作派发
     ///   (dispatch 走能力/动作绑定, 见 `bind_action_handler`)
     PluginxxOperatorHandle*(PLUGINXX_CALL* update_panel)(
         const PluginxxHost*       host,
@@ -383,7 +394,7 @@ typedef struct AgentxxClientUiIface {
     /* ---- 斜杠命令 ---- */
     /// 注册斜杠命令: 用户输入 "/{name}" 触发 (name 不含 '/' 与空格)
     /// - name: 全局唯一; description: 帮助/自动补全用
-    /// - execute: client io 线程调用, 异步操作契约 (见 [AgentxxClientCommandExecuteFn]);
+    /// - execute: 插件执行线程调用, 异步操作契约 (见 [AgentxxClientCommandExecuteFn]);
     ///   动作 JSON 经它的 `notify` 交回 (空 = 没有动作)
     /// - `command_ud`: `execute` 的上下文 (与完成回调的 `ud` 无关)
     /// - 名字冲突 / 参数非法按失败交回
@@ -418,7 +429,7 @@ typedef struct AgentxxClientUiIface {
     );
 
     /* ---- 工具消息装饰 ---- */
-    /// 更新/删除本插件对某次工具调用的消息装饰 (io 线程约束):
+    /// 更新/删除本插件对某次工具调用的消息装饰 (插件执行线程约束):
     /// - 装饰内容为语义 JSON, UI 按通用渲染器展示: 折叠头 displayName/summary +
     ///   展开体 items (界面描述层 schema, 同 update_panel)
     ///   {"displayName": "Plan",              // 可选; 折叠头显示名 (缺省原始 toolName)
@@ -480,7 +491,7 @@ typedef struct AgentxxClientUiIface {
      * `_BASELINE_SIZE` 保持当前值并用 `pluginxx::ifaceHas` 判定 (见
      * docs/zh-cn/design/plugins.md §9 的追加策略)。
      */
-    /// 绑定动作处理器 (client io 线程约束):
+    /// 绑定动作处理器 (插件执行线程约束):
     /// - target_id: 归属键 (section_id / panel_id / tool_call_id); 空串 = 本实例
     ///   默认绑定 (方案 A fallback: 精确匹配优先, 未命中回落到 "")
     /// - 同一 (plugin, target_id) 重复绑定覆盖; on_action 为 NULL 则按参数错未受理
@@ -501,7 +512,7 @@ typedef struct AgentxxClientUiIface {
         void*                     ud,
         PluginxxString*           error_out
     );
-    /// 通用 overlay (client io 线程约束; 插件 on_action 内直接调用):
+    /// 通用 overlay (插件执行线程约束; 插件 on_action 内直接调用):
     /// - 已有 overlay/核心弹窗时的策略由 spec->extra_json 的 `stack` 决定:
     ///   缺省替换当前 overlay (last-wins), `stack=true` 时保留现有 overlay 并丢弃本次
     /// - spec->version 必须 == 1; type 越界按参数错未受理
@@ -625,7 +636,7 @@ typedef struct AgentxxClientSelfIface {
         void*                    ud,
         PluginxxString*          error_out
     );
-    /// 本插件配置参数 JSON (yaml `plugins` 条目 args; io 线程):
+    /// 本插件配置参数 JSON (yaml `plugins` 条目 args; 插件执行线程):
     /// 主程序不解析 args 字段语义, 整体原样传递; 未配置时为 "{}"
     PluginxxOperatorHandle*(PLUGINXX_CALL* get_plugin_args)(
         const PluginxxHost*      host,
@@ -633,7 +644,7 @@ typedef struct AgentxxClientSelfIface {
         void*                    ud,
         PluginxxString*          error_out
     );
-    /// 本插件配置文件所在目录或文件路径 (yaml `plugins` 条目 config; io 线程;
+    /// 本插件配置文件所在目录或文件路径 (yaml `plugins` 条目 config; 插件执行线程;
     /// 未指定时结果为空串)
     /// - 可指向文件或目录 (由插件自行判断类型并加载)
     /// - 主程序已归一化为绝对路径 (正斜杠, lexically_normal)
@@ -643,14 +654,14 @@ typedef struct AgentxxClientSelfIface {
         void*                    ud,
         PluginxxString*          error_out
     );
-    /// 读取当前 client 使用的语言 (client io 线程; 结果如 "en" / "zh-cn")
+    /// 读取当前 client 使用的语言 (插件执行线程; 结果如 "en" / "zh-cn")
     PluginxxOperatorHandle*(PLUGINXX_CALL* get_language)(
         const PluginxxHost*      host,
         PluginxxOperatorCallback cb,
         void*                    ud,
         PluginxxString*          error_out
     );
-    /// 指定使用的语言 (client io 线程; 不支持 auto, 为空或 auto 时回退为 "en")
+    /// 指定使用的语言 (插件执行线程; 不支持 auto, 为空或 auto 时回退为 "en")
     PluginxxOperatorHandle*(PLUGINXX_CALL* set_language)(
         const PluginxxHost*       host,
         const PluginxxStringView* language,
@@ -689,7 +700,7 @@ typedef struct AgentxxTimerSpec {
     /// - 可取值: 面板 id / Info 段落 id / 通用 overlay (`"__overlay"`) /
     ///   工具消息装饰的 `tool_call_id` (主程序按该消息是否在消息列表角度内判定)
     PluginxxStringView owner_id;
-    /// 超时回调 (client io 线程同步调用; 不得抛异常出边界, 主程序统一保护)
+    /// 超时回调 (插件执行线程同步调用; 不得抛异常出边界, 主程序统一保护)
     void(PLUGINXX_CALL* on_timer)(void* user_data);
     /// 回调上下文 (建议 = 插件实例上下文; 可为 NULL)
     void* user_data;
@@ -702,7 +713,7 @@ typedef struct AgentxxClientTimerIface {
     int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_TIMER_VERSION
     uint32_t struct_size;
 
-    /// 注册定时器 (client io 线程; 句柄经完成回调 payload 交回 = 进程内地址的十进制文本)
+    /// 注册定时器 (插件执行线程; 句柄经完成回调 payload 交回 = 进程内地址的十进制文本)
     /// - 失败原因: spec 非法 (版本/回调为空) / 主程序动画等级为 Disabled /
     ///   单实例定时器数量超上限 (当前 8)
     /// - 句柄由主程序持有, 实例禁用/卸载时自动取消 (插件无需在 stop 里逐个取消,
@@ -714,7 +725,7 @@ typedef struct AgentxxClientTimerIface {
         void*                     ud,
         PluginxxString*           error_out
     );
-    /// 取消定时器 (io 线程; 句柄随后失效, 重复取消/空句柄忽略)
+    /// 取消定时器 (插件执行线程; 句柄随后失效, 重复取消/空句柄忽略)
     PluginxxOperatorHandle*(PLUGINXX_CALL* cancel_timer)(
         const PluginxxHost*      host,
         AgentxxTimer*            timer,
@@ -760,7 +771,7 @@ typedef struct AgentxxKeybindSpec {
     PluginxxStringView keys;
     /// 说明文本 (界面/帮助展示; 可空)
     PluginxxStringView description;
-    /// 触发回调 (client io 线程同步调用; 不得抛异常出边界, 主程序统一保护)
+    /// 触发回调 (插件执行线程同步调用; 不得抛异常出边界, 主程序统一保护)
     void(PLUGINXX_CALL* on_keybind)(void* user_data);
     /// 回调上下文 (建议 = 插件实例上下文; 可为 NULL)
     void* user_data;
@@ -773,7 +784,7 @@ typedef struct AgentxxClientKeybindIface {
     int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_KEYBIND_VERSION
     uint32_t struct_size;
 
-    /// 注册全局快捷键 (client io 线程; 句柄经完成回调 payload 交回 = 进程内地址的十进制文本)
+    /// 注册全局快捷键 (插件执行线程; 句柄经完成回调 payload 交回 = 进程内地址的十进制文本)
     /// - 失败原因: 键位无法解析 / 无修饰键的可打印字符 / 已被其它实例占用
     ///   (先注册者优先) / 单实例数量超上限 (当前 16)
     /// - 快捷键在表单控件有焦点时同样生效 (全局优先级最高); 输入框内输入字符
@@ -785,7 +796,7 @@ typedef struct AgentxxClientKeybindIface {
         void*                       ud,
         PluginxxString*             error_out
     );
-    /// 注销快捷键 (io 线程; 句柄随后失效, 重复注销/空句柄忽略)
+    /// 注销快捷键 (插件执行线程; 句柄随后失效, 重复注销/空句柄忽略)
     PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_keybind)(
         const PluginxxHost*      host,
         AgentxxKeybind*          bind,
@@ -793,7 +804,7 @@ typedef struct AgentxxClientKeybindIface {
         void*                    ud,
         PluginxxString*          error_out
     );
-    /// 当前已注册的快捷键列表 (io 线程; JSON 数组, 元素
+    /// 当前已注册的快捷键列表 (插件执行线程; JSON 数组, 元素
     /// `{"keys","description","plugin"}`; 空列表给 `[]`)
     PluginxxOperatorHandle*(PLUGINXX_CALL* list_keybinds)(
         const PluginxxHost*      host,
@@ -809,7 +820,7 @@ typedef struct AgentxxClientKeybindIface {
 /// 纯静态元数据, 不得读取/依赖任何实例状态)
 typedef const AgentxxClientPluginInfo*(PLUGINXX_CALL* AgentxxClientPluginGetInfoFn)(void);
 /// 必需: client 侧插件实例创建 (主程序线程池调用; 内部注册动作主程序自动投递回
-/// client io 线程; 语义同 agent 侧 agentxx_plugin_agent_create)
+/// 插件执行线程; 语义同 agent 侧 agentxx_plugin_agent_create)
 /// 【多实例契约】可重入, 每次调用产出独立存活实例 —— 一切实例状态只能
 /// 存于 *plugin_ctx 指向的堆块 (禁止可变全局/函数级 static 缓存); 一切注册
 /// 回调必须设置 user_data = 实例上下文。

@@ -35,6 +35,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <set>
 #include <sstream>
 #include <string>
@@ -9669,6 +9670,45 @@ extern "C" PLUGINXX_EXPORT int
 /// - 线程启动失败或能力注册失败 → 返回 NULL + error, 主程序回滚本次加载 (注册
 ///   失败时先停止刚启动的引擎, 不留线程/运行时残留);
 /// - 重复 start: 引擎已运行时幂等成功, 能力注册在主程序侧按 owner+名称去重。
+/// - **能力登记走异步形态**: start 事务可能跑在主程序的插件执行线程上, 在那里同步等
+///   完成回调会与"回调投回这条线程"互等; 所以入口返回 provider 句柄、结论在
+///   [jsCapRegDone] 里交回。
+
+/// `interpreter.js` 能力登记的完成状态 (堆对象; 回调里释放)
+///
+/// 只存一份 `notify` 拷贝, 不在这里持有生命周期凭据: 凭据在完成回调里现构造,
+/// 这样"入口最后没受理"时不会提前发一次 done。
+struct JsCapRegState {
+    JsEngine*              engine = nullptr;
+    PluginxxOperatorNotify notify{};
+};
+
+/// 能力登记完成: 成功 → 记位 + 交 OK; 失败 → 停掉本次刚起的引擎 + 交 FAILED
+static void PLUGINXX_CALL
+    jsCapRegDone(void* ud, int32_t status, const PluginxxStringView* payload) {
+    std::unique_ptr<JsCapRegState> st(static_cast<JsCapRegState*>(ud));
+    if (!st || !st->engine) {
+        return;
+    }
+    auto  later  = agentxx::plugin::finishLater(&st->notify);
+    auto* engine = st->engine;
+    if (status == PLUGINXX_OPERATOR_OK) {
+        engine->setCapabilityRegistered(true);
+        engine->logAt(2, "agentxx_javascript_engine started (QuickJS interpreter.js)");
+        later.ok();
+        return;
+    }
+    std::string reason = "interpreter.js start: capability registration failed";
+    if (payload && payload->data && payload->size > 0) {
+        reason.assign(payload->data, static_cast<size_t>(payload->size));
+    }
+    engine->guardLog(reason.c_str());
+    // start 事务失败: 撤销本事务已启动的引擎线程 (destroy 随后会等待收尾完成,
+    // 不留线程/运行时残留)
+    engine->requestStop(nullptr);
+    later.failed(reason);
+}
+
 static void* PLUGINXX_CALL jsEngineStart(
     void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
@@ -9696,7 +9736,16 @@ static void* PLUGINXX_CALL jsEngineStart(
         }
         if (engine->capabilityRegistered()) {
             // 重复 start (幂等): 能力仍由本实例持有, 主程序尚未撤销
-        } else {
+            if (iface.log && iface.log->log) {
+                auto loadedSv = agentxx::plugin::PluginStringView::fromCstr(
+                    "agentxx_javascript_engine started (QuickJS interpreter.js)"
+                );
+                iface.log->log(host, 2, &loadedSv);
+            }
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+            return nullptr; ///< 同步完成 (没有要等的事)
+        }
+        {
             // 能力 "interpreter.js" (异步方法处理器三件套): JS 插件 (C++ 壳) 经
             // invoke_capability(_async) 把脚本代码交给本引擎执行 —— 插件间通信,
             // 主程序不参与; load/unload 均为异步完成 (JS 线程执行)
@@ -9715,36 +9764,34 @@ static void* PLUGINXX_CALL jsEngineStart(
             spec.run_start   = &jsCapStart;
             spec.cancel      = nullptr;
             spec.user_data   = engine;
-            // 表成员是异步契约: 本入口在 start 事务里跑 (主程序 IO 线程), 主程序内联完成
-            const auto regOp = capabilitySyncWait(
+            auto  state      = new (std::nothrow) JsCapRegState{engine, *notify};
+            if (state == nullptr) {
+                engine->requestStop(nullptr);
+                return setErr("interpreter.js start: out of memory");
+            }
+            auto* handle     = iface.capabilities->register_capability(
                 host,
-                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                    return iface.capabilities->register_capability(
+                nullptr,
+                &spec,
+                &jsCapRegDone,
+                state,
+                error_out
+            );
+            if (handle == nullptr) {
+                // 未受理 (参数错/实例正在关闭): 本次事务已启动的引擎要收回
+                delete state;
+                engine->requestStop(nullptr);
+                if (error_out != nullptr && error_out->data == nullptr) {
+                    *error_out = agentxx::plugin::PluginString::fromCstr(
                         host,
-                        nullptr,
-                        &spec,
-                        cb,
-                        ud,
-                        err
+                        "interpreter.js start: capability registration was not accepted"
                     );
                 }
-            );
-            if (!regOp.ok()) {
-                // start 事务失败: 撤销本事务已启动的引擎线程 (destroy 随后会
-                // 等待收尾完成, 不留线程/运行时残留)
-                engine->requestStop(nullptr);
-                return setErr("interpreter.js start: capability registration failed");
+                return nullptr;
             }
-            engine->setCapabilityRegistered(true);
+            // 已受理: 结论在 jsCapRegDone 里交回 (堆对象同时充当 provider 句柄)
+            return static_cast<void*>(state);
         }
-        if (iface.log && iface.log->log) {
-            auto loadedSv = agentxx::plugin::PluginStringView::fromCstr(
-                "agentxx_javascript_engine started (QuickJS interpreter.js)"
-            );
-            iface.log->log(host, 2, &loadedSv);
-        }
-        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-        return nullptr; ///< 同步完成
     } catch (...) {
         ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
             if (engine) {

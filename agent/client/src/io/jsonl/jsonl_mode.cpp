@@ -184,6 +184,11 @@ asio::awaitable<void> runJsonlStdioAsync(
     );
     // 停插件 + 刷盘 (与进程内模式一致; 不等待未完成的轮次, 取消语义维持现状)
     (void)co_await agent->shutdownAsync();
+    // 插件实例的 stop 事务是派发到插件执行线程上跑的, 必须等完再放掉容器
+    // (否则实例按 CloseFailed 收尾, 动态库与上下文白白保留到进程退出)
+    if (auto pluginHost = host->pluginHost()) {
+        co_await pluginHost->shutdownAsync();
+    }
     transport->close();
     signals->cancel();
 

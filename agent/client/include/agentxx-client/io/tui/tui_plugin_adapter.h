@@ -57,7 +57,7 @@ public:
             // 定时器: 主程序驱动 (asio steady_timer, 回调在 client io 线程);
             // 面板/Info 不可见时可暂停, 动画等级 Disabled 时拒绝注册
             std::string{pi::ClientTimer},
-            // 全局快捷键: 注册/注销/列表; 按键派发在 client io 线程执行插件回调
+            // 全局快捷键: 注册/注销/列表; 按键派发到插件的执行线程 (默认 = client io 线程)
             std::string{pi::ClientKeybind},
         };
     }

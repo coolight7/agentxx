@@ -15,6 +15,7 @@
 /// 8. 插件执行器停止后派发记为 unschedulable, 不会悬挂
 #include "agentxx-test/plugin/test_plugin_executor.h"
 
+#include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -45,6 +46,111 @@ int g_pe_failed = 0;
 
 #define XX_TEST_PASSED g_pe_passed
 #define XX_TEST_FAILED g_pe_failed
+
+/// 真实插件加载路径用例的辅助 (全局匿名命名空间: 与其它测试 TU 无符号冲突)
+namespace {
+
+/// 定位插件目录 (与 `test_agent_host.cpp` / `test_plugins.cpp` 同一策略)
+std::string findPluginDirForExecutor(std::string_view pluginName) {
+    namespace fs = std::filesystem;
+    const std::string     name{pluginName};
+    std::error_code       ec;
+    std::vector<fs::path> candidates;
+    if (auto exeDir = agentxx::test::executableDir()) {
+        candidates.push_back(*exeDir / "plugins" / name);
+    }
+    candidates.push_back(fs::current_path(ec) / "plugins" / name);
+    auto hasPluginFiles = [](const fs::path& dir) {
+        std::error_code                     ec2;
+        std::filesystem::directory_iterator it(dir, ec2);
+        std::filesystem::directory_iterator end;
+        for (; it != end; it.increment(ec2)) {
+            const auto ext = it->path().extension().string();
+            if (ext == ".dll" || ext == ".so" || ext == ".dylib") {
+                return true;
+            }
+        }
+        return fs::exists(dir / "plugin.yaml", ec2);
+    };
+    for (const auto& dir : candidates) {
+        if (fs::is_directory(dir, ec) && hasPluginFiles(dir)) {
+            return dir.string();
+        }
+    }
+    return {};
+}
+
+// =====================================================================
+// 9. 真实 AgentHost + 真实插件: start 事务在插件线程上跑通
+// =====================================================================
+/// `agentxx_javascript_engine` 的 start 事务里要登记一条能力行: 配了插件执行器时
+/// 它跑在插件线程上, 因此不能用同步表助手 (完成回调会投回这条线程), 必须写异步形态。
+/// 本用例走真实加载路径 (`AgentHost::loadPluginsAsync` → 插件线程 → start), 验证
+/// 能力行真的登记成功。
+asio::awaitable<void> test_real_host_js_engine_start() {
+    const std::string engineDir = findPluginDirForExecutor("agentxx_javascript_engine");
+    const std::string jsDir     = findPluginDirForExecutor("example_js");
+    if (engineDir.empty() || jsDir.empty()) {
+        TEST_INFO << "javascript engine / example_js plugin not found, skip real-host test"
+                  << std::endl;
+        co_return;
+    }
+
+    auto                               io = std::make_shared<asio::io_context>();
+    agentxx::agent::AgentHost::Config  hostCfg;
+    hostCfg.ioCtx = io;
+    hostCfg.pluginList.push_back(agentxx::agent::PluginConfig{.path = engineDir});
+    hostCfg.pluginList.push_back(agentxx::agent::PluginConfig{.path = jsDir});
+
+    std::atomic<bool> loaded{false};
+    bool              hasExecutor   = false;
+    bool              hasCapability = false;
+    bool              engineRunning = false;
+
+    asio::co_spawn(
+        *io,
+        [&]() -> asio::awaitable<void> {
+            auto work = asio::make_work_guard(*io);
+            auto host = agentxx::agent::AgentHost::create(hostCfg);
+            if (!host) {
+                loaded.store(true);
+                co_return;
+            }
+            co_await host->loadPluginsAsync();
+            auto mgr    = host->pluginHost();
+            hasExecutor = mgr && mgr->hasPluginExecutor();
+            if (mgr) {
+                hasCapability = mgr->hasCapability(
+                                    "plugin.agentxx_javascript_engine.interpreter.js"
+                                )
+                                == 1;
+                for (const auto& view : mgr->list()) {
+                    if (view.name == "agentxx_javascript_engine" && view.enabled
+                        && !view.capabilities.empty()) {
+                        engineRunning = true;
+                    }
+                }
+                co_await mgr->shutdownAsync();
+            }
+            host.reset();
+            loaded.store(true);
+            co_return;
+        }(),
+        asio::detached
+    );
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{90};
+    while (!loaded.load() && std::chrono::steady_clock::now() < deadline) {
+        io->run_for(std::chrono::milliseconds{10});
+        io->restart();
+    }
+    XX_TEST_EXPECT_TRUE(loaded.load());
+    XX_TEST_EXPECT_TRUE(hasExecutor);
+    XX_TEST_EXPECT_TRUE(hasCapability);
+    XX_TEST_EXPECT_TRUE(engineRunning);
+}
+
+} // namespace // 全局匿名命名空间
 
 namespace agentxx {
 namespace test {
@@ -537,6 +643,7 @@ asio::awaitable<TestResult> run_plugin_executor_tests() {
     co_await test_driver_ticket_on_plugin_thread();
     co_await test_broadcast_handler_on_plugin_thread();
     co_await test_executor_stopped();
+    co_await test_real_host_js_engine_start();
 
     result.passed = g_pe_passed;
     result.failed = g_pe_failed;

@@ -799,8 +799,23 @@ path/to/agentxx_test --log-level warn string_util regex
   `invoke_capability_blocking` / `call_tool_blocking` / kit 侧 `*Blocking`) 已删除;
   唯一的同步等待原语 `pluginxx::tableOpSyncWait(...)` 只给必须同步回答外部同步 API 的桥
   (JS 运行时插件的 QuickJS 回调) 与 kit 内部几个同步便捷函数, `boundaries` 规则 16 拦回退。
-  生命周期入口的注册事务写成协程: `finishLater(notify)` + `ctx.spawn(...)` +
-  `return later.provider()`; 挂载带挂载级状态时返回自己的状态对象 (unmount 收到它)
+  **在插件执行线程上它会拒绝等待** (完成回调要投回这条线程, 而它正阻塞在那里),
+  所以 `start` / `stop` 里的注册事务必须写成异步形态:
+  `finishLater(notify)` + `ctx.spawn(...)` + `return later.provider()` (agent 侧内置插件
+  都已是这种写法); 挂载带挂载级状态时返回自己的状态对象 (unmount 收到它)
+- **插件执行线程 (2026-11)**: 插件代码不再跑在主程序 io 线程上。`PluginRuntime::pluginExecutor`
+  (空 = 与改造前完全一致) 由主程序绑定: agent 侧 `AgentHost::loadPluginsAsync` 起一条
+  `pluginxx::PluginExecutorThread` (`agentxx-plugin`), client 侧由
+  `ClientPluginManager::startPluginThread()` 起 (`agentxx-client-plugin`, **默认不启动** ——
+  内置 client 插件注册事务还在用同步表助手)。所有"主程序 → 插件"的调用经
+  `pluginxx::dispatchToPlugin(inst, label, fn, opts)` 投到那条线程 (派发时取 `InstanceLease`,
+  拿不到就丢弃并计数; 同实例 FIFO, `stop` 也走同一条队列); 状态仍只在 io 线程。
+  io 线程永不阻塞等插件线程; 反向的过渡期等待 (`ioCallSync`) 允许。
+  `scheduler.is_io_thread` 名字未改, 语义变成"当前线程是不是该插件的执行线程"。
+  诊断: `pluginCallbackStats()` (次数/平均/最大/超预算/dropped/unschedulable,
+  预算 `plugin.callback_budget_ms` 默认 100)。测试模块 `plugin_executor`
+  (含真实 `AgentHost` 加载 `agentxx_javascript_engine` 的用例)。详见
+  [plugins.md](docs/zh-cn/design/plugins.md) §15.3
 - client 侧六张表同一套契约 (2026-11): `agentxx.client.ui` / `session` / `wire` / `self` /
   `timer` / `keybind` 全部 v2 异步, **没有保留的同步成员** (连 `is_visible` 也走异步);
   渲染回调与命令 `execute` 也是异步 (主程序给 `PluginxxOperatorNotify`, 回调可立即
@@ -808,6 +823,8 @@ path/to/agentxx_test --log-level warn string_util regex
   `clientTableHandle` 与展示面入口 (`clientRegisterStatusItem` / `clientUpdatePanel` /
   `clientRegisterCommand` / `clientUpdateToolDecor` / `clientOpenOverlay` / `clientBindAction` /
   `clientSendPluginData` …); 回答型回调收尾用 `notifyText` / `notifyError`。
+  **同步助手只在非插件执行线程上可用**: 内置 client 插件的注册事务还在用它们, 所以
+  client 插件线程**默认不启动** (`ClientPluginManager::startPluginThread()` 是可选开关)。
   **入参都是借用视图**: 主程序投递前必按值拷贝 (`copyView`), 否则跨线程执行时
   heap-use-after-free (ASan 实测)
 - 接口表数量: agent 侧 19 张 (9 张通用表 `<应用名>.*` 即 `agentxx.*`: broadcasts/capabilities/
@@ -845,7 +862,8 @@ path/to/agentxx_test --log-level warn string_util regex
   `netHttpServe` / `netInfo` (要结果), `netSubmit` 与包装 `netWsConnect` / `netWsSend` /
   `netWsClose` / `netHttpRespond` (提交完不等), asio 形态 `netFetch(ex, host, net, url, options, token)`;
   **不再提供阻塞等待**: 确实需要阻塞的插件自己写“回调 + 条件变量”小助手
-  (完成回调在主程序 io 线程派发), **不得在主程序 io 线程上等** (`scheduler.is_io_thread` 先问一句)。
+  (完成回调在插件执行线程派发), **不得在插件执行线程上等** (`scheduler.is_io_thread`
+  先问一句)。
   4 个网络插件已全部迁完 (`websearch` / `rag_search` / `text_selection_monitor` / `chatbot`),
   插件里不再出现 `utilxx/http_client.h` / `ws_client.h`; 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §22
@@ -961,7 +979,9 @@ path/to/agentxx_test --log-level warn string_util regex
 - 测试模块: client 侧 19 个 (含 `banner_art` `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
   同步组另有 `view_replica`(副本语义) `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
   `chatbot_task`,
-  插件挂载组另有 `plugin_host_mount` (一管理器 + 多 agent) `plugin_multi_mount` (示例插件全流程)
+  插件挂载组另有 `plugin_host_mount` (一管理器 + 多 agent) `plugin_multi_mount` (示例插件全流程);
+  插件执行线程组 `plugin_executor` (派发/FIFO/租约/预算/OpCore/生命周期/驱动票/广播处理器 +
+  真实 `AgentHost` 加载 `agentxx_javascript_engine`)
 - 命令执行环境与输出编码 (2026-10-18, 插件 `agentxx_execute_command`): 子进程固定下发
   `PYTHONIOENCODING=utf-8` / `PYTHONUTF8=1` / `JAVA_TOOL_OPTIONS` (stdout/stderr 编码 +
   `-Dfile.encoding=UTF-8`, JDK 17 及以前默认字符集也是 GBK) / `NO_COLOR` / `TERM=dumb` /

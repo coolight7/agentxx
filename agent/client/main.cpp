@@ -1192,6 +1192,11 @@ Options:
                 XX_LOGI("[agent_server] signal received, shutting down ({})...", ec.message());
                 server->stop();
                 if (*hostHolder) {
+                    // 插件实例的 stop 事务派发在插件执行线程上: 等完再放容器,
+                    // 否则实例按 CloseFailed 收尾并保留动态库/上下文
+                    if (auto pluginHost = (*hostHolder)->pluginHost()) {
+                        co_await pluginHost->shutdownAsync();
+                    }
                     // 释放主程序 (节点容器总线的 handler 只持 weak_ptr,
                     // 委派请求此后直接失败, 不会在关机阶段再拉起子代理)
                     hostHolder->reset();

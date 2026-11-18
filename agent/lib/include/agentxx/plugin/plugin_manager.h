@@ -156,6 +156,17 @@ private:
 /// 因此 `unloadAsync` / `shutdownAsync` / `shutdownAll` / `disable` / `enable` /
 /// `detachAll` / `detachInstanceRegistrations` / `clearPluginOwnedRegistrations` /
 /// `stopForDisable` / `startForEnable` / `hasPendingClose` 都是继承来的。
+///
+/// 线程模型 (与 client 侧 ClientPluginManager 同一套):
+/// - **io 线程**: 全部主程序状态 (实例表/挂载表/注册表/图/定时器) 与会话业务;
+/// - **插件执行线程** (一条, 由 AgentHost 起并经 `setPluginExecutor` 挂上): 插件代码
+///   只在这条线程上执行 —— 工具/图节点/能力行的 body、生命周期入口、通道事件、
+///   后台任务事件、广播订阅、`sleep`/`offload` 的完成回调都经
+///   `pluginxx::dispatchToPlugin` 投过去;
+/// - 两条线程只经投递交互: io 侧只受理、投递、推状态机, **从不阻塞等插件线程**;
+///   插件调表 = 投到 io 的异步操作, 完成回调再投回插件线程。
+/// - 没配插件执行器时 (`setPluginExecutor` 未调用, 测试与嵌入方常见) 行为与改造前
+///   完全一致: 插件代码就在 io 线程上跑。
 class PluginManager : public pluginxx::PluginHostLifecycle<PluginInstance>,
                       public std::enable_shared_from_this<PluginManager>,
                       public pluginxx::DomainServices {

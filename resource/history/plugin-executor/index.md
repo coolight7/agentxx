@@ -43,11 +43,11 @@
 
 ## 状态
 
-规划中（2026-11）。设计见 [plan.md](plan.md)，实施未开始。
+已实施（2026-11）。分阶段记录见 [work.md](work.md)，结论见下方“结论”。
 
 前置: [plugin-api-async](../plugin-api-async/index.md)。接口表没异步化之前，把插件代码
 搬到另一条线程只会让每次表调用变成一次"插件线程阻塞等 io"的往返，反而更慢；
-异步化完成后这一步才划算（过渡期可以先做生命周期那一批，见 plan.md 阶段 A）。
+异步化完成后这一步才划算。
 
 ## 关键决策
 
@@ -70,4 +70,38 @@
 
 ## 结论
 
-待实施后补充。
+**做了的**（agent 侧已默认生效；client 侧派发点已迁移、线程可选开启）:
+
+1. `PluginRuntime` 从"一个 executor"变成两个: `executor` (io, 主程序状态) +
+   `pluginExecutor` (插件代码)。`pluginExecutor` 为空 = 行为完全不变，测试与直接 new
+   管理器的嵌入方不受影响 —— 这一条让"先落派发机制、再开线程"成为可能。
+2. 唯一的派发入口 `pluginxx::dispatchToPlugin(inst, label, fn, opts)`: 投到插件执行器，
+   **取实例 lease 后**才进插件代码（拿不到就丢弃并计数）。因此"取消后不再进插件代码"
+   与"dlclose 安全"是同一件事，卸载不再需要"边跑边卸"的兜底。
+3. 派发覆盖全部"主程序 → 插件"方向: `OpCore` 的 start / cancel / 完成回调、生命周期
+   四个入口、驱动票、能力链、广播订阅、`sleep`/`offload` 完成回调、通道事件、
+   后台任务事件、client 的动作/定时器/快捷键/渲染器/命令。io 线程只受理、投递、推状态机。
+4. 可观测性: `PluginCallbackStats`（callbacks / 总耗时 / 最大 / 超预算 / dropped /
+   unschedulable，预算 `plugin.callback_budget_ms` 默认 100 ms），写操作全无等待。
+5. `scheduler.is_io_thread` 名字不变、语义变成"当前线程是不是该插件的执行线程"——
+   kit 的同步桥与 `netCall` 一类阻塞助手用它做安全闸，没有 ABI 换代。
+
+**偏差与预留**:
+
+1. **不做实例自带执行器**（plan §5.4）: JS 引擎保持 "io → 插件线程 → JS 线程" 三跳。它
+   自己的同步桥 (`tableOpSyncWait`) 必须跑在**不是**插件执行线程的线程上，声明自带执行器
+   反而会与同步桥互等。框架留了判定入口，留给将来"自带 asio 执行器且不用同步桥"的插件。
+2. **client 侧插件线程默认不启动**: 派发点已全部迁移，但内置 client 插件的 `start`/`stop`
+   还在用同步表助手登记注册（插件线程上会被拒绝: 完成回调要投回这条线程，而它正阻塞）。
+   开关是 `ClientPluginManager::startPluginThread()`，前置条件写在该函数注释与
+   plugins.md §15.3；把那些注册事务改成异步形态后才能默认打开。
+3. **不删 `is_io_thread` / `ioCallSync`**: 前者语义改为"插件执行线程判定"后仍是 kit 同步桥
+   的安全闸；后者在过渡期是"插件线程同步等 io"，卡住的只是插件自己，且只刺两处
+   （`call_tool` 与 `mount` 入口）。要彻底删掉得把这两个入口改成纯异步。
+
+**新增/改动的测试**: `plugin_executor` 模块（9 组: 派发线程与 FIFO / 租约与关闭后丢弃 /
+预算 / OpCore 三处 / 生命周期入口 / 驱动票 / 广播处理器 / 执行器停止 / 真实
+`AgentHost` 加载 `agentxx_javascript_engine`）。
+
+**连带修的两处**: JS 引擎 `start` 的能力登记改成异步形态（否则有插件线程时它自己加载不起来）;
+`plugin_runtime` 的 offload 用例改为按"派发项也持一份 lease"断言。

@@ -16,7 +16,8 @@ namespace agent {
 /// 线程约定:
 /// - 所有回调在 client io 线程同步调用 (端点 onPeerMessage / sendUserInput /
 ///   setConnState 等路径); 实现必须快速返回, 不得阻塞
-/// - 实现侧负责分发到订阅的插件回调 (同样在 io 线程)
+/// - 实现侧负责分发到订阅的插件回调: 经插件执行器派发 (默认在 client io 线程执行,
+///   调 `ClientPluginManager::startPluginThread()` 后在那条专用线程)
 /// - 端点销毁/停止前无需显式摘除: 端点是 sink 的持有方 (shared_ptr),
 ///   生命周期一致
 ///

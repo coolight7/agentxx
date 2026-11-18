@@ -41,7 +41,8 @@
 /// ```
 /// - 返回 `NULL` = **未受理** (参数错 / 作用域失效 / 实例正在关闭), 原因写进
 ///   `error_out`, 且 `cb` 不会被调用; 写错参数仍然立刻可见, 不用等一次往返;
-/// - 返回非 NULL = 已受理, 结果经 `cb` **恰好一次**交回, 回调在主程序 io 线程发出;
+/// - 返回非 NULL = 已受理, 结果经 `cb` **恰好一次**交回, 回调在**插件自己的执行线程**
+///   发出 (主程序起了独立插件线程时是那条线程, 否则是主程序 io 线程);
 ///   `payload` 就是旧版出参 `out` 的内容 (JSON / 纯文本 / `1` 与 `0` 等标记), 语义不变;
 /// - `status` 取 `PLUGINXX_OPERATOR_OK` / `PLUGINXX_OPERATOR_FAILED` /
 ///   `PLUGINXX_OPERATOR_CANCELED`; `OK` 时 `payload` 是结果, 其它值时可以是原因;
@@ -54,11 +55,13 @@
 ///
 /// 少数成员保持同步, 只因为它们能在调用方线程当场算完、根本不跨执行体:
 /// `agentxx.agent.session.is_canceled` (本地原子标记) 与
-/// `pluginxx.scheduler.is_io_thread` (线程本地判定)。
+/// `pluginxx.scheduler.is_io_thread` (线程本地判定; 有独立插件线程时回答的是
+/// "当前线程是不是插件自己的执行线程")。
 ///
 /// C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
 /// `co_await tableOp(ctx, ...)` / `tableOpCallback(ctx, ..., done)` /
-/// `tableOpSyncWait(...)` (只给必须同步回答外部同步 API 的桥用, 且仅限非 io 线程)。
+/// `tableOpSyncWait(...)` (只给必须同步回答外部同步 API 的桥用; 在插件执行线程上
+/// 它会拒绝等待 —— 完成回调要投回那条线程, 而它正阻塞在那里)。
 #ifndef AGENTXX_PLUGIN_API_H
 #define AGENTXX_PLUGIN_API_H
 

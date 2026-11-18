@@ -5,8 +5,10 @@
 /// - UI 注册表 (uiRegistry_) 例外: io 线程写, UI 线程经快照读 (mutex + COW shared_ptr)
 /// - dlopen/entry 卸载到内部 thread_pool; entry 的注册动作经 vtable 异步表操作
 ///   投递回 io 线程串行执行 (插件无感)
-/// - 插件回调 (事件 handler / 命令 execute) 在 io 线程调用, 结果可立即交回或稍后交回
-/// - UI 线程从不直接调用插件代码: 命令触发经 postCommandInvocation 投递
+/// - 插件回调 (动作/定时器/快捷键/渲染器/命令/广播) 经 `dispatchToPlugin` 投到**插件
+///   执行线程**: 默认就是 client io 线程 (未调 `startPluginThread` 时), 起线程后是那条
+///   专用线程; 结果可立即交回或稍后交回
+/// - UI 线程从不直接调用插件代码: 命令/点击经 postCommandInvocation / 派发投递
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "pluginxx/host/table_op.h"
@@ -343,6 +345,23 @@ ClientPluginManager::ClientPluginManager(asio::any_io_executor ex) :
     setDomainServices(this);
     // 客户端频道: 插件在 start 里就会订阅, 因此管理器构造时就声明好 (幂等)
     declareClientChannels();
+    // 插件执行线程**默认不启动**: 见 [startPluginThread] 的说明 (client 插件还在用
+    // 同步表助手做注册, 在插件线程上会被防死锁检查拒掉)。
+}
+
+bool ClientPluginManager::startPluginThread() {
+    if (hasPluginExecutor()) {
+        return true;
+    }
+    if (!pluginThread_.start("agentxx-client-plugin")) {
+        XX_LOGW(
+            "[client_plugin] plugin executor thread could not start; plugin callbacks run on the "
+            "client IO thread"
+        );
+        return false;
+    }
+    setPluginExecutor(pluginThread_.executor());
+    return true;
 }
 
 ClientPluginManager::~ClientPluginManager() {
@@ -1290,55 +1309,84 @@ void ClientPluginManager::performToolRender(
         std::string{"client.ui.tool_render:"} + toolName,
         std::move(finish)
     );
-    auto           notify = slot->notify();
-    PluginxxString err{nullptr, 0};
-    int32_t        rc = AGENTXX_RESULT_ERR_INTERNAL;
-    const auto     cb = wantCollapsed ? hit->collapsedFn : hit->expandedFn;
+    auto       notify = slot->notify();
+    ReplySlot* raw    = slot.release();
+    const auto cb     = wantCollapsed ? hit->collapsedFn : hit->expandedFn;
 
     if (hit->builtin) {
         // 主程序内置渲染器: 进程生命周期函数 (主程序自身实现), 无插件实例/租约,
         // 不经插件禁用/卸载路径, 直接在 io 线程执行
+        PluginxxString err{nullptr, 0};
+        int32_t        rc = AGENTXX_RESULT_ERR_INTERNAL;
         try {
             rc = cb(hit->userData, &input, &notify, &err);
         } catch (...) {
             rc = AGENTXX_RESULT_ERR_INTERNAL;
         }
-    } else {
-        // 租约仍有效: 回调期间实例由 guard 保活 (禁止卸载 dlclose)
-        PluginInstanceBase::InflightGuard guard(owner);
-        if (!guard || !ownerReady()) {
-            auto* raw = slot.release();
+        if (err.data) {
+            XX_LOGW(
+                "[client_plugin] tool renderer `{}` not accepted: {}",
+                toolName,
+                std::string{err.data, static_cast<size_t>(err.size)}
+            );
+            if (owner) {
+                agentxx::plugin::PluginString::free(owner->hostView(), &err);
+            }
+        }
+        if (rc != 0) {
             ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
-            return;
         }
-        try {
-            rc = cb(hit->userData, &input, &notify, &err);
-        } catch (const std::exception& e) {
-            XX_LOGW("[client_plugin] tool renderer `{}` threw: {}", toolName, e.what());
-        } catch (...) {
-            XX_LOGW("[client_plugin] tool renderer `{}` threw", toolName);
-        }
-    }
-
-    if (err.data) {
-        XX_LOGW(
-            "[client_plugin] tool renderer `{}` not accepted: {}",
-            toolName,
-            std::string{err.data, static_cast<size_t>(err.size)}
-        );
-        if (owner) {
-            agentxx::plugin::PluginString::free(owner->hostView(), &err);
-        }
-    }
-    if (rc != 0) {
-        // 未受理: 按“没有自定义内容”收尾 (写一条未命中条目 + 清掉“进行中”标记,
-        // 避免每帧重请求)
-        auto* raw = slot.release();
-        ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
         return;
     }
-    // 已受理: 快路径下对象已在回调里释放; 未完成时由回调自行释放
-    slot.release();
+
+    // 插件渲染器: 回调投到插件执行器 (渲染回调是异步契约, 内容经 notify 交回)
+    //
+    // `hit` 指向当前注册表快照, 不能跨投递持有 (快照可能被替换释放):
+    // 只捕回调与它的 userData。
+    void*      renderUd = hit->userData;
+    const bool queued   = pluginxx::dispatchToPlugin(
+        owner,
+        "client tool render " + toolName,
+        [renderUd, cb, req, notify, owner, raw, toolCallId, toolName]() mutable {
+            AgentxxToolRenderInput view{};
+            view.struct_size  = sizeof(AgentxxToolRenderInput);
+            view.version      = 1;
+            view.tool_call_id = agentxx::plugin::PluginStringView::from(toolCallId);
+            view.tool_name    = agentxx::plugin::PluginStringView::from(toolName);
+            view.args_json    = agentxx::plugin::PluginStringView::from(req.argsJson);
+            view.result_text  = agentxx::plugin::PluginStringView::from(req.resultText);
+            view.is_finished  = req.isFinished ? 1 : 0;
+            view.is_error     = req.isError ? 1 : 0;
+            view.max_width    = req.maxWidth;
+            PluginxxString err{nullptr, 0};
+            int32_t        rc = AGENTXX_RESULT_ERR_INTERNAL;
+            try {
+                rc = cb(renderUd, &view, &notify, &err);
+            } catch (const std::exception& e) {
+                XX_LOGW("[client_plugin] tool renderer `{}` threw: {}", toolName, e.what());
+            } catch (...) {
+                XX_LOGW("[client_plugin] tool renderer `{}` threw", toolName);
+            }
+            if (err.data) {
+                XX_LOGW(
+                    "[client_plugin] tool renderer `{}` not accepted: {}",
+                    toolName,
+                    std::string{err.data, static_cast<size_t>(err.size)}
+                );
+                if (auto hostView = owner->hostView(); hostView != nullptr) {
+                    agentxx::plugin::PluginString::free(hostView, &err);
+                }
+            }
+            if (rc != 0) {
+                // 未受理: 按“没有自定义内容”收尾
+                ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
+            }
+        },
+        pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
+    );
+    if (!queued) {
+        ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
+    }
 }
 
 bool ClientPluginManager::hasCommand(std::string_view name) const {
@@ -1393,39 +1441,48 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
         std::string{"client.ui.command:"} + name,
         std::move(finish)
     );
-    auto           notify = slot->notify();
-    auto           owner  = inst->self.lock();
-    PluginxxString err{nullptr, 0};
-    int32_t        rc = AGENTXX_RESULT_ERR_INTERNAL;
-    if (owner) {
-        // 回调期间实例由 guard 保活 (禁止卸载 dlclose)
-        PluginInstanceBase::InflightGuard guard(owner);
-        auto                              argsSv = agentxx::plugin::PluginStringView::from(argsJson);
-        try {
-            rc = cmd->execute(cmd->ud, &argsSv, &notify, &err);
-        } catch (const std::exception& e) {
-            XX_LOGW("[client_plugin] command `{}` execute threw: {}", name, e.what());
-        } catch (...) {
-            XX_LOGW("[client_plugin] command `{}` execute threw unknown exception", name);
-        }
-    }
-    if (err.data) {
-        XX_LOGW(
-            "[client_plugin] command `{}` not accepted: {}",
-            name,
-            std::string{err.data, static_cast<size_t>(err.size)}
-        );
-        if (auto hostView = owner ? owner->hostView() : nullptr; hostView != nullptr) {
-            agentxx::plugin::PluginString::free(hostView, &err);
-        }
-    }
-    if (rc != 0 || !owner) {
-        // 未受理: 本次命令什么也不做 (旧实现的“输出留空”)
-        auto* raw = slot.release();
+    auto                notify = slot->notify();
+    auto                owner  = inst->self.lock();
+    ReplySlot*          raw    = slot.release();
+    if (!owner) {
         ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
         return;
     }
-    slot.release();
+    // 插件回调只能在它的执行器上跑: 受理结论 (rc/err) 也在那里得出
+    const bool queued = pluginxx::dispatchToPlugin(
+        owner,
+        "client command " + name,
+        [cmd, name, argsJson, notify, owner, raw]() mutable {
+            auto           argsSv = agentxx::plugin::PluginStringView::from(argsJson);
+            PluginxxString err{nullptr, 0};
+            int32_t        rc = AGENTXX_RESULT_ERR_INTERNAL;
+            try {
+                rc = cmd->execute(cmd->ud, &argsSv, &notify, &err);
+            } catch (const std::exception& e) {
+                XX_LOGW("[client_plugin] command `{}` execute threw: {}", name, e.what());
+            } catch (...) {
+                XX_LOGW("[client_plugin] command `{}` execute threw unknown exception", name);
+            }
+            if (err.data) {
+                XX_LOGW(
+                    "[client_plugin] command `{}` not accepted: {}",
+                    name,
+                    std::string{err.data, static_cast<size_t>(err.size)}
+                );
+                if (auto hostView = owner->hostView(); hostView != nullptr) {
+                    agentxx::plugin::PluginString::free(hostView, &err);
+                }
+            }
+            if (rc != 0) {
+                // 未受理: 本次命令什么也不做 (旧实现的“输出留空”)
+                ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
+            }
+        },
+        pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
+    );
+    if (!queued) {
+        ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
+    }
 }
 
 void ClientPluginManager::dispatchCommandAction(const std::string& actionJson) {
@@ -3824,16 +3881,16 @@ void fireTimerTick(
         ++timer->dropped;
     }
     if (usable && !hidden && !stale) {
-        // 回调期间实例由 guard 保活 (禁止卸载 dlclose)
-        PluginInstanceBase::InflightGuard guard(inst);
-        if (guard) {
-            try {
-                timer->cb(timer->ud);
-            } catch (const std::exception& e) {
-                XX_LOGW("[client_plugin] timer callback threw: {}", e.what());
-            } catch (...) {
-                XX_LOGW("[client_plugin] timer callback threw unknown exception");
-            }
+        // 插件回调在它的执行器上跑 (周期/次数记账仍在本线程, 与回调耗时无关)
+        if (!pluginxx::dispatchToPlugin(
+                inst,
+                "client timer",
+                [cb = timer->cb, ud = timer->ud] {
+                    cb(ud);
+                },
+                pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
+            )) {
+            XX_LOGD("[client_plugin] timer callback dropped (instance closing)");
         }
         // 次数递减: 一次性定时器触发后结束, 周期定时器按 repeat 上限限制
         if (timer->repeatMode) {
@@ -4152,16 +4209,21 @@ void ClientPluginManager::postKeybindInvocation(std::string keys) {
             XX_LOGD("[client_plugin] keybind `{}` not dispatched (unregistered or disabled)", keys);
             return;
         }
-        PluginInstanceBase::InflightGuard guard(inst);
-        if (!guard) {
+        if (!found || !hit.handler || !inst || !inst->enabled) {
+            XX_LOGD("[client_plugin] keybind `{}` not dispatched (unregistered or disabled)", keys);
             return;
         }
-        try {
-            hit.handler(hit.ud);
-        } catch (const std::exception& e) {
-            XX_LOGW("[client_plugin] keybind `{}` handler threw: {}", keys, e.what());
-        } catch (...) {
-            XX_LOGW("[client_plugin] keybind `{}` handler threw unknown exception", keys);
+        auto instKeep = inst;
+        // 插件回调在它的执行器上跑 (按键事件本身已在这条 io 线程上完成查表与代次校验)
+        if (!pluginxx::dispatchToPlugin(
+                instKeep,
+                "client keybind " + keys,
+                [handler = hit.handler, ud = hit.ud] {
+                    handler(ud);
+                },
+                pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
+            )) {
+            XX_LOGD("[client_plugin] keybind `{}` not dispatched (instance closing)", keys);
         }
     });
 }
@@ -4563,23 +4625,30 @@ void ClientPluginManager::dispatchAction(
                 return;
             }
         }
-        PluginInstanceBase::InflightGuard guard(inst->self.lock());
-        AgentxxUiActionContext            ctx{};
-        ctx.struct_size = sizeof(AgentxxUiActionContext);
-        ctx.version     = 1;
-        ctx.owner_id    = agentxx::plugin::PluginStringView::from(ownerId.data(), ownerId.size());
-        ctx.action_id   = agentxx::plugin::PluginStringView::from(actionId.data(), actionId.size());
-        ctx.action_args = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
         auto cb         = hit->cb;
         auto ud         = hit->ud;
-        // C ABI 回调异常保护: 单个插件违约不得打断 io 事件循环
-        try {
-            cb(&ctx, ud);
-        } catch (const std::exception& e) {
-            XX_LOGW("[client_plugin] `{}` action `{}` threw: {}", plugin, actionId, e.what());
-        } catch (...) {
-            XX_LOGW("[client_plugin] `{}` action `{}` threw unknown exception", plugin, actionId);
+        auto instKeep   = inst->self.lock();
+        if (!instKeep) {
+            return;
         }
+        // 插件回调只能在它的执行器上跑: 视图数据拷进闭包, 异常由派发器记日志
+        pluginxx::dispatchToPlugin(
+            instKeep,
+            "client action " + actionId,
+            [cb, ud, ownerId, actionId, argsJson]() {
+                AgentxxUiActionContext ctx{};
+                ctx.struct_size = sizeof(AgentxxUiActionContext);
+                ctx.version     = 1;
+                ctx.owner_id
+                    = agentxx::plugin::PluginStringView::from(ownerId.data(), ownerId.size());
+                ctx.action_id
+                    = agentxx::plugin::PluginStringView::from(actionId.data(), actionId.size());
+                ctx.action_args
+                    = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+                cb(&ctx, ud);
+            },
+            pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
+        );
     });
 }
 
@@ -4640,7 +4709,8 @@ void ClientPluginManager::reportRegionSize(const std::string& id, int width, int
         entry.width  = width;
         entry.height = height;
     }
-    // 事件投递到 io 线程 (插件回调的线程约定: 一律在 client io 线程执行)
+    // 区域尺寸快照先投回 io 线程 (注册表状态只在 io 线程上读写), 由 io 侧的发布路径
+    // 再派发到插件执行线程通知订阅者
     auto executor = ioExecutor();
     if (!executor) {
         return;

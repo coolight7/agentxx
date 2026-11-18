@@ -400,6 +400,22 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     pluginsAgent["plugins"] = std::move(mountPlugins);
     root["plugins_agent"]   = std::move(pluginsAgent);
 
+    // `plugin_executor`: 插件执行线程是否启用与回调统计 (排障用: "谁在拖慢插件线程")
+    if (ctx.pluginManager) {
+        const auto& stats
+            = ctx.pluginManager->pluginCallbackStats();
+        utilxx_base::Json executor = utilxx_base::Json::object();
+        executor["enabled"]        = ctx.pluginManager->hasPluginExecutor();
+        executor["budget_ms"]      = stats.budgetMs.load(std::memory_order_relaxed);
+        executor["callbacks"]      = stats.callbacks.load(std::memory_order_relaxed);
+        executor["total_micros"]   = stats.totalMicros.load(std::memory_order_relaxed);
+        executor["max_micros"]     = stats.maxMicros.load(std::memory_order_relaxed);
+        executor["over_budget"]    = stats.overBudget.load(std::memory_order_relaxed);
+        executor["dropped"]        = stats.dropped.load(std::memory_order_relaxed);
+        executor["unschedulable"]  = stats.unschedulable.load(std::memory_order_relaxed);
+        root["plugin_executor"]    = std::move(executor);
+    }
+
     // ---- 执行图 ----
     utilxx_base::Json graph = utilxx_base::Json::object();
     const auto&       def   = ctx.graphDefinitionJson;
@@ -708,6 +724,24 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
                 p.value("capability_count", 0)
             ));
         }
+    }
+    // 插件执行线程: 开关与回调统计 (预算/超预算/dropped 一眼看出谁在拖慢)
+    if (snapshot.contains("plugin_executor") && snapshot["plugin_executor"].is_object()) {
+        const auto& ex = snapshot["plugin_executor"];
+        const auto  calls = ex.value("callbacks", uint64_t{0});
+        const auto  total = ex.value("total_micros", uint64_t{0});
+        add(fmt::format(
+            "plugin_executor: {} callbacks={} avg={}us max={}us over_budget={} (budget {}ms) "
+            "dropped={} unschedulable={}",
+            ex.value("enabled", false) ? "plugin-thread" : "io-thread",
+            calls,
+            calls > 0 ? total / calls : 0,
+            ex.value("max_micros", uint64_t{0}),
+            ex.value("over_budget", uint64_t{0}),
+            ex.value("budget_ms", 0),
+            ex.value("dropped", uint64_t{0}),
+            ex.value("unschedulable", uint64_t{0})
+        ));
     }
     // 本 agent 角度: 本挂载装了哪些插件、各自注册了多少东西
     if (snapshot.contains("plugins_agent") && snapshot["plugins_agent"].is_object()) {

@@ -835,7 +835,7 @@ void TUIClientAgentIO::start() {
                 return false;
             }
             // 插件全局快捷键 (agentxx.client.keybind): 全局优先级最高, 有注册时
-            // 拦截按键并投递到 client io 线程执行插件回调。无修饰键的可打印字符
+            // 拦截按键并投递到插件执行线程 (默认 = client io 线程) 执行回调。无修饰键的可打印字符
             // 不参与匹配 (见 tui_keybind.h), 因此不影响输入框打字。
             if (pluginManager_) {
                 const std::string keys = agentxx::client::keybindOfEvent(event);

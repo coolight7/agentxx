@@ -222,6 +222,9 @@ private:
     std::shared_ptr<SessionServerAgentIO> serverIO_;
     std::shared_ptr<AgentHost>            host_;
 
+    /// 容器是本次运行自建的 (调用方没传 `cfg.host`) —— 收尾时由本对象等插件停完
+    bool ownsHost_ = false;
+
     /// 输入请求序号 (自动分配; 服务端只在 requestId > 0 时回受理回执)
     std::atomic<uint64_t> inputRequestId_{0};
 

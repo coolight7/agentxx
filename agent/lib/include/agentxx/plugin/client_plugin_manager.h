@@ -13,6 +13,7 @@
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
+#include "pluginxx/runtime/plugin_thread.h"
 #include "utilxx_base/json.h"
 #include <atomic>
 #include <chrono>
@@ -429,7 +430,8 @@ std::string_view toolDisplayNameFor(
 /// [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
 /// 的 `AgentxxTimer` 不透明类型对应)
 ///
-/// - 计时器挂在 client io 执行器上 (asio::steady_timer), 回调在 io 线程执行
+/// - 计时器挂在 client io 执行器上 (asio::steady_timer); 到点后回调派发到插件执行线程
+///   (默认就是这条 io 线程, 见 [startPluginThread])
 /// - `alive` 为取消标记: 取消后即使有尚未返回的等待也不会再回调插件
 /// - `repeat` 为剩余触发次数 (0 = 一次性), 周期定时器每次触发后递减
 /// - `armedAt` 用于**同帧合并**: io 线程繁忙/事件积压导致多个周期同时到期时,
@@ -586,6 +588,22 @@ public:
     /// 会话切换时经 ClientEventSink::onSessionSwitched 自动更新)
     void setSessionId(std::string sessionId);
 
+    /// 启动 client 插件线程 (须在加载任何插件之前调用; 可重复调用)
+    ///
+    /// 启用后所有"主程序 → 插件"的回调 (UI 动作 / 定时器 / 快捷键 / 工具渲染 /
+    /// 命令 / 广播订阅) 都在这条线程上执行, client io 线程只做受理与投递。
+    ///
+    /// **默认不开**: client 插件的 `start` / `stop` 注册事务里还在用同步表助手
+    /// (`clientTableOp` / `clientTableText` / `clientTableHandle`) —— 表操作在主程序
+    /// io 线程执行、完成回调投回插件执行器, 而同步等待会把插件线程占住, 等不到
+    /// 自己的完成回调 (现象是 `start` 报 registration transaction failed)。
+    /// 把这些注册事务改成异步形态 (`finishLater(notify)` + 完成回调里 `notify`) 之后
+    /// 才能默认打开。
+    ///
+    /// - `return` 线程已就绪 (含原本就在跑) 返回 true; 起不来记警告, 插件代码仍在
+    ///   client io 线程执行, 不影响功能
+    bool startPluginThread();
+
     // ==================== 生命周期 (须 client io 线程) ====================
 
     /// 加载 client 插件动态库 (io 线程协程; dlopen 卸载到内部线程池执行)
@@ -648,14 +666,15 @@ public:
     std::shared_ptr<const ClientUiRegistry> uiRegistrySnapshot() const;
 
     /// 工具语义渲染缓存 (任意线程可读; 内部短锁)。UI 线程只读其中的主程序拷贝,
-    /// 自定义 renderer 的插件回调一律在 client io 线程执行。
+    /// 自定义 renderer 的插件回调在插件执行线程上跑 (默认 = client io 线程,
+    /// 见 [startPluginThread])。
     std::shared_ptr<ClientToolRenderCache> toolRenderCache() const {
         return toolRenderCache_;
     }
 
     /// 取工具语义渲染结果 (UI 线程):
     /// - 命中缓存 (同输入特征) → 返回主程序拥有的结果, 不进入插件代码
-    /// - 未命中 → 拷贝输入并投递到 client io 线程执行自定义 renderer, 本次返回
+    /// - 未命中 → 拷贝输入并派发到插件执行线程执行自定义 renderer, 本次返回
     ///   nullptr (调用方用通用回退); 结果到达后经 uiAdapter->onToolRenderUpdated
     ///   通知 UI 重建该消息块
     std::shared_ptr<const ClientToolRenderEntry>
@@ -940,8 +959,9 @@ public:
 
     // ==================== 定时器 (`agentxx.client.timer`, io 线程) ====================
     //
-    // 插件侧定时器只能经主程序驱动: 定时器挂在 client io 执行器上, 回调在 io 线程
-    // 执行 (插件代码不在 UI 线程运行这一约束因此不变)。门控: 主程序动画等级为
+    // 插件侧定时器只能经主程序驱动: 定时器挂在 client io 执行器上, 到点后回调经
+    // `dispatchToPlugin` 投到插件执行线程 (默认也是这条 io 线程; 插件代码永远
+    // 不在 UI 线程运行)。门控: 主程序动画等级为
     // Disabled 时拒绝注册; 关联区域不可见的定时器可声明 pause_when_hidden 跳过回调。
 
     /// 注册定时器 (io 线程); 返回主程序句柄 (nullptr = 校验失败/动画关闭/超上限)
@@ -1099,6 +1119,14 @@ protected:
 private:
 
     friend class ClientPluginInstance;
+
+    /// 插件执行线程 (所有 client 插件回调在这条线上串行执行)
+    ///
+    /// - **声明在最前**: 成员逆序析构, 它的 stop() 最后跑 —— 实例表/注册表/线程池
+    ///   都已拆完, 线程才停;
+    /// - 从插件线程自身销毁管理器时 `stop()` 会 detach 而不 join (见
+    ///   [pluginxx::PluginExecutorThread::stop])。
+    pluginxx::PluginExecutorThread pluginThread_;
 
     /// 发一条客户端频道值 (io 线程; 幂等声明 + 发布, 失败只记日志)
     void publishClientChannel(std::string_view channel, const std::string& payloadJson);
