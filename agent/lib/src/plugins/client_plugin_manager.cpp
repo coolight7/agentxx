@@ -6,8 +6,7 @@
 /// - dlopen/entry 卸载到内部 thread_pool; entry 的注册动作经 vtable 异步表操作
 ///   投递回 io 线程串行执行 (插件无感)
 /// - 插件回调 (动作/定时器/快捷键/渲染器/命令/广播) 经 `dispatchToPlugin` 投到**插件
-///   执行线程**: 默认就是 client io 线程 (未调 `startPluginThread` 时), 起线程后是那条
-///   专用线程; 结果可立即交回或稍后交回
+///   执行线程** (`agentxx-client-plugin`, 首次加载插件时自动起); 结果可立即交回或稍后交回
 /// - UI 线程从不直接调用插件代码: 命令/点击经 postCommandInvocation / 派发投递
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -345,23 +344,22 @@ ClientPluginManager::ClientPluginManager(asio::any_io_executor ex) :
     setDomainServices(this);
     // 客户端频道: 插件在 start 里就会订阅, 因此管理器构造时就声明好 (幂等)
     declareClientChannels();
-    // 插件执行线程**默认不启动**: 见 [startPluginThread] 的说明 (client 插件还在用
-    // 同步表助手做注册, 在插件线程上会被防死锁检查拒掉)。
+    // 插件执行线程在首次加载插件时由 [ensurePluginThread] 起 (没有 client 插件时不建线程,
+    // 与 agent 侧同一取舍)。
 }
 
-bool ClientPluginManager::startPluginThread() {
+void ClientPluginManager::ensurePluginThread() {
     if (hasPluginExecutor()) {
-        return true;
+        return;
     }
     if (!pluginThread_.start("agentxx-client-plugin")) {
         XX_LOGW(
             "[client_plugin] plugin executor thread could not start; plugin callbacks run on the "
             "client IO thread"
         );
-        return false;
+        return;
     }
     setPluginExecutor(pluginThread_.executor());
-    return true;
 }
 
 ClientPluginManager::~ClientPluginManager() {
@@ -444,6 +442,8 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     const agentxx::agent::PluginConfig* cfg,
     bool                                allowMissingEntry
 ) {
+    // 插件执行线程: 必须在任何 start/回调之前就绪 (幂等; 没有 client 插件时不建线程)
+    ensurePluginThread();
     // 内置简写: builtin://<name> 在 client 侧暂无内置 registry, 按目录探测
     // 回退 (若插件以目录形式存在于默认 plugins/<name> 则按目录加载,
     // 否则视为仅 agent 侧内置, 静默跳过)
@@ -1449,15 +1449,20 @@ void ClientPluginManager::invokeCommand(const std::string& name, const std::stri
         return;
     }
     // 插件回调只能在它的执行器上跑: 受理结论 (rc/err) 也在那里得出
-    const bool queued = pluginxx::dispatchToPlugin(
+    //
+    // `cmd` 指向当前注册表快照, 不能跨投递持有 (快照可能被替换释放): 只捕回调与它的
+    // userData (与 [renderTool] 同一规则)。
+    AgentxxClientCommandExecuteFn execute = cmd->execute;
+    void*                          cmdUd   = cmd->ud;
+    const bool                     queued  = pluginxx::dispatchToPlugin(
         owner,
         "client command " + name,
-        [cmd, name, argsJson, notify, owner, raw]() mutable {
+        [execute, cmdUd, name, argsJson, notify, owner, raw]() mutable {
             auto           argsSv = agentxx::plugin::PluginStringView::from(argsJson);
             PluginxxString err{nullptr, 0};
             int32_t        rc = AGENTXX_RESULT_ERR_INTERNAL;
             try {
-                rc = cmd->execute(cmd->ud, &argsSv, &notify, &err);
+                rc = execute(cmdUd, &argsSv, &notify, &err);
             } catch (const std::exception& e) {
                 XX_LOGW("[client_plugin] command `{}` execute threw: {}", name, e.what());
             } catch (...) {
@@ -1904,11 +1909,6 @@ static std::string clientStatusResult(int rc, std::string_view what) {
 /// 那时原内存已经失效 —— 捕获前必须先按值拷一份。
 static std::string copyView(const PluginxxStringView& sv) {
     return sv.data ? std::string{sv.data, static_cast<size_t>(sv.size)} : std::string{};
-}
-
-static std::string copyView(const PluginxxStringView* sv) {
-    return (sv && sv->data) ? std::string{sv->data, static_cast<size_t>(sv->size)}
-                            : std::string{};
 }
 
 /// "agentxx.client.ui" 展示接口表访问器 (定义于下方接口表加载区, 需在
@@ -3876,20 +3876,33 @@ void fireTimerTick(
                           )
                                   .count()
                               >= 2 * static_cast<int64_t>(timer->intervalMs);
+    // 回调还在插件执行线程上跑 (耗时超过 interval): 本次到期直接跳过, 不排队追补 ——
+    // 否则回调一返回就会连续补跑积压的那几次 (插件被自己的回调打满)
+    const bool busy = timer->inFlight->load(std::memory_order_acquire);
     const bool usable = inst->enabled && inst->lifetime && inst->lifetime->acceptsOperations();
-    if (stale) {
+    if (stale || busy) {
         ++timer->dropped;
     }
-    if (usable && !hidden && !stale) {
+    if (usable && !hidden && !stale && !busy) {
         // 插件回调在它的执行器上跑 (周期/次数记账仍在本线程, 与回调耗时无关)
+        auto inFlight = timer->inFlight;
+        inFlight->store(true, std::memory_order_release);
         if (!pluginxx::dispatchToPlugin(
                 inst,
                 "client timer",
-                [cb = timer->cb, ud = timer->ud] {
+                [cb = timer->cb, ud = timer->ud, inFlight] {
+                    // 不论回调怎么结束都要放开标志, 否则这个定时器会一直停在"跳过"
+                    struct Clear {
+                        std::shared_ptr<std::atomic<bool>> flag;
+                        ~Clear() {
+                            flag->store(false, std::memory_order_release);
+                        }
+                    } clear{inFlight};
                     cb(ud);
                 },
                 pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
             )) {
+            inFlight->store(false, std::memory_order_release);
             XX_LOGD("[client_plugin] timer callback dropped (instance closing)");
         }
         // 次数递减: 一次性定时器触发后结束, 周期定时器按 repeat 上限限制
@@ -4204,10 +4217,6 @@ void ClientPluginManager::postKeybindInvocation(std::string keys) {
                     break;
                 }
             }
-        }
-        if (!found || !hit.handler || !inst || !inst->enabled) {
-            XX_LOGD("[client_plugin] keybind `{}` not dispatched (unregistered or disabled)", keys);
-            return;
         }
         if (!found || !hit.handler || !inst || !inst->enabled) {
             XX_LOGD("[client_plugin] keybind `{}` not dispatched (unregistered or disabled)", keys);

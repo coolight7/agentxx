@@ -211,6 +211,8 @@ inline bool declarePluginBroadcast(
                              + (anyonePublish ? "anyone" : "owner") + "\"}";
     const auto declSv = PluginStringView::from(decl.data(), decl.size());
     const auto caps   = broadcastCallIfaces(host);
+    // 频道表的工作体只改注册表 (发布时把处理器投给别人, 自己不等待), 不会派回调用方的
+    // 执行线程, 因此插件执行线程上同步等是安全的 (见 pluginxx/api/sync_bridge.h)
     return pluginxx::tableOpSyncWait(
                host,
                caps.first,
@@ -218,7 +220,8 @@ inline bool declarePluginBroadcast(
                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                    return broadcasts->declare_broadcast(host, &declSv, cb, ud, err);
                },
-               0
+               0,
+               pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
     )
         .ok();
 }
@@ -248,7 +251,8 @@ inline bool publishPluginBroadcast(
                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                    return broadcasts->publish_broadcast(host, &idSv, &payloadSv, cb, ud, err);
                },
-               0
+               0,
+               pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
     )
         .ok();
 }
@@ -272,7 +276,8 @@ inline bool unsubscribePluginBroadcast(
                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                    return broadcasts->unsubscribe_broadcast(host, sub, cb, ud, err);
                },
-               0
+               0,
+               pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
     )
         .ok();
 }
@@ -299,7 +304,8 @@ inline PluginxxSubscription* subscribePluginBroadcast(
             return broadcasts->subscribe_broadcast(host, scope, &idSv, handler, ud, nullptr, cb,
                                                    opUd, err);
         },
-        0
+        0,
+        pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
     );
     // 表成员是异步契约: 订阅句柄以十进制文本放在 `payload` 里交回
     return op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
@@ -627,10 +633,10 @@ struct ClientIfaces {
  * client 侧六张表也是异步契约。下面三个助手给**同步写法**用 (渲染器回调这类无法写成
  * 协程的地方, 以及主程序侧的同步桥):
  * - 调用方本来就在 client io 线程时主程序是**内联完成**的, 不产生任何等待;
- * - 调用方在其他线程时真等到完成回调;
- * - **插件执行线程上不等待** (完成回调要投回这条线程, 而它正阻塞在这里): 主程序起了
- *   独立插件线程时, `start` / `stop` 里的注册事务必须写成异步形态
- *   (`finishLater(notify)` + 完成回调里 `notify`)。
+ * - 调用方在其他线程 (含 client 插件执行线程) 时真等到完成回调: 完成回调经
+ *   **同步桥**就地调用 (见 pluginxx/api/sync_bridge.h), 因此不会自己等自己;
+ * - client 表的工作体只碰 client 注册表, 不会派发回本插件的执行线程, 所以这里显式
+ *   放行插件执行线程 (`allowOnPluginThread`); agent 侧的表仍默认拒绝。
  * 需要“提交完不管”的地方 (toast / 装饰 / 取消订阅等) 直接传 `cb = nullptr`, 不等待。
  */
 
@@ -645,7 +651,9 @@ inline pluginxx::detail::TableOpResult clientTableOp(
         host,
         iface.cancel,
         iface.scheduler,
-        std::forward<StartFn>(start)
+        std::forward<StartFn>(start),
+        0,
+        pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
     );
 }
 

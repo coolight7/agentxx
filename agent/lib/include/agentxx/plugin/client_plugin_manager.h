@@ -447,7 +447,12 @@ struct ClientTimerImpl {
     bool    pauseHidden = false;                 ///< 关联区域不可见时跳过回调
     /// 上次续期时刻 (判定"迟到"用; 见 [armTimer])
     std::chrono::steady_clock::time_point armedAt{};
-    /// 因同帧合并被丢弃的触发次数 (诊断用)
+    /// 上一次触发的回调是否还在执行 (插件执行线程上跑)
+    ///
+    /// 回调耗时超过 interval 时, io 线程按周期算出的一批到期**不排队追补**: 未返回前
+    /// 的新到期直接跳过 (见 [fireTimerTick])。标志由插件线程写、io 线程读。
+    std::shared_ptr<std::atomic<bool>> inFlight = std::make_shared<std::atomic<bool>>(false);
+    /// 因同帧合并或回调未返回被丢弃的触发次数 (诊断用)
     uint64_t dropped               = 0;
     void(PLUGINXX_CALL* cb)(void*) = nullptr;
     void* ud                       = nullptr;
@@ -587,22 +592,6 @@ public:
     /// 当前会话 sessionId (get_client_state 数据源; mode_runners 启动时注入,
     /// 会话切换时经 ClientEventSink::onSessionSwitched 自动更新)
     void setSessionId(std::string sessionId);
-
-    /// 启动 client 插件线程 (须在加载任何插件之前调用; 可重复调用)
-    ///
-    /// 启用后所有"主程序 → 插件"的回调 (UI 动作 / 定时器 / 快捷键 / 工具渲染 /
-    /// 命令 / 广播订阅) 都在这条线程上执行, client io 线程只做受理与投递。
-    ///
-    /// **默认不开**: client 插件的 `start` / `stop` 注册事务里还在用同步表助手
-    /// (`clientTableOp` / `clientTableText` / `clientTableHandle`) —— 表操作在主程序
-    /// io 线程执行、完成回调投回插件执行器, 而同步等待会把插件线程占住, 等不到
-    /// 自己的完成回调 (现象是 `start` 报 registration transaction failed)。
-    /// 把这些注册事务改成异步形态 (`finishLater(notify)` + 完成回调里 `notify`) 之后
-    /// 才能默认打开。
-    ///
-    /// - `return` 线程已就绪 (含原本就在跑) 返回 true; 起不来记警告, 插件代码仍在
-    ///   client io 线程执行, 不影响功能
-    bool startPluginThread();
 
     // ==================== 生命周期 (须 client io 线程) ====================
 
@@ -1127,6 +1116,12 @@ private:
     /// - 从插件线程自身销毁管理器时 `stop()` 会 detach 而不 join (见
     ///   [pluginxx::PluginExecutorThread::stop])。
     pluginxx::PluginExecutorThread pluginThread_;
+
+    /// 保证插件执行线程已就绪 (幂等; 首次加载插件时调一次)
+    ///
+    /// 线程起不来时只记警告: 插件代码退回 client io 线程, 功能不受影响
+    /// (与改造前一致), 不因为一条线程起不来而拒绝加载插件。
+    void ensurePluginThread();
 
     /// 发一条客户端频道值 (io 线程; 幂等声明 + 发布, 失败只记日志)
     void publishClientChannel(std::string_view channel, const std::string& payloadJson);

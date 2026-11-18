@@ -31,17 +31,20 @@
 #include "asio/executor_work_guard.hpp"
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
+#include "pluginxx/runtime/instance_base.h"
 #include "utilxx_base/log.h"
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
@@ -53,6 +56,59 @@ static asio::awaitable<void> sleepMs(int ms) {
     auto timer
         = asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds{ms});
     co_await timer.async_wait(asio::use_awaitable);
+}
+
+/// 轮询等待条件成立 (插件回调在插件执行线程上跑, 断言前要先等效果出现)
+///
+/// - `pred` 在测试协程 (client io 线程) 上检查, 只读主程序注册表快照与适配器计数器
+/// - 超时返回 false, 由调用处断言报出 (helper 自己不记失败, 便于一次定位)
+asio::awaitable<bool> waitUntil(
+    std::function<bool()> pred,
+    int                   timeoutMs = 2000,
+    int                   stepMs    = 5
+) {
+    const int loops = timeoutMs / stepMs;
+    for (int i = 0; i < loops; ++i) {
+        if (pred()) {
+            co_return true;
+        }
+        co_await sleepMs(stepMs);
+    }
+    co_return pred();
+}
+
+/// 等某个插件的执行线程把已投递的回调都跑完 (FIFO 探针)
+///
+/// 事件注入 (`onPluginData` / `onReady` / `onConnStateChanged` / `onDelta` / 命令 ...)
+/// 只是把回调投到插件执行线程, 效果要等它跑完才出现在注册表与适配器上。探针与
+/// 先前回调同在一条队列上, 探针跑到就说明先前的都已返回 (插件回调里的表操作是同步
+/// 等待, 返回即已生效)。
+asio::awaitable<void> drainPlugin(
+    const std::shared_ptr<agentxx::plugin::ClientPluginManager>& mgr,
+    const std::string&                                           name
+) {
+    auto inst = mgr->find(name);
+    if (!inst) {
+        co_return;
+    }
+    auto owner = inst->self.lock();
+    if (!owner) {
+        co_return;
+    }
+    auto       done   = std::make_shared<std::atomic<bool>>(false);
+    const bool queued = pluginxx::dispatchToPlugin(
+        owner,
+        "test drain",
+        [done] { done->store(true, std::memory_order_release); },
+        pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
+    );
+    if (!queued) {
+        co_return;
+    }
+    (void)co_await waitUntil(
+        [done] { return done->load(std::memory_order_acquire); },
+        5000
+    );
 }
 
 /// client 表调用的结果 (测试夹具)
@@ -505,6 +561,7 @@ public:
         ++dataUpCount_;
         lastDataTopic_ = topic;
         lastDataJson_  = json;
+        dataUpTopics_.push_back(topic);
         return true;
     }
 
@@ -631,6 +688,17 @@ public:
         return lastDataTopic_;
     }
 
+    /// 某主题是否曾经上行过 (插件回调异步执行, 多条上行的先后不固定)
+    bool hasDataTopic(const std::string& topic) const {
+        std::lock_guard<std::mutex> lock(m_);
+        for (const auto& t : dataUpTopics_) {
+            if (t == topic) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 private:
 
     mutable std::mutex m_;
@@ -657,6 +725,7 @@ private:
     std::string        lastSent_;
     std::string        lastDataTopic_;
     std::string        lastDataJson_;
+    std::vector<std::string> dataUpTopics_; ///< 全部上行主题 (按到达顺序)
     std::string        lastOverlayPlugin_;
     std::string        lastOverlayTitle_;
     std::string        lastOverlayPayload_;
@@ -840,6 +909,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
     }
     XX_TEST_EXPECT_EQ(inst->name, "example_plugin");
+    // 首次加载插件时管理器自动起插件执行线程 (不再有开关): 插件代码不在 client io 线程
+    XX_TEST_EXPECT_TRUE(mgr->hasPluginExecutor());
 
     // ---- 2. UI 注册表 ----
     {
@@ -1048,9 +1119,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     //        插件事件分发完成后主程序上报 client_interfaces (三期6, 镜像
     //        server_plugins —— agent 侧插件据此知道 client 接口集)
     mgr->onReady();
-    XX_TEST_EXPECT_TRUE(adapter->dataUpCount() >= 2);
-    // 主程序接口集上报最后发出 (插件 READY 处理器先行); 主题为 client 端约定全名
-    XX_TEST_EXPECT_EQ(adapter->lastDataTopic(), "agentxx.client.host.client_interfaces");
+    // 插件 READY 处理器在插件执行线程上跑, 主程序的接口集上报在 io 线程先发出:
+    // 两条上行都会到, 但先后不固定, 所以按主题查找而不看最后一条
+    XX_TEST_EXPECT_TRUE(co_await waitUntil([&] { return adapter->dataUpCount() >= 2; }));
+    XX_TEST_EXPECT_TRUE(adapter->hasDataTopic("agentxx.client.host.client_interfaces"));
+    XX_TEST_EXPECT_TRUE(adapter->hasDataTopic("agentxx.client.plugin.example_plugin.hello"));
 
     // TURN_END: 状态栏项文本更新 (turns: 1)
     {
@@ -1059,6 +1132,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         r.hasError  = false;
         mgr->onTurnResult(r);
     }
+    // TURN_END 的处理在插件执行线程上: 等这次回调整段跑完再断言
+    // (状态栏项与 Info 段落同属一次回调, 只等其中一个会漏)
+    co_await drainPlugin(mgr, "example_plugin");
     {
         auto reg = mgr->uiRegistrySnapshot();
         if (reg) {
@@ -1095,17 +1171,19 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         d.data  = R"({"done":1})";
         mgr->onPluginData(d);
     }
-    XX_TEST_EXPECT_TRUE(adapter->panelUpdated() >= 1);
+    XX_TEST_EXPECT_TRUE(co_await waitUntil([&] { return adapter->panelUpdated() >= 1; }));
 
     // ---- 4. 命令执行 ----
     // /example (send 动作)
     mgr->invokeCommand("example", R"({"text":"hi"})");
+    XX_TEST_EXPECT_TRUE(co_await waitUntil([&] { return adapter->sendCount() >= 1; }));
     XX_TEST_EXPECT_EQ(adapter->sendCount(), 1);
     XX_TEST_EXPECT_TRUE(adapter->lastSent().find("Hello from example plugin") != std::string::npos);
     XX_TEST_EXPECT_TRUE(adapter->lastSent().find("(hi)") != std::string::npos);
 
     // example_toast (toast 动作)
     mgr->invokeCommand("example_toast", R"({"text":"notice"})");
+    XX_TEST_EXPECT_TRUE(co_await waitUntil([&] { return adapter->toastCount() >= 1; }));
     XX_TEST_EXPECT_EQ(adapter->toastCount(), 1);
     XX_TEST_EXPECT_EQ(adapter->lastToast(), "notice");
     XX_TEST_EXPECT_EQ(adapter->lastToastLvl(), 1);
@@ -1301,6 +1379,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(subs[i] != nullptr);
         }
         mgr->onConnStateChanged("connected", "100%");
+        co_await drainPlugin(mgr, "example_plugin");
         XX_TEST_EXPECT_EQ(hits.load(), 3);
         for (auto* sub : subs) {
             if (broadcasts8 && sub) {
@@ -1314,6 +1393,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             }
         }
         mgr->onConnStateChanged("connected", "100%");
+        co_await drainPlugin(mgr, "example_plugin");
         XX_TEST_EXPECT_EQ(hits.load(), 3); ///< 全部退订后不再到达
 
         // 8.2 未声明的跨进程频道: 订阅入口先补声明 (否则跨端事件永远收不到)
@@ -1337,6 +1417,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             // 主程序代发 (发布者 = 属主) → 订阅收到
             mgr->publishClientChannelValue(kTopic, R"({"n":1})");
+            co_await drainPlugin(mgr, "example_plugin");
             XX_TEST_EXPECT_EQ(hits.load(), 4);
             XX_TEST_EXPECT_TRUE(
                 agentxx::plugin::unsubscribePluginBroadcast(inst2->hostView(), broadcasts8, sub)
@@ -1349,6 +1430,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(unloaded2);
         XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
         mgr->onConnStateChanged("connected", "100%");
+        co_await sleepMs(50); ///< 实例已卸载: 没有可派的回调, 只给误派留时间
         XX_TEST_EXPECT_EQ(hits.load(), beforeUnload);
     }
 
@@ -1586,6 +1668,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                                : nullptr;
                 XX_TEST_EXPECT_TRUE(sub != nullptr);
                 mgr->onReady();
+                co_await drainPlugin(mgr, "example_plugin");
                 XX_TEST_EXPECT_TRUE(readyPayload.find("\"interfaces\"") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(readyPayload.find("agentxx.client.panel") != std::string::npos);
                 if (broadcasts11 && sub) {
@@ -1629,6 +1712,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             st.topic = "plugin.agentxx_codegraph.status";
             st.data   = R"({"loaded":true,"project_root":"/workspace/test_proj"})";
             mgr->onPluginData(st);
+            co_await drainPlugin(mgr, "agentxx_codegraph");
 
             reg = mgr->uiRegistrySnapshot();
             for (const auto& sec : reg->infoSections) {
@@ -1644,6 +1728,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             prog.topic = "plugin.agentxx_codegraph.progress";
             prog.data   = R"({"processed":25,"total":100,"current_file":"src/main.cpp"})";
             mgr->onPluginData(prog);
+            co_await drainPlugin(mgr, "agentxx_codegraph");
 
             reg = mgr->uiRegistrySnapshot();
             for (const auto& sec : reg->infoSections) {
@@ -1666,6 +1751,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             progDone.topic = "plugin.agentxx_codegraph.progress";
             progDone.data   = R"({"processed":100,"total":100,"current_file":""})";
             mgr->onPluginData(progDone);
+            co_await drainPlugin(mgr, "agentxx_codegraph");
 
             reg = mgr->uiRegistrySnapshot();
             for (const auto& sec : reg->infoSections) {
@@ -1705,6 +1791,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             usage.data
                 = R"({"cpu":35.5,"cpu_cores":12,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":6144,"usage_percent":42.0}]})";
             mgr->onPluginData(usage);
+            co_await drainPlugin(mgr, "agentxx_system_monitor");
 
             reg = mgr->uiRegistrySnapshot();
             for (const auto& sec : reg->infoSections) {
@@ -1740,6 +1827,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             usage.data
                 = R"({"cpu":71.2,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384})";
             mgr->onPluginData(usage);
+            co_await drainPlugin(mgr, "agentxx_system_monitor");
             reg = mgr->uiRegistrySnapshot();
             for (const auto& sec : reg->infoSections) {
                 if (sec.id == "agentxx_system_monitor.usage") {
@@ -1752,6 +1840,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(mgr->hasCommand("sysinfo"));
             auto toastBefore = adapter->toastCount();
             mgr->invokeCommand("sysinfo", R"({})");
+            co_await drainPlugin(mgr, "agentxx_system_monitor");
             XX_TEST_EXPECT_TRUE(adapter->toastCount() > toastBefore);
             XX_TEST_EXPECT_TRUE(
                 adapter->lastToast().find("System resource info") != std::string::npos
@@ -1801,6 +1890,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 panelData.topic = "plugin.agentxx_chatbot.panel";
                 panelData.data   = snapshot;
                 mgr->onPluginData(panelData);
+                co_await drainPlugin(mgr, "agentxx_chatbot");
 
                 reg = mgr->uiRegistrySnapshot();
                 bool checkedPanel = false;
@@ -1841,6 +1931,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 broken.topic = "plugin.agentxx_chatbot.panel";
                 broken.data   = "not-json";
                 mgr->onPluginData(broken);
+                co_await drainPlugin(mgr, "agentxx_chatbot");
                 reg = mgr->uiRegistrySnapshot();
                 for (const auto& p : reg->panels) {
                     if (p.id == "agentxx_chatbot.bots") {
@@ -1853,6 +1944,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 // client_interfaces, 会把 adapter 记的"最后一条"盖掉
                 const int upBefore = adapter->dataUpCount();
                 mgr->onConnStateChanged("connected", "100%");
+                co_await drainPlugin(mgr, "agentxx_chatbot");
                 XX_TEST_EXPECT_TRUE(adapter->dataUpCount() > upBefore);
                 XX_TEST_EXPECT_EQ(
                     adapter->lastDataTopic(),
@@ -1882,6 +1974,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             plData.data
                 = R"({"roadmap":"stateDiagram-v2\n[*] --> step1\nstep1 --> [*]","todos":[{"state":"in_progress","content":"do step 1","summary":"doing step 1"},{"state":"completed","content":"done step 0"}],"notes":"test note 123"})";
             mgr->onPluginData(plData);
+            co_await drainPlugin(mgr, "agentxx_planning");
 
             auto reg            = mgr->uiRegistrySnapshot();
             bool hasPlanSection = false;
@@ -1946,6 +2039,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false
             );
             mgr->onDelta(deltaWriteStart);
+            co_await drainPlugin(mgr, "agentxx_planning");
 
             reg             = mgr->uiRegistrySnapshot();
             bool foundDecor = false;
@@ -1964,6 +2058,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             // 14.3 工具行插入 (read 模式) -> 占位装饰
             auto deltaReadStart = toolRowDelta("call_plan_read_1", R"({"mode":"read"})", "", false);
             mgr->onDelta(deltaReadStart);
+            co_await drainPlugin(mgr, "agentxx_planning");
 
             reg = mgr->uiRegistrySnapshot();
             for (const auto& d : reg->toolDecors) {
@@ -1983,6 +2078,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 true
             );
             mgr->onDelta(deltaReadEnd);
+            co_await drainPlugin(mgr, "agentxx_planning");
 
             reg = mgr->uiRegistrySnapshot();
             for (const auto& d : reg->toolDecors) {
@@ -2088,6 +2184,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // 14.5 会话切换 -> 清除装饰与段落
             mgr->onSessionSwitched("new_session_123");
+            co_await drainPlugin(mgr, "agentxx_planning");
             reg                        = mgr->uiRegistrySnapshot();
             bool hasPlanSecAfterSwitch = false;
             for (const auto& sec : reg->infoSections) {
@@ -2500,21 +2597,25 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
                 // 精确优先: owner=sec1 → exact
                 mgr->dispatchAction("example_plugin", "sec1", "a.do", "{}");
+                co_await drainPlugin(mgr, "example_plugin");
                 XX_TEST_EXPECT_EQ(hitsExact.load(), 1);
                 XX_TEST_EXPECT_EQ(hitsFallback.load(), 0);
                 // 未命中精确 → 回落 "": owner=other → fallback
                 mgr->dispatchAction("example_plugin", "other", "a.do", "{}");
+                co_await drainPlugin(mgr, "example_plugin");
                 XX_TEST_EXPECT_EQ(hitsExact.load(), 1);
                 XX_TEST_EXPECT_EQ(hitsFallback.load(), 1);
                 // 覆盖语义: 同 (plugin,target) 重绑覆盖
                 std::atomic<int> hitsExact2{0};
                 XX_TEST_EXPECT_EQ(uiBindAction(exHost, ui, "sec1", exactFn, &hitsExact2), 0);
                 mgr->dispatchAction("example_plugin", "sec1", "a.do", "{}");
+                co_await drainPlugin(mgr, "example_plugin");
                 XX_TEST_EXPECT_EQ(hitsExact.load(), 1);
                 XX_TEST_EXPECT_EQ(hitsExact2.load(), 1);
                 // unbind 精确后回落 fallback
                 XX_TEST_EXPECT_EQ(uiUnbindAction(exHost, ui, "sec1"), 0);
                 mgr->dispatchAction("example_plugin", "sec1", "a.do", "{}");
+                co_await drainPlugin(mgr, "example_plugin");
                 XX_TEST_EXPECT_EQ(hitsFallback.load(), 2);
                 // disable 保留 / enable 恢复
                 mgr->disable("example_plugin");
@@ -2577,6 +2678,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     "planning.open_graph",
                     R"({"k":1})"
                 );
+                co_await drainPlugin(mgr, "example_plugin");
                 XX_TEST_EXPECT_EQ(cap.owner, "toolCallX");
                 XX_TEST_EXPECT_EQ(cap.action, "planning.open_graph");
                 XX_TEST_EXPECT_TRUE(cap.args.find("\"k\"") != std::string::npos);
@@ -2726,9 +2828,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             plData.topic = "plugin.agentxx_planning.planning";
             plData.data   = R"({"roadmap":"stateDiagram-v2\n[*] --> e2e\ne2e --> [*]","todos":[]})";
             mgr->onPluginData(plData);
+            co_await drainPlugin(mgr, "agentxx_planning");
             const int openBefore = adapter->overlayOpenCount();
             // decor owner=toolCallId 同样被 fallback 接住
             mgr->dispatchAction("agentxx_planning", "call_e2e_1", "planning.open_graph", "{}");
+            co_await drainPlugin(mgr, "agentxx_planning");
             XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), openBefore + 1);
             XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_MERMAID);
             XX_TEST_EXPECT_TRUE(adapter->lastOverlayPayload().find("e2e") != std::string::npos);
@@ -3190,6 +3294,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
                 // 当前代次点击 → 派发
                 mgr->dispatchAction("agentxx_filesystem", "gen_sec", "a.do", "{}", gen1);
+                co_await drainPlugin(mgr, "agentxx_filesystem");
                 XX_TEST_EXPECT_EQ(hits.load(), 1);
 
                 // 卸载 + 重新加载 (新代次) → 旧代次点击丢弃, 新代次点击派发
@@ -3204,6 +3309,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(gen2 != gen1);
                     // 旧代次点击: 实例已重载 → 丢弃 (即使绑定同名同 owner)
                     mgr->dispatchAction("agentxx_filesystem", "gen_sec", "a.do", "{}", gen1);
+                    co_await drainPlugin(mgr, "agentxx_filesystem");
                     XX_TEST_EXPECT_EQ(hits.load(), 1);
                     // 新实例重新绑定后, 新代次点击正常派发
                     const auto ui2 = agentxx::plugin::ClientIfaces::query(second->hostView()).ui;
@@ -3215,6 +3321,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                         );
                     }
                     mgr->dispatchAction("agentxx_filesystem", "gen_sec", "a.do", "{}", gen2);
+                    co_await drainPlugin(mgr, "agentxx_filesystem");
                     XX_TEST_EXPECT_EQ(hits.load(), 2);
                     co_await mgr->unloadAsync("agentxx_filesystem");
                 }
@@ -4459,21 +4566,24 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(co_await mgr->unloadAsync("example_plugin"));
     }
 
-    // ---- 33. 定时器同帧合并: io 线程被占住后不补发迟到的那次触发 ----
+    // ---- 33. 定时器同周期合并: 回调未返回时到期的那几次不排队追补 ----
     //
-    // 用**独立 io_context 并由本线程驱动**: 回调里会阻塞 300ms, 若借用测试共享的
-    // io 上下文会推迟其它模块尚未处理的事件 (影响与本用例无关的时序); 用额外线程则
-    // 需要处理停机, 这里直接在主线程 run_for 驱动 (阻塞也只影响本用例)。
+    // 用**独立 io_context 并由本线程驱动**: 回调在插件执行线程上阻塞 370ms (不是
+    // 周期的整数倍, 让阻塞结束落在两个到期点之间), 若借用测试共享的 io 上下文会推迟
+    // 其它模块尚未处理的事件 (影响与本用例无关的时序); 用额外线程则需要处理停机,
+    // 这里直接在主线程 run_for 驱动。
     {
         using clk = std::chrono::steady_clock;
 
+        /// 回调观测: 触发次数 / 是否已经阻塞过 / "两个回调几乎同时开始"的次数
+        ///
+        /// 合并生效时回调之间至少隔一个周期; 未合并 (追赶式补发) 时积压的那几次会在
+        /// 阻塞结束后连着跑 —— 相邻两次开始的间隔几乎为 0。
         struct Probe {
-            std::atomic<int>  ticks{0};
-            std::atomic<bool> blocked{false};
-            /// 阻塞回调结束时刻 (steady_clock 毫秒; 0 = 未结束)
-            std::atomic<int64_t> blockEndMs{0};
-            /// 阻塞结束后首次回调与 blockEnd 的间隔 (ms; -1 = 尚未回调)
-            std::atomic<int64_t> firstGapAfterBlockMs{-1};
+            std::atomic<int>     ticks{0};
+            std::atomic<bool>    blocked{false};
+            std::atomic<int>     burst{0};       ///< 相邻两次开始间隔 < 20ms 的次数
+            std::atomic<int64_t> lastStartMs{0}; ///< 上次开始时刻 (steady_clock 毫秒)
         } probe;
 
         asio::io_context ioT;
@@ -4497,25 +4607,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 if (ifaceTimerC == nullptr) {
                     co_return;
                 }
-                // 阻塞回调 (一次性): 占住 io 线程 300ms —— 期间 interval=50ms 的
-                // 周期定时器会积压到期
-                AgentxxTimerSpec blocker{};
-                blocker.version     = 1;
-                blocker.interval_ms = 50;
-                blocker.repeat      = 0;
-                blocker.on_timer    = [](void* ud) {
-                    auto* p = static_cast<Probe*>(ud);
-                    std::this_thread::sleep_for(std::chrono::milliseconds{300});
-                    p->blockEndMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                            clk::now().time_since_epoch()
-                    )
-                                            .count());
-                    p->blocked.store(true);
-                };
-                blocker.user_data = &probe;
-                // 先注册阻塞定时器: 两个定时器同一时刻到期, 阻塞回调先执行
-                (void)timerSet(instC->hostView(), ifaceTimerC, &blocker);
-
+                // 周期定时器 (interval=50ms): 第一次回调占住插件执行线程 370ms ——
+                // 期间每次到期的周期触发都被跳过 (不排队追补), 回调返回后从下一个
+                // 周期继续
                 AgentxxTimerSpec periodic{};
                 periodic.version     = 1;
                 periodic.interval_ms = 50;
@@ -4523,14 +4617,19 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 periodic.on_timer    = [](void* ud) {
                     auto* p = static_cast<Probe*>(ud);
                     p->ticks.fetch_add(1);
-                    if (p->blocked.load()) {
-                        int64_t       expected = -1;
-                        const int64_t gap = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                clk::now().time_since_epoch()
-                                            )
-                                                .count()
-                                            - p->blockEndMs.load();
-                        p->firstGapAfterBlockMs.compare_exchange_strong(expected, gap);
+                    const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                              clk::now().time_since_epoch()
+                    )
+                                              .count();
+                    const int64_t prev = p->lastStartMs.exchange(nowMs);
+                    if (prev != 0 && nowMs - prev < 20) {
+                        // 两次回调几乎同时开始: 这是被追补的那一批
+                        p->burst.fetch_add(1);
+                    }
+                    if (!p->blocked.load()) {
+                        // 第一次: 占住插件执行线程 370ms (远大于 50ms 周期)
+                        std::this_thread::sleep_for(std::chrono::milliseconds{370});
+                        p->blocked.store(true);
                     }
                 };
                 periodic.user_data = &probe;
@@ -4549,9 +4648,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
         XX_TEST_EXPECT_TRUE(loaded.load());
         XX_TEST_EXPECT_TRUE(probe.blocked.load());
-        // 合并生效: 阻塞结束后的首次回调不会"立刻补一次", 而是等到下一个周期
-        // (未合并时该次回调会在 blockEnd 后立即执行 → 间隔约 0ms)
-        XX_TEST_EXPECT_TRUE(probe.firstGapAfterBlockMs.load() >= 20);
+        // 合并生效: 阻塞期间到期的触发被丢弃, 回调之间至少隔一个周期
+        // (未合并时积压的那几次会在阻塞结束后连着跑 → burst > 0)
+        XX_TEST_EXPECT_EQ(probe.burst.load(), 0);
         // 定时器仍然活着并持续触发 (合并不等于停摆)
         XX_TEST_EXPECT_TRUE(probe.ticks.load() >= 4);
 

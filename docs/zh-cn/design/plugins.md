@@ -808,8 +808,8 @@ cancel) + 1 张**网络表** `agentxx.net` (两侧都提供) + 6 张自有表 (`
 | `agentxx.client.keybind` | 2 | 全局快捷键注册/注销/列表 (键位规范与优先级见 §9.6) |
 
 **六张表全部是异步操作契约 (v2)**: 成员返回 `PluginxxOperatorHandle*` (**已受理**),
-结果经 `cb(ud, status, payload)` 恰好一次交回 (在**插件执行线程**上, 默认 = client io
-线程, 见 §15.3); 返回 `NULL` = 未受理 (原因写
+结果经 `cb(ud, status, payload)` 恰好一次交回 (在**插件执行线程**上, client 侧由
+`ClientPluginManager` 首次加载插件时自动起, 见 §15.3); 返回 `NULL` = 未受理 (原因写
 `error_out`)。查询类的结果在 `payload`、句柄类的 `payload` 是进程内地址的十进制文本
 (`agentxx/plugin/api/client_handle.h` 的 `clientHandleFromText`)。client 侧**没有**保留的
 同步成员 (连 `is_visible` 这类查询也走异步); 不关心结果时 `cb` 传 `NULL` 即可。
@@ -819,10 +819,11 @@ cancel) + 1 张**网络表** `agentxx.net` (两侧都提供) + 6 张自有表 (`
 `clientRegisterStatusItem` / `clientRegisterCommand` / `notifyText` 一组便捷入口即可;
 **入参都是借用视图**, 主程序投递前必按值拷贝。
 
-> 同步助手 (`clientTableOp` 系列) 只能在**不是**插件执行线程的地方用 (注册事务、外部同步
-> 桥)。它们没有把 client 插件线程打开的原因就在这里: 内置 client 插件的 `start` 还在用
-> 同步助手登记注册, 而插件线程上它会拒绝等待 (`ClientPluginManager::startPluginThread()`
-> 是可选的开关)。
+> **同步助手 (`clientTableOp` 系列) 在插件执行线程上可用**: 工作体只改 client 注册表,
+> 不会派发回本插件的执行线程, 所以这里显式放行 (`SyncWaitThreadPolicy::
+> allowOnPluginThread`)。插件线程阻塞在等待上时, 完成回调经**同步桥**在完成线程 (io)
+> 就地调用 (见 §15.3), 不会自己等自己。agent 侧的表仍默认拒绝 —— 跨插件调用可能把
+> 工作体派发到同一条线程。
 
 **客户端事件走广播频道, 不再有事件表** (原来的 `agentxx.client.events` /
 `agentxx.client.json` / `agentxx.client.log` 已删除, 后两者改用通用表
@@ -1036,8 +1037,12 @@ typedef struct AgentxxClientTimerIface {
 - `AgentxxTimerSpec`: `interval_ms` (下限 50, 更小按 50 收敛) / `repeat`
   (0 = 一次性, > 0 = 周期触发次数上限) / `pause_when_hidden` /
   `owner_id` (关联的面板/Info 段落 id) / `on_timer` + `user_data`
-- **回调线程**: 插件执行线程 (默认 = client io 线程; 见 §15.3, 插件代码永不进 UI 线程);
+- **回调线程**: 插件执行线程 (client 侧由 `ClientPluginManager` 首次加载时自动起; 见 §15.3, 插件代码永不进 UI 线程);
   回调内可直接更新面板/Info/overlay 描述 (注册入口自身会投递到 io 线程)
+- **回调未返回时的到期直接跳过**: 回调耗时超过 `interval_ms` 时, 这段时间内到期的
+  周期触发**不排队追补** (只记一次丢弃, 见 `ClientTimerImpl::inFlight`)。否则回调
+  一返回就会连着补跑积压的那几次, 把插件自己的执行线程打满 (测试
+  `client_plugins` 第 33 组用“相邻两次回调开始间隔 < 20ms”的次数为 0 来验证)
 - **门控**:
   - 主程序动画等级为 `Disabled` 时**拒绝注册** (返回 NULL, 插件降级为静态展示)
   - `pause_when_hidden != 0` 且 `owner_id` 当前不可见时跳过本次回调并**顺延**
@@ -1077,7 +1082,7 @@ typedef struct AgentxxClientKeybindIface {
   单实例 ≤ 16 个
 - **优先级**: 全局快捷键 > 表单控件焦点 > 普通按键 (有控件焦点时快捷键仍生效);
   模态弹窗打开时快捷键不触发 (弹窗优先)
-- **回调线程**: 插件执行线程 (默认 = client io 线程); 派发路径为"UI 线程查表 →
+- **回调线程**: 插件执行线程 (client 侧自动起, 见 §15.3); 派发路径为"UI 线程查表 →
   派发到插件执行线程 → 复查插件存在/启用 → 回调"
 - SDK: `ClientPluginBase::registerKeybind(keys, description, fn)` 返回
   `std::shared_ptr<KeybindHandle>` (析构自动注销);
@@ -1224,7 +1229,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
    - 结果契约: 中断结果恒为 `{"values": {"<控件 id>": 值}}` (空对象 = 未应答)。
 
 6. **语义渲染缓存**：
-   - 两个内容回调都**只在插件执行线程执行**（默认 = client io 线程，见 §15.3）：UI 线程按部分提交 `ClientToolRenderRequest`
+   - 两个内容回调都**只在插件执行线程执行**（client 侧自动起，见 §15.3）：UI 线程按部分提交 `ClientToolRenderRequest`
      (tool_call_id / tool_name / args / result / 宽度等拥有型拷贝, 带 `part` = 折叠/展开)，
      主程序在 IO 线程复查 renderer lease、实例 `enabled` 与可注册状态后持 lease 调用,
      把 `text` 或 `items` 拷成主程序对象写入 `ClientToolRenderCache`；
@@ -1624,7 +1629,7 @@ Closing → CloseFailed → Closing (可重试)
 | 角色 | 线程 | 说明 |
 |---|---|---|
 | 主程序状态（实例表/挂载/注册表/图/定时器/会话） | io 线程 | `PluginManager` / `ClientPluginManager` 的全部状态机与会话业务 |
-| 插件代码（回调 + 生命周期入口） | **插件执行线程** | agent 侧由 `AgentHost` 起（`agentxx-plugin`），client 侧由 `ClientPluginManager::startPluginThread()` 起（`agentxx-client-plugin`）；一条线程按受理顺序串行执行所有实例的插件代码 |
+| 插件代码（回调 + 生命周期入口） | **插件执行线程** | agent 侧由 `AgentHost` 起（`agentxx-plugin`），client 侧由 `ClientPluginManager` 首次加载插件时自动起（`agentxx-client-plugin`，没有开关）；一条线程按受理顺序串行执行所有实例的插件代码 |
 | 插件显式委托的工作 | 后台线程池 | `offload` / `blocking_tool` / 磁盘与目录扫描 / `netCall` 等（显式例外，插件自己知道） |
 | 插件自管线程 | 插件自己 | JS 引擎的脚本线程等（§15.5） |
 
@@ -1639,11 +1644,17 @@ Closing → CloseFailed → Closing (可重试)
   回调之后，`stop` 之后不再受理新的派发；
 - 方向约定：**io 线程永不阻塞等插件线程**。插件在回调里调表 = 投到 io 的异步
   操作，完成回调再投回插件线程；
-- 同步桥 `tableOpSyncWait` 在插件执行线程上**拒绝等待**（完成回调要投回这条线程，
-  而它正在这里阻塞）。所以 `start`/`stop` 里的注册事务必须写成异步形态：协程
-  （`finishLater(notify)` + `ctx.spawn(...)`）或直接交完成回调。agent 侧内置插件都
-  已这么写；client 侧还有插件在用同步助手（`clientTableOp` 系列），因此 client 插件
-  线程**默认不启动**（`startPluginThread()` 是可选开关，见 §9）；
+- **同步等待 + 同步桥**：插件确实需要当场拿到结果时可用 kit 的 `tableOpSyncWait`
+  （阻塞的是插件自己的执行线程）。它的完成回调不能投回这条线程（那就是自己等自己），
+  所以 kit 把它包成**同步桥** (`pluginxx/api/sync_bridge.h`：固定标记 + 唤醒体 + ud)，
+  主程序 `OpCore::commit` 识别标记后**在完成线程（io）就地调用** —— 就地跑的只是
+  唤醒体（写状态 + 通知条件变量），插件业务代码仍在插件线程上继续；
+- **准入策略**：`tableOpSyncWait` 末参 `SyncWaitThreadPolicy` 决定插件执行线程上
+  能不能等。默认 `refuseOnPluginThread`（agent 侧跨插件调用可能把工作体派发到同一条
+  线程）；client 表与广播表显式 `allowOnPluginThread`（工作体只碰 client 注册表，
+  不会派回本插件的执行线程）。`start`/`stop` 里的注册事务优先写异步形态
+  （`finishLater(notify)` + `ctx.spawn(...)` + `return later.provider()`），同步助手
+  继续可用但不推荐；
 - 没配插件执行器的主程序（测试、直接 new 管理器的嵌入方程序）行为与改造前一致：
   `dispatchToPlugin` 就地执行，插件代码与 io 同线程；
 - 可观测性：单次插件回调超过预算（框架默认 100 ms，嵌入方经 `setPluginCallbackBudget`
@@ -1679,8 +1690,9 @@ Closing → CloseFailed → Closing (可重试)
 - **线程与运行时都属于 start 事务**：`create` 不启动线程；`start` 创建运行时并启动
   线程、提交运行时注册 (能力)；`stop` 停止线程并释放运行时；`destroy` 只释放本地状态，
   不调用主程序接口。
-- **start 里的能力登记走异步形态**：start 跑在插件执行线程上，那里不能用同步桥
-  (`tableOpSyncWait` 会拒绝)，所以登记时交完成回调并返回 provider 句柄，结论在回调里
+- **start 里的能力登记走异步形态**：start 跑在插件执行线程上，那里默认不能用同步桥
+  (`tableOpSyncWait` 按 `refuseOnPluginThread` 拒绝；client 侧才对 client 表放行)，
+  所以登记时交完成回调并返回 provider 句柄，结论在回调里
   经 `notify.done` 交回；失败时先撤掉本次刚起动的引擎线程再报错。
 - **stop 必须可重复且不能被调用线程自锁**：插件线程若可能反向调用主程序 vtable
   (主程序在非 IO 线程上发出的表调用会把工作体排队到 IO 线程，即 `startTableOp`)，
@@ -1962,7 +1974,7 @@ polled_tool(ctx, name, depict, schema,
 
 1. **10ms 量子**：单实例等待期间 ≈100 次/秒驱动（每次 ≈1 个主程序 post + 1 次
    `epoll_wait(0)`），等待阶段最坏多 10ms 延迟（网络/子进程可接受）；实现为常量便于调优。
-2. **重 CPU 段不得留在 polled 协程里**：它运行在插件执行线程上（默认就是主程序 io 线程；
+2. **重 CPU 段不得留在 polled 协程里**：它运行在插件执行线程上（没配插件线程时就是主程序 io 线程；
    有独立插件线程时是那条，但仍会拖慢同一线程上的其它插件回调 / 触发主程序看门狗告警）。
    目录遍历 / 全文件扫描 / 向量相似度继续用 `blocking_tool`；确需在
    polled 协程内做重计算的用主程序 `offload` 显式卸载。
