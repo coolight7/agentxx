@@ -58,8 +58,7 @@ std::string findPluginDirForExecutor(std::string_view pluginName) {
     std::vector<fs::path> candidates;
     if (auto exeDir = agentxx::test::executableDir()) {
         candidates.push_back(*exeDir / "plugins" / name);
-    }
-    candidates.push_back(fs::current_path(ec) / "plugins" / name);
+    }    candidates.push_back(fs::current_path(ec) / "plugins" / name);
     auto hasPluginFiles = [](const fs::path& dir) {
         std::error_code                     ec2;
         std::filesystem::directory_iterator it(dir, ec2);
@@ -630,6 +629,72 @@ asio::awaitable<void> test_executor_stopped() {
     }));
 }
 
+// =====================================================================
+// 9. 真实插件: JS 引擎 + 脚本工具在插件线程开启时跑通
+// =====================================================================
+/// `agentxx_javascript_engine` 的 start 事务里要登记一条能力行, 脚本又通过能力行
+/// 在 JS 线程里注册工具。配了插件执行器时这条链是“io → 插件线程 → JS 线程”三跳,
+/// 而脚本里的表调用会在 JS 线程上同步等完成 (完成回调投回插件线程)。
+/// 本组用真实 DSO 验证: 能力行登记成功、脚本工具注册成功、工具能真实执行。
+asio::awaitable<void> test_js_engine_on_plugin_thread() {
+    const std::string engineDir = findPluginDirForExecutor("agentxx_javascript_engine");
+    const std::string jsDir     = findPluginDirForExecutor("example_js");
+    if (engineDir.empty() || jsDir.empty()) {
+        TEST_INFO << "javascript engine / example_js plugin not found, skip js-on-thread test"
+                  << std::endl;
+        co_return;
+    }
+    auto ex = co_await asio::this_coro::executor;
+
+    auto thread = std::make_shared<pluginxx::PluginExecutorThread>();
+    if (!thread->start("agentxx-test-plugin")) {
+        XX_TEST_EXPECT_TRUE(false);
+        co_return;
+    }
+    auto ctx               = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->toolRegistry      = std::make_shared<agentxx::plugin::ToolRegistry>();
+    auto mgr               = std::make_shared<agentxx::plugin::PluginManager>(ctx);
+    ctx->pluginManager     = mgr;
+    mgr->setIoExecutor(ex);
+    mgr->setPluginExecutor(thread->executor());
+    auto mount       = mgr->attachMountSync(ctx);
+    ctx->pluginMount = mount;
+
+    auto engine = co_await mgr->loadPluginAsync(engineDir);
+    XX_TEST_EXPECT_TRUE(engine != nullptr);
+    auto script = co_await mgr->loadPluginAsync(jsDir);
+    XX_TEST_EXPECT_TRUE(script != nullptr);
+    XX_TEST_EXPECT_TRUE(mgr->hasPluginExecutor());
+
+    // 脚本在 JS 线程加载、异步注册工具, 等它出现
+    XX_TEST_EXPECT_TRUE(co_await waitFor(
+        [&] {
+            return ctx->toolRegistry->contains("js_hello");
+        },
+        20000
+    ));
+    auto tool = ctx->toolRegistry->find("js_hello");
+    XX_TEST_EXPECT_TRUE(tool != nullptr);
+    if (tool) {
+        auto result = co_await tool->execute_async(utilxx_base::Json{{"name", "plugin-thread"}});
+        XX_TEST_EXPECT_TRUE(result.text.find("plugin-thread") != std::string::npos);
+    }
+
+    // 先卸脚本、再卸引擎 (依赖顺序), 全部走异步 stop
+    XX_TEST_EXPECT_TRUE(co_await mgr->unloadAsync("example_js", std::chrono::seconds{30}));
+    XX_TEST_EXPECT_TRUE(
+        co_await mgr->unloadAsync("agentxx_javascript_engine", std::chrono::seconds{30})
+    );
+    co_await mgr->shutdownAsync();
+    ctx->pluginMount.reset();
+    tool.reset();
+    script.reset();
+    engine.reset();
+    mgr.reset();
+    thread->stop();
+    co_return;
+}
+
 } // namespace
 
 asio::awaitable<TestResult> run_plugin_executor_tests() {
@@ -644,6 +709,7 @@ asio::awaitable<TestResult> run_plugin_executor_tests() {
     co_await test_broadcast_handler_on_plugin_thread();
     co_await test_executor_stopped();
     co_await test_real_host_js_engine_start();
+    co_await test_js_engine_on_plugin_thread();
 
     result.passed = g_pe_passed;
     result.failed = g_pe_failed;

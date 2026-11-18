@@ -812,8 +812,8 @@ path/to/agentxx_test --log-level warn string_util regex
   拿不到就丢弃并计数; 同实例 FIFO, `stop` 也走同一条队列); 状态仍只在 io 线程。
   io 线程永不阻塞等插件线程; 反向的过渡期等待 (`ioCallSync`) 允许。
   `scheduler.is_io_thread` 名字未改, 语义变成"当前线程是不是该插件的执行线程"。
-  诊断: `pluginCallbackStats()` (次数/平均/最大/超预算/dropped/unschedulable,
-  预算 `plugin.callback_budget_ms` 默认 100)。测试模块 `plugin_executor`
+  诊断: `pluginCallbackStats()` (次数/平均/最大/超预算/dropped/unschedulable;
+  预算固定为框架默认 100 ms, 嵌入方经 `setPluginCallbackBudget` 可改, 暂无 yaml 键)。测试模块 `plugin_executor`
   (含真实 `AgentHost` 加载 `agentxx_javascript_engine` 的用例)。详见
   [plugins.md](docs/zh-cn/design/plugins.md) §15.3
 - client 侧六张表同一套契约 (2026-11): `agentxx.client.ui` / `session` / `wire` / `self` /

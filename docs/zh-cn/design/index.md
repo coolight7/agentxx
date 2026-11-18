@@ -1808,6 +1808,10 @@ AgentContext
 - **加载快照分两段**: `plugins` 是进程角度 (每插件挂载数 / 挂载到哪些 agent / 清单资源 /
   禁用原因), `plugins_agent` 是本 agent 角度 (本挂载装了哪些插件 + 各插件实体计数),
   界面与诊断不必自己拼这两份事实
+- **`plugin_executor` 段** (2026-11): 插件执行线程是否启用与回调统计 (`enabled` /
+  `budget_ms` / `callbacks` / `total_micros` / `max_micros` / `over_budget` / `dropped` /
+  `unschedulable`), 看“是不是插件在拖慢执行器”; 线程模型见
+  [plugins.md](plugins.md) §15.3
 
 **子代理用量计入父会话**: 子代理有自己的 `AgentContext` / `SessionsManager`, 但没有
 `sessionStore`, 直接记账会丢掉。`AgentHost::spawnOneTask` 派生时把父上下文的记账目标

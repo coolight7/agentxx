@@ -82,7 +82,8 @@
    四个入口、驱动票、能力链、广播订阅、`sleep`/`offload` 完成回调、通道事件、
    后台任务事件、client 的动作/定时器/快捷键/渲染器/命令。io 线程只受理、投递、推状态机。
 4. 可观测性: `PluginCallbackStats`（callbacks / 总耗时 / 最大 / 超预算 / dropped /
-   unschedulable，预算 `plugin.callback_budget_ms` 默认 100 ms），写操作全无等待。
+   unschedulable，预算固定为框架默认 100 ms，`setPluginCallbackBudget` 可改、暂无 yaml 键），
+   写操作全无等待。
 5. `scheduler.is_io_thread` 名字不变、语义变成"当前线程是不是该插件的执行线程"——
    kit 的同步桥与 `netCall` 一类阻塞助手用它做安全闸，没有 ABI 换代。
 
@@ -99,9 +100,10 @@
    的安全闸；后者在过渡期是"插件线程同步等 io"，卡住的只是插件自己，且只刺两处
    （`call_tool` 与 `mount` 入口）。要彻底删掉得把这两个入口改成纯异步。
 
-**新增/改动的测试**: `plugin_executor` 模块（9 组: 派发线程与 FIFO / 租约与关闭后丢弃 /
+**新增/改动的测试**: `plugin_executor` 模块（10 组: 派发线程与 FIFO / 租约与关闭后丢弃 /
 预算 / OpCore 三处 / 生命周期入口 / 驱动票 / 广播处理器 / 执行器停止 / 真实
-`AgentHost` 加载 `agentxx_javascript_engine`）。
+`AgentHost` 加载 `agentxx_javascript_engine` / 真实 DSO 的 JS 脚本工具端到端）。
+全量回归 43792 项断言 0 失败。
 
 **连带修的两处**: JS 引擎 `start` 的能力登记改成异步形态（否则有插件线程时它自己加载不起来）;
 `plugin_runtime` 的 offload 用例改为按"派发项也持一份 lease"断言。

@@ -209,3 +209,17 @@ JS 引擎插件重建（`build_plugins.ps1 agentxx_javascript_engine`）通过�
 阶段 E 收尾回归（新鲜 exe + `--log-level warn`，0 失败）：boundaries 20、assembly_snapshot 38、
 test_modules 5、agent_host 190、session_runtime 55、shutdown_stages 17、plugin_executor 655、
 plugin_agent_runtime 221；client 侧 `agentxx.exe` 与 JS 引擎插件均重新编译通过。
+
+### 第 7 步：全量回归与 JS 端到端补充用例
+
+全量 `agentxx_test --log-level warn`：**passed=43792 failed=0**（全 144 个模块）。
+
+补一组“JS 脚本工具在插件线程开启时能真实调用”的用例（`plugin_executor` 第 10 组）：
+前面第 9 组只验证了“能力行登记成功”，而脚本真正跑起来时是
+`io → 插件线程 → JS 线程` 三跳，脚本里的表调用还会在 JS 线程上同步等完成（完成回调投回
+插件线程）。本组用真实 DSO 验证：能力行登记、脚本异步注册 `js_hello` 工具、工具真实执行
+（结果包含入参）、然后按依赖顺序 (脚本 → 引擎) 卸载。只剩两条可接受的 WARN：
+`寄存器图节点类型` 与“provider is closed or disabled”（测试容器没有图注册表 /
+卸顺序由 shutdownAsync 决定）。
+
+最终计数：`plugin_executor` 663/0。

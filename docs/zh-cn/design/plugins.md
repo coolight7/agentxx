@@ -1646,7 +1646,8 @@ Closing → CloseFailed → Closing (可重试)
   线程**默认不启动**（`startPluginThread()` 是可选开关，见 §9）；
 - 没配插件执行器的主程序（测试、直接 new 管理器的嵌入方程序）行为与改造前一致：
   `dispatchToPlugin` 就地执行，插件代码与 io 同线程；
-- 可观测性：单次插件回调超过 `plugin.callback_budget_ms`（默认 100 ms）记 WARN，
+- 可观测性：单次插件回调超过预算（框架默认 100 ms，嵌入方经 `setPluginCallbackBudget`
+  可改；目前没有 yaml 配置键）记 WARN，
   计数在 `PluginManagerBase::pluginCallbackStats()`（callbacks / 平均 / 最大 /
   overBudget / dropped / unschedulable）—— 排查“谁在拖慢执行器”看这一组数；
 - `scheduler.is_io_thread` 成员名未变（避免 ABI 换代），语义是“当前线程是不是**该插件
@@ -1678,6 +1679,9 @@ Closing → CloseFailed → Closing (可重试)
 - **线程与运行时都属于 start 事务**：`create` 不启动线程；`start` 创建运行时并启动
   线程、提交运行时注册 (能力)；`stop` 停止线程并释放运行时；`destroy` 只释放本地状态，
   不调用主程序接口。
+- **start 里的能力登记走异步形态**：start 跑在插件执行线程上，那里不能用同步桥
+  (`tableOpSyncWait` 会拒绝)，所以登记时交完成回调并返回 provider 句柄，结论在回调里
+  经 `notify.done` 交回；失败时先撤掉本次刚起动的引擎线程再报错。
 - **stop 必须可重复且不能被调用线程自锁**：插件线程若可能反向调用主程序 vtable
   (主程序在非 IO 线程上发出的表调用会把工作体排队到 IO 线程，即 `startTableOp`)，
   则 `stop` 不得在 IO 线程直接
