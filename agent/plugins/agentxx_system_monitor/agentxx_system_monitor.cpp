@@ -553,99 +553,145 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
     agentxx::plugin::clientUpdateInfoSection(ctx.host, ctx.iface.ui, ctx.section, json);
 }
 
-/// client 侧注册事务 (start 的实际内容); 无 UI 能力时静默降级 (返回 0)。
-static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
-    if (!ctx.iface.ui) {
-        return 0;
+/// client 侧注册事务 (协程形态): 无 UI 能力时静默降级
+///
+/// 三条注册都是提交 + `co_await`: 不阻塞插件执行线程, 失败只记日志 (与原同步版同样
+/// 不影响其他展示能力)。
+static pluginxx::Task<void> sysMonClientSetupAsync(SysMonClientCtx& ctx) {
+    const PluginxxHost* host = ctx.host;
+    const auto          ui   = ctx.iface.ui;
+    if (!ui) {
+        co_return;
     }
 
-    ctx.section = agentxx::plugin::clientRegisterInfoSection(
-        ctx.host,
-        ctx.iface.ui,
-        "agentxx_system_monitor.usage",
-        R"_({"title":"System"})_"
-    );
-
-    if (ctx.iface.broadcasts && ctx.iface.broadcasts->subscribe_broadcast) {
-        agentxx::plugin::subscribePluginBroadcast(
-            ctx.host,
-            ctx.iface.broadcasts,
-            nullptr,
-            "plugin.agentxx_system_monitor.usage",
-            [](const PluginxxStringView* payload_json, void* ud) {
-                auto* ctx = static_cast<SysMonClientCtx*>(ud);
-                if (!ctx || PluginStringView::empty(payload_json)) {
-                    return;
-                }
-                // 频道值就是用量 JSON (主程序按原文转发)
-                ctx->last_usage_json.assign(payload_json->data, payload_json->size);
-                refreshUsageDisplay(*ctx);
-            },
-            &ctx
+    {
+        const auto idSv   = agentxx::plugin::PluginStringView::fromCstr(
+            "agentxx_system_monitor.usage"
         );
+        constexpr std::string_view kJson = R"_({"title":"System"})_";
+        const auto jsonSv = agentxx::plugin::PluginStringView::from(kJson.data(), kJson.size());
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ui->register_info_section(host, &idSv, &jsonSv, cb, ud, err);
+            }
+        );
+        ctx.section = agentxx::plugin::clientHandleOf<AgentxxInfoSection>(res);
+        if (!ctx.section) {
+            ctx.log.log(3, fmt::format("register info section failed: {}", res.text()));
+        }
     }
 
-    if (ctx.iface.ui->register_command) {
-        // 命令回调是异步操作契约: 动作 JSON 经回调自己的 notify 交回 (本插件同步给)
-        agentxx::plugin::clientRegisterCommand(
-            ctx.host,
-            ctx.iface.ui,
-            "sysinfo",
-            "Toggle system resource usage display in sidebar Info section",
-            [](void*                         ud,
-               const PluginxxStringView*     args_json,
-               const PluginxxOperatorNotify* notify,
-               PluginxxString*               error_out) -> int32_t {
-                (void)args_json;
-                (void)error_out;
-                auto* ctx = static_cast<SysMonClientCtx*>(ud);
-                if (!ctx) {
-                    return -1;
-                }
-                const bool next = !ctx->usage_enabled.load(std::memory_order_relaxed);
-                ctx->usage_enabled.store(next, std::memory_order_relaxed);
-                refreshUsageDisplay(*ctx);
-                const std::string payload
-                    = next ? R"_({"enabled":true})_" : R"_({"enabled":false})_";
-                agentxx::plugin::clientSendPluginData(
-                    ctx->host,
-                    ctx->iface.wire,
-                    "agentxx.client.plugin.agentxx_system_monitor.usage_enabled",
-                    payload
+    const auto broadcasts = ctx.iface.broadcasts;
+    if (broadcasts && broadcasts->subscribe_broadcast) {
+        const auto idSv = agentxx::plugin::PluginStringView::fromCstr(
+            "plugin.agentxx_system_monitor.usage"
+        );
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return broadcasts->subscribe_broadcast(
+                    host,
+                    nullptr,
+                    &idSv,
+                    [](const PluginxxStringView* payload_json, void* ud) {
+                        auto* ctx = static_cast<SysMonClientCtx*>(ud);
+                        if (!ctx || PluginStringView::empty(payload_json)) {
+                            return;
+                        }
+                        // 频道值就是用量 JSON (主程序按原文转发)
+                        ctx->last_usage_json.assign(payload_json->data, payload_json->size);
+                        refreshUsageDisplay(*ctx);
+                    },
+                    &ctx,
+                    nullptr,
+                    cb,
+                    ud,
+                    err
                 );
-                std::string text = next ? "System resource info: ON" : "System resource info: OFF";
-                std::string stateStr = ctx->clientState();
-                if (!stateStr.empty() && stateStr != "{}") {
-                    try {
-                        auto st = utilxx_base::Json::parse(stateStr);
-                        if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
-                            bool found = false;
-                            for (const auto& v : st["agentPlugins"]) {
-                                if (v.is_object()
-                                    && v.value("name", std::string{}) == "agentxx_system_monitor") {
-                                    found = true;
+            }
+        );
+        if (!res.ok()) {
+            ctx.log.log(3, fmt::format("subscribe usage channel failed: {}", res.text()));
+        }
+    }
+
+    if (ui->register_command) {
+        // 命令回调是异步操作契约: 动作 JSON 经回调自己的 notify 交回 (本插件同步给)
+        const auto nameSv = agentxx::plugin::PluginStringView::fromCstr("sysinfo");
+        const auto descSv = agentxx::plugin::PluginStringView::fromCstr(
+            "Toggle system resource usage display in sidebar Info section"
+        );
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ui->register_command(
+                    host,
+                    &nameSv,
+                    &descSv,
+                    [](void*                         ud,
+                       const PluginxxStringView*     args_json,
+                       const PluginxxOperatorNotify* notify,
+                       PluginxxString*               error_out) -> int32_t {
+                        (void)args_json;
+                        (void)error_out;
+                        auto* ctx = static_cast<SysMonClientCtx*>(ud);
+                        if (!ctx) {
+                            return -1;
+                        }
+                        const bool next = !ctx->usage_enabled.load(std::memory_order_relaxed);
+                        ctx->usage_enabled.store(next, std::memory_order_relaxed);
+                        refreshUsageDisplay(*ctx);
+                        const std::string payload
+                            = next ? R"_({"enabled":true})_" : R"_({"enabled":false})_";
+                        agentxx::plugin::clientSendPluginData(
+                            ctx->host,
+                            ctx->iface.wire,
+                            "agentxx.client.plugin.agentxx_system_monitor.usage_enabled",
+                            payload
+                        );
+                        std::string text
+                            = next ? "System resource info: ON" : "System resource info: OFF";
+                        std::string stateStr = ctx->clientState();
+                        if (!stateStr.empty() && stateStr != "{}") {
+                            try {
+                                auto st = utilxx_base::Json::parse(stateStr);
+                                if (st.contains("agentPlugins") && st["agentPlugins"].is_array()) {
+                                    bool found = false;
+                                    for (const auto& v : st["agentPlugins"]) {
+                                        if (v.is_object()
+                                            && v.value("name", std::string{})
+                                                   == "agentxx_system_monitor") {
+                                            found = true;
+                                        }
+                                    }
+                                    if (!found) {
+                                        text += " (warn: plugin missing on server side; toggle is "
+                                                "local only)";
+                                    }
                                 }
-                            }
-                            if (!found) {
-                                text
-                                    += " (warn: plugin missing on server side; toggle is local only)";
+                            } catch (...) {
                             }
                         }
-                    } catch (...) {
-                    }
-                }
-                utilxx_base::Json out;
-                out["action"]      = "toast";
-                out["text"]        = text;
-                out["level"]       = 0;
-                agentxx::plugin::notifyText(notify, out.dump());
-                return 0;
-            },
-            &ctx
+                        utilxx_base::Json out;
+                        out["action"] = "toast";
+                        out["text"]   = text;
+                        out["level"]  = 0;
+                        agentxx::plugin::notifyText(notify, out.dump());
+                        return 0;
+                    },
+                    &ctx,
+                    cb,
+                    ud,
+                    err
+                );
+            }
         );
+        if (!res.ok()) {
+            ctx.log.log(3, fmt::format("register command `sysinfo` failed: {}", res.text()));
+        }
     }
-
-    return 0;
+    co_return;
 }
 
 static void* sysMonClientStart(
@@ -663,18 +709,14 @@ static void* sysMonClientStart(
         }
         return nullptr;
     }
-    if (sysMonClientSetup(ctx) != 0) {
-        if (error) {
-            PluginString::set(
-                ctx.host,
-                error,
-                "agentxx_system_monitor client start: registration failed"
-            );
-        }
-        return nullptr;
-    }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    // 注册事务写成协程: 三条注册提交后并发跑, 全部有结果才交回
+    auto later = agentxx::plugin::finishLater(notify);
+    ctx.spawn([later](SysMonClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+        co_await sysMonClientSetupAsync(c);
+        later.ok();
+        co_return;
+    });
+    return later.provider();
 }
 
 static void*

@@ -129,60 +129,98 @@ void PLUGINXX_CALL onConnState(const PluginxxStringView* payload, void* ud) {
     }
 }
 
-/// client 侧注册事务 (start 的实际内容)
+/// client 侧注册事务 (协程形态)
 ///
-/// 没有界面能力 (CLI / 老主程序) 时直接返回 0: 面板注册失败不影响 agent 侧功能。
-int32_t chatbotClientSetup(ChatbotClientCtx& ctx) {
-    if (!ctx.iface.ui) {
-        return 0;
+/// 没有界面能力 (CLI / 老主程序) 时直接返回: 面板注册失败不影响 agent 侧功能。
+pluginxx::Task<void> chatbotClientSetupAsync(ChatbotClientCtx& ctx) {
+    const PluginxxHost* host = ctx.host;
+    const auto          ui   = ctx.iface.ui;
+    if (!ui) {
+        co_return;
     }
-    if (ctx.iface.ui->register_panel) {
+    if (ui->register_panel) {
         utilxx_base::Json props = utilxx_base::Json::object();
         props["title"]          = kPanelTitle;
-        ctx.panel = agentxx::plugin::clientRegisterPanel(
-            ctx.host,
-            ctx.iface.ui,
-            kPanelId,
-            props.dump()
+        const std::string propsJson = props.dump();
+        const auto        idSv   = agentxx::plugin::PluginStringView::fromCstr(kPanelId);
+        const auto        jsonSv = agentxx::plugin::PluginStringView::from(
+            propsJson.data(),
+            propsJson.size()
         );
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* e) {
+                return ui->register_panel(host, &idSv, &jsonSv, cb, ud, e);
+            }
+        );
+        ctx.panel = agentxx::plugin::clientHandleOf<AgentxxPanel>(res);
         if (ctx.panel == nullptr) {
             ctx.log.warn("register panel `agentxx_chatbot.bots` failed (id taken or no sidebar)");
         }
         // 先给一份占位内容: 免得 tab 里一片空白, 也让用户知道在等谁的数据
         ctx.render(true);
     }
-    if (!ctx.iface.broadcasts || !ctx.iface.broadcasts->subscribe_broadcast) {
-        return 0;
+    const auto broadcasts = ctx.iface.broadcasts;
+    if (!broadcasts || !broadcasts->subscribe_broadcast) {
+        co_return;
     }
-    if (agentxx::plugin::subscribePluginBroadcast(
-            ctx.host,
-            ctx.iface.broadcasts,
-            nullptr,
-            kPanelTopic,
-            onPanelSnapshot,
-            &ctx
-        )
-        == nullptr) {
-        return -1;
+    struct SubSpec {
+        std::string_view                                  id;
+        void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*);
+    };
+    // 第一条必需 (面板数据全靠它), 后两条失败只影响“主动补快照”
+    const SubSpec required[] = {{kPanelTopic, onPanelSnapshot}};
+    const SubSpec optional[] = {
+        {agentxx::plugin::broadcasts::ClientReady,           onServerReady},
+        {agentxx::plugin::broadcasts::ClientConnectionState, onConnState  },
+    };
+    for (const auto& sub : required) {
+        const auto idSv = agentxx::plugin::PluginStringView::from(sub.id.data(), sub.id.size());
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* e) {
+                return broadcasts->subscribe_broadcast(
+                    host,
+                    nullptr,
+                    &idSv,
+                    sub.handler,
+                    &ctx,
+                    nullptr,
+                    cb,
+                    ud,
+                    e
+                );
+            }
+        );
+        if (!res.ok()) {
+            throw std::runtime_error(
+                fmt::format("subscribe `{}` failed: {}", sub.id, res.text())
+            );
+        }
     }
-    // 这两个频道早就有 (READY / 连接状态); 订阅失败只影响"主动补快照"
-    agentxx::plugin::subscribePluginBroadcast(
-        ctx.host,
-        ctx.iface.broadcasts,
-        nullptr,
-        agentxx::plugin::broadcasts::ClientReady,
-        onServerReady,
-        &ctx
-    );
-    agentxx::plugin::subscribePluginBroadcast(
-        ctx.host,
-        ctx.iface.broadcasts,
-        nullptr,
-        agentxx::plugin::broadcasts::ClientConnectionState,
-        onConnState,
-        &ctx
-    );
-    return 0;
+    for (const auto& sub : optional) {
+        const auto idSv = agentxx::plugin::PluginStringView::from(sub.id.data(), sub.id.size());
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* e) {
+                return broadcasts->subscribe_broadcast(
+                    host,
+                    nullptr,
+                    &idSv,
+                    sub.handler,
+                    &ctx,
+                    nullptr,
+                    cb,
+                    ud,
+                    e
+                );
+            }
+        );
+        if (!res.ok()) {
+            ctx.log.warn(fmt::format("subscribe `{}` failed: {}", sub.id, res.text()));
+        }
+    }
+    co_return;
 }
 
 void* chatbotClientStart(
@@ -194,16 +232,20 @@ void* chatbotClientStart(
         agentxx::plugin::PluginString::set(ctx.host, error, "client start: notify required");
         return nullptr;
     }
-    if (chatbotClientSetup(ctx) != 0) {
-        agentxx::plugin::PluginString::set(
-            ctx.host,
-            error,
-            "client start: registration failed (面板/事件订阅)"
-        );
-        return nullptr;
-    }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    auto later = agentxx::plugin::finishLater(notify);
+    ctx.spawn([later](ChatbotClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await chatbotClientSetupAsync(c);
+        } catch (const std::exception& e) {
+            later.failed(
+                fmt::format("client start: registration failed (面板/事件订阅): {}", e.what())
+            );
+            co_return;
+        }
+        later.ok();
+        co_return;
+    });
+    return later.provider();
 }
 
 void* chatbotClientStop(

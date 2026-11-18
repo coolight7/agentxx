@@ -1119,9 +1119,7 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
 /// ====================
 
 /// client 侧每实例上下文 (多实例契约: 原进程级 static 状态全部移入)
-struct ClientCtx {
-    const PluginxxHost*           host = nullptr;
-    agentxx::plugin::ClientIfaces iface{};
+struct ClientCtx : agentxx::plugin::ClientPluginBase {
     const AgentxxClientUiIface*   ui           = nullptr;
     AgentxxInfoSection*           section      = nullptr;
     bool                          loaded       = false;
@@ -1276,8 +1274,7 @@ extern "C" PLUGINXX_EXPORT int
                 return -1;
             }
             auto ctx   = std::make_unique<ClientCtx>();
-            ctx->host  = host;
-            ctx->iface = agentxx::plugin::ClientIfaces::query(host);
+            ctx->init(host);
             ctx->ui    = agentxx::plugin::queryInterface<AgentxxClientUiIface>(
                 host,
                 AGENTXX_IFACE_CLIENT_UI
@@ -1288,52 +1285,95 @@ extern "C" PLUGINXX_EXPORT int
     );
 }
 
-/// client 侧 start: 注册 Info 段落与跨端数据订阅 (注册事务)
+/// client 侧注册事务 (协程): Info 段落 + 两条跨端数据订阅
+static pluginxx::Task<void> codegraphClientSetupAsync(ClientCtx& ctx) {
+    const PluginxxHost* host = ctx.host;
+    const auto          ui   = ctx.ui;
+    if (ui && ui->register_info_section) {
+        const auto idSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
+        constexpr std::string_view kJson = R"_({"title":"CodeGraph"})_";
+        const auto                 jsonSv
+            = agentxx::plugin::PluginStringView::from(kJson.data(), kJson.size());
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* e) {
+                return ui->register_info_section(host, &idSv, &jsonSv, cb, ud, e);
+            }
+        );
+        ctx.section = agentxx::plugin::clientHandleOf<AgentxxInfoSection>(res);
+        if (!ctx.section) {
+            throw std::runtime_error(fmt::format("register info section failed: {}", res.text()));
+        }
+        // 注册完立刻根据已有状态刷一次 (内部是提交即返回的更新)
+        refreshSection(ctx);
+    }
+
+    const auto broadcasts = ctx.iface.broadcasts;
+    if (!broadcasts || !broadcasts->subscribe_broadcast) {
+        throw std::runtime_error("broadcasts table missing");
+    }
+    struct SubSpec {
+        std::string_view                                  id;
+        void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*);
+    };
+    const SubSpec subs[] = {
+        {"plugin.agentxx_codegraph.status",   onClientStatus  },
+        {"plugin.agentxx_codegraph.progress", onClientProgress},
+    };
+    for (const auto& sub : subs) {
+        const auto idSv = agentxx::plugin::PluginStringView::from(sub.id.data(), sub.id.size());
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* e) {
+                return broadcasts->subscribe_broadcast(
+                    host,
+                    nullptr,
+                    &idSv,
+                    sub.handler,
+                    &ctx,
+                    nullptr,
+                    cb,
+                    ud,
+                    e
+                );
+            }
+        );
+        if (!res.ok()) {
+            throw std::runtime_error(
+                fmt::format("subscribe `{}` failed: {}", sub.id, res.text())
+            );
+        }
+    }
+
+    if (ctx.iface.log && ctx.iface.log->log) {
+        auto msgSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph client loaded");
+        ctx.iface.log->log(host, 2, &msgSv);
+    }
+    co_return;
+}
+
+/// client 侧 start: 注册事务写成协程 (提交后不阻塞插件执行线程)
 static void* codegraphClientStart(
     ClientCtx&                    ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               err
 ) {
-    if (ctx.ui && ctx.ui->register_info_section) {
-        ctx.section = agentxx::plugin::clientRegisterInfoSection(
-            ctx.host,
-            ctx.ui,
-            "agentxx_codegraph.status",
-            R"_({"title":"CodeGraph"})_"
-        );
-        if (ctx.section) {
-            refreshSection(ctx);
+    if (!notify) {
+        agentxx::plugin::PluginString::set(ctx.host, err, "codegraph client start: notify required");
+        return nullptr;
+    }
+    auto later = agentxx::plugin::finishLater(notify);
+    ctx.spawn([later](ClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await codegraphClientSetupAsync(c);
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+            co_return;
         }
-    }
-    if (!ctx.iface.broadcasts || !ctx.iface.broadcasts->subscribe_broadcast) {
-        agentxx::plugin::PluginString::set(ctx.host, err, "broadcasts table missing");
-        return nullptr;
-    }
-    if (!agentxx::plugin::subscribePluginBroadcast(
-            ctx.host,
-            ctx.iface.broadcasts,
-            nullptr,
-            "plugin.agentxx_codegraph.status",
-            onClientStatus,
-            &ctx
-        )
-        || !agentxx::plugin::subscribePluginBroadcast(
-            ctx.host,
-            ctx.iface.broadcasts,
-            nullptr,
-            "plugin.agentxx_codegraph.progress",
-            onClientProgress,
-            &ctx
-        )) {
-        agentxx::plugin::PluginString::set(ctx.host, err, "status/progress subscribe failed");
-        return nullptr;
-    }
-    if (ctx.iface.log && ctx.iface.log->log) {
-        auto msgSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph client loaded");
-        ctx.iface.log->log(ctx.host, 2, &msgSv);
-    }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+        later.ok();
+        co_return;
+    });
+    return later.provider();
 }
 
 /// client 侧 stop: 撤销 Info 段落 (可重复调用)
