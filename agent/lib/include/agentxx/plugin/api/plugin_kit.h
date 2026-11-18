@@ -602,6 +602,8 @@ struct ClientIfaces {
     const PluginxxCancelIface* cancel = nullptr; ///< "pluginxx.cancel"
     /// 调度 (通用表): 睡眠 / 卸载 / io 线程判定
     const PluginxxSchedulerIface* scheduler = nullptr; ///< "pluginxx.scheduler"
+    /// 后台任务 (通用表): kit 的协程 `spawn` 用它登记取消
+    const PluginxxTasksIface* tasks = nullptr; ///< "pluginxx.tasks"
 
     /// 从主程序查询全部已知 client 侧接口表 (host 为空时返回全 NULL 聚合)
     static ClientIfaces query(const PluginxxHost* host) {
@@ -624,6 +626,7 @@ struct ClientIfaces {
         f.plugins  = queryInterface<PluginxxPluginsIface>(host, PLUGINXX_IFACE_PLUGINS);
         f.cancel    = queryInterface<PluginxxCancelIface>(host, PLUGINXX_IFACE_CANCEL);
         f.scheduler = queryInterface<PluginxxSchedulerIface>(host, PLUGINXX_IFACE_SCHEDULER);
+        f.tasks     = queryInterface<PluginxxTasksIface>(host, PLUGINXX_IFACE_TASKS);
         return f;
     }
 };
@@ -655,6 +658,33 @@ inline pluginxx::detail::TableOpResult clientTableOp(
         0,
         pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
     );
+}
+
+/// client 表调用 (**协程形态**): 提交即开始, `co_await` 拿结果
+///
+/// 与 [clientTableOp] 的区别: 不阻塞调用方线程。插件把注册事务写成协程时用它
+/// (`start` 入口先 `finishLater(notify)` 再 `ctx.spawn(...)`):
+///
+/// ```cpp
+/// auto r = co_await clientTableOpAsync(ctx, [&](auto cb, auto ud, auto err) {
+///     return ui->register_status_item(host, &idSv, &jsonSv, 0, 10, cb, ud, err);
+/// });
+/// auto* handle = clientHandleOf<AgentxxStatusItem>(r);
+/// ```
+///
+/// - `ctx` 是插件上下文 (`host` / `iface.cancel` / `bridge()` 由 kit 的 `tableOp` 取);
+/// - 也可以先攒几条再 `co_await whenAll(...)` 一次收齐, 或 `.forget()` 丢掉结果。
+template<typename Ctx, typename StartFn>
+inline pluginxx::TableOpTicket clientTableOpAsync(const Ctx& ctx, StartFn&& start) {
+    return pluginxx::tableOp(ctx, std::forward<StartFn>(start));
+}
+
+/// 从句柄类表结果里取句柄 (失败 / 未受理 → nullptr)
+///
+/// client 表把句柄以十进制文本放在 `payload` 里 (见 `clientHandleFromText`)。
+template<typename Handle>
+inline Handle* clientHandleOf(const pluginxx::detail::TableOpResult& result) {
+    return result.ok() ? agentxx::plugin::clientHandleFromText<Handle>(result.text()) : nullptr;
 }
 
 /// client 表查询: 只取结果正文 (失败 / 未受理 = 空串)
@@ -5898,12 +5928,18 @@ struct DiffSegment {
     std::string newStr; ///< 替换后文本
 };
 
-class ClientPluginBase {
+/// 客户端插件实例上下文基类
+///
+/// 继承 `pluginxx::PluginBaseT<ClientIfaces>`: 拿 `host` / `iface` / `log` 与协程驱动
+/// （`bridge()` / `spawn(...)`）。`start` 里的注册事务可以写成协程
+/// （`finishLater(notify)` + `spawn` + 逐条 `co_await clientTableOpAsync(...)`），
+/// 也可以继续用同步助手（同步桥保证不会自己等自己，见
+/// `pluginxx/api/sync_bridge.h`）。
+class ClientPluginBase : public pluginxx::PluginBaseT<ClientIfaces> {
 public:
 
-    const PluginxxHost*   host = nullptr;
-    ClientIfaces          iface{};
-    Logger                log;
+    using Base = pluginxx::PluginBaseT<ClientIfaces>;
+
     kit::ActionController actions;
 
     ClientPluginBase() = default;
@@ -5916,13 +5952,6 @@ public:
 
     std::shared_ptr<std::atomic<bool>> lifeToken() const {
         return lifeToken_;
-    }
-
-    void init(const PluginxxHost* h) {
-        host      = h;
-        iface     = ClientIfaces::query(h);
-        log.host  = h;
-        log.logFn = (iface.log && iface.log->log) ? iface.log->log : nullptr;
     }
 
     std::string clientState() const {

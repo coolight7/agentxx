@@ -830,7 +830,10 @@ path/to/agentxx_test --log-level warn string_util regex
   `clientSendPluginData` …); 回答型回调收尾用 `notifyText` / `notifyError`。
   **同步助手在插件执行线程上可用**: client 表工作体只碰 client 注册表、不会派回本插件
   的执行线程, 所以 kit 显式放行 (`SyncWaitThreadPolicy::allowOnPluginThread`), 完成回调经
-  同步桥在 io 就地调用; 内置 client 插件的注册事务继续用它们 (改为协程化的后续工作)。
+  同步桥在 io 就地调用。新写的注册事务**优先协程形态**: `ClientPluginBase` 继承
+  `pluginxx::PluginBaseT<ClientIfaces>` (有 `ctx.spawn(...)` / `bridge()`), 用
+  `finishLater(notify)` + `co_await clientTableOpAsync(ctx, ...)` + `clientHandleOf<T>`
+  (参考 `example_plugin` 的 client start); `ClientIfaces` 的 `tasks` 供 `spawn` 登记取消。
   client 定时器另有**回调未返回就跳过到期**的规则 (`ClientTimerImpl::inFlight`),
   否则慢回调返回后会连着补跑积压触发。
   **入参都是借用视图**: 主程序投递前必按值拷贝 (`copyView`), 否则跨线程执行时

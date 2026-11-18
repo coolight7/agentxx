@@ -27,6 +27,7 @@
 
 #include <chrono>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -739,97 +740,158 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
     });
 }
 
-/// client 侧生命周期事务 (与 agent 侧对称):
-/// - create 只构造上下文与接口查询;
-/// - start 注册状态栏项/面板/Info 段落/命令/事件订阅;
-/// - stop 撤销上述注册 (句柄置空, 可重复调用);
-/// - destroy 只释放本地内存。
-static int exampleClientSetup(ClientCtx& ctx) {
+/// client 侧注册事务 (协程形态): 逐条提交并等结果, 任何一条拒绝就整体失败
+///
+/// 跑在插件执行线程上 (`exampleClientStart` 里 `ctx.spawn`), 每条注册都是
+/// `co_await clientTableOpAsync(...)`: 提交后不再阻塞线程, 完成经同步桥就地唤醒。
+static pluginxx::Task<void> exampleClientSetupAsync(ClientCtx& ctx) {
     const PluginxxHost* host = ctx.host;
-    ctx.ui      = ctx.iface.ui;
-    ctx.status_item = agentxx::plugin::clientRegisterStatusItem(
-        host,
-        ctx.ui,
-        "example_plugin.turns",
-        R"_({"text":"turns: 0"})_",
-        0,
-        10
-    );
-    ctx.panel = agentxx::plugin::clientRegisterPanel(
-        host,
-        ctx.ui,
-        "example_plugin.panel",
-        R"_({"title":"Example"})_"
-    );
-    ctx.info_section = agentxx::plugin::clientRegisterInfoSection(
-        host,
-        ctx.ui,
-        "example_plugin.info",
-        R"_({"title":"Example Info"})_"
-    );
+    const auto          ui   = ctx.iface.ui;
+    ctx.ui                   = ui;
+    if (!ui) {
+        throw std::runtime_error("client ui iface is unavailable");
+    }
+
+    // 句柄类结果: 正文是主程序侧地址的十进制文本, 解析不到说明注册被拒
+    constexpr std::string_view kStatusJson = R"_({"text":"turns: 0"})_";
+    constexpr std::string_view kPanelJson  = R"_({"title":"Example"})_";
+    constexpr std::string_view kInfoJson   = R"_({"title":"Example Info"})_";
+
+    {
+        const auto idSv   = agentxx::plugin::PluginStringView::fromCstr("example_plugin.turns");
+        const auto jsonSv = agentxx::plugin::PluginStringView::from(kStatusJson.data(), kStatusJson.size());
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ui->register_status_item(host, &idSv, &jsonSv, 0, 10, cb, ud, err);
+            }
+        );
+        ctx.status_item = agentxx::plugin::clientHandleOf<AgentxxStatusItem>(res);
+        if (!ctx.status_item) {
+            throw std::runtime_error(fmt::format("register status item failed: {}", res.text()));
+        }
+    }
+    {
+        const auto idSv   = agentxx::plugin::PluginStringView::fromCstr("example_plugin.panel");
+        const auto jsonSv = agentxx::plugin::PluginStringView::from(kPanelJson.data(), kPanelJson.size());
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ui->register_panel(host, &idSv, &jsonSv, cb, ud, err);
+            }
+        );
+        ctx.panel = agentxx::plugin::clientHandleOf<AgentxxPanel>(res);
+        if (!ctx.panel) {
+            throw std::runtime_error(fmt::format("register panel failed: {}", res.text()));
+        }
+    }
+    {
+        const auto idSv   = agentxx::plugin::PluginStringView::fromCstr("example_plugin.info");
+        const auto jsonSv = agentxx::plugin::PluginStringView::from(kInfoJson.data(), kInfoJson.size());
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ui->register_info_section(host, &idSv, &jsonSv, cb, ud, err);
+            }
+        );
+        ctx.info_section = agentxx::plugin::clientHandleOf<AgentxxInfoSection>(res);
+        if (!ctx.info_section) {
+            throw std::runtime_error(fmt::format("register info section failed: {}", res.text()));
+        }
+    }
 
     // 命令回调是异步操作契约: 动作 JSON 经回调自己的 notify 交回 (本插件同步给).
     // 主程序无命令能力 (精简客户端) 时注册失败, 不影响其余展示能力.
-    if (!agentxx::plugin::clientRegisterCommand(
-            host,
-            ctx.ui,
-            "example",
-            "Send a message from the example plugin",
-            example_cmd_execute,
-            &ctx
-        )) {
-        return -1;
+    {
+        const auto nameSv = agentxx::plugin::PluginStringView::fromCstr("example");
+        const auto descSv
+            = agentxx::plugin::PluginStringView::fromCstr("Send a message from the example plugin");
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ui->register_command(
+                    host,
+                    &nameSv,
+                    &descSv,
+                    example_cmd_execute,
+                    &ctx,
+                    cb,
+                    ud,
+                    err
+                );
+            }
+        );
+        if (!res.ok()) {
+            throw std::runtime_error(fmt::format("register command `example` failed: {}", res.text()));
+        }
     }
-    if (!agentxx::plugin::clientRegisterCommand(
-            host,
-            ctx.ui,
-            "example_toast",
-            "Show a toast from the example plugin",
-            example_toast_execute,
-            &ctx
-        )) {
-        return -1;
+    {
+        const auto nameSv = agentxx::plugin::PluginStringView::fromCstr("example_toast");
+        const auto descSv
+            = agentxx::plugin::PluginStringView::fromCstr("Show a toast from the example plugin");
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ui->register_command(
+                    host,
+                    &nameSv,
+                    &descSv,
+                    example_toast_execute,
+                    &ctx,
+                    cb,
+                    ud,
+                    err
+                );
+            }
+        );
+        if (!res.ok()) {
+            throw std::runtime_error(fmt::format("register command `example_toast` failed: {}", res.text()));
+        }
     }
 
-    if (!ctx.iface.broadcasts || !ctx.iface.broadcasts->subscribe_broadcast) {
-        return -1;
+    const auto broadcasts = ctx.iface.broadcasts;
+    if (!broadcasts || !broadcasts->subscribe_broadcast) {
+        throw std::runtime_error("broadcasts iface is unavailable");
     }
-    if (!agentxx::plugin::subscribePluginBroadcast(
-            host,
-            ctx.iface.broadcasts,
-            nullptr,
-            agentxx::plugin::broadcasts::ClientReady,
-            on_client_ready,
-            &ctx
-        )) {
-        return -1;
-    }
-    if (!agentxx::plugin::subscribePluginBroadcast(
-            host,
-            ctx.iface.broadcasts,
-            nullptr,
-            agentxx::plugin::broadcasts::ClientTurnEnd,
-            on_client_turn_end,
-            &ctx
-        )) {
-        return -1;
-    }
-    if (!agentxx::plugin::subscribePluginBroadcast(
-            host,
-            ctx.iface.broadcasts,
-            nullptr,
-            kExampleProgressTopic,
-            on_client_plugin_data,
-            &ctx
-        )) {
-        return -1;
+    struct SubSpec {
+        std::string_view                                  id;
+        void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*);
+    };
+    const SubSpec subs[] = {
+        {agentxx::plugin::broadcasts::ClientReady, on_client_ready},
+        {agentxx::plugin::broadcasts::ClientTurnEnd, on_client_turn_end},
+        {kExampleProgressTopic,                    on_client_plugin_data },
+    };
+    for (const auto& sub : subs) {
+        const auto idSv = agentxx::plugin::PluginStringView::from(sub.id.data(), sub.id.size());
+        auto res = co_await agentxx::plugin::clientTableOpAsync(
+            ctx,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return broadcasts->subscribe_broadcast(
+                    host,
+                    nullptr,
+                    &idSv,
+                    sub.handler,
+                    &ctx,
+                    nullptr,
+                    cb,
+                    ud,
+                    err
+                );
+            }
+        );
+        if (!res.ok()) {
+            throw std::runtime_error(
+                fmt::format("subscribe `{}` failed: {}", sub.id, res.text())
+            );
+        }
     }
 
     if (ctx.iface.log && ctx.iface.log->log) {
         auto msgSv = agentxx::plugin::PluginStringView::fromCstr("example client plugin loaded");
         ctx.iface.log->log(host, 2, &msgSv);
     }
-    return 0;
+    co_return;
 }
 
 static void* exampleClientStart(
@@ -847,22 +909,24 @@ static void* exampleClientStart(
         }
         return nullptr;
     }
-    if (exampleClientSetup(ctx) != 0) {
-        if (error) {
-            agentxx::plugin::PluginString::set(
-                ctx.host,
-                error,
-                "example_plugin client start: registration transaction failed"
-            );
+    // 注册事务写成协程: 每条注册都是提交 + co_await, 全部生效后才交回成功
+    auto later = agentxx::plugin::finishLater(notify);
+    ctx.spawn([later](ClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+        try {
+            co_await exampleClientSetupAsync(c);
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+            co_return;
         }
-        return nullptr;
-    }
-    if (ctx.iface.log && ctx.iface.log->log) {
-        auto msgSv = agentxx::plugin::PluginStringView::fromCstr("example client plugin started");
-        ctx.iface.log->log(ctx.host, 2, &msgSv);
-    }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+        if (c.iface.log && c.iface.log->log) {
+            auto msgSv
+                = agentxx::plugin::PluginStringView::fromCstr("example client plugin started");
+            c.iface.log->log(c.host, 2, &msgSv);
+        }
+        later.ok();
+        co_return;
+    });
+    return later.provider();
 }
 
 static void* exampleClientStop(ClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {

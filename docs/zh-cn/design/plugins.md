@@ -943,6 +943,12 @@ cancel) + 1 张**网络表** `agentxx.net` (两侧都提供) + 6 张自有表 (`
   ctx.setPanelItems(ctx.panel, items);   // 或 auto ui = ctx.panelItems(ctx.panel); ui.add(...)
   ```
 
+- `ClientPluginBase` 继承 `pluginxx::PluginBaseT<ClientIfaces>`，因此插件能拿到
+  协程驱动（`ctx.bridge()` / `ctx.spawn(...)`）。`start` 里的注册事务可以写成协程：
+  `finishLater(notify)` + `ctx.spawn(...)` + 逐条 `co_await clientTableOpAsync(ctx, ...)`，
+  全部成功才 `later.ok()`。`example_plugin` 的 client start 就是这么写的；同步助手
+  仍然可用（见 §15.3 的同步桥）。
+
 
 ### 9.2 控件与结果回传（本项目的域内约定）
 
@@ -1654,7 +1660,9 @@ Closing → CloseFailed → Closing (可重试)
   线程）；client 表与广播表显式 `allowOnPluginThread`（工作体只碰 client 注册表，
   不会派回本插件的执行线程）。`start`/`stop` 里的注册事务优先写异步形态
   （`finishLater(notify)` + `ctx.spawn(...)` + `return later.provider()`），同步助手
-  继续可用但不推荐；
+  继续可用但不推荐；已改成协程的参考 `example_plugin` 的 client 入口: 逐条
+  `co_await clientTableOpAsync(ctx, ...)`, 句柄用 `clientHandleOf<T>` 取, 失败抛异常
+  由协程统一转成 `later.failed`；
 - 没配插件执行器的主程序（测试、直接 new 管理器的嵌入方程序）行为与改造前一致：
   `dispatchToPlugin` 就地执行，插件代码与 io 同线程；
 - 可观测性：单次插件回调超过预算（框架默认 100 ms，嵌入方经 `setPluginCallbackBudget`
