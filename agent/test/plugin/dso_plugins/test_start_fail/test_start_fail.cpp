@@ -151,29 +151,49 @@ void PLUGINXX_CALL regToolDone(void* ud, int32_t status, const PluginxxStringVie
 
 } // namespace
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    static const PluginxxInfo info{
-        PLUGINXX_API_VERSION,
-        0,
-        cstrView("test_start_fail_plugin"),
-        cstrView("1.0.0"),
-        cstrView("Test-only plugin: fails start after full registration (rollback fixture)"),
-    };
-    return &info;
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* out) {
+    if (!out || out->struct_size < PLUGINXX_INFO_BASELINE_SIZE) {
+        return -1;
+    }
+    out->min_api_version = AGENTXX_PLUGIN_MIN_API_VERSION;
+    out->flags           = 0;
+    out->name            = sv("test_start_fail_plugin");
+    out->version         = sv("1.0.0");
+    out->description
+        = sv("Test-only plugin: fails start after full registration (rollback fixture)");
+    return 0;
 }
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
+) {
     if (!host || !host->vtable || !plugin_ctx) {
-        return -1;
+        if (notify && notify->done) {
+            auto msg = sv("test_start_fail: invalid create call");
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &msg);
+        }
+        return;
     }
-    auto* ctx = static_cast<ProbeCtx*>(host->vtable->alloc(sizeof(ProbeCtx)));
-    if (!ctx) {
-        return -1;
+    // 可重入: 禁用后再启用只重新注册, 不重建上下文
+    if (*plugin_ctx == nullptr) {
+        auto* ctx = static_cast<ProbeCtx*>(host->vtable->alloc(sizeof(ProbeCtx)));
+        if (!ctx) {
+            if (notify && notify->done) {
+                auto msg = sv("test_start_fail: out of memory");
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &msg);
+            }
+            return;
+        }
+        ctx->host   = host;
+        *plugin_ctx = ctx;
     }
-    ctx->host   = host;
-    *plugin_ctx = ctx;
-    return 0;
+    // 进程级启动: 本探针的注册全部在 mount 里做
+    if (notify && notify->done) {
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
 }
 
 /// 挂载事务: 逐步注册 (任一步失败即返回, 主程序回滚已生效的注册)
@@ -386,21 +406,7 @@ static void* probeMount(
     return nullptr;
 }
 
-extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
-    void*                         plugin_ctx,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
-) {
-    (void)plugin_ctx;
-    (void)error_out;
-    // 进程级启动: 本探针的注册全部在 mount 里做
-    if (notify && notify->done) {
-        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    }
-    return nullptr;
-}
-
-extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_mount(
+extern "C" PLUGINXX_EXPORT void* agentxx_agent_plugin_mount(
     void*                              plugin_ctx,
     const AgentxxPluginAgentMountSpec* spec,
     const PluginxxOperatorNotify*      notify,
@@ -409,31 +415,38 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_mount(
     return probeMount(plugin_ctx, spec, notify, error_out);
 }
 
-extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_unmount(
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_unmount(
     void*                         plugin_ctx,
     void*                         mount_ud,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*
+    PluginxxString*               error_out
 ) {
     (void)plugin_ctx;
     (void)mount_ud;
+    (void)error_out;
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
-    return nullptr;
 }
 
-extern "C" PLUGINXX_EXPORT void*
-    agentxx_plugin_agent_stop(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
+extern "C" PLUGINXX_EXPORT void
+    agentxx_agent_plugin_stop(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
-    return nullptr;
 }
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
+) {
     auto* ctx = static_cast<ProbeCtx*>(plugin_ctx);
     if (ctx && ctx->host) {
         ctx->host->vtable->free(ctx);
+    }
+    (void)error_out;
+    if (notify && notify->done) {
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
 }

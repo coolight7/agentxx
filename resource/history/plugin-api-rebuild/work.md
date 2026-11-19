@@ -5,10 +5,10 @@
 | 步 | 内容 | 状态 |
 |---|---|---|
 | 0 | 现状调研（线程/线程池/生命周期/表调用/阻塞点/命名/构造时机/通用性/get_info/create/kit 布局/其它同步面） | 完成（记录在 [plan.md](plan.md) §2，含 §2.14 补审计） |
-| 1 | 决策确认 + 基线记录 | 待开始 |
-| 2 | 命名：入口符号与导出宏、`entrySymbols()`、全部表编号改下划线 | 待开始 |
-| 3 | `get_info` 填表化 + 删 `AgentxxClientPluginInfo` | 待开始 |
-| 4 | 框架通用化收尾（注释/示例去端化 + `boundaries` 规则） | 待开始 |
+| 1 | 决策确认 + 基线记录 | 完成（基线 `agentxx_test` passed=43825 failed=0；决策见下方“设计过程”第一~九轮） |
+| 2 | 命名：入口符号与导出宏、`entrySymbols()`、全部表编号改下划线 | 完成（与步 3/4/11 合并为一次 ABI 换代, 见下节） |
+| 3 | `get_info` 填表化 + 删 `AgentxxClientPluginInfo` | 完成（同上） |
+| 4 | 框架通用化收尾（注释/示例去端化 + `boundaries` 规则） | 完成（同上） |
 | 5 | 两侧管理器启动即构造 + 删 `ensurePluginThread` | 待开始 |
 | 6 | 线程池统一（管理器持一个池，默认 3 条，`plugin.thread_pool_workers`，两端同值；删其余四个池） | 待开始 |
 | 7 | 4 个同步受理入口改提交（含 `OpCore` 操作编号原子化与登记线程安全化） | 待开始 |
@@ -17,9 +17,123 @@
 | 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 待开始 |
 | 10b | 工具体收成一个：`tool`（`pluginxx::Task` 体）+ 删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync`（53 处） | 待开始 |
 | 10c | `offload` / `sleep` 改“提交即返回 ticket” + `whenAll` 泛化/变参 | 待开始 |
-| 11 | `create`/`start` 合并（返回 void、可重入）+ `destroy` 改异步 + 插件迁移 | 待开始 |
+| 11 | `create`/`start` 合并（返回 void、可重入）+ `destroy` 改异步 + 插件迁移 | 完成（全量回归 passed=43825 failed=0） |
 | 12 | 测试夹具统一带插件线程与池 | 待开始 |
 | 13 | 修静默降级（§2.6 六处 + 两处订阅）+ 文档/代次 + 全量回归 | 待开始 |
+
+## 实施记录：ABI 换代（步 2 + 3 + 4 + 11 合并为一次）
+
+**为什么合并**：三者改的是同一批文件（`cxx_pluginxx` 的 `abi.h` / 入口宏 / 框架生命周期、
+agentxx 的 `plugin_api.h` / `client_plugin_api.h` / `plugin_kit.h`、25 个插件的入口）。
+分三次做要重编三轮插件（每轮 4~8 分钟）且中间态无法编译，因此一次改完、一次验证。
+
+### 已改内容
+
+`cxx_pluginxx`（子模块，独立提交）:
+
+- `api/app.h`: 新增 `PLUGINXX_TABLE_ID(name)` = `<应用名>_<name>`（下划线）;
+  `PLUGINXX_APP_ID(name)` 仍点分, 只用于官方能力/广播/功能埋点 id。
+- `api/tables.h` / `api/net.h`: 10 张通用表 IID 改 `PLUGINXX_TABLE_ID("plugin_xxx")`。
+- `api/abi.h`:
+  - `PluginxxInfo` = `{api_version(框架写), min_api_version(插件写), struct_size(框架写),
+    flags(插件写), name, version, description}` + `PLUGINXX_INFO_BASELINE_SIZE`;
+  - `PluginxxGetInfoFn` 改 `int32_t(*)(PluginxxInfo*)`（填表）;
+  - `PluginxxCreateFn` 改 `void(host, void** plugin_ctx, notify, error_out)`（构造 + 注册合并,
+    可重入）; `PluginxxStopFn` / `PluginxxDestroyFn` 改 `void(..., notify, error_out)`;
+    `PluginxxStartFn` 删除;
+  - `PluginxxBuiltinInfo` 去 `start`, 字段顺序 `name/get_info/create/stop/destroy/mount/unmount`。
+- `api/entry.h`: `PluginEntrySymbols{getInfo, create, stop, destroy}`（去 `start`）。
+- `runtime/instance_base.h`: 删 `pluginDestroySymbol()` / `destroyPlugin()`;
+  `lifecycleStart` → `lifecycleCreate`; 新增 `lifecycleDestroy` / `finishDestroy()` /
+  `detail::destroyInstanceNoWait()`（异步 destroy 完成后 `finishDestroy` + `dlclose`）。
+- `runtime/op_driver.h`: 新增 `awaitPluginLifecycleVoid(runtime, inst, call, label, error)`
+  （驱动 "void + 完成通知" 形态入口; 非空哨兵句柄让 Operation 进 Running）。
+- `host/lifecycle.h`: `loadNativeAsync` / `loadBuiltinAsync` 改填表 `get_info` + 跑 `create`;
+  `makeInstance` / `attachInstance` 收 `create/stop/destroy` 三个入口;
+  新增 `rollbackLoadAsync` / `destroyInstanceAsync` / `requestAsyncDestroy`;
+  `hostApiVersion()` 扩展点（两端各自报自己的代次）;
+  `startForEnable` 改成"可重入 create", `stopForDisable` / `unload` 走 `awaitPluginLifecycleVoid`。
+- `kit/kit.h`: `PLUGINXX_EXPORT_PLUGIN(SymbolPrefix, Ctx, Name, Ver, Desc, CreateFn, StopFn)` 与
+  `PLUGINXX_EXPORT_PLUGIN_LIFECYCLE(SymbolPrefix, Ctx, StopFn)` 按新协议重写; 新增
+  `detail::{fillPluginInfo, notifyLifecycleFailure, callLifecycleEntryVoid,
+  createInstanceEntry, destroyInstanceEntry}`。
+
+agentxx:
+
+- `agent/CMakeLists.txt`: `AGENTXX_PLUGIN_API_VERSION` 7 → 8（含缓存纠正分支）。
+- `plugin/api/plugin_api.h`: 入口符号 `agentxx_agent_plugin_{get_info,create,stop,destroy}`
+  (+ `mount`/`unmount`), 删除 `start`; 新增 `AGENTXX_TABLE_ID(name)`;
+  10 张业务表 IID 改 `agentxx_agent_xxx`; `AgentxxPluginAgentUnmountFn` 改 `void`。
+- `plugin/api/client_plugin_api.h`: `AGENTXX_CLIENT_PLUGIN_API_VERSION` 8 → 9;
+  删 `AgentxxClientPluginInfo`（统一用 `PluginxxInfo`）;
+  入口符号 `agentxx_client_plugin_*`; 6 张表 IID 改 `agentxx_client_xxx`。
+- `plugin/api/plugin_kit.h`: 导出宏改名并按新协议生成 4 个入口
+  （`AGENTXX_AGENT_PLUGIN_EXPORT` / `_MOUNT_EXPORT` / `_LIFECYCLE_EXPORT` /
+  `AGENTXX_CLIENT_PLUGIN_EXPORT` / `_LIFECYCLE_EXPORT`）; 新增通用 helper
+  `detail::{createCtxEntry, destroyCtxEntry, fillAgentPluginInfo, fillClientPluginInfo}`。
+- 两个管理器: 入口符号常量、`get_info` 填表、`min_api_version` 校验、`hostApiVersion()` 覆写、
+  失败回滚改 `destroyInstanceAsync`、析构判 `pluginDestroyed`。
+- `agent/plugins/CMakeLists.txt` + `builtin_plugins.cpp.in` + 各插件 CMakeLists:
+  导出白名单/内置清单的入口符号与参数顺序按新 ABI 改（内置清单 7 项, 无 `start`）。
+- 25 个插件: 入口按新协议重写。`mount` 仍返回 per-agent 状态 (`void*`),
+  `create/stop/unmount` 一律 `void` + 完成通知; 手工 create 的插件
+  (JS 引擎 / chatbot / codegraph / planning / example_js 壳 / test 夹具) 用
+  `createCtxEntry` / `destroyCtxEntry`, 上下文 `init(host)` 由 helper 调用。
+
+文档与测试:
+
+- `docs/{zh-cn,en}/design/plugins.md`: 入口符号、入口协议（`get_info` 填表 / `create` 可重入 /
+  `stop` / `destroy`）、导出宏名称同步; 25 张表 IID 在全部文档里改成下划线写法
+  （`agentxx_agent_tools` 等, 点分的官方能力/广播 id 不动）。
+- `test_boundaries` 的 IID 检查改 `PLUGINXX_TABLE_ID` 拼法 + 下划线前缀。
+- `test_plugin_abi_c17.c` 版本断言: agent 8 / client 9。
+- `test_plugin_runtime` / `test_client_plugins` / `test_plugin_executor` 的假实例改
+  `lifecycleCreate` 与 `awaitPluginLifecycleVoid`。
+- `test/plugin/dso_plugins/test_start_fail` / `test_client_start_fail` 两个夹具按新入口重写。
+
+### 偏差与后续
+
+- **表版本号未抬**: 只换了 IID（下划线拼法）, 各表 `VERSION` / `BASELINE_SIZE` 不动 ——
+  IID 变化本身就让老插件在 `query_interface` 阶段查不到表, 不会静默不兼容。
+- `polled_tool` / `blocking_tool` / `fast_tool` / `registerToolSync` 仍在: 本批只做入口换代,
+  工具体收一归步 10b。
+- `plugin_kit.h` 暂未拆成三个头（步 10 一起做）。
+- `docs/*/develop.md` 里的 SDK 示例仍按旧宏写（步 13 统一改, 已在 plan.md 记录）。
+
+### 验证与修复（同一次换代内完成）
+
+编译: 顶层 `cmake --build agent/build/windows-debug --config Debug` 通过; 25 个插件 DLL 重编通过。
+
+全量测试: `agentxx_test --log-level warn` → **passed=43825 failed=0**（与换代前基线一致）。
+
+换代过程中发现并修掉的问题（都属于“create 现在真的跑在插件执行线程上”带来的后果）:
+
+1. **`example_js` / `example_js_execute_command` 的 `create` 在插件线程同步等表调用**：
+   `get_own_info` 被改成异步两步（`onOwnInfoDone` → `beginScriptLoad`），失败路径一律
+   `done(FAILED, 原因)`；`example_js_execute_command` 的 own-info 解析在批量转换时整段丢了
+   （`scriptPath` 永远是空串），这次按同样形状补回（含开发期源码目录回退）。
+2. **`example_resources` / `codegraph` / `llm_uncensored` / `planning` 的阻塞读表**：
+   - `example_resources`：`ownInfoString` → `ownInfoStringAsync`（`co_await tableOp`）；
+   - `codegraph`：`readHostConfig` → `readHostConfigAsync`，`codegraphCtor` → `codegraphInit`
+     （协程），create 里 `finishLater` + `spawn` 驱动；60 行死事务 `codegraphAgentStart` 删除;
+   - `llm_uncensored`：`readArgs` → `readArgsAsync`（挂载协程里 `co_await`）；
+   - `planning`：`dataDir` 改为挂载时读一次缓存进 `PluginCtx::dataDir`，
+     之后的工具/事件回调不再调表。
+3. **导出宏的完成信号缺口（会挂死）**：`AGENTXX_AGENT_PLUGIN_MOUNT_EXPORT` 的 unmount 与
+   `PLUGINXX_EXPORT_PLUGIN{,_LIFECYCLE}` 的 stop 在“回调为空”时都没有调 `notify->done`，
+   主程序一直等到超时 —— `plugin_multi_instance` 挂死、`plugin_executor` 超时的直接原因。
+   两处补上“无事务也发 OK”。
+4. **`destroyInstanceNoWait` 先判运行时**：主程序构造的伪实例（没有 `runtime`）永远关不掉。
+   调整为“没有 destroy 入口 → 本地退休 + 关库”先短路，不再要求运行时。
+5. **`unloadAsyncUntil` 无条件绕一趟加载线程池**：没有 `dlHandle` 时（内置插件/伪实例）
+   这次往返只能靠线程调度凑巧完成，测试里表现为 `unloadAsync` 偶发返回 false。
+   改成只在 `dlHandle` 非空时 `co_await runLoaderTask`。
+6. **`query_interface` 的假告警**：IID 改下划线后，`looksLikeGenericTableIid` 把
+   `agentxx_plugin_net`（由主程序自己实现的网络表）当成“应用名不一致”，每次 create 刷 5 条警告。
+   增加 `appTableIdPrefix()`，本进程前缀的 IID 只交给主程序继续查。
+7. **测试夹具**：手工构造的 `ClientPluginInstance` 补 `runtime`（真实实例必有）；
+   `test_client_plugins` 的接口名断言改成下划线 IID；`test_boundaries` 的 IID 提取接受
+   `PLUGINXX_TABLE_ID` / `AGENTXX_TABLE_ID` 两种拼法，并清空同步等待豁免名单。
 
 ## 设计过程
 

@@ -507,15 +507,13 @@ asio::awaitable<void> test_lifecycle_on_plugin_thread() {
     std::atomic<std::thread::id> lifecycleThread{};
 
     std::string error;
-    const bool  ok = co_await pluginxx::awaitPluginLifecycle(
+    const bool  ok = co_await pluginxx::awaitPluginLifecycleVoid(
         f.mgr->runtime(),
         f.inst,
-        nullptr,
-        [&](void*, const PluginxxOperatorNotify* notify, PluginxxString*) -> void* {
+        [&](const PluginxxOperatorNotify* notify, PluginxxString*) {
             lifecycleThread.store(std::this_thread::get_id());
             auto copy = *notify;
             copy.done(copy.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-            return reinterpret_cast<void*>(0x3);
         },
         "plugin start",
         error

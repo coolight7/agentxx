@@ -1,7 +1,7 @@
 /// test_client_plugins.cpp —— client 侧插件系统测试 (模块名 `client_plugins`)
 ///
 /// 覆盖:
-/// 1. 加载 example_plugin 的 client 入口 (agentxx_plugin_client_create)
+/// 1. 加载 example_plugin 的 client 入口 (agentxx_client_plugin_create)
 /// 2. UI 注册表: 状态栏项 / 面板 / Info 栏段落 / 命令 (含快照读取)
 /// 3. 频道分发: `agentxx.client.ready` / `turn_end` / `user_input` → 插件回调
 /// 4. 命令执行: /example (send 动作) / example_toast (toast 动作)
@@ -373,28 +373,29 @@ static std::string
 }
 
 /// 同步关闭路径无法等待 stop 事务: 该 hook 只用于断言“未被调用”。
-void* PLUGINXX_CALL fakeClientStopHook(void*, const PluginxxOperatorNotify*, PluginxxString*) {
-    return nullptr;
-}
+void PLUGINXX_CALL fakeClientStopHook(void*, const PluginxxOperatorNotify*, PluginxxString*) {}
 
-/// client 侧 start/stop 事务探针 (记录调用次数; 不保存任何跨调用全局状态)
+/// client 侧 create/stop 事务探针 (记录调用次数; 不保存任何跨调用全局状态)
 struct ClientLifecycleProbe {
     int starts = 0;
     int stops  = 0;
 };
 
-void* PLUGINXX_CALL
-    probeClientStartHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    ++static_cast<ClientLifecycleProbe*>(ud)->starts;
+/// create = 构造 + 注册 (可重入): 上下文已经是上一次的 `&probe`, 只计数
+void PLUGINXX_CALL probeClientCreateHook(
+    const PluginxxHost*,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
+    ++static_cast<ClientLifecycleProbe*>(*plugin_ctx)->starts;
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
 }
 
-void* PLUGINXX_CALL
+void PLUGINXX_CALL
     probeClientStopHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ++static_cast<ClientLifecycleProbe*>(ud)->stops;
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
 }
 
 #if XX_IS_WIN_D
@@ -1550,8 +1551,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 未置位的能力不得出现 (prompt_modal 仍未实现, 预留位不置)
         XX_TEST_EXPECT_FALSE(stateJson.find("agentxx.client.prompt_modal") != std::string::npos);
         // 本次实现的能力 (定时器/快捷键) 由 Mock 适配器声明, 应出现在清单里
-        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.timer") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.keybind") != std::string::npos);
+        // (接口名就是表 IID: 下划线形式 `<应用名>_client_<表名>`)
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx_client_timer") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx_client_keybind") != std::string::npos);
 
         // 11.1b 区域尺寸快照: 上报后进入 client_state.regions, 值未变化不重复记录
         XX_TEST_EXPECT_TRUE(mgr->regionSizes().empty());
@@ -3340,6 +3342,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         fake->pluginCreated    = true;
         fake->manager          = syncMgr;
         fake->self             = fake;
+        fake->runtime          = syncMgr->runtime();
         fake->lifetime         = std::make_shared<pluginxx::InstanceLifetime>(
             syncIo.get_executor(),
             fake->name,
@@ -3363,6 +3366,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto legacy      = std::make_shared<agentxx::plugin::ClientPluginInstance>("fake_legacy");
         legacy->manager  = syncMgr;
         legacy->self     = legacy;
+        legacy->runtime  = syncMgr->runtime();
         legacy->lifetime = std::make_shared<pluginxx::InstanceLifetime>(
             syncIo.get_executor(),
             legacy->name,
@@ -3389,6 +3393,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto inst  = std::make_shared<agentxx::plugin::ClientPluginInstance>(std::move(name));
             inst->self = inst;
             inst->manager  = m;
+            inst->runtime  = m->runtime();
             inst->lifetime = std::make_shared<pluginxx::InstanceLifetime>(
                 io.get_executor(),
                 inst->name,
@@ -3411,10 +3416,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto mgr2 = std::make_shared<agentxx::plugin::ClientPluginManager>(io.get_executor());
         ClientLifecycleProbe probe;
         auto                 inst = createFake(mgr2, io, "fake_lifecycle", uint64_t{7});
-        inst->lifecycleStart      = &probeClientStartHook;
-        inst->lifecycleStop       = &probeClientStopHook;
-        inst->pluginCtx           = &probe;
-        inst->lifecycleStarted    = true;
+        inst->lifecycleCreate    = &probeClientCreateHook;
+        inst->lifecycleStop      = &probeClientStopHook;
+        inst->pluginCtx          = &probe;
+        inst->lifecycleStarted   = true;
 
         // 禁用: 主程序侧同步摘除, stop 事务投递到 client io 线程
         mgr2->disable("fake_lifecycle");
@@ -3471,6 +3476,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto inst  = std::make_shared<agentxx::plugin::ClientPluginInstance>(std::move(name));
             inst->self = inst;
             inst->manager  = m;
+            inst->runtime  = m->runtime();
             inst->lifetime = std::make_shared<pluginxx::InstanceLifetime>(
                 io.get_executor(),
                 inst->name,

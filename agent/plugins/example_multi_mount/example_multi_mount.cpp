@@ -40,69 +40,58 @@ static auto guardLogger(MultiMountCtx* ctx) noexcept {
     };
 }
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const PluginxxInfo* {
-            static const PluginxxInfo info{
-                PLUGINXX_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("example_multi_mount"),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "Example plugin mounted by several agents, one state per mount"
-                ),
-            };
-            return &info;
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillAgentPluginInfo(
+        out,
+        "example_multi_mount",
+        "1.0.0",
+        "Example plugin mounted by several agents, one state per mount"
+    );
+}
+
+static void multiMountStart(MultiMountCtx&, const PluginxxOperatorNotify*, PluginxxString*);
+
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::createCtxEntry<MultiMountCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "example_multi_mount",
+        [](MultiMountCtx& ctx) -> std::string {
+            return {};
+        },
+        [](MultiMountCtx& c, const PluginxxOperatorNotify* n, PluginxxString* e) {
+            (void)multiMountStart(c, n, e);
         }
     );
 }
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    MultiMountCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            guardLogger(raw)(msg);
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto ctx = std::make_unique<MultiMountCtx>();
-            ctx->init(host);
-            raw = ctx.get();
-            // create 只构造与查询接口: 注册事务在 mount 里做 (那时才有挂载引用)
-            if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
-                return -1;
-            }
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
-    );
-}
 
 /// 进程级启动: 本插件没有线程/定时器/进程级注册
-static void* multiMountStart(
+static void multiMountStart( 
     MultiMountCtx&, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
-    return nullptr;
+    return;
 }
 
 /// 进程级停止: 没有进程级资源需要回收, 只给完成信号
 /// (各挂载的状态在 `unmount` 里释放)
-static void* multiMountStop(
+static void multiMountStop(
     MultiMountCtx&, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
-    return nullptr;
+    return;
 }
 
 /// 注册本挂载的两个工具 (**协程形态**)
@@ -215,30 +204,32 @@ static void* multiMountForAgent(
 }
 
 /// 拆挂载: 工具由主程序按挂载记录撤销, 这里只释放本挂载的状态
-static void* multiMountForAgentEnd(
+static void multiMountForAgentEnd(
     MultiMountCtx&, void* mountUserData, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
     delete static_cast<std::shared_ptr<MountState>*>(mountUserData);
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT(
     MultiMountCtx,
-    multiMountStart,
     multiMountStop,
     multiMountForAgent,
     multiMountForAgentEnd
 )
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<MultiMountCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(guardLogger(ctx), [&] {
-        if (!ctx) {
-            return;
-        }
-        delete ctx;
-    });
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<MultiMountCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](MultiMountCtx* ctx) { delete ctx; }
+    );
 }

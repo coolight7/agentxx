@@ -66,15 +66,15 @@ Plugin shared libraries hide all symbols by default, exporting only the entry-po
 
 ```c
 #include "agentxx/plugin/api/plugin_api.h"
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void);
-extern "C" PLUGINXX_EXPORT int32_t agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx);
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx);
+extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_agent_plugin_get_info(void);
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_create(const PluginxxHost* host, void** plugin_ctx);
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(void* plugin_ctx);
 ```
 
 - **Entry Symbol Sets**:
-  - Agent side: `agentxx_plugin_agent_get_info` / `agentxx_plugin_agent_create` / `agentxx_plugin_agent_destroy`
-  - Client side (Dual-sided or UI-only): `agentxx_plugin_client_get_info` / `agentxx_plugin_client_create` / `agentxx_plugin_client_destroy`
-- **Automated Build Configuration**: `plugins/CMakeLists.txt` configures ELF `-fvisibility=hidden` + version script whitelists (wildcarding `agentxx_plugin_agent_*` / `agentxx_plugin_client_*`, allowing single-sided plugins to link under Android lld), macOS `-exported_symbols_list`, and MSVC `dllexport`. Third-party static library symbols are hidden automatically.
+  - Agent side: `agentxx_agent_plugin_get_info` / `agentxx_agent_plugin_create` / `agentxx_agent_plugin_destroy`
+  - Client side (Dual-sided or UI-only): `agentxx_client_plugin_get_info` / `agentxx_client_plugin_create` / `agentxx_client_plugin_destroy`
+- **Automated Build Configuration**: `plugins/CMakeLists.txt` configures ELF `-fvisibility=hidden` + version script whitelists (wildcarding `agentxx_agent_plugin_*` / `agentxx_client_plugin_*`, allowing single-sided plugins to link under Android lld), macOS `-exported_symbols_list`, and MSVC `dllexport`. Third-party static library symbols are hidden automatically.
 
 ---
 
@@ -151,7 +151,7 @@ using namespace agentxx::plugin;
 struct MyPluginCtx : public PluginBase {};
 
 // Declarative export macro (encapsulates entry symbols, C ABI boundary guards, and context lifecycle)
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     MyPluginCtx,
     "my_plugin",
     "1.0.0",
@@ -263,8 +263,8 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ### SDK Core Infrastructure Highlights
 
-1. **Export Macros (`AGENTXX_PLUGIN_AGENT_EXPORT` / `AGENTXX_PLUGIN_CLIENT_EXPORT`)**:
-   - Automatically defines exported C entry points (`agentxx_plugin_agent_get_info`, `create`, `destroy`).
+1. **Export Macros (`AGENTXX_AGENT_PLUGIN_EXPORT` / `AGENTXX_CLIENT_PLUGIN_EXPORT`)**:
+   - Automatically defines exported C entry points (`agentxx_agent_plugin_get_info`, `create`, `destroy`).
    - Wraps all entry calls in `guardCall` exception guards, intercepting C++ exceptions from crossing C ABI boundaries.
    - Manages heap-allocated instance context (`PluginBase`) lifecycle cleanly.
 2. **Fluent Schema Builder (`ToolSchemaBuilder`)**:
@@ -319,23 +319,23 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 There are 20 agent-side tables: 10 **business tables** (`agentxx.agent.*`, implemented by the
 host) plus 10 **generic tables** (declared and implemented by the plugin framework, `<app>.*` —
 with the `agentxx` app name that is `agentxx.log`, `agentxx.broadcasts`, ...; querying
-`pluginxx.log` or `agentxx.agent.log` does not hit). One more table, `agentxx.net` (network,
+`pluginxx.log` or `agentxx.agent.log` does not hit). One more table, `agentxx_plugin_net` (network,
 provided on both sides), is not counted in those 20.
 
 ### 8.1 Business tables (`agentxx.agent.*`, 10)
 
 | IID | Version | Capability |
 |---|---|---|
-| `agentxx.agent.tools` | 3 | `register_tool/unregister_tool`, `call_tool_async` (cross-plugin invocation; completion guaranteed posted to the IO thread; cancel goes through `agentxx.cancel.op_cancel`). v3: success is expressed by the final result status, the text carries no `[Error]` prefix. |
-| `agentxx.agent.permission` | 2 | `register_tool_permission/unregister_tool_permission` (the tool provider declares its own limits) + `check_paths` (batched three-state path check, never asks/interrupts). |
-| `agentxx.agent.session` | 3 | `get_share_store/add_share_store/emit_message_tip` (IO thread) + `get_session_work_dir(agent, session_id)` (effective session workdir: worktree binding wins, empty session id returns the default) + `is_canceled(agent, thread_id)` (advisory; the authoritative notification is still the cancel callback). The last two moved here from the framework tables in v3. |
-| `agentxx.agent.context` | 2 | Session LLM context queries: `get_messages/messages_count` (IO thread). The session owns the context (the graph state has no `messages` channel); use `messages_count` when only the size matters. |
-| `agentxx.agent.model` | 2 | `get_config(agent)` (the agent's main model and related config JSON). |
-| `agentxx.agent.prompt` | 3 | `get_prompt/set_prompt` (host prompt read/write) + `get_tool_prompt(tool_name)` (per-tool prompt config JSON `{depict, args}`, host-level; moved here from the framework table in v3). |
-| `agentxx.agent.resources` | 2 | `register_skill_dir/memory_file/mcp_server` (initialization phase only) + `get_own_resources` (immutable after freeze). |
-| `agentxx.agent.graph` | 2 | Execution graph extensibility: `register_node_type/unregister_node_type` (custom node types injected into the per-agent `GraphRegistry`) + `get_graph_json/get_graph_name/set_graph_json` (inspect/modify the host execution graph, default name `agentxx.default`; applied during plugin load, consumed before the host builds the engine). **The graph state carries no conversation context**: `state_json` has no `messages` channel, only control channels and the read-only shadow channel `xx_messagesMeta`; use `agentxx.agent.context` for content. Conditional edges use `xx_has_tool_calls`. |
-| `agentxx.agent.mount` | 1 | Mount queries (diagnostics): `list` (all mount summaries as a JSON array, each with agentId/agentName/workDir/language/mountSeq/plugins) + `get` (one summary by agent id, -1 when absent). |
-| `agentxx.agent.runtime` | 2 | Session runtime (a plugin mounts its own root and drives sessions): `mount_root/unmount_root` + `open_channel/close_channel` (one channel per session id) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer`. v2 appended four background-task members (`submit/cancel/get/list_async_work`, baseline kept, gate with `ifaceHas`). See §19 of the Chinese doc. |
+| `agentxx_agent_tools` | 3 | `register_tool/unregister_tool`, `call_tool_async` (cross-plugin invocation; completion guaranteed posted to the IO thread; cancel goes through `agentxx.cancel.op_cancel`). v3: success is expressed by the final result status, the text carries no `[Error]` prefix. |
+| `agentxx_agent_permission` | 2 | `register_tool_permission/unregister_tool_permission` (the tool provider declares its own limits) + `check_paths` (batched three-state path check, never asks/interrupts). |
+| `agentxx_agent_session` | 3 | `get_share_store/add_share_store/emit_message_tip` (IO thread) + `get_session_work_dir(agent, session_id)` (effective session workdir: worktree binding wins, empty session id returns the default) + `is_canceled(agent, thread_id)` (advisory; the authoritative notification is still the cancel callback). The last two moved here from the framework tables in v3. |
+| `agentxx_agent_context` | 2 | Session LLM context queries: `get_messages/messages_count` (IO thread). The session owns the context (the graph state has no `messages` channel); use `messages_count` when only the size matters. |
+| `agentxx_agent_model` | 2 | `get_config(agent)` (the agent's main model and related config JSON). |
+| `agentxx_agent_prompt` | 3 | `get_prompt/set_prompt` (host prompt read/write) + `get_tool_prompt(tool_name)` (per-tool prompt config JSON `{depict, args}`, host-level; moved here from the framework table in v3). |
+| `agentxx_agent_resources` | 2 | `register_skill_dir/memory_file/mcp_server` (initialization phase only) + `get_own_resources` (immutable after freeze). |
+| `agentxx_agent_graph` | 2 | Execution graph extensibility: `register_node_type/unregister_node_type` (custom node types injected into the per-agent `GraphRegistry`) + `get_graph_json/get_graph_name/set_graph_json` (inspect/modify the host execution graph, default name `agentxx.default`; applied during plugin load, consumed before the host builds the engine). **The graph state carries no conversation context**: `state_json` has no `messages` channel, only control channels and the read-only shadow channel `xx_messagesMeta`; use `agentxx_agent_context` for content. Conditional edges use `xx_has_tool_calls`. |
+| `agentxx_agent_mount` | 1 | Mount queries (diagnostics): `list` (all mount summaries as a JSON array, each with agentId/agentName/workDir/language/mountSeq/plugins) + `get` (one summary by agent id, -1 when absent). |
+| `agentxx_agent_runtime` | 2 | Session runtime (a plugin mounts its own root and drives sessions): `mount_root/unmount_root` + `open_channel/close_channel` (one channel per session id) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer`. v2 appended four background-task members (`submit/cancel/get/list_async_work`, baseline kept, gate with `ifaceHas`). See §19 of the Chinese doc. |
 
 ### 8.2 Generic tables (`agentxx.*`, 10)
 
@@ -351,12 +351,12 @@ the same calls on both ends.
 | `agentxx.coroutine_runtime` | 1 | Generic coroutine driver: `request_driver/cancel_driver/is_io_thread` (driver-ticket / wake protocol, see §15). |
 | `agentxx.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON; each `list_plugins` item carries `mount_count` / `mount_agents`). |
 | `agentxx.config` | 3 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` returns the normalized absolute path configured via YAML `config`, pointing to a file or a directory). Since v3 it carries no business members. |
-| `agentxx.cancel` | 3 | `op_cancel` (cancel one operation handle; every table with cancellable entries funnels here). Since v3 `is_canceled` moved to `agentxx.agent.session`. |
+| `agentxx.cancel` | 3 | `op_cancel` (cancel one operation handle; every table with cancellable entries funnels here). Since v3 `is_canceled` moved to `agentxx_agent_session`. |
 | `agentxx.json` | 1 | `json_get_string/json_escape`. |
 | `agentxx.log` | 1 | `log(level, msg)` (0: trace .. 4: error). |
 | `agentxx.tasks` | 1 | Host-managed background tasks: `register_task/cancel_task` (auto-registered by kit `spawn`; the host tracks the handle, holds the inflight count and receives `notify.done`, which may be called from any thread). |
 
-> Not counted in the 20: `agentxx.net` (v1) — `call / call_async / cancel`; HTTP / WebSocket /
+> Not counted in the 20: `agentxx_plugin_net` (v1) — `call / call_async / cancel`; HTTP / WebSocket /
 > TCP / UDP / HTTP server all go through `utilxx::NetHub` (see §22 of the Chinese doc).
 
 > **Built-in capabilities (callable by other plugins / the host side)**
@@ -407,12 +407,12 @@ tables (`agentxx.client.*`). Client events are broadcast channels now — the ol
 
 | IID | Version | Capability |
 |---|---|---|
-| `agentxx.client.ui` | 1 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay`. |
-| `agentxx.client.session` | 1 | `get_client_state` (snapshot JSON), `send_user_input`, `request_cancel`. |
-| `agentxx.client.wire` | 1 | `send_plugin_data(topic, json)` → published on the agent bus under the same topic (topic must be the full name `agentxx.client.plugin.<plugin name>.<event>`). |
-| `agentxx.client.self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (Returns normalized absolute path configured via YAML `config`). |
-| `agentxx.client.timer` | 1 | One-shot / periodic timers plus region visibility queries (pause policy: plugins.md §9.5 in the Chinese doc). |
-| `agentxx.client.keybind` | 1 | Global keybind register/unregister/list (normalization and priority: §9.6 in the Chinese doc). |
+| `agentxx_client_ui` | 1 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay`. |
+| `agentxx_client_session` | 1 | `get_client_state` (snapshot JSON), `send_user_input`, `request_cancel`. |
+| `agentxx_client_wire` | 1 | `send_plugin_data(topic, json)` → published on the agent bus under the same topic (topic must be the full name `agentxx.client.plugin.<plugin name>.<event>`). |
+| `agentxx_client_self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (Returns normalized absolute path configured via YAML `config`). |
+| `agentxx_client_timer` | 1 | One-shot / periodic timers plus region visibility queries (pause policy: plugins.md §9.5 in the Chinese doc). |
+| `agentxx_client_keybind` | 1 | Global keybind register/unregister/list (normalization and priority: §9.6 in the Chinese doc). |
 
 Client channels declared by the host at startup (subscribe directly, no `declare_broadcast`
 needed): `agentxx.client.ready`, `agentxx.client.connection_state`,
@@ -488,13 +488,13 @@ The Agentxx client adopts a unified, layered tool-specialized rendering mechanis
 ## 10. Session Resource Contributions (Skills / Memory / MCP)
 
 - **Declarative**: Resources declared alongside `plugin.yaml` in the plugin directory (applied via `AgentResourceApplier::applyDecls` upon successful entry, removed on unload/disable).
-- **Programmatic**: Dynamically registered/unregistered at runtime via the `agentxx.agent.resources` interface table (e.g. `agentxx_codegraph` registering index paths based on configuration args).
+- **Programmatic**: Dynamically registered/unregistered at runtime via the `agentxx_agent_resources` interface table (e.g. `agentxx_codegraph` registering index paths based on configuration args).
 - The host handles deduplication and lifecycle management for both declarative and programmatic resources (ownership semantics in `resource_applier.h`); failed items are tracked in `AppendComponentNotification` for UI reporting.
 
 ### Plugin Configuration Path (`config` field)
 
 - Each plugin entry in `agentxx-config.yaml` can specify a configuration directory or file path via `config` (supports `~`, `${VAR}`, and relative paths, normalized to absolute paths by the host).
-- Plugins query this path via `get_plugin_config_path` in `agentxx.agent.config` (agent side) or `agentxx.client.self` (client side), returning `NULL` when unconfigured. Plugins can determine file type and load accordingly (e.g. scanning `*.yaml` files or reading a specific file).
+- Plugins query this path via `get_plugin_config_path` in `agentxx.agent.config` (agent side) or `agentxx_client_self` (client side), returning `NULL` when unconfigured. Plugins can determine file type and load accordingly (e.g. scanning `*.yaml` files or reading a specific file).
 - Typical usage: `config: ${AGENTXX_WORK_DIR}/config/my_plugin.yaml` or `config: ./my_plugin_config/` (relative to work directory); wrapped conveniently as `PluginBase::configPath()` in the SDK.
 
 ---
@@ -523,7 +523,7 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 | Plugin | Description |
 |---|---|
 | `example_plugin` | Comprehensive native C++ example (fast_tool, Task coroutines, call_tool, sleep, **coroutine bridge**, **controlled polling `polled_tool`**, hooks, events, capabilities, client entry). |
-| `example_graph_node` | Graph extension sample (custom node types + set_graph_json; requires `agentxx.agent.graph`). |
+| `example_graph_node` | Graph extension sample (custom node types + set_graph_json; requires `agentxx_agent_graph`). |
 | `example_js` | JavaScript script plugin example (C++ shell wrapper + `plugin.js`). |
 | `example_resources` | Session resource contribution example (declarative & programmatic MCP, Skills, rules, session environments). |
 | `agentxx_filesystem` | Filesystem tools (list, read, write, edit, glob, grep, move, copy, remove; includes unit-tested `*_impl.h`). |
@@ -550,7 +550,7 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 > change an already frozen tool definition). `agentxx_execute_command` follows this by probing
 > python/node availability + version (and the PowerShell executable name + version on Windows)
 > inside its `start` transaction, then injecting the resulting depict and argument descriptions
-> as this instance's contribution through the `agentxx.agent.prompt` interface; the contribution
+> as this instance's contribution through the `agentxx_agent_prompt` interface; the contribution
 > is removed automatically on `disable` / unload. Probe results live only in the
 > instance context (`ExecPluginCtx::env`) — no process-wide mutable statics (multi-instance
 > constraint, see §4).

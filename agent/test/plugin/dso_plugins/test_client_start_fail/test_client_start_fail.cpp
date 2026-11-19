@@ -40,6 +40,35 @@ PluginxxStringView sv(const char* text) {
     return view;
 }
 
+/// 元信息填表 (纯 C ABI 版的 `fillClientPluginInfo`): 只写插件侧字段
+int32_t fillInfo(PluginxxInfo* out, const char* name, const char* ver, const char* desc) {
+    if (!out || out->struct_size < PLUGINXX_INFO_BASELINE_SIZE) {
+        return -1;
+    }
+    out->min_api_version = AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION;
+    out->flags           = 0;
+    out->name            = cstrView(name);
+    out->version         = cstrView(ver);
+    out->description     = cstrView(desc);
+    return 0;
+}
+
+/// 失败收尾: 写 error_out 并当场交回失败通知
+void notifyFailure(
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               out,
+    const char*                   text
+) {
+    auto msg = cstrView(text);
+    if (out) {
+        out->data = const_cast<char*>(msg.data);
+        out->size = msg.size;
+    }
+    if (notify && notify->done) {
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &msg);
+    }
+}
+
 void setError(const PluginxxHost* host, PluginxxString* out, const char* text) {
     if (!out) {
         return;
@@ -274,73 +303,81 @@ bool registerAll(const PluginxxHost* host, ProbeCtx* ctx, PluginxxString* error)
 
 } // namespace
 
-extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
-    static const AgentxxClientPluginInfo info{
-        AGENTXX_CLIENT_PLUGIN_API_VERSION,
-        0,
-        cstrView("test_client_start_fail_plugin"),
-        cstrView("1.0.0"),
-        cstrView(
-            "Test-only client plugin: fails start after full UI registration (rollback fixture)"
-        ),
-    };
-    return &info;
+extern "C" PLUGINXX_EXPORT int32_t agentxx_client_plugin_get_info(PluginxxInfo* out) {
+    return fillInfo(
+        out,
+        "test_client_start_fail_plugin",
+        "1.0.0",
+        "Test-only client plugin: fails start after full UI registration (rollback fixture)"
+    );
 }
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {
-    if (!host || !host->vtable || !plugin_ctx) {
-        return -1;
-    }
-    auto* ctx = static_cast<ProbeCtx*>(host->vtable->alloc(sizeof(ProbeCtx)));
-    if (!ctx) {
-        return -1;
-    }
-    ctx->host    = host;
-    ctx->started = false;
-    *plugin_ctx  = ctx;
-    return 0;
-}
-
-extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_start(
-    void*                         plugin_ctx,
+extern "C" PLUGINXX_EXPORT void agentxx_client_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {
-    auto* ctx = static_cast<ProbeCtx*>(plugin_ctx);
-    if (!ctx || !ctx->host) {
-        setError(ctx ? ctx->host : nullptr, error_out, "client start: missing context");
-        return nullptr;
+    if (!host || !host->vtable || !plugin_ctx) {
+        notifyFailure(notify, error_out, "client start: invalid create call");
+        return;
     }
-    const PluginxxHost* host = ctx->host;
+    // 可重入: 禁用后再启用只重新注册, 不重建上下文
+    if (*plugin_ctx == nullptr) {
+        auto* ctx = static_cast<ProbeCtx*>(host->vtable->alloc(sizeof(ProbeCtx)));
+        if (!ctx) {
+            notifyFailure(notify, error_out, "client start: out of memory");
+            return;
+        }
+        ctx->host    = host;
+        ctx->started = false;
+        *plugin_ctx  = ctx;
+    }
 
+    auto* ctx = static_cast<ProbeCtx*>(*plugin_ctx);
     const char* okFlag = std::getenv("AGENTXX_TEST_CLIENT_START_OK");
     if (!registerAll(host, ctx, error_out)) {
-        return nullptr;
+        if (notify && notify->done) {
+            auto msg = error_out && error_out->data
+                           ? PluginxxStringView{error_out->data, error_out->size}
+                           : PluginxxStringView{nullptr, 0};
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &msg);
+        }
+        return;
     }
     if (okFlag && okFlag[0] == '1') {
         ctx->started = true;
         if (notify && notify->done) {
             notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
         }
-        return ctx;
+        return;
     }
     // 全部注册 + 句柄自检成功后主动失败 (触发主程序回滚)。
     setError(host, error_out, "client start failed on purpose after full registration");
-    return nullptr;
+    if (notify && notify->done) {
+        auto msg = PluginxxStringView{error_out->data, error_out->size};
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &msg);
+    }
 }
 
-extern "C" PLUGINXX_EXPORT void*
-    agentxx_plugin_client_stop(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
+extern "C" PLUGINXX_EXPORT void
+    agentxx_client_plugin_stop(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
-    return nullptr;
 }
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_client_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
+) {
     auto* ctx = static_cast<ProbeCtx*>(plugin_ctx);
     if (ctx && ctx->host) {
         ctx->host->vtable->free(ctx);
+    }
+    (void)error_out;
+    if (notify && notify->done) {
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
 }

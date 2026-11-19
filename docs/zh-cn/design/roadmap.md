@@ -20,7 +20,7 @@
 | ARC-5 | 分阶段关闭与后台任务结束 | 已实施（不等待轮次） | `util/task_scope.{h,cpp}` + `BaseAgent::shutdownAsync`（停止输入 → 后台任务取消收敛 → 关插件 → 刷盘）+ `AgentContext::markShuttingDown`；模块 `task_scope`、`shutdown_stages` |
 | ARC-6 | 生效加载快照（启动日志 + `--dump-config`） | 已实施（限定范围） | `agent/lib/{include/agentxx/agent,src/agent}/assembly_snapshot.*`（配置侧 + 运行侧快照、渲染、启动日志）+ `agent/client/main.cpp` 的 `--dump-config`；模块 `assembly_snapshot`、`assembly_snapshot_io` |
 | ARC-7 | 新能力不进入核心骨架 | 已实施（纪律） | `agent/lib/AGENTS.md` |
-| ARC-8 | 处理方使用窄接口（试点） | 部分实施（试点结论：不新增一层） | 现有等价窄接口：上下文 `nodes/session_context.h`（读/写入口 + 影子通道刷新）、权限走总线服务 `service.permission.check/reverify`、工具注册 `agentxx.agent.tools` 表 + `ToolAssemblyRecord`、子代理 `service.subagent`（`AgentHost::spawnBatch`）；四处都有测试替身用例（`prompt_stability_io` / `permission` / `assembly_snapshot_io` / `subagent_bus`），再包一层 C++ 窄视图属重复抽象，故不新增 |
+| ARC-8 | 处理方使用窄接口（试点） | 部分实施（试点结论：不新增一层） | 现有等价窄接口：上下文 `nodes/session_context.h`（读/写入口 + 影子通道刷新）、权限走总线服务 `service.permission.check/reverify`、工具注册 `agentxx_agent_tools` 表 + `ToolAssemblyRecord`、子代理 `service.subagent`（`AgentHost::spawnBatch`）；四处都有测试替身用例（`prompt_stability_io` / `permission` / `assembly_snapshot_io` / `subagent_bus`），再包一层 C++ 窄视图属重复抽象，故不新增 |
 | ARC-4 / ARC-7b / ARC-9 | 子系统配置视图 / 千行文件拆分 / 业务与策略分离 | 不做 | 提高内聚、无功能收益 |
 
 ## 2. 轮次与输入投递
@@ -249,7 +249,7 @@
       `LogDispatcher::setModuleLevel/clearModuleLevels` + `applyLogModuleLevelSpec`
       （CLI 读 `AGENTXX_LOG_MODULES`，主程序日志记为 `plugin.<名字>`）；模块 `log_modules`。
     - ARC-8（处理方窄接口试点）结论：**不新增一层窄视图** —— 四处等价窄接口已存在
-      （`nodes/session_context.h`、`service.permission.*`、`agentxx.agent.tools` 表 +
+      （`nodes/session_context.h`、`service.permission.*`、`agentxx_agent_tools` 表 +
       `ToolAssemblyRecord`、`service.subagent`），且都有测试替身用例；再包一层属重复抽象。
     - PLG-8 文档拆分经核定不做（保留数量/名称校验与 §8 澄清）。
     - 全部回归（Debug + ASan/UBSan）：**36,438 项断言 0 失败**（上一轮 35,985）。

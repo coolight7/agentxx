@@ -19,15 +19,16 @@
 /* ==================== 全局版本 ==================== */
 
 /* v7: 表成员统一成异步操作契约 (结果经 PluginxxOperatorCallback 交回,
-   返回 NULL 表示未受理); v8: client 侧六张业务表也改成异步操作契约,
-   三个回答型回调 (工具折叠/展开内容、命令 execute) 改成 notify 形态
-   —— 两侧一起抬, 旧插件被拒, 必须重编 */
-_Static_assert(PLUGINXX_API_VERSION == 7, "agent 侧 ABI 版本必须为 7");
-_Static_assert(PLUGINXX_MIN_API_VERSION == 7, "agent 侧最低兼容 ABI 版本必须为 7");
-_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 8, "client 侧 ABI 版本必须为 8");
+   返回 NULL 表示未受理); v8 = 入口协议与命名换代: `get_info` 改成填表,
+   `create` 与 `start` 合并成一个异步 `create` (返回 void, 上下文走出参, 可重入),
+   `destroy` 也改成异步; 入口符号与表 IID 改下划线 (`agentxx_agent_plugin_*` /
+   `agentxx_agent_*`) —— 旧插件被拒, 必须重编 */
+_Static_assert(PLUGINXX_API_VERSION == 8, "agent 侧 ABI 版本必须为 8");
+_Static_assert(PLUGINXX_MIN_API_VERSION == 8, "agent 侧最低兼容 ABI 版本必须为 8");
+_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 9, "client 侧 ABI 版本必须为 9");
 _Static_assert(
-    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 8,
-    "client 侧最低兼容 ABI 版本必须为 8"
+    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 9,
+    "client 侧最低兼容 ABI 版本必须为 9"
 );
 
 /* ==================== 8 字节对齐（全部跨边界结构体） ==================== */
@@ -110,10 +111,10 @@ _Static_assert(
 /* 这些声明只在 C 角度下检查"函数指针类型可声明、调用约定宏可用"，
    不引入任何实现；GCC/Clang 的 -Wunused 对文件级 static 变量不告警。 */
 static PluginxxCreateFn abi_probe_create = NULL;
+static PluginxxGetInfoFn  abi_probe_get_info = NULL;
 /* 协程驱动: 不透明请求句柄与驱动回调类型必须在 C 角度下可声明 */
 static PluginxxDriver*     abi_probe_driver  = NULL;
 static PluginxxDriveOnceFn abi_probe_drive   = NULL;
-static PluginxxStartFn     abi_probe_start   = NULL;
 static PluginxxStopFn      abi_probe_stop    = NULL;
 static PluginxxDestroyFn   abi_probe_destroy = NULL;
 
@@ -221,7 +222,7 @@ uint64_t agentxx_test_abi_value(int32_t id) {
 /// C 侧自检：ABI 头在 C17 下可编译、结构体对齐与首字段布局成立。
 /// - `return` 0 表示全部通过，非 0 为失败编号（见上方断言）
 int32_t agentxx_test_abi_c_probe(void) {
-    if (abi_probe_create || abi_probe_start || abi_probe_stop || abi_probe_destroy
+    if (abi_probe_create || abi_probe_get_info || abi_probe_stop || abi_probe_destroy
         || abi_probe_driver || abi_probe_drive) {
         return 1; /* 文件级函数指针必须保持未使用（仅类型检查） */
     }

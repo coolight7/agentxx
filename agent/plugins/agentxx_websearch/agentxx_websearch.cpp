@@ -285,14 +285,14 @@ static pluginxx::Task<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRe
     co_return;
 }
 
-static void* websearchStart(
+static void websearchStart( 
     WebsearchPluginCtx&           ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
 ) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     (void)ctx;
-    return nullptr;
+    return;
 }
 
 static void* websearchMount(
@@ -330,19 +330,19 @@ static void* websearchMount(
     return later.provider();
 }
 
-static void*
-    websearchUnmount(WebsearchPluginCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void websearchUnmount(
+    WebsearchPluginCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void*
-    websearchStop(WebsearchPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void websearchStop(
+    WebsearchPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     WebsearchPluginCtx,
     "agentxx_websearch",
     "1.0.0",
@@ -357,7 +357,7 @@ struct WebsearchClientCtx : public ClientPluginBase {};
 
 /// client 侧 start: 注册工具显示名与折叠内容 (stop 无需撤销, 主程序负责摘除)
 /// - 折叠内容是一行纯文本, **不带**分隔符 " · " (头行格式由界面统一拼装)
-static void* websearchClientStart(
+static void websearchClientStart(
     WebsearchClientCtx&           ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
@@ -381,16 +381,15 @@ static void* websearchClientStart(
            }}
     );
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void*
-    websearchClientStop(WebsearchClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    websearchClientStop(WebsearchClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_CLIENT_EXPORT(
+AGENTXX_CLIENT_PLUGIN_EXPORT(
     WebsearchClientCtx,
     "agentxx_websearch",
     "1.0.0",

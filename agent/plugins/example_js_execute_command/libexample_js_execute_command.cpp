@@ -36,6 +36,13 @@ struct ShellCtx {
     bool scriptLoaded = false;
     /// start/stop 的 op 占位句柄 (主程序只当不透明非空 token; 每实例独立)
     int opToken = 0;
+
+    /// 构造入口经 [agentxx::plugin::detail::createCtxEntry] 调用:
+    /// 记主程序句柄并一次查齐本插件用到的接口表
+    void init(const PluginxxHost* h) {
+        host  = h;
+        iface = agentxx::plugin::AgentIfaces::query(h);
+    }
 };
 
 void shellLog(const ShellCtx* ctx, int level, const std::string& msg) {
@@ -186,153 +193,34 @@ bool dispatchScriptUnload(ShellCtx& ctx, const PluginxxOperatorNotify* stopNotif
     return true;
 }
 
-} // namespace
-
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const PluginxxInfo* {
-            static const PluginxxInfo info{
-                PLUGINXX_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("example_js_execute_command"),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "Execute JavaScript code (JS equivalent of bash command) via QuickJS"
-                ),
-            };
-            return &info;
-        }
-    );
-}
-
-/// create: 只构造上下文 (查询接口表 + 解析自身名称/脚本路径), 不做运行时注册,
-/// 不启动线程, 不调用能力。
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    ShellCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            shellLog(raw, 4, msg ? msg : "");
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto ctx   = std::make_unique<ShellCtx>();
-            ctx->host  = host;
-            ctx->iface = agentxx::plugin::AgentIfaces::query(host);
-            raw        = ctx.get();
-            if (!ctx->iface.capabilities || !ctx->iface.plugins || !ctx->iface.json
-                || !ctx->iface.log) {
-                return -1;
-            }
-            const auto& s_if = ctx->iface;
-            auto        logE = [&](const std::string& msg) {
-                auto sv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
-                s_if.log->log(host, 4, &sv);
-            };
-
-            // 表成员是异步操作契约: 这里用阻塞形态取回本插件清单 JSON
-            const auto infoJson = agentxx::plugin::detail::tableOpText(
-                host,
-                s_if.cancel,
-                s_if.scheduler,
-                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                    return s_if.plugins->get_own_info(host, cb, ud, err);
-                }
-            );
-            if (infoJson.empty()) {
-                logE("example_js_execute_command: get_own_info failed");
-                return -1;
-            }
-            auto infoSv = agentxx::plugin::PluginStringView::from(
-                infoJson.data(),
-                infoJson.size()
-            );
-            auto field = [&](const char* key) -> std::string {
-                PluginxxString v{nullptr, 0};
-                auto           keySv = agentxx::plugin::PluginStringView::fromCstr(key);
-                s_if.json->json_get_string(host, &infoSv, &keySv, &v);
-                if (!v.data) {
-                    return {};
-                }
-                std::string s(v.data, static_cast<size_t>(v.size));
-                agentxx::plugin::PluginString::free(host, &v);
-                return s;
-            };
-            std::string libPath = field("path");
-            ctx->name           = field("name");
-            if (ctx->name.empty() || libPath.empty()) {
-                logE("example_js_execute_command: own info invalid");
-                return -1;
-            }
-            ctx->dir = dirOf(libPath);
-
-            ctx->scriptPath = fmt::format("{}/plugin.js", ctx->dir);
-            if (!fileExists(ctx->scriptPath)) {
-                auto pos = ctx->dir.find_last_of("/\\");
-                if (pos != std::string::npos) {
-                    std::string parent = ctx->dir.substr(0, pos);
-                    if (fileExists(fmt::format("{}/plugin.js", parent))) {
-                        ctx->dir        = parent;
-                        ctx->scriptPath = fmt::format("{}/plugin.js", parent);
-                    }
-                }
-            }
-            // 开发期回退：若按 get_own_info 推导的 plugin.js 不存在，尝试源码目录
-            // (host 传入的 path 在内置模式下可能为虚路径，此分支仅为本地调试保留)
-            if (!fileExists(ctx->scriptPath)) {
-                std::string fallback = "agent/plugins/example_js_execute_command/plugin.js";
-                if (fileExists(fallback)) {
-                    ctx->scriptPath = fallback;
-                }
-            }
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
-    );
-}
-
-/// start 事务: 依赖能力校验 + 脚本加载。
-/// - 加载经 "interpreter.js" 能力异步执行, 脚本注册的工具属于本实例;
-///   因此 start 必须等加载结束才 done (返回主程序托管句柄, 完成回调上报结果);
-/// - 能力不可用或脚本缺失 → 返回 NULL + error (拒绝); 加载失败 → done FAILED;
-///   两条路径都由主程序回滚本次加载, 不留注册残留。
-static void*
-    jsShellAgentStart(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
-    auto setErr = [&](const std::string& msg) -> void* {
+/// 提交脚本加载 (异步): 校验脚本文件后把 load 交给 "interpreter.js" 能力
+/// - 失败直接 `done(FAILED, 原因)`: 主程序靠完成包判定本次 create 成败, 不能只写 error
+void beginScriptLoad(ShellCtx& ctx, const PluginxxOperatorNotify& notify, PluginxxString* error) {
+    auto fail = [&](const std::string& msg) {
         if (error) {
             agentxx::plugin::PluginString::set(ctx.host, error, msg);
         }
-        return nullptr;
+        auto sv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_FAILED, &sv);
     };
-    if (!notify || !notify->done) {
-        return setErr("example_js_execute_command start: notify required");
-    }
     if (!ctx.iface.capabilities || !ctx.iface.capabilities->invoke_capability) {
-        return setErr("example_js_execute_command start: host lacks capabilities interface");
+        fail("example_js_execute_command create: host lacks capabilities interface");
+        return;
     }
     // 不单查 capability_info: 解释器能力没注册时下面的 invoke_capability 就不受理,
     // 与“先查再调”等价, 且不必同步等待一次表调用
-    auto capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
-    if (!fileExists(ctx.scriptPath)) {
-        return setErr(
-            "example_js_execute_command start: plugin.js not found next to the plugin library"
+    if (ctx.scriptPath.empty() || !fileExists(ctx.scriptPath)) {
+        fail(
+            "example_js_execute_command create: plugin.js not found next to the plugin "
+            "library"
         );
+        return;
     }
-    if (ctx.scriptLoaded) {
-        // 重复 start (幂等): 脚本已由本实例加载
-        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-        return nullptr;
-    }
-
+    auto           capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
     std::string    args   = scriptArgsJson(ctx);
     auto           argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
     PluginxxString err{nullptr, 0};
-    auto*          state = new std::pair<ShellCtx*, PluginxxOperatorNotify>(&ctx, *notify);
+    auto*          state = new std::pair<ShellCtx*, PluginxxOperatorNotify>(&ctx, notify);
     auto*          h     = ctx.iface.capabilities->invoke_capability(
         ctx.host,
         nullptr,
@@ -345,51 +233,231 @@ static void*
     );
     if (!h) {
         delete state;
-        std::string errStr = err.data ? std::string(err.data, static_cast<size_t>(err.size))
-                                      : "load script async dispatch failed";
+        std::string msg = err.data ? std::string(err.data, static_cast<size_t>(err.size))
+                                   : std::string("load script async dispatch failed");
         if (err.data) {
             agentxx::plugin::PluginString::free(ctx.host, &err);
         }
-        return setErr(errStr);
+        fail(msg);
+        return;
     }
     if (err.data) {
         agentxx::plugin::PluginString::free(ctx.host, &err);
     }
     shellLog(&ctx, 2, fmt::format("example_js_execute_command: loading script {}", ctx.scriptPath));
-    return &ctx.opToken; ///< 已接受: 完成通知在加载回调中发出
+    // 已受理: 完成通知在加载回调中发出
+}
+
+/// 从 `get_own_info` 的 JSON 里取插件名与库路径, 定位同目录 plugin.js
+/// - `return` 空串 = 成功; 非空 = 失败原因
+std::string resolveOwnInfo(ShellCtx& ctx, const std::string& infoJson) {
+    const auto& iface = ctx.iface;
+    if (!iface.json || !iface.json->json_get_string) {
+        return "host lacks json interface";
+    }
+    auto infoSv = agentxx::plugin::PluginStringView::from(infoJson.data(), infoJson.size());
+    auto field  = [&](const char* key) -> std::string {
+        PluginxxString v{nullptr, 0};
+        auto           keySv = agentxx::plugin::PluginStringView::fromCstr(key);
+        iface.json->json_get_string(ctx.host, &infoSv, &keySv, &v);
+        if (!v.data) {
+            return {};
+        }
+        std::string s(v.data, static_cast<size_t>(v.size));
+        agentxx::plugin::PluginString::free(ctx.host, &v);
+        return s;
+    };
+    std::string libPath = field("path");
+    ctx.name            = field("name");
+    if (ctx.name.empty() || libPath.empty()) {
+        return "own info has no name/path";
+    }
+    ctx.dir = dirOf(libPath);
+    {
+        std::error_code ec;
+        if (std::filesystem::is_directory(libPath, ec)) {
+            ctx.dir = libPath;
+        }
+    }
+    ctx.scriptPath = fmt::format("{}/plugin.js", ctx.dir);
+    if (!fileExists(ctx.scriptPath)) {
+        auto pos = ctx.dir.find_last_of("/\\");
+        if (pos != std::string::npos) {
+            std::string parent = ctx.dir.substr(0, pos);
+            if (fileExists(fmt::format("{}/plugin.js", parent))) {
+                ctx.dir        = parent;
+                ctx.scriptPath = fmt::format("{}/plugin.js", parent);
+            }
+        }
+    }
+    // 开发期回退: 若按 get_own_info 推导的 plugin.js 不存在, 尝试源码目录
+    // (host 传入的 path 在内置模式下可能为虚路径, 此分支仅为本地调试保留)
+    if (!fileExists(ctx.scriptPath)) {
+        std::string fallback = "agent/plugins/example_js_execute_command/plugin.js";
+        if (fileExists(fallback)) {
+            ctx.scriptPath = fallback;
+        }
+    }
+    return {};
+}
+
+/// 自身清单读取完成 (create 的第一步收尾): 解析名称/路径 → 提交脚本加载
+void PLUGINXX_CALL
+    onOwnInfoDone(void* ud, int32_t status, const PluginxxStringView* payload) {
+    auto* state = static_cast<std::pair<ShellCtx*, PluginxxOperatorNotify>*>(ud);
+    if (!state) {
+        return;
+    }
+    ShellCtx*              ctx    = state->first;
+    PluginxxOperatorNotify notify = state->second;
+    delete state;
+    if (!ctx) {
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_FAILED, nullptr);
+        return;
+    }
+    std::string text;
+    if (payload && payload->data) {
+        text.assign(payload->data, static_cast<size_t>(payload->size));
+    }
+    std::string reason;
+    if (status != PLUGINXX_OPERATOR_OK) {
+        reason = text.empty() ? std::string("get_own_info rejected") : text;
+    } else if (text.empty()) {
+        reason = "get_own_info returned empty";
+    } else {
+        reason = resolveOwnInfo(*ctx, text);
+    }
+    if (!reason.empty()) {
+        shellLog(
+            ctx,
+            4,
+            fmt::format("example_js_execute_command: own info unavailable: {}", reason)
+        );
+        auto sv = agentxx::plugin::PluginStringView::from(reason.data(), reason.size());
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_FAILED, &sv);
+        return;
+    }
+    beginScriptLoad(*ctx, notify, nullptr);
+}
+
+} // namespace
+
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillAgentPluginInfo(
+        out,
+        "example_js_execute_command",
+        "1.0.0",
+        "Execute JavaScript code (JS equivalent of bash command) via QuickJS"
+    );
+}
+
+/// create: 首次构造上下文 (查接口表), 然后读自身清单定位同目录 plugin.js 并把它
+/// 交给引擎执行; 可重入: 再次 create 只重跑脚本加载。
+///
+/// **create 跑在插件执行线程上**, 期间不能同步等接口表 (会被拒), 所以自身清单读取
+/// 与脚本加载两步都是“提交 + 完成回调”。
+static void jsShellAgentStart(ShellCtx&, const PluginxxOperatorNotify*, PluginxxString*);
+
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::createCtxEntry<ShellCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "example_js_execute_command",
+        [](ShellCtx& ctx) -> std::string {
+            const auto& iface = ctx.iface;
+            if (!iface.capabilities || !iface.plugins || !iface.json || !iface.log) {
+                return "example_js_execute_command: host lacks capabilities/plugins/json/log";
+            }
+            return {};
+        },
+        [](ShellCtx& c, const PluginxxOperatorNotify* n, PluginxxString* e) {
+            jsShellAgentStart(c, n, e);
+        }
+    );
+}
+
+
+/// 注册事务 (create 的实际内容): 取自身清单(首次) → 加载脚本
+/// - 任何失败都 `done(FAILED, 原因)`: 只写 error 不通知会让主程序一直等。
+static void
+    jsShellAgentStart(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+    auto fail = [&](const std::string& msg) {
+        if (error) {
+            agentxx::plugin::PluginString::set(ctx.host, error, msg);
+        }
+        if (notify && notify->done) {
+            auto sv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &sv);
+        }
+    };
+    if (!notify || !notify->done) {
+        fail("example_js_execute_command create: notify required");
+        return;
+    }
+    if (ctx.scriptLoaded) {
+        // 重复 create (幂等): 脚本已由本实例加载
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+        return;
+    }
+    if (!ctx.scriptPath.empty()) {
+        beginScriptLoad(ctx, *notify, error);
+        return;
+    }
+
+    // 首次: 自身清单必须异步读 —— create 跑在插件执行线程上, 同步等表调用会被拒
+    auto*          state = new std::pair<ShellCtx*, PluginxxOperatorNotify>(&ctx, *notify);
+    PluginxxString err{nullptr, 0};
+    void*          h = ctx.iface.plugins->get_own_info(ctx.host, &onOwnInfoDone, state, &err);
+    if (!h) {
+        delete state;
+        std::string msg = err.data ? std::string(err.data, static_cast<size_t>(err.size))
+                                   : std::string("get_own_info was not accepted");
+        if (err.data) {
+            agentxx::plugin::PluginString::free(ctx.host, &err);
+        }
+        fail(msg);
+        return;
+    }
+    if (err.data) {
+        agentxx::plugin::PluginString::free(ctx.host, &err);
+    }
+    // 已受理: 后续直到脚本加载完成才发完成通知
 }
 
 /// stop 事务: 通知引擎卸载脚本 (撤销脚本注册的工具/订阅/定时器)。
 /// - 引擎已停用/卸载时卸载调用失败: 只记录, 脚本上下文由引擎的停止路径释放;
 /// - 卸载 op 自身持有本实例 caller lease, 主程序会等它完成后才 destroy;
 /// - 本函数同步完成 stop 本身 (卸载为 fire-and-forget, 无阻塞等待)。
-static void*
-    jsShellAgentStop(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    jsShellAgentStop(ShellCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (!notify || !notify->done) {
-        return nullptr;
+        return;
     }
     if (dispatchScriptUnload(ctx, notify)) {
-        return &ctx.opToken; ///< 已受理: 完成通知在卸载回调里发出 (脚本注册先撤净)
+        return; ///< 已受理: 完成通知在卸载回调里发出 (脚本注册先撤净)
     }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(ShellCtx, jsShellAgentStart, jsShellAgentStop, nullptr, nullptr)
+AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT(
+    ShellCtx,
+    jsShellAgentStop, nullptr, nullptr)
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<ShellCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(
-        [ctx](const char* msg) noexcept {
-            shellLog(ctx, 4, msg ? msg : "");
-        },
-        [&] {
-            if (!ctx) {
-                return;
-            }
-            // destroy 只处理已经停止的对象: 不再调用主程序接口、不创建异步工作
-            // (脚本注销与上下文释放由 stop 与引擎的停止路径完成)
-            delete ctx;
-        }
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<ShellCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](ShellCtx* ctx) { delete ctx; }
     );
 }

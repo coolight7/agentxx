@@ -103,11 +103,6 @@ public:
         PluginInstanceBase(std::move(in_name)) {}
 
     ~PluginInstance();
-
-    /// 本端 destroy 入口符号名 (agent 侧)
-    const char* pluginDestroySymbol() const noexcept override {
-        return AGENTXX_PLUGIN_AGENT_SYMBOL_DESTROY;
-    }
 };
 
 /// 插件工具 (本挂载上注册的一个工具)
@@ -371,7 +366,7 @@ public:
     /// - 路径不存在 (相对路径按进程当前工作目录解析);
     /// - 目录下没有 `plugin.yaml` 清单 / 清单 YAML 语法错误 / 清单 `entry`
     ///   指向的库文件不存在;
-    /// - 库文件缺少主程序入口符号 (agent 侧 `agentxx_plugin_agent_{create,start,stop}`);
+    /// - 库文件缺少主程序入口符号 (agent 侧 `agentxx_agent_plugin_{create,stop,destroy}`);
     /// - 以上都没问题时返回一句“若加载仍失败多半是 API 代次不匹配, 需按当前 API 版本
     ///   重新编译插件” (代次判断只能靠 `get_info`, 不在本函数的静态检查范围);
     /// - 只读检查 (不改变任何状态)。
@@ -634,14 +629,13 @@ protected:
 
     /// agent 侧插件入口符号名 (插件框架不硬编码主程序专名, 见 pluginxx/api/entry.h)
     ///
-    /// 与插件侧导出宏 AGENTXX_PLUGIN_AGENT_EXPORT 生成的符号一致; `destroy` 不在此列
-    /// (由 PluginInstance::pluginDestroySymbol 给出)。
+    /// 与插件侧导出宏 AGENTXX_AGENT_PLUGIN_EXPORT 生成的符号一致。
     pluginxx::PluginEntrySymbols entrySymbols() const override {
         return {
-            AGENTXX_PLUGIN_AGENT_SYMBOL_GET_INFO,
-            AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE,
-            AGENTXX_PLUGIN_AGENT_SYMBOL_START,
-            AGENTXX_PLUGIN_AGENT_SYMBOL_STOP,
+            AGENTXX_AGENT_PLUGIN_SYMBOL_GET_INFO,
+            AGENTXX_AGENT_PLUGIN_SYMBOL_CREATE,
+            AGENTXX_AGENT_PLUGIN_SYMBOL_STOP,
+            AGENTXX_AGENT_PLUGIN_SYMBOL_DESTROY,
         };
     }
 

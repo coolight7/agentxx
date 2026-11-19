@@ -357,17 +357,13 @@ asio::awaitable<void> PluginMount::unmountOneAsync(std::shared_ptr<PluginInstanc
         std::string unmountError;
         auto        instPtr = inst;
         void*       mountUd = entry->mountUserData;
-        const bool  ok      = co_await pluginxx::awaitPluginLifecycle(
+        const bool  ok      = co_await pluginxx::awaitPluginLifecycleVoid(
             host->runtime(),
             instPtr,
-            instPtr->pluginCtx,
             [instPtr, mountUd](
-                void* /*ctx*/,
                 const PluginxxOperatorNotify* notify,
                 PluginxxString*               err
-            ) {
-                return instPtr->unmountFn(instPtr->pluginCtx, mountUd, notify, err);
-            },
+            ) { instPtr->unmountFn(instPtr->pluginCtx, mountUd, notify, err); },
             "plugin unmount",
             unmountError
         );

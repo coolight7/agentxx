@@ -3971,13 +3971,17 @@ using pluginxx::detail::autoStopSpawns;
 using pluginxx::detail::AwaiterState;
 using pluginxx::detail::BridgeRoot;
 using pluginxx::detail::callLifecycleEntry;
+using pluginxx::detail::callLifecycleEntryVoid;
 using pluginxx::detail::CompletionGuard;
+using pluginxx::detail::createInstanceEntry;
+using pluginxx::detail::destroyInstanceEntry;
 using pluginxx::detail::destroyBridgeFrame;
 using pluginxx::detail::finishIfDone;
 using pluginxx::detail::invokeCap;
 using pluginxx::detail::InvokeCapAwaiter;
 using pluginxx::detail::InvokeCapState;
 using pluginxx::detail::jsonGet;
+using pluginxx::detail::notifyLifecycleFailure;
 using pluginxx::detail::OffloadAwaiter;
 using pluginxx::detail::PolledRoot;
 using pluginxx::detail::PollOneBridge;
@@ -3988,6 +3992,143 @@ using pluginxx::detail::SleepAwaiter;
 using pluginxx::detail::spawnTaskImpl;
 using pluginxx::detail::startBridgedRoot;
 using pluginxx::detail::YieldAwaiter;
+
+/// 手写 create 入口的公共实现: 构造上下文 (**可重入**) → 插件自己的检查 → 注册事务
+///
+/// 少数插件需要自己控制上下文构造 (按平台建运行时、装日志 sink、查必需接口),
+/// 于是手写 `create` 入口。本函数把"可重入 / 异常兜底 / 失败通知"这三件重复事收在一处:
+///
+/// ```cpp
+/// extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+///     const PluginxxHost* host, void** plugin_ctx,
+///     const PluginxxOperatorNotify* notify, PluginxxString* err) {
+///     agentxx::plugin::detail::createCtxEntry<MyCtx>(
+///         host, plugin_ctx, notify, err, "my_plugin",
+///         [](MyCtx& ctx) -> std::string {
+///             ctx.extra = ...;                  // 构造阶段的事（可失败）
+///             return checkOk(ctx) ? "" : "missing required interface";
+///         },
+///         myStart);                              // void(MyCtx&, notify, err)
+/// }
+/// ```
+///
+/// - `*plugin_ctx` 非空 = 同一实例第二次 create (禁用后启用): 不重建上下文,
+///   跳过 `check`, 只跑注册事务;
+/// - `check` 返回非空串 = 构造失败; 上下文仍写回 `*plugin_ctx` (主程序随后会调
+///   destroy 收尾), 完成通知已发 FAILED;
+/// - `create` 为空 = 只构造 (没有注册事务)。
+template<typename CtxType, typename CheckFn, typename CreateFn>
+inline void createCtxEntry(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err,
+    std::string_view              name,
+    CheckFn&&                     check,
+    CreateFn&&                    create
+) noexcept {
+    if (!plugin_ctx) {
+        notifyLifecycleFailure(host, notify, err, "plugin create: null plugin context");
+        return;
+    }
+    auto* ctx = static_cast<CtxType*>(*plugin_ctx);
+    if (!ctx) {
+        try {
+            auto fresh = std::make_unique<CtxType>();
+            fresh->init(host);
+            ctx         = fresh.release();
+            *plugin_ctx = ctx;
+        } catch (const std::exception& e) {
+            notifyLifecycleFailure(
+                host,
+                notify,
+                err,
+                fmt::format("plugin create {}: {}", name, e.what())
+            );
+            return;
+        } catch (...) {
+            notifyLifecycleFailure(host, notify, err, "plugin create: unknown exception");
+            return;
+        }
+        // 构造阶段的插件自有检查 (失败时保留上下文, 让主程序随后 destroy 收尾)
+        try {
+            std::string reason = check(*ctx);
+            if (!reason.empty()) {
+                notifyLifecycleFailure(host, notify, err, reason);
+                return;
+            }
+        } catch (const std::exception& e) {
+            notifyLifecycleFailure(host, notify, err, e.what());
+            return;
+        } catch (...) {
+            notifyLifecycleFailure(host, notify, err, "plugin create: unknown exception");
+            return;
+        }
+    }
+    pluginxx::detail::callLifecycleEntryVoid(host, ctx, notify, err, "plugin create", [&]() {
+        using CreateType = std::decay_t<CreateFn>;
+        if constexpr (std::is_same_v<CreateType, std::nullptr_t>) {
+            // 没有注册事务: 构造完成即加载完成
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+        } else {
+            if constexpr (std::is_pointer_v<CreateType>) {
+                if (!create) {
+                    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+                    return;
+                }
+            }
+            create(*ctx, notify, err);
+        }
+    });
+}
+
+/// 手写 destroy 入口的公共实现: 插件自己的释放 + 完成通知
+///
+/// `cleanup` 只做本地释放 (不调主程序接口、不起异步工作); 抛异常按失败通知。
+template<typename CtxType, typename CleanupFn>
+inline void destroyCtxEntry(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err,
+    CleanupFn&&                   cleanup
+) noexcept {
+    auto*       ctx  = static_cast<CtxType*>(plugin_ctx);
+    const auto* host = ctx ? ctx->host : nullptr;
+    pluginxx::detail::destroyInstanceEntry(host, ctx, notify, err, std::forward<CleanupFn>(cleanup));
+}
+
+/// 手写 get_info 入口的公共实现 (agent 侧): 填插件名/版本/描述与要求的最低主程序版本
+inline int32_t fillAgentPluginInfo(
+    PluginxxInfo* out,
+    const char*   name,
+    const char*   version,
+    const char*   description
+) noexcept {
+    return pluginxx::detail::fillPluginInfo(
+        out,
+        name,
+        version,
+        description,
+        AGENTXX_PLUGIN_MIN_API_VERSION
+    );
+}
+
+/// 手写 get_info 入口的公共实现 (client 侧)
+inline int32_t fillClientPluginInfo(
+    PluginxxInfo* out,
+    const char*   name,
+    const char*   version,
+    const char*   description
+) noexcept {
+    return pluginxx::detail::fillPluginInfo(
+        out,
+        name,
+        version,
+        description,
+        AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION
+    );
+}
+
 
 /// 图节点操作的输入键 (kit 写进 `RootRequest::extraFields`, 业务侧用下面的
 /// [nodeNameOf] / [nodeConfigOf] / [nodeStateOf] 读取)
@@ -6992,36 +7133,48 @@ inline void logClientCreateFailure(
 }
 
 /// Agent 侧插件入口导出
-/// (生成 `agentxx_plugin_agent_{get_info,create,start,stop,destroy,mount,unmount}`)。
+/// (生成 `agentxx_agent_plugin_{get_info,create,stop,destroy,mount,unmount}`)。
 ///
-/// 插件框架只提供"带符号前缀"的通用导出宏 (见 `pluginxx/kit/kit.h` 的
+/// 插件框架提供带符号前缀的通用导出宏 (见 `pluginxx/kit/kit.h` 的
 /// [PLUGINXX_EXPORT_PLUGIN]); 入口符号名属于本主程序命名空间, 因此在这里包一层。
 /// 运行时由 PluginManager::entrySymbols() 交出同一批符号名。
 ///
-/// - `StartFn` / `StopFn`: 进程级 (一次), 形如
-///   `void*(CtxType&, const PluginxxOperatorNotify*, PluginxxString*)`
+/// - `CreateFn` / `StopFn`: 进程级 (一次), 形如
+///   `void(CtxType&, const PluginxxOperatorNotify*, PluginxxString*)`;
+///   `CreateFn` 就是注册事务 (旧版的 start), 上下文构造由宏包着的 create 代劳;
 /// - `MountFn` / `UnmountFn`: agent 级 (每 agent 一次), 形如
 ///   `void*(CtxType&, const AgentxxPluginAgentMountSpec*, const PluginxxOperatorNotify*,
-///    PluginxxString*)` / `void*(CtxType&, void* mount_ud, const PluginxxOperatorNotify*,
-///    PluginxxString*)`;
+///    PluginxxString*)` / `void(CtxType&, void* mount_ud, const PluginxxOperatorNotify*,
+///    PluginxxString*)` (旧版 UnmountFn 的返回值被忽略);
 ///   **没有 per-agent 状态的插件传 `nullptr, nullptr`**
-#define AGENTXX_PLUGIN_AGENT_EXPORT(                                                \
-    CtxType, Name, Ver, Desc, StartFn, StopFn, MountFn, UnmountFn                   \
-)                                                                                   \
-    PLUGINXX_EXPORT_PLUGIN(agentxx_plugin_agent_, CtxType, Name, Ver, Desc, StartFn, StopFn) \
-    AGENTXX_PLUGIN_AGENT_MOUNT_EXPORT(CtxType, MountFn, UnmountFn)
+#define AGENTXX_AGENT_PLUGIN_EXPORT(                                                \
+    CtxType, Name, Ver, Desc, CreateFn, StopFn, MountFn, UnmountFn                  \
+)                                                                                  \
+    PLUGINXX_EXPORT_PLUGIN(agentxx_agent_plugin_, CtxType, Name, Ver, Desc, CreateFn, StopFn) \
+    AGENTXX_AGENT_PLUGIN_MOUNT_EXPORT(CtxType, MountFn, UnmountFn)
 
-/// 只生成挂载/卸载两个入口 (与 [AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT] 配套)
-#define AGENTXX_PLUGIN_AGENT_MOUNT_EXPORT(CtxType, MountFn, UnmountFn)                         \
-    extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_mount                \
-        (void*                              plugin_ctx,                                       \
-         const AgentxxPluginAgentMountSpec* spec,                                             \
-         const PluginxxOperatorNotify*      notify,                                           \
-         PluginxxString*                    err) {                                             \
-        if ((MountFn) == nullptr) {                                                           \
+/// 只生成挂载/卸载两个入口 (与 [AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT] 配套)
+///
+/// - mount: 同步完成时先 `notify->done(OK)` 再返回 per-agent 状态;
+/// - unmount: `void` + 完成通知 (旧函数仍返回 `void*`, 返回值在这里被忽略)。
+#define AGENTXX_AGENT_PLUGIN_MOUNT_EXPORT(CtxType, MountFn, UnmountFn)                         \
+    extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_agent_plugin_mount(                \
+        void*                              plugin_ctx,                                       \
+        const AgentxxPluginAgentMountSpec* spec,                                             \
+        const PluginxxOperatorNotify*      notify,                                           \
+        PluginxxString*                    err                                               \
+    ) {                                                                                      \
+        auto mountFn = static_cast<                                                          \
+            void* (*)(                                                                       \
+                CtxType&,                                                                    \
+                const AgentxxPluginAgentMountSpec*,                                          \
+                const PluginxxOperatorNotify*,                                               \
+                PluginxxString*                                                              \
+            )>(MountFn);                                                                      \
+        if (!mountFn) {                                                                       \
             /* 无挂载入口 = 本插件无 agent 侧能力, 仍要给出完成信号 */                           \
             if (notify && notify->done) {                                                     \
-                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);                \
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);                 \
             }                                                                                 \
             return nullptr;                                                                   \
         }                                                                                     \
@@ -7032,156 +7185,58 @@ inline void logClientCreateFailure(
             notify,                                                                           \
             err,                                                                              \
             "plugin mount",                                                                   \
-            [&]() -> void* {                                                                  \
-                return (MountFn)(*ctx, spec, notify, err);                                    \
-            }                                                                                 \
+            [&]() -> void* { return mountFn(*ctx, spec, notify, err); }                        \
         );                                                                                    \
     }                                                                                         \
-    extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_unmount               \
-        (void*                         plugin_ctx,                                             \
-         void*                         mount_ud,                                               \
-         const PluginxxOperatorNotify* notify,                                                 \
-         PluginxxString*               err) {                                                   \
-        if ((UnmountFn) == nullptr) {                                                                    \
-            if (notify && notify->done) {                                                      \
-                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);                 \
-            }                                                                                  \
-            return nullptr;                                                                    \
-        }                                                                                      \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
-        return agentxx::plugin::detail::callLifecycleEntry(                                     \
-            ctx ? ctx->host : nullptr,                                                          \
-            plugin_ctx,                                                                        \
-            notify,                                                                            \
-            err,                                                                               \
+    extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL agentxx_agent_plugin_unmount(               \
+        void*                         plugin_ctx,                                             \
+        void*                         mount_ud,                                               \
+        const PluginxxOperatorNotify* notify,                                                 \
+        PluginxxString*               err                                                     \
+    ) {                                                                                       \
+        auto unmountFn = static_cast<                                                         \
+            void (*)(CtxType&, void*, const PluginxxOperatorNotify*, PluginxxString*)>(       \
+            UnmountFn                                                                         \
+        );                                                                                    \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                        \
+        pluginxx::detail::callLifecycleEntryVoid(                                             \
+            ctx ? ctx->host : nullptr,                                                        \
+            plugin_ctx,                                                                       \
+            notify,                                                                           \
+            err,                                                                              \
             "plugin unmount",                                                                 \
-            [&]() -> void* {                                                                   \
-                return (UnmountFn)(*ctx, mount_ud, notify, err);                               \
-            }                                                                                  \
-        );                                                                                     \
+            [&]() {                                                                           \
+                if (unmountFn) {                                                              \
+                    unmountFn(*ctx, mount_ud, notify, err);                                   \
+                } else {                                                                      \
+                    /* 无挂载状态 = 没有要撤销的东西, 仍要给出完成信号 */                          \
+                    if (notify && notify->done) {                                             \
+                        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);         \
+                    }                                                                         \
+                }                                                                             \
+            }                                                                                 \
+        );                                                                                    \
     }
 
-/// Agent 侧只导出 start/stop/mount/unmount 四个入口 (供手写 create/destroy 的插件使用)。
+/// Agent 侧只导出 stop/mount/unmount 三个入口 (供手写 create/destroy 的插件使用)。
 ///
-/// 与 [AGENTXX_PLUGIN_AGENT_EXPORT] 的生命周期部分同语义, 但由插件自己实现
-/// `agentxx_plugin_agent_create` / `agentxx_plugin_agent_destroy`。
-#define AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn, MountFn, UnmountFn) \
-    PLUGINXX_EXPORT_PLUGIN_LIFECYCLE(agentxx_plugin_agent_, CtxType, StartFn, StopFn)       \
-    AGENTXX_PLUGIN_AGENT_MOUNT_EXPORT(CtxType, MountFn, UnmountFn)
+/// 与 [AGENTXX_AGENT_PLUGIN_EXPORT] 的生命周期部分同语义, 但由插件自己实现
+/// `agentxx_agent_plugin_create` / `agentxx_agent_plugin_destroy`。
+#define AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT(CtxType, StopFn, MountFn, UnmountFn) \
+    PLUGINXX_EXPORT_PLUGIN_LIFECYCLE(agentxx_agent_plugin_, CtxType, StopFn)       \
+    AGENTXX_AGENT_PLUGIN_MOUNT_EXPORT(CtxType, MountFn, UnmountFn)
 
-/// Client 侧只导出 start/stop 两个入口 (与
-/// [AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT] 对称)。
-#define AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn) \
-    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_start(        \
-        void*                         plugin_ctx,                        \
-        const PluginxxOperatorNotify* notify,                            \
-        PluginxxString*               err                                \
-    ) {                                                                  \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                   \
-        return agentxx::plugin::detail::callLifecycleEntry(              \
-            ctx ? ctx->host : nullptr,                                   \
-            plugin_ctx,                                                  \
-            notify,                                                      \
-            err,                                                         \
-            "client plugin start",                                       \
-            [&]() -> void* {                                             \
-                return (StartFn)(*ctx, notify, err);                     \
-            }                                                            \
-        );                                                               \
-    }                                                                    \
-    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_stop(         \
-        void*                         plugin_ctx,                        \
-        const PluginxxOperatorNotify* notify,                            \
-        PluginxxString*               err                                \
-    ) {                                                                  \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                   \
-        return agentxx::plugin::detail::callLifecycleEntry(              \
-            ctx ? ctx->host : nullptr,                                   \
-            plugin_ctx,                                                  \
-            notify,                                                      \
-            err,                                                         \
-            "client plugin stop",                                        \
-            [&]() -> void* {                                             \
-                return (StopFn)(*ctx, notify, err);                      \
-            }                                                            \
-        );                                                               \
-    }
+/// Client 侧只导出 stop 入口 (与 [AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT] 对称)。
+#define AGENTXX_CLIENT_PLUGIN_LIFECYCLE_EXPORT(CtxType, StopFn) \
+    PLUGINXX_EXPORT_PLUGIN_LIFECYCLE(agentxx_client_plugin_, CtxType, StopFn)
 
-/// Client 侧插件入口导出 (与 [AGENTXX_PLUGIN_AGENT_EXPORT] 对称)。
+/// Client 侧插件入口导出 (与 [AGENTXX_AGENT_PLUGIN_EXPORT] 对称)。
 ///
-/// `StartFn` / `StopFn` 形如
-/// `void*(CtxType&, const PluginxxOperatorNotify*, PluginxxString* error_out)`;
-/// start 里做 UI 项/命令/订阅注册, stop 里撤销插件自管资源 (线程/定时器/订阅)。
-/// 纯 UI 插件 (无 agent 侧入口) 只导出 get_info + 下列四个入口即可。
-#define AGENTXX_PLUGIN_CLIENT_EXPORT(CtxType, Name, Ver, Desc, StartFn, StopFn)                   \
-    extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void \
-    ) {                                                                                           \
-        static const AgentxxClientPluginInfo info{                                                \
-            AGENTXX_CLIENT_PLUGIN_API_VERSION,                                                    \
-            0,                                                                                    \
-            agentxx::plugin::PluginStringView::fromCstr(Name),                                    \
-            agentxx::plugin::PluginStringView::fromCstr(Ver),                                     \
-            agentxx::plugin::PluginStringView::fromCstr(Desc),                                    \
-        };                                                                                        \
-        return &info;                                                                             \
-    }                                                                                             \
-    extern "C" PLUGINXX_EXPORT int32_t                                                            \
-        agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {               \
-        if (!host || !plugin_ctx) {                                                               \
-            return -1;                                                                            \
-        }                                                                                         \
-        try {                                                                                     \
-            auto ctx = std::make_unique<CtxType>();                                               \
-            ctx->init(host);                                                                      \
-            *plugin_ctx = ctx.release();                                                          \
-            return 0;                                                                             \
-        } catch (const std::exception& e) {                                                       \
-            agentxx::plugin::logClientCreateFailure(host, Name, e.what());                        \
-        } catch (...) {                                                                           \
-            agentxx::plugin::logClientCreateFailure(host, Name, "unknown exception");             \
-        }                                                                                         \
-        return -1;                                                                                \
-    }                                                                                             \
-    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_start(                                 \
-        void*                         plugin_ctx,                                                 \
-        const PluginxxOperatorNotify* notify,                                                     \
-        PluginxxString*               err                                                         \
-    ) {                                                                                           \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                            \
-        return agentxx::plugin::detail::callLifecycleEntry(                                       \
-            ctx ? ctx->host : nullptr,                                                            \
-            plugin_ctx,                                                                           \
-            notify,                                                                               \
-            err,                                                                                  \
-            "client plugin start",                                                                \
-            [&]() -> void* {                                                                      \
-                return (StartFn)(*ctx, notify, err);                                              \
-            }                                                                                     \
-        );                                                                                        \
-    }                                                                                             \
-    extern "C" PLUGINXX_EXPORT void* agentxx_plugin_client_stop(                                  \
-        void*                         plugin_ctx,                                                 \
-        const PluginxxOperatorNotify* notify,                                                     \
-        PluginxxString*               err                                                         \
-    ) {                                                                                           \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                            \
-        return agentxx::plugin::detail::callLifecycleEntry(                                       \
-            ctx ? ctx->host : nullptr,                                                            \
-            plugin_ctx,                                                                           \
-            notify,                                                                               \
-            err,                                                                                  \
-            "client plugin stop",                                                                 \
-            [&]() -> void* {                                                                      \
-                return (StopFn)(*ctx, notify, err);                                               \
-            }                                                                                     \
-        );                                                                                        \
-    }                                                                                             \
-    extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {             \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                            \
-        if (ctx) {                                                                                \
-            delete ctx;                                                                           \
-        }                                                                                         \
-    }
+/// `CreateFn` / `StopFn` 形如 `void(CtxType&, const PluginxxOperatorNotify*, PluginxxString*)`;
+/// create 里做 UI 项/命令/订阅注册, stop 里撤销插件自管资源 (线程/定时器/订阅)。
+/// 纯 UI 插件 (无 agent 侧入口) 只导出这四个入口即可。
+#define AGENTXX_CLIENT_PLUGIN_EXPORT(CtxType, Name, Ver, Desc, CreateFn, StopFn) \
+    PLUGINXX_EXPORT_PLUGIN(agentxx_client_plugin_, CtxType, Name, Ver, Desc, CreateFn, StopFn)
 } // namespace plugin
 } // namespace agentxx
 

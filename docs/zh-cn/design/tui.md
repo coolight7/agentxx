@@ -296,7 +296,7 @@ struct UiActionItem {
 ### 2.6 插件 UI
 
 - **注册入口只在 client 侧**: 面板/Info 段落/状态栏项/装饰/overlay 都由 client 侧插件
-  经 `agentxx.client.ui` 表注册 (插件在 client 进程内, 描述不经网络); agent 侧插件要把
+  经 `agentxx_client_ui` 表注册 (插件在 client 进程内, 描述不经网络); agent 侧插件要把
   数据交给同名 client 插件时走 `plugin_data` 转发, 自己不产生 UI 描述。唯一由 agent 侧
   产出、client 侧渲染的 UI 结构是**中断描述** (`interrupt_ui.h`)。
 - 描述形态是**界面描述层 `cxx_pluginxx_ui`** 的组件项 JSON (组件树, 见 [plugins.md](plugins.md) §9.1
@@ -344,7 +344,7 @@ struct UiActionItem {
   agent 侧 `preset::permissionCard` 为内置分类给 i18n 键 (`读取文件`/`写入文件`),
   **读/写只靠颜色区分** (`hint` / `thinking`), 不加粗、不加括号或背景色
 - **定时器与快捷键**: 插件不能自己起线程/定时器, 需要"按时间刷新"或"响应按键"时经
-  `agentxx.client.timer` / `agentxx.client.keybind` 两张表注册 (回调都在插件执行线程
+  `agentxx_client_timer` / `agentxx_client_keybind` 两张表注册 (回调都在插件执行线程
   执行 —— 默认就是 client io 线程, 插件代码永不进 UI 线程):
   - 定时器: `pause_when_hidden` 关联的面板/Info 段落不可见时顺延不触发; 主程序动画等级
     `Disabled` 时拒绝注册; 插件禁用/卸载时主程序全部取消

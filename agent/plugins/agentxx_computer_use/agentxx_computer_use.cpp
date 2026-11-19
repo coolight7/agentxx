@@ -98,7 +98,7 @@ struct ComputerUsePluginCtx : public agentxx::plugin::PluginBase {};
 
 /// ==================== 生命周期 (create 只构造, start 进程级, mount 注册, stop 撤销) ====================
 
-static void* computerUseAgentStart(
+static void computerUseAgentStart( 
     ComputerUsePluginCtx&         ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
@@ -106,7 +106,7 @@ static void* computerUseAgentStart(
     // 本插件没有进程级工作 (无连接/线程/定时器)
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     (void)ctx;
-    return nullptr;
+    return;
 }
 
 /// 挂载事务 (**协程形态**): 先取主程序里的工具提示词, 再注册鼠标/键盘工具
@@ -171,24 +171,24 @@ static void* computerUseAgentMount(
     return later.provider();
 }
 
-static void* computerUseAgentUnmount(
+static void computerUseAgentUnmount( 
     ComputerUsePluginCtx&,
     void*,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
 ) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 /// stop: 本插件不持有自管线程/定时器, 只上报完成 (主程序负责撤销注册)
-static void*
-    computerUseAgentStop(ComputerUsePluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void computerUseAgentStop(
+    ComputerUsePluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     ComputerUsePluginCtx,
     "agentxx_computer_use",
     "1.0.0",

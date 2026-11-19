@@ -35,37 +35,35 @@ struct PluginCtx : public agentxx::plugin::PluginBase {
     std::string                                                 projectRoot;
 };
 
-static HostConfig
-    readHostConfig(const PluginxxHost* host, const agentxx::plugin::AgentIfaces& iface) {
-    HostConfig cfg;
-    if (!host || !iface.config) {
-        return cfg;
+static pluginxx::Task<HostConfig> readHostConfigAsync(PluginCtx& ctx) {
+    HostConfig          cfg;
+    const PluginxxHost* host = ctx.host;
+    if (!host || !ctx.iface.config) {
+        co_return cfg;
     }
-    // 表成员是异步操作契约, 这里用阻塞形态 (start 里本来就在主程序 IO 线程, 内联完成)
-    if (iface.config->get_config) {
-        const auto s = agentxx::plugin::detail::tableOpText(
-            host,
-            iface.cancel,
-            iface.scheduler,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return iface.config->get_config(host, cb, ud, err);
+    // 表成员是异步操作契约: 提交 + co_await (create 跑在插件执行线程, 不能同步等)
+    if (ctx.iface.config->get_config) {
+        auto r = co_await pluginxx::tableOp(
+            ctx,
+            [host, &ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ctx.iface.config->get_config(host, cb, ud, err);
             }
         );
+        const std::string s{r.ok() ? r.text() : std::string_view{}};
         if (!s.empty()) {
             agentxx::plugin::ArgReader args(s);
             cfg.dataDir     = args.value<std::string>("dataDir", std::string{});
             cfg.projectRoot = args.value<std::string>("projectRoot", std::string{});
         }
     }
-    if (iface.config->get_plugin_args) {
-        const auto s = agentxx::plugin::detail::tableOpText(
-            host,
-            iface.cancel,
-            iface.scheduler,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return iface.config->get_plugin_args(host, cb, ud, err);
+    if (ctx.iface.config->get_plugin_args) {
+        auto r = co_await pluginxx::tableOp(
+            ctx,
+            [host, &ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ctx.iface.config->get_plugin_args(host, cb, ud, err);
             }
         );
+        const std::string s{r.ok() ? r.text() : std::string_view{}};
         if (!s.empty()) {
             agentxx::plugin::ArgReader args(s);
             cfg.loadPaths    = args.value<std::vector<std::string>>("paths", {});
@@ -74,7 +72,7 @@ static HostConfig
             cfg.loadCwd      = args.value<bool>("load_cwd", cfg.loadCwd);
         }
     }
-    return cfg;
+    co_return cfg;
 }
 
 struct ToolPrompt {
@@ -819,120 +817,120 @@ static void PLUGINXX_CALL on_client_attached(const PluginxxStringView*, void* ud
 
 using namespace agentxx_codegraph_plugin;
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    static const PluginxxInfo info{
-        PLUGINXX_API_VERSION,
-        0,
-        agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph"),
-        agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-        agentxx::plugin::PluginStringView::fromCstr(
-            "CodeGraph code analysis: symbol search/context/callers/callees/impact/path"
-        ),
-    };
-    return &info;
+/// 实例初始化 (协程): 打开索引库并初始化 (可降级: dataDir 缺失 / 初始化失败时保持 mgr 为空)
+///
+/// 接口存在性校验放在 createCtxEntry 的 check 里 (同步、不碰表), 这里只做需要
+/// co_await 的配置读取与本地初始化。
+static pluginxx::Task<std::string> codegraphInit(PluginCtx& ctx) {
+    auto cfg = co_await readHostConfigAsync(ctx);
+    if (cfg.dataDir.empty()) {
+        pluginLog(ctx.host, ctx.iface.log, 3, "agentxx_codegraph: dataDir not set, skip tools");
+        co_return std::string{};
+    }
+
+    agentxx_codegraph_plugin::CodeGraphIndexConfig cgConfig;
+    cgConfig.loadPaths           = cfg.loadPaths;
+    cgConfig.ignorePaths         = cfg.ignorePaths;
+    cgConfig.useGitignore        = cfg.useGitignore;
+    cgConfig.autoLoadProjectRoot = cfg.loadCwd;
+
+    std::string sqliteDir = (std::filesystem::path(cfg.dataDir) / "sqlite").string();
+    ctx.mgr = std::make_shared<agentxx_codegraph_plugin::CodeGraphManager>(sqliteDir, cgConfig);
+    ctx.mgr->setLogSink([ctxPtr = &ctx](int level, const std::string& msg) {
+        pluginLog(ctxPtr->host, ctxPtr->iface.log, level, msg);
+    });
+
+    PluginCtx* ctxRaw = &ctx;
+    ctx.mgr->setProgressCallback([ctxRaw](int processed, int total, std::string_view currentFile) {
+        try {
+            if (!ctxRaw || !ctxRaw->host || !ctxRaw->iface.broadcasts
+                || !ctxRaw->iface.broadcasts->publish_broadcast) {
+                return;
+            }
+            codegraph::Json j   = codegraph::Json::object();
+            j["processed"]      = processed;
+            j["total"]          = total;
+            j["current_file"]   = std::string{currentFile};
+            std::string payload = j.dump();
+            auto        progTopic = agentxx::plugin::PluginStringView::fromCstr(
+                "plugin.agentxx_codegraph.progress"
+            );
+            auto payloadSv
+                = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+            agentxx::plugin::publishPluginBroadcastNoWait(
+                ctxRaw->host,
+                ctxRaw->iface.broadcasts,
+                progTopic,
+                payloadSv
+            );
+        } catch (...) {
+        }
+    });
+
+    std::string projectRoot = cfg.projectRoot;
+    if (projectRoot.empty()) {
+        std::error_code ec;
+        projectRoot = std::filesystem::current_path(ec).string();
+        if (ec) {
+            projectRoot.clear();
+        }
+    }
+    if (projectRoot.empty()) {
+        pluginLog(ctx.host, ctx.iface.log, 4, "agentxx_codegraph: get current path failed");
+        co_return std::string{};
+    }
+
+    if (!ctx.mgr->initialize(projectRoot)) {
+        pluginLog(ctx.host, ctx.iface.log, 4, "agentxx_codegraph: initialize failed");
+        co_return std::string{};
+    }
+    ctx.projectRoot = projectRoot;
+    co_return std::string{};
 }
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    PluginCtx* raw    = nullptr;
-    auto       logger = [&raw](const char* m) noexcept {
-        pluginLog(raw ? raw->host : nullptr, raw ? raw->iface.log : nullptr, 4, m ? m : "");
-    };
-    return agentxx::plugin::guardCall(std::move(logger), -1, [&]() -> int {
-        if (!host || !host->vtable || !plugin_ctx) {
-            return -1;
-        }
-        auto ctx = std::make_unique<PluginCtx>();
-        ctx->init(host);
-        raw = ctx.get();
+/// 进程级启动工作 (后台索引预热 + 状态事件), 定义在下方
+static int codegraphAgentStartSetup(PluginCtx& ctx);
 
-        if (!ctx->iface.tools || !ctx->iface.tools->register_tool || !ctx->iface.broadcasts) {
-            pluginLog(host, ctx->iface.log, 4, "agentxx_codegraph: lacks tools/broadcasts iface");
-            return -1;
-        }
-
-        auto cfg = readHostConfig(ctx->host, ctx->iface);
-        if (cfg.dataDir.empty()) {
-            pluginLog(
-                ctx->host,
-                ctx->iface.log,
-                3,
-                "agentxx_codegraph: dataDir not set, skip tools"
-            );
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
-
-        agentxx_codegraph_plugin::CodeGraphIndexConfig cgConfig;
-        cgConfig.loadPaths           = cfg.loadPaths;
-        cgConfig.ignorePaths         = cfg.ignorePaths;
-        cgConfig.useGitignore        = cfg.useGitignore;
-        cgConfig.autoLoadProjectRoot = cfg.loadCwd;
-
-        std::string sqliteDir = (std::filesystem::path(cfg.dataDir) / "sqlite").string();
-        ctx->mgr
-            = std::make_shared<agentxx_codegraph_plugin::CodeGraphManager>(sqliteDir, cgConfig);
-        ctx->mgr->setLogSink([ctxPtr = ctx.get()](int level, const std::string& msg) {
-            pluginLog(
-                ctxPtr ? ctxPtr->host : nullptr,
-                ctxPtr ? ctxPtr->iface.log : nullptr,
-                level,
-                msg
-            );
-        });
-
-        PluginCtx* ctxRaw = ctx.get();
-        ctx->mgr->setProgressCallback(
-            [ctxRaw](int processed, int total, std::string_view currentFile) {
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::createCtxEntry<PluginCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "agentxx_codegraph",
+        [](PluginCtx& ctx) -> std::string {
+            if (!ctx.iface.tools || !ctx.iface.tools->register_tool || !ctx.iface.broadcasts) {
+                return "agentxx_codegraph: lacks tools/broadcasts iface";
+            }
+            return {};
+        },
+        [](PluginCtx& ctx, const PluginxxOperatorNotify* n, PluginxxString*) {
+            // 配置读取 / 索引库初始化 / 进程级启动工作都经协程: 完成通知随之异步发出
+            auto later = agentxx::plugin::finishLater(n);
+            ctx.spawn([later](PluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
                 try {
-                    if (!ctxRaw || !ctxRaw->host || !ctxRaw->iface.broadcasts
-                        || !ctxRaw->iface.broadcasts->publish_broadcast) {
-                        return;
+                    auto reason = co_await codegraphInit(c);
+                    if (!reason.empty()) {
+                        later.failed(reason);
+                        co_return;
                     }
-                    codegraph::Json j   = codegraph::Json::object();
-                    j["processed"]      = processed;
-                    j["total"]          = total;
-                    j["current_file"]   = std::string{currentFile};
-                    std::string payload = j.dump();
-                    auto        progTopic
-                        = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.progress");
-                    auto payloadSv
-                        = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-                    agentxx::plugin::publishPluginBroadcastNoWait(ctxRaw->host,
-                        ctxRaw->iface.broadcasts,
-                        progTopic,
-                        payloadSv
-                    );
-                } catch (...) {
+                    if (codegraphAgentStartSetup(c) != 0) {
+                        later.failed("agentxx_codegraph: start setup failed");
+                        co_return;
+                    }
+                    later.ok();
+                } catch (const std::exception& e) {
+                    later.failed(e.what());
                 }
-            }
-        );
-
-        std::string projectRoot = cfg.projectRoot;
-        if (projectRoot.empty()) {
-            std::error_code ec;
-            projectRoot = std::filesystem::current_path(ec).string();
-            if (ec) {
-                projectRoot.clear();
-            }
+                co_return;
+            });
         }
-        if (projectRoot.empty()) {
-            pluginLog(ctx->host, ctx->iface.log, 4, "agentxx_codegraph: get current path failed");
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
-
-        if (!ctx->mgr->initialize(projectRoot)) {
-            pluginLog(ctx->host, ctx->iface.log, 4, "agentxx_codegraph: initialize failed");
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
-        ctx->projectRoot = projectRoot;
-
-        // 工具/prompt/事件/后台索引任务属于 start 事务, 见 codegraphAgentSetup
-        *plugin_ctx = ctx.release();
-        return 0;
-    });
+    );
 }
 
 /// 挂载事务 (mount 的实际内容): 工具/prompt/事件订阅 (**协程形态**)。
@@ -1005,35 +1003,6 @@ static int codegraphAgentStartSetup(PluginCtx& ctx) {
     return 0;
 }
 
-static void* codegraphAgentStart(
-    PluginCtx&                    ctx,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error
-) {
-    if (!notify) {
-        if (error) {
-            agentxx::plugin::PluginString::set(
-                ctx.host,
-                error,
-                "agentxx_codegraph start: notify required"
-            );
-        }
-        return nullptr;
-    }
-    if (codegraphAgentStartSetup(ctx) != 0) {
-        if (error) {
-            agentxx::plugin::PluginString::set(
-                ctx.host,
-                error,
-                "agentxx_codegraph start: setup failed"
-            );
-        }
-        return nullptr;
-    }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
-}
-
 static void* codegraphAgentMount(
     PluginCtx&                         ctx,
     const AgentxxPluginAgentMountSpec* spec,
@@ -1075,36 +1044,38 @@ static void* codegraphAgentMount(
     return later.provider();
 }
 
-static void* codegraphAgentUnmount(
+static void codegraphAgentUnmount(
     PluginCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
     // 无 per-agent 状态; 工具/提示词/订阅由主程序按挂载记录撤销, 索引数据保留
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void* codegraphAgentStop(PluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void codegraphAgentStop(PluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 注册记录与后台任务句柄由主程序在 stop 后统一撤销/取消; 索引数据保留在
     // 实例上下文中, 下次 start 直接复用。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT(
     PluginCtx,
-    codegraphAgentStart,
     codegraphAgentStop,
     codegraphAgentMount,
     codegraphAgentUnmount
 )
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(
-        [ctx](const char* m) noexcept {
-            pluginLog(ctx ? ctx->host : nullptr, ctx ? ctx->iface.log : nullptr, 4, m ? m : "");
-        },
-        [&] {
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<PluginCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](PluginCtx* ctx) {
             if (!ctx) {
                 return;
             }
@@ -1238,42 +1209,42 @@ static void PLUGINXX_CALL onClientProgress(const PluginxxStringView* payload_jso
     refreshSection(*ctx);
 }
 
-extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
-    static const AgentxxClientPluginInfo info{
-        AGENTXX_CLIENT_PLUGIN_API_VERSION,
-        0,
-        agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph"),
-        agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-        agentxx::plugin::PluginStringView::fromCstr("CodeGraph index status (sidebar Info section)"
-        ),
-    };
-    return &info;
+extern "C" PLUGINXX_EXPORT int32_t agentxx_client_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillClientPluginInfo(
+        out,
+        "agentxx_codegraph",
+        "1.0.0",
+        "CodeGraph index status (sidebar Info section)"
+    );
 }
 
-/// client 侧 create: 只构造上下文 (查询接口表, 不注册任何 UI 项)
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {
-    ClientCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* m) noexcept {
-            if (raw) {
-                raw->logErr(m);
-            }
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto ctx   = std::make_unique<ClientCtx>();
-            ctx->init(host);
-            ctx->ui    = agentxx::plugin::queryInterface<AgentxxClientUiIface>(
-                host,
-                AGENTXX_IFACE_CLIENT_UI
-            );
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
+/// client 侧实例构造: 只查接口表 (UI 项由 create 的注册事务负责)
+static std::string codegraphClientCtor(ClientCtx& ctx) {
+    ctx.ui = agentxx::plugin::queryInterface<AgentxxClientUiIface>(ctx.host, AGENTXX_IFACE_CLIENT_UI);
+    return {};
+}
+
+/// client 侧注册事务 (定义在下方, 写成协程)
+static void codegraphClientStart(
+    ClientCtx&                    ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+);
+
+extern "C" PLUGINXX_EXPORT void agentxx_client_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::createCtxEntry<ClientCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "agentxx_codegraph",
+        &codegraphClientCtor,
+        &codegraphClientStart
     );
 }
 
@@ -1345,14 +1316,14 @@ static pluginxx::Task<void> codegraphClientSetupAsync(ClientCtx& ctx) {
 }
 
 /// client 侧 start: 注册事务写成协程 (提交后不阻塞插件执行线程)
-static void* codegraphClientStart(
+static void codegraphClientStart( 
     ClientCtx&                    ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               err
 ) {
     if (!notify) {
         agentxx::plugin::PluginString::set(ctx.host, err, "codegraph client start: notify required");
-        return nullptr;
+        return;
     }
     auto later = agentxx::plugin::finishLater(notify);
     ctx.spawn([later](ClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
@@ -1365,14 +1336,14 @@ static void* codegraphClientStart(
         later.ok();
         co_return;
     });
-    return later.provider();
+    later.provider();
+    return;
 }
 
 /// client 侧 stop: 撤销 Info 段落 (可重复调用)
 ///
 /// 注销是表调用, 这里提交即返回 (主程序在 stop 之后也会按记录撤销, 不依赖这一次)。
-static void*
-    codegraphClientStop(ClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    codegraphClientStop(ClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (ctx.section) {
         if (ctx.iface.ui && ctx.iface.ui->unregister_info_section && ctx.host) {
             agentxx::plugin::clientTableCall(
@@ -1393,26 +1364,26 @@ static void*
     }
     ctx.current_file.clear();
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(ClientCtx, codegraphClientStart, codegraphClientStop)
+AGENTXX_CLIENT_PLUGIN_LIFECYCLE_EXPORT(ClientCtx, codegraphClientStop)
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(
-        [ctx](const char* m) noexcept {
-            if (ctx) {
-                ctx->logErr(m);
-            }
-        },
-        [&] {
-            if (!ctx || !ctx->host) {
-                delete ctx;
+extern "C" PLUGINXX_EXPORT void agentxx_client_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<ClientCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](ClientCtx* ctx) {
+            if (!ctx) {
                 return;
             }
             // destroy 只释放本地状态: UI 项撤销已由 stop 完成
-            if (ctx->iface.log && ctx->iface.log->log) {
+            if (ctx->host && ctx->iface.log && ctx->iface.log->log) {
                 auto msgSv = agentxx::plugin::PluginStringView::fromCstr(
                     "agentxx_codegraph client unloaded"
                 );

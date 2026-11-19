@@ -359,13 +359,13 @@ static pluginxx::Task<void> sysMonStartSetup(SysMonCtx& ctx) {
     co_return;
 }
 
-static void*
-    sysMonStart(SysMonCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+static void sysMonStart(
+    SysMonCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify) {
         if (error) {
             PluginString::set(ctx.host, error, "agentxx_system_monitor start: notify required");
         }
-        return nullptr;
+        return;
     }
     if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         if (error) {
@@ -375,7 +375,7 @@ static void*
                 "agentxx_system_monitor start: host has no pluginxx.tasks (spawn unavailable)"
             );
         }
-        return nullptr;
+        return;
     }
     auto later = finishLater(notify);
     // 能力登记与事件订阅走协程: 全部生效后再报启动完成
@@ -388,7 +388,8 @@ static void*
         }
         co_return;
     });
-    return later.provider();
+    later.provider();
+    return;
 }
 
 static void* sysMonMount(
@@ -423,20 +424,20 @@ static void* sysMonMount(
 }
 
 /// 卸载: 无 per-agent 状态 (工具由主程序按挂载记录撤销)
-static void* sysMonUnmount(
+static void sysMonUnmount( 
     SysMonCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void* sysMonStop(SysMonCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void sysMonStop( SysMonCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ctx.stopSpawns();
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     SysMonCtx,
     "agentxx_system_monitor",
     "1.2.0",
@@ -694,7 +695,7 @@ static pluginxx::Task<void> sysMonClientSetupAsync(SysMonClientCtx& ctx) {
     co_return;
 }
 
-static void* sysMonClientStart(
+static void sysMonClientStart( 
     SysMonClientCtx&              ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
@@ -707,7 +708,7 @@ static void* sysMonClientStart(
                 "agentxx_system_monitor client start: notify required"
             );
         }
-        return nullptr;
+        return;
     }
     // 注册事务写成协程: 三条注册提交后并发跑, 全部有结果才交回
     auto later = agentxx::plugin::finishLater(notify);
@@ -716,17 +717,18 @@ static void* sysMonClientStart(
         later.ok();
         co_return;
     });
-    return later.provider();
+    later.provider();
+    return;
 }
 
-static void*
-    sysMonClientStop(SysMonClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void sysMonClientStop(
+    SysMonClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // UI 注册与订阅由主程序在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_CLIENT_EXPORT(
+AGENTXX_CLIENT_PLUGIN_EXPORT(
     SysMonClientCtx,
     "agentxx_system_monitor",
     "1.2.0",

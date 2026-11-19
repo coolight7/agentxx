@@ -5,6 +5,7 @@
 #include "pluginxx/ui/gen/blocks.g.h"
 #include "utilxx_base/string_util.h"
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -451,16 +452,19 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
         const fs::path* file;
         const char* macro; ///< 宏名前缀 (含 `_VERSION` 的变体不会匹配到引号, 天然排除)
         size_t      expect;
-        const char* prefix;
+        const char* prefix; ///< IID 值前缀 (`<应用名>_<表名>`, 下划线拼法)
         bool        documented; ///< 是否要求写进 plugins.md
-        const char* appPrefix = "agentxx."; ///< `PLUGINXX_APP_ID(...)` 形式拼出来的前缀
+        const char* tableMacro = "PLUGINXX_TABLE_ID"; ///< 把表名拼成 IID 的宏
     };
 
-    // 通用表的 IID 由 `<应用名>.` + 表名拼出 (`PLUGINXX_APP_ID`), agentxx 下即 `agentxx.`
+    // 接口表 IID 一律下划线: `<应用名>_<表名>` (`PLUGINXX_TABLE_ID`);
+    // 表名分两族 —— 通用表 `plugin_*`, 业务表 `agent_*` / `client_*`
     const Group groups[] = {
-        {&genericHeader, "PLUGINXX_IFACE_",             9,  "agentxx.",       false},
-        {&agentHeader,   "AGENTXX_PLUGIN_IFACE_AGENT_", 10, "agentxx.agent.",  true },
-        {&clientHeader,  "AGENTXX_IFACE_CLIENT_",       6,  "agentxx.client.", true },
+        {&genericHeader, "PLUGINXX_IFACE_",             9,  "agentxx_plugin_", false},
+        {&agentHeader,   "AGENTXX_PLUGIN_IFACE_AGENT_", 10, "agentxx_agent_",  true,
+         "AGENTXX_TABLE_ID"},
+        {&clientHeader,  "AGENTXX_IFACE_CLIENT_",       6,  "agentxx_client_", true,
+         "AGENTXX_TABLE_ID"},
     };
 
     std::vector<std::string> documentedNames;
@@ -472,14 +476,15 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
             continue;
         }
         // IID 有两种写法: 字面量 (`#define X_IFACE_A "pluginxx.a"`) 与
-        // 应用名拼接 (`#define X_IFACE_A PLUGINXX_APP_ID("a")`, 实际值 = `<应用名>.a`)
+        // 表名拼接 (`#define X_IFACE_A PLUGINXX_TABLE_ID("plugin_a")`, 实际值 = `<应用名>_a`)
         const std::regex literalPattern{
             std::string{R"re(^[ \t]*#[ \t]*define[ \t]+)re"} + group.macro
             + R"re([A-Z0-9_]+[ \t]+"([^"]+)")re"
         };
-        const std::regex appIdPattern{
+        const std::regex tableIdPattern{
             std::string{R"re(^[ \t]*#[ \t]*define[ \t]+)re"} + group.macro
-            + R"re([A-Z0-9_]+[ \t]+PLUGINXX_APP_ID\("([^"]+)"\))re"
+            + R"re([A-Z0-9_]+[ \t]+)re" + group.tableMacro
+            + "\\(\\s*\"([^\"]+)\"\\s*\\)"
         };
         std::vector<std::string> names;
         std::string_view         rest{text};
@@ -491,8 +496,8 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
             const auto  line = std::string{rest.substr(pos, end - pos)};
             if (std::regex_search(line, m, literalPattern)) {
                 names.push_back(m[1].str());
-            } else if (std::regex_search(line, m, appIdPattern)) {
-                names.emplace_back(std::string{group.appPrefix} + m[1].str());
+            } else if (std::regex_search(line, m, tableIdPattern)) {
+                names.emplace_back("agentxx_" + m[1].str());
             }
             if (nl == std::string_view::npos) {
                 break;
@@ -537,7 +542,8 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
 /// 规则 9: 接口表四件套齐全
 ///
 /// 每张接口表必须同时具备四项, 缺一不可 (新增表同样):
-/// - **IID** (`X_IFACE_<名>` 字符串常量): `query_interface` 的键;
+/// - **IID** (`X_IFACE_<名>`): `query_interface` 的键, 由 `PLUGINXX_TABLE_ID` /
+///   `AGENTXX_TABLE_ID` 拼出 (下划线形式, 见 `pluginxx/api/app.h`);
 /// - **`struct_size`** 字段: 主程序加载时填 `sizeof(表)`;
 /// - **`version`** 字段 + `X_VERSION`: 语义档位;
 /// - **`X_MIN_VERSION`**: 本头能配合工作的最低表版本;
@@ -643,7 +649,9 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
                     const std::string body = m[2].str();
                     if (!body.empty()
                         && (body.front() == '"'
-                            || body.rfind("PLUGINXX_APP_ID(", 0) == 0)) {
+                            || body.rfind("PLUGINXX_APP_ID(", 0) == 0
+                            || body.rfind("PLUGINXX_TABLE_ID(", 0) == 0
+                            || body.rfind("AGENTXX_TABLE_ID(", 0) == 0)) {
                         iids.push_back(name);
                     } else if (name.ends_with("_BASELINE_SIZE")) {
                         // 两种合法写法, 都是编译器算的:
@@ -1382,8 +1390,8 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
 /// - **回调形态**: `tableOpCallback(ctx, start, done)`。
 ///
 /// 阻塞形态 (`tableOpBlocking*` / `invoke_capability_blocking` / `call_tool_blocking`)
-/// 已删除, 再出现就是回退。同步等待原语 `tableOpSyncWait` 只允许出现在必须同步回答
-/// 外部同步 API 的地方 —— 目前只剩内嵌脚本引擎的示例插件 (`example_js`)。
+/// 已删除, 再出现就是回退。同步等待原语 `tableOpSyncWait` 只允许出现在插件 SDK
+/// 内部 (它要就地回答同步外部 API), 插件源码里不得再用。
 ///
 /// kit 里还有几个用阻塞形态实现的便捷函数 (client 表的 `clientTableOp` /
 /// `clientTableText` / `clientTableHandle`): 它们只在 `create` 这类加载线程上用,
@@ -1402,14 +1410,12 @@ void checkPluginTableCallShape(const fs::path& root, Violations& v) {
         "clientTableText(",
         "clientTableHandle(",
     };
-    // 同步等待原语与阻塞式 client 表入口: 只有这些文件可以用 (路径片段)
+    // 同步等待原语与阻塞式 client 表入口: 没有任何插件可以再用 (名单为空)
     //
-    // JS 引擎已经全部走 Promise 桥 (脚本侧表调用一律返回 Promise, 不再阻塞 JS 线程),
-    // 所以它不再享有豁免 —— 再出现同步等待就是回退。
-    static constexpr std::string_view kSyncWaitAllowed[] = {
-        "plugins/example_js/libexample_js.cpp",
-        "plugins\\example_js\\libexample_js.cpp",
-    };
+    // create / mount / 工具回调都跑在插件执行线程上, 在那里等表调用会与结果派发
+    // 互等; 要结果就写成协程 (`co_await tableOp`), 不要结果用 `clientTableCall`。
+    // JS 引擎也不再享有豁免 (脚本侧表调用一律返回 Promise)。
+    static constexpr std::array<std::string_view, 0> kSyncWaitAllowed{};
 
     std::vector<fs::path> files;
     collectSources(root / "plugins", files);

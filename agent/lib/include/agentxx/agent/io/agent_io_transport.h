@@ -552,7 +552,7 @@ struct WirePluginData {
 };
 
 /// client 插件事件上行 (Client -> Server)
-/// - client 侧插件 (`agentxx_plugin_client_create`) 经 `send_plugin_data` 发出的跨端事件;
+/// - client 侧插件 (`agentxx_client_plugin_create`) 经 `send_plugin_data` 发出的跨端事件;
 ///   服务端收到后把**同一个主题**发布到 agent 事件总线, 由 agent 侧插件按名订阅
 /// - 主题归属 client 族: 插件数据 `agentxx.client.plugin.<插件名>.<事件>`,
 ///   主程序约定事件 `agentxx.client.host.<事件>` (服务端原样转发, 不会环回客户端)

@@ -790,16 +790,15 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
 }
 
 /// 进程级启动: 本插件没有自管线程/定时器/订阅, 工具注册全在挂载阶段做
-static void*
-    fsStart(FsPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    fsStart(FsPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void* fsStop(FsPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void fsStop(FsPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 无自管线程/定时器; 注册记录由主程序在卸载时统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 /// 挂载: 把 9 个文件系统工具与它们的权限声明注册到本 agent 名下
@@ -836,7 +835,7 @@ static void* fsMount(
 }
 
 /// 卸载: 无 per-agent 状态需要释放 (工具与权限声明由主程序按记录撤销)
-static void* fsUnmount(
+static void fsUnmount(
     FsPluginCtx&,
     void*                         userData,
     const PluginxxOperatorNotify* notify,
@@ -844,10 +843,10 @@ static void* fsUnmount(
 ) {
     (void)userData;
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     FsPluginCtx,
     "agentxx_filesystem",
     "1.0.0",
@@ -1072,13 +1071,12 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
     return 0;
 }
 
-static void*
-    fsClientStart(FsClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+static void    fsClientStart(FsClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify) {
         if (error) {
             PluginString::set(ctx.host, error, "agentxx_filesystem client start: notify required");
         }
-        return nullptr;
+        return;
     }
     if (fsClientSetup(ctx) != 0) {
         if (error) {
@@ -1088,19 +1086,19 @@ static void*
                 "agentxx_filesystem client start: registration failed"
             );
         }
-        return nullptr;
+        return;
     }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void* fsClientStop(FsClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void fsClientStop(FsClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // UI 注册记录由主程序在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_CLIENT_EXPORT(
+AGENTXX_CLIENT_PLUGIN_EXPORT(
     FsClientCtx,
     "agentxx_filesystem",
     "1.0.0",

@@ -317,8 +317,8 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
     co_return;
 }
 
-static void*
-    execStart(ExecPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void execStart(
+    ExecPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 进程级只做环境探测 (与 agent 无关); 提示词与工具注册在 mount 里
     ctx.env = detectExecEnv();
     XX_LOGI(
@@ -326,7 +326,7 @@ static void*
         agentxx_execmd_plugin::detail::resolveExecEnvPolicy().describe
     );
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 static void* execMount(
@@ -360,19 +360,19 @@ static void* execMount(
     return later.provider();
 }
 
-static void*
-    execUnmount(ExecPluginCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void execUnmount(
+    ExecPluginCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void* execStop(ExecPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void execStop( ExecPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 无自管线程/定时器; 注册记录由主程序在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     ExecPluginCtx,
     "agentxx_execute_command",
     "1.0.0",
@@ -402,7 +402,7 @@ static int32_t setupExecClient(ExecClientCtx& ctx) {
     return 0;
 }
 
-static void* execClientStart(
+static void execClientStart(
     ExecClientCtx&                ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
@@ -415,7 +415,7 @@ static void* execClientStart(
                 "agentxx_execute_command client start: notify required"
             );
         }
-        return nullptr;
+        return;
     }
     if (setupExecClient(ctx) != 0) {
         if (error) {
@@ -425,19 +425,19 @@ static void* execClientStart(
                 "agentxx_execute_command client start: registration failed"
             );
         }
-        return nullptr;
+        return;
     }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void* execClientStop(ExecClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void execClientStop(ExecClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // UI 注册记录由主程序在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_CLIENT_EXPORT(
+AGENTXX_CLIENT_PLUGIN_EXPORT(
     ExecClientCtx,
     "agentxx_execute_command",
     "1.0.0",

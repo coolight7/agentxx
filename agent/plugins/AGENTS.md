@@ -16,7 +16,7 @@
 ## 导出与生命周期
 
 - 插件动态库只导出入口符号 `agentxx_plugin_{agent,client}_{get_info,create,start,
-  stop,destroy}`：使用 SDK 宏（`AGENTXX_PLUGIN_AGENT_EXPORT` /
+  stop,destroy}`：使用 SDK 宏（`AGENTXX_AGENT_PLUGIN_EXPORT` /
   `AGENTXX_PLUGIN_{AGENT,CLIENT}_LIFECYCLE_EXPORT` / `PLUGINXX_EXPORT`），
   不要手写 `__declspec(dllexport)` 或 `visibility("default")`。
 - 生命周期契约：`create` 只构造上下文（不注册、不起线程），`start` 是注册事务

@@ -326,14 +326,16 @@ AgentxxPluginToolSpec fakeTool(void* ud, bool reject) {
 int gLifecycleStops    = 0;
 int gLifecycleDestroys = 0;
 
-void* PLUGINXX_CALL fakeStopHook(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
+void PLUGINXX_CALL fakeStopHook(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ++gLifecycleStops;
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
 }
 
-void PLUGINXX_CALL fakeDestroyHook(void* ud) {
+void PLUGINXX_CALL fakeDestroyHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ++*static_cast<int*>(ud);
+    if (notify && notify->done) {
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
 }
 
 /// 接口表严格协商探针：伪装主程序只返回一次可控接口表，用于验证 SDK 对
@@ -359,7 +361,7 @@ void installLifecycleHooks(PluginInstance& inst, int* destroys) {
     inst.lifecycleStop    = &fakeStopHook;
     inst.lifecycleStarted = true;
     inst.pluginCreated    = true;
-    inst.builtinUnload    = &fakeDestroyHook;
+    inst.lifecycleDestroy = &fakeDestroyHook;
     inst.pluginCtx        = destroys;
 }
 
@@ -395,9 +397,19 @@ struct LifecycleProbe {
     PluginxxScopeRef  ref{};
 };
 
-void* PLUGINXX_CALL
-    lifecycleStartHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString* error) {
-    auto& probe = *static_cast<LifecycleProbe*>(ud);
+/// create = 构造 + 注册 (可重入): 上下文由主程序经 `*plugin_ctx` 交回
+void PLUGINXX_CALL lifecycleCreateHook(
+    const PluginxxHost*,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
+) {
+    auto  fail  = [&](std::string_view msg) {
+        hostMemorySetString(error, msg);
+        PluginxxStringView sv{msg.data(), static_cast<uint64_t>(msg.size())};
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &sv);
+    };
+    auto& probe = *static_cast<LifecycleProbe*>(*plugin_ctx);
     ++probe.starts;
     if (probe.tools && probe.host) {
         // 表成员是异步契约: 生命周期入口在主程序 IO 线程上, 内联完成
@@ -442,14 +454,13 @@ void* PLUGINXX_CALL
     }
     if (probe.failStart) {
         // 事务中途失败：主程序必须撤销这次已生效的注册（部分注册回滚）。
-        hostMemorySetString(error, "start refused by probe");
-        return nullptr;
+        fail("start refused by probe");
+        return;
     }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
 }
 
-void* PLUGINXX_CALL
+void PLUGINXX_CALL
     lifecycleStopHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
     auto& probe = *static_cast<LifecycleProbe*>(ud);
     ++probe.stops;
@@ -471,7 +482,6 @@ void* PLUGINXX_CALL
         );
     }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
 }
 } // namespace
 
@@ -1224,7 +1234,7 @@ TestResult testPluginRuntime() {
         RuntimeFixture f;
         gLifecycleDestroys        = 0;
         f.provider->pluginCreated = true;
-        f.provider->builtinUnload = &fakeDestroyHook;
+        f.provider->lifecycleDestroy = &fakeDestroyHook;
         f.provider->pluginCtx     = &gLifecycleDestroys;
 
         f.manager->shutdownAll();
@@ -1240,7 +1250,7 @@ TestResult testPluginRuntime() {
         inst->lifecycleStop    = &fakeStopHook;
         inst->lifecycleStarted = true;
         inst->pluginCreated    = true;
-        inst->builtinUnload    = &fakeDestroyHook;
+        inst->lifecycleDestroy = &fakeDestroyHook;
         inst->pluginCtx        = &gLifecycleDestroys;
         XX_TEST_EXPECT_TRUE(inst->lifecycleStopPending());
         inst.reset();
@@ -1604,7 +1614,7 @@ TestResult testPluginRuntime() {
         }
         XX_TEST_EXPECT_TRUE(probe->graph != nullptr);
 
-        inst->lifecycleStart   = &lifecycleStartHook;
+        inst->lifecycleCreate  = &lifecycleCreateHook;
         inst->lifecycleStop    = &lifecycleStopHook;
         inst->pluginCtx        = probe.get();
         inst->lifecycleStarted = true;

@@ -88,29 +88,27 @@ extern "C" {
 /// 去业务成员 (client 侧表布局同样未变, 两端重编即可); v4 = 跟随 agent 侧工具
 /// 结果状态位换代 (client 侧表布局未变, 两端重编即可); v5 = 跟随 agent 侧
 /// 功能埋点统一成功能埋点; v6 = 跟随 agent 侧工具结果两段上报 (正文 + 元数据);
-/// v7 = agent 侧表成员统一成异步操作契约 (client 侧表布局未变); v8 = **client 侧六张
-/// 业务表也改成异步操作契约**, 三个回答型回调 (工具折叠内容/展开内容、命令 `execute`)
-/// 改成 notify 形态 —— 本代的 client 侧表布局全部变化, **旧插件必须重编**
-#define AGENTXX_CLIENT_PLUGIN_API_VERSION 8
+/// v7 = agent 侧表成员统一成异步操作契约 (client 侧表布局未变); v8 = client 侧六张
+/// 业务表也改成异步操作契约, 三个回答型回调 (工具折叠内容/展开内容、命令 `execute`)
+/// 改成 notify 形态 —— 本代的 client 侧表布局全部变化, **旧插件必须重编**;
+/// v9 = 入口协议与命名换代: `get_info` 改成"框架给结构体、插件填写", `create` 与
+/// `start` 合并成一个异步 `create` (返回 `void`, 上下文走出参, 可重入), `destroy`
+/// 也改成异步; 入口符号与表 IID 改下划线 (`agentxx_client_plugin_*` /
+/// `agentxx_client_*`), 元信息结构统一用 `PluginxxInfo` (删 `AgentxxClientPluginInfo`)
+#define AGENTXX_CLIENT_PLUGIN_API_VERSION 9
 
-/// 主程序支持的**最低**插件 API 版本 (插件 `AgentxxClientPluginInfo.api_version` 检查)
-///
-/// 判据只有这一条: `api_version >= AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION`。插件声明更高
-/// 版本不被拒绝 (它可能用了主程序没有的能力, 由插件自己读 `AGENTXX_CLIENT_PLUGIN_API_VERSION`
-/// 决定是否降级)。与 agent 侧 `PLUGINXX_MIN_API_VERSION` 同一规则。
-#define AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION 8
+/// 本 SDK 要求的**最低主程序版本**: 导出宏把它填进 `PluginxxInfo.min_api_version`,
+/// 加载时校验 `min_api_version <= 主程序支持的版本` (见 pluginxx/api/entry.h)。
+#define AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION 9
 
 #pragma pack(push, 8)
 
 /* ==================== 插件元信息 ==================== */
 
-typedef struct AgentxxClientPluginInfo {
-    int32_t            api_version; ///< 必须 >= AGENTXX_CLIENT_PLUGIN_API_VERSION
-    uint32_t           _reserved;   ///< 8 字节补齐
-    PluginxxStringView name;        ///< 唯一标识 (与 agent 侧插件共用命名空间)
-    PluginxxStringView version;
-    PluginxxStringView description;
-} AgentxxClientPluginInfo;
+/// client 侧插件元信息与 agent 侧**共用** `PluginxxInfo` (pluginxx/api/abi.h):
+/// 框架给结构体、插件填写, 插件不分配内存, 也没有第二份布局相同的定义。
+/// 两端只在"支持的版本号"上不同: client 侧管理器把 `api_version` 填成
+/// [AGENTXX_CLIENT_PLUGIN_API_VERSION], agent 侧填 `AGENTXX_PLUGIN_API_VERSION`。
 
 /* ==================== client 事件通道 ==================== */
 
@@ -272,7 +270,7 @@ typedef struct AgentxxOverlaySpec {
 
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_UI             PLUGINXX_APP_ID("client.ui")
+#define AGENTXX_IFACE_CLIENT_UI             AGENTXX_TABLE_ID("client_ui")
 /* v2: 全部成员改成异步操作契约 (句柄经完成回调 payload 交回), 见文件头 */
 #define AGENTXX_IFACE_CLIENT_UI_VERSION     2 /* 追加成员 / 语义变化 -> +1 */
 #define AGENTXX_IFACE_CLIENT_UI_MIN_VERSION 2 /* 只在破坏性改动时 +1 (优先换 IID) */
@@ -535,7 +533,7 @@ typedef struct AgentxxClientUiIface {
 
 /* ==================== 接口表: 会话上下文与操作 (agentxx.client.session) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_SESSION             PLUGINXX_APP_ID("client.session")
+#define AGENTXX_IFACE_CLIENT_SESSION             AGENTXX_TABLE_ID("client_session")
 /* v2: 全部成员改成异步操作契约 (查询结果经完成回调 payload 交回) */
 #define AGENTXX_IFACE_CLIENT_SESSION_VERSION     2
 #define AGENTXX_IFACE_CLIENT_SESSION_MIN_VERSION 2
@@ -588,7 +586,7 @@ typedef struct AgentxxClientSessionIface {
 
 /* ==================== 接口表: 跨端数据通道 (agentxx.client.wire) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_WIRE             PLUGINXX_APP_ID("client.wire")
+#define AGENTXX_IFACE_CLIENT_WIRE             AGENTXX_TABLE_ID("client_wire")
 /* v2: 全部成员改成异步操作契约 */
 #define AGENTXX_IFACE_CLIENT_WIRE_VERSION     2
 #define AGENTXX_IFACE_CLIENT_WIRE_MIN_VERSION 2
@@ -617,7 +615,7 @@ typedef struct AgentxxClientWireIface {
 
 /* ==================== 接口表: 自描述/配置 (agentxx.client.self) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_SELF             PLUGINXX_APP_ID("client.self")
+#define AGENTXX_IFACE_CLIENT_SELF             AGENTXX_TABLE_ID("client_self")
 /* v2: 全部成员改成异步操作契约 (查询结果经完成回调 payload 交回) */
 #define AGENTXX_IFACE_CLIENT_SELF_VERSION     2
 #define AGENTXX_IFACE_CLIENT_SELF_MIN_VERSION 2
@@ -673,7 +671,7 @@ typedef struct AgentxxClientSelfIface {
 
 /* ==================== 接口表: 定时器 (agentxx.client.timer) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_TIMER             PLUGINXX_APP_ID("client.timer")
+#define AGENTXX_IFACE_CLIENT_TIMER             AGENTXX_TABLE_ID("client_timer")
 /* v2: 全部成员改成异步操作契约 (句柄经完成回调 payload 交回) */
 #define AGENTXX_IFACE_CLIENT_TIMER_VERSION     2
 #define AGENTXX_IFACE_CLIENT_TIMER_MIN_VERSION 2
@@ -746,7 +744,7 @@ typedef struct AgentxxClientTimerIface {
 
 /* ==================== 接口表: 全局快捷键 (agentxx.client.keybind) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_KEYBIND             PLUGINXX_APP_ID("client.keybind")
+#define AGENTXX_IFACE_CLIENT_KEYBIND             AGENTXX_TABLE_ID("client_keybind")
 /* v2: 全部成员改成异步操作契约 (句柄经完成回调 payload 交回) */
 #define AGENTXX_IFACE_CLIENT_KEYBIND_VERSION     2
 #define AGENTXX_IFACE_CLIENT_KEYBIND_MIN_VERSION 2
@@ -816,31 +814,19 @@ typedef struct AgentxxClientKeybindIface {
 
 /* ==================== 插件入口符号 (dlsym) ==================== */
 
-/// 可选: 查询插件元信息 (加载前调用, 用于版本/信息校验; 未导出则跳过;
-/// 纯静态元数据, 不得读取/依赖任何实例状态)
-typedef const AgentxxClientPluginInfo*(PLUGINXX_CALL* AgentxxClientPluginGetInfoFn)(void);
-/// 必需: client 侧插件实例创建 (主程序线程池调用; 内部注册动作主程序自动投递回
-/// 插件执行线程; 语义同 agent 侧 agentxx_plugin_agent_create)
-/// 【多实例契约】可重入, 每次调用产出独立存活实例 —— 一切实例状态只能
-/// 存于 *plugin_ctx 指向的堆块 (禁止可变全局/函数级 static 缓存); 一切注册
-/// 回调必须设置 user_data = 实例上下文。
-/// - host: 本实例专属主程序句柄 (opaque 已关联本实例)
-/// - plugin_ctx: 输出本实例私有上下文 (原样转给 destroy)
-/// - 返回 0 成功; 非 0 创建失败 (主程序走失败清理路径并报告错误)
-typedef int32_t(PLUGINXX_CALL* AgentxxClientPluginCreateFn)(
-    const PluginxxHost* host,
-    void**              plugin_ctx
-);
-/// 可选: 插件实例销毁 (主程序等全部执行中回调完成后调用; 主程序会在此之前自动
-/// 反注册该实例的一切 status item/panel/command/订阅)。只销毁对应 create
-/// 产出的实例上下文, 与其他并存实例无关。
-typedef void(PLUGINXX_CALL* AgentxxClientPluginDestroyFn)(void* plugin_ctx);
+/// 入口函数类型与定位统一用插件框架的定义 (`pluginxx/api/abi.h`):
+/// - 元信息: `PluginxxGetInfoFn` = `int32_t(PluginxxInfo*)`;
+/// - 创建: `PluginxxCreateFn` = 构造 + 注册 (`void`, 上下文走 `void**` 出参, 可重入);
+/// - 停用: `PluginxxStopFn`; 销毁: `PluginxxDestroyFn` —— 两个都是 `void` + 完成通知。
+///
+/// 四个入口的完整语义见 `pluginxx/api/abi.h` 与 docs 的插件开发约定;
+/// 导出用本头的 [AGENTXX_CLIENT_PLUGIN_EXPORT] (或自己写 create/destroy 时用
+/// [AGENTXX_CLIENT_PLUGIN_LIFECYCLE_EXPORT] 只生成 stop)。
 
-#define AGENTXX_PLUGIN_CLIENT_SYMBOL_GET_INFO "agentxx_plugin_client_get_info"
-#define AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE   "agentxx_plugin_client_create"
-#define AGENTXX_PLUGIN_CLIENT_SYMBOL_START    "agentxx_plugin_client_start"
-#define AGENTXX_PLUGIN_CLIENT_SYMBOL_STOP     "agentxx_plugin_client_stop"
-#define AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY  "agentxx_plugin_client_destroy"
+#define AGENTXX_CLIENT_PLUGIN_SYMBOL_GET_INFO "agentxx_client_plugin_get_info"
+#define AGENTXX_CLIENT_PLUGIN_SYMBOL_CREATE   "agentxx_client_plugin_create"
+#define AGENTXX_CLIENT_PLUGIN_SYMBOL_STOP     "agentxx_client_plugin_stop"
+#define AGENTXX_CLIENT_PLUGIN_SYMBOL_DESTROY  "agentxx_client_plugin_destroy"
 
 #pragma pack(pop)
 

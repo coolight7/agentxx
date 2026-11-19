@@ -53,42 +53,34 @@ static auto eventGuardLogger(EventCtx* ctx) noexcept {
     };
 }
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const PluginxxInfo* {
-            static const PluginxxInfo info{
-                PLUGINXX_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("example_event"),
-                agentxx::plugin::PluginStringView::fromCstr("2.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "Example broadcast plugin: declare channels, publish, subscribe, read, end"
-                ),
-            };
-            return &info;
-        }
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillAgentPluginInfo(
+        out,
+        "example_event",
+        "2.0.0",
+        "Example broadcast plugin: declare channels, publish, subscribe, read, end"
     );
 }
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    EventCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            eventGuardLogger(raw)(msg);
+static void eventAgentStart(EventCtx&, const PluginxxOperatorNotify*, PluginxxString*);
+
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::createCtxEntry<EventCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "example_event",
+        [](EventCtx& ctx) -> std::string {
+            return {};
         },
-        -1,
-        [&]() -> int {
-            if (!host || !plugin_ctx) {
-                return -1;
-            }
-            auto* ctx = new EventCtx();
-            raw       = ctx;
-            ctx->init(host);
-            *plugin_ctx = ctx;
-            return 0;
+        [](EventCtx& c, const PluginxxOperatorNotify* n, PluginxxString* e) {
+            (void)eventAgentStart(c, n, e);
         }
     );
 }
@@ -211,7 +203,7 @@ static pluginxx::Task<void> eventAgentSetup(EventCtx& ctx, EventMountState& stat
     co_return;
 }
 
-static void* eventAgentStart(
+static void eventAgentStart(
     EventCtx&                     ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
@@ -224,12 +216,12 @@ static void* eventAgentStart(
                 "example_event start: notify required"
             );
         }
-        return nullptr;
+        return;
     }
     // 进程级启动: 本插件没有自管线程/定时器, 注册全在挂载阶段做
     ctx.log.info("example_event started");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 static void* eventAgentMount(
@@ -307,7 +299,7 @@ static void* eventAgentMount(
     return state;
 }
 
-static void* eventAgentUnmount(
+static void eventAgentUnmount(
     EventCtx&                     ctx,
     void*                         mountUd,
     const PluginxxOperatorNotify* notify,
@@ -317,27 +309,31 @@ static void* eventAgentUnmount(
     delete static_cast<EventMountState*>(mountUd);
     ctx.log.info("example_event unmounted");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void*
-    eventAgentStop(EventCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    eventAgentStop(EventCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ctx.log.info("example_event stopped");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT(
     EventCtx,
-    eventAgentStart,
     eventAgentStop,
     eventAgentMount,
     eventAgentUnmount
 )
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<EventCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(eventGuardLogger(ctx), [&] {
-        delete ctx;
-    });
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<EventCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](EventCtx* ctx) { delete ctx; }
+    );
 }

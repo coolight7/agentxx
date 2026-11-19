@@ -311,63 +311,47 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
 // 入口: get_info / create / start / stop / mount / unmount / destroy
 // ===========================================================================
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const PluginxxInfo* {
-            static const PluginxxInfo info{
-                PLUGINXX_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("example_runtime"),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "Example runtime plugin: own root agent + chat channel + trigger + timer"
-                ),
-            };
-            return &info;
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillAgentPluginInfo(
+        out,
+        "example_runtime",
+        "1.0.0",
+        "Example runtime plugin: own root agent + chat channel + trigger + timer"
+    );
+}
+
+static void runtimeStart(RuntimeCtx&, const PluginxxOperatorNotify*, PluginxxString*);
+
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::createCtxEntry<RuntimeCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "example_runtime",
+        [](RuntimeCtx& ctx) -> std::string {
+            return {};
+        },
+        [](RuntimeCtx& c, const PluginxxOperatorNotify* n, PluginxxString* e) {
+            (void)runtimeStart(c, n, e);
         }
     );
 }
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    RuntimeCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            guardLogger(raw)(msg);
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto ctx = std::make_unique<RuntimeCtx>();
-            ctx->init(host);
-            raw = ctx.get();
-            // create 只构造与查询接口: 建根/开通道是进程级事务, 一律放 start
-            if (!agentxx::plugin::hasRuntime(*ctx)) {
-                ctx->log.error(
-                    "example_runtime requires the agentxx.agent.runtime interface "
-                    "(main program does not provide it)"
-                );
-                return -1;
-            }
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
-    );
-}
 
 /// 进程级启动: 挂根 → 开通道 → 配触发器/定时器。
 ///
 /// 这一步的顺序是有讲究的: 挂根之后根会异步 init, 通道可以先开 (就绪后自动启动);
 /// 触发器与定时器都要求通道 id 存在, 所以放在开通道之后。
-static void*
-    runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+static void    runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify || !notify->done) {
         agentxx::plugin::PluginString::set(ctx.host, error, "start: notify required");
-        return nullptr;
+        return;
     }
     const auto args = ctx.args();
 
@@ -385,7 +369,7 @@ static void*
             error,
             "start: mountRoot failed (see main program log: invalid config or root budget)"
         );
-        return nullptr;
+        return;
     }
     ctx.log.info(fmt::format("root mounted: {}", ctx.rootId));
 
@@ -407,7 +391,7 @@ static void*
             error,
             "start: openChannel failed (see main program log: session occupied or budget)"
         );
-        return nullptr;
+        return;
     }
     ctx.log.info(fmt::format("channel opened: {}", ctx.channelId));
 
@@ -448,14 +432,14 @@ static void*
     }
 
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 /// 进程级停止: 撤销自管资源 (通道 → 触发器/定时器 → 根)
 ///
 /// 主程序在禁用/卸载时也会按归属整批回收, 所以这里的清理是"自己先收干净";
 /// 全部入口都是幂等的, 重复清理不会出错。
-static void* runtimeStop(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void runtimeStop(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (ctx.timerId != 0) {
         agentxx::plugin::removeRuntimeTimer(ctx, ctx.timerId);
         ctx.timerId = 0;
@@ -475,7 +459,7 @@ static void* runtimeStop(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, 
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
-    return nullptr;
+    return;
 }
 
 /// 每个 agent 一份: 注册"投消息 / 发事件 / 查状态"三个工具
@@ -517,29 +501,31 @@ static void* runtimeForAgent(
 }
 
 /// 拆 agent 挂载: 工具由主程序按挂载记录撤销, 这里没有额外状态
-static void* runtimeForAgentEnd(
+static void runtimeForAgentEnd(
     RuntimeCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT(
     RuntimeCtx,
-    runtimeStart,
     runtimeStop,
     runtimeForAgent,
     runtimeForAgentEnd
 )
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<RuntimeCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(guardLogger(ctx), [&] {
-        if (!ctx) {
-            return;
-        }
-        delete ctx;
-    });
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<RuntimeCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](RuntimeCtx* ctx) { delete ctx; }
+    );
 }

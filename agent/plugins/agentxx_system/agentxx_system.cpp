@@ -38,11 +38,10 @@ static pluginxx::Task<void> sysSetupAsync(SysPluginCtx& ctx, ScopeRef ref) {
     co_return;
 }
 
-static void*
-    sysStart(SysPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    sysStart(SysPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     (void)ctx;
-    return nullptr;
+    return;
 }
 
 static void* sysMount(
@@ -76,18 +75,17 @@ static void* sysMount(
     return later.provider();
 }
 
-static void*
-    sysUnmount(SysPluginCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    sysUnmount(SysPluginCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void* sysStop(SysPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void sysStop(SysPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     SysPluginCtx,
     "agentxx_system",
     "1.0.0",

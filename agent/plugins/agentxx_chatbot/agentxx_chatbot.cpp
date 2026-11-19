@@ -1669,18 +1669,18 @@ bool chatbotStartBody(
 /// 进程级启动: 取实例参数与配置文件路径 (表调用) → 跑启动主体 → 订阅面板事件
 ///
 /// 三件事都靠协程串起来: `start` 跑在插件执行线程上, 不允许同步等主程序。
-void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+void chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify || !notify->done) {
         PluginString::set(ctx.host, error, "start: notify required");
-        return nullptr;
+        return;
     }
     if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         PluginString::set(ctx.host, error, "start: host has no pluginxx.tasks (spawn unavailable)");
-        return nullptr;
+        return;
     }
     auto later = agentxx::plugin::finishLater(notify);
     if (!later.active()) {
-        return nullptr;
+        return;
     }
     ctx.spawn([later](ChatbotCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
         try {
@@ -1700,11 +1700,11 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
         }
         co_return;
     });
-    return later.provider();
+    later.provider();
 }
 
 /// 进程级停止: 停平台 → 关通道 → 卸根 (逆序、幂等)
-void* chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+void chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (ctx.started.exchange(false, std::memory_order_acq_rel)) {
         // 1. 停平台连接 (不再收新消息)
         ctx.runOnIoBlocking([&]() {
@@ -1765,7 +1765,7 @@ void* chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
-    return nullptr;
+    return;
 }
 
 /// 每个 agent 一份: 只对**人设 root** 注册工具
@@ -1841,11 +1841,11 @@ void* chatbotForAgent(
 }
 
 /// 拆 agent 挂载: 工具由主程序按挂载记录撤销, 这里没有额外状态
-void* chatbotForAgentEnd(ChatbotCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
+void chatbotForAgentEnd(ChatbotCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
-    return nullptr;
+    return;
 }
 
 } // namespace
@@ -1854,78 +1854,74 @@ void* chatbotForAgentEnd(ChatbotCtx&, void*, const PluginxxOperatorNotify* notif
 // 入口: get_info / create / start / stop / mount / unmount / destroy
 // ===========================================================================
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const PluginxxInfo* {
-            static const PluginxxInfo info{
-                PLUGINXX_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr(kPluginName),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "Chat platform bridge (QQ first): persona roots + per-chat sessions"
-                ),
-            };
-            return &info;
-        }
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillAgentPluginInfo(
+        out,
+        kPluginName,
+        "1.0.0",
+        "Chat platform bridge (QQ first): persona roots + per-chat sessions"
     );
 }
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    ChatbotCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            guardLogger(raw)(msg);
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto ctx = std::make_unique<ChatbotCtx>();
-            ctx->init(host);
-            raw = ctx.get();
-            // 插件本地 dispatcher 默认没有 sink: 不接的话 `XX_LOG*` 的内容全部丢弃
-            ctx->hostLogSink = std::make_shared<HostLogSink>(ctx->log);
-            utilxx_base::LogDispatcher::instance().addSink(ctx->hostLogSink);
-            if (!agentxx::plugin::hasRuntime(*ctx)) {
-                ctx->log.error("agentxx_chatbot requires the agentxx.agent.runtime interface "
-                               "(main program does not provide it)");
-                return -1;
-            }
-            if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
-                ctx->log.error("agentxx_chatbot requires the agentxx.agent.tools interface");
-                return -1;
-            }
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
+/// 实例构造阶段 (在 create 入口里跑一次, 可失败)
+static std::string chatbotCtor(ChatbotCtx& ctx) {
+    // 插件本地 dispatcher 默认没有 sink: 不接的话 `XX_LOG*` 的内容全部丢弃
+    ctx.hostLogSink = std::make_shared<HostLogSink>(ctx.log);
+    utilxx_base::LogDispatcher::instance().addSink(ctx.hostLogSink);
+    if (!agentxx::plugin::hasRuntime(ctx)) {
+        return "agentxx_chatbot requires the agentxx.agent.runtime interface "
+               "(main program does not provide it)";
+    }
+    if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
+        return "agentxx_chatbot requires the agentxx.agent.tools interface";
+    }
+    return {};
+}
+
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::createCtxEntry<ChatbotCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "agentxx_chatbot",
+        &chatbotCtor,
+        &chatbotStart
     );
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT(
     ChatbotCtx,
-    chatbotStart,
     chatbotStop,
     chatbotForAgent,
     chatbotForAgentEnd
 )
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<ChatbotCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(guardLogger(ctx), [&] {
-        if (!ctx) {
-            return;
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<ChatbotCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](ChatbotCtx* ctx) {
+            if (!ctx) {
+                return;
+            }
+            // 先摘掉日志 sink 再释放实例: sink 持有实例的 logger, 反过来实例析构后
+            // 若 sink 仍在表里, 后续日志会打到已销毁的实例上
+            if (ctx->hostLogSink) {
+                utilxx_base::LogDispatcher::instance().removeSink(ctx->hostLogSink);
+                ctx->hostLogSink.reset();
+            }
+            delete ctx;
         }
-        // 先摘掉日志 sink 再释放实例: sink 持有实例的 logger, 反过来实例析构后
-        // 若 sink 仍在表里, 后续日志会打到已销毁的实例上
-        if (ctx->hostLogSink) {
-            utilxx_base::LogDispatcher::instance().removeSink(ctx->hostLogSink);
-            ctx->hostLogSink.reset();
-        }
-        delete ctx;
-    });
+    );
 }

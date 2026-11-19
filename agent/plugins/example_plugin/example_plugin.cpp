@@ -12,7 +12,7 @@
 /// 3. 事件: 订阅 plugin.demo.topic 与跨端事件
 /// 4. 能力: 声明 capability "example.demo"
 /// 5. 卸载: destroy 释放实例
-/// 6. client 入口 (双端插件, agentxx_plugin_client_create)
+/// 6. client 入口 (双端插件, agentxx_client_plugin_create)
 #include "agentxx/plugin/api/agentxx_broadcast_ids.h"
 #include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
@@ -66,22 +66,12 @@ static auto clientGuardLogger(ClientCtx* ctx) noexcept {
 
 /// ---------------- get_info ----------------
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const PluginxxInfo* {
-            static const PluginxxInfo info{
-                PLUGINXX_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("example_plugin"),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "Example native plugin: echo tool, hook, event, capability"
-                ),
-            };
-            return &info;
-        }
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillAgentPluginInfo(
+        out,
+        "example_plugin",
+        "1.0.0",
+        "Example native plugin: echo tool, hook, event, capability"
     );
 }
 
@@ -128,39 +118,44 @@ static void PLUGINXX_CALL on_client_hello(const PluginxxStringView*, void* ud) {
     });
 }
 
-/// ---------------- 实例生命周期 (create 构造 / start 注册 / stop 撤销) ----------------
+/// ---------------- 实例生命周期 (create = 构造 + 注册 / stop 撤销 / destroy 释放) ----------------
 ///
 /// 入口语义 (见 docs/zh-cn/design/plugins.md 生命周期小节):
-/// - `create`: 只分配上下文、查询接口、初始化纯本地字段; 不提交任何运行时注册,
-///   不启动不受托管的线程。
-/// - `start`: 在主程序 IO 线程执行注册事务 (工具/hook/事件/能力/prompt); 失败时
-///   返回 NULL + error, 主程序按"拒绝"处理并回滚已生效的注册。
-/// - `stop`: 在实例停用/关闭时给出完成信号 (本插件没有自管线程/定时器)。
+/// - `create`: 构造上下文并做注册事务 (旧版 `create` + `start` 合并); 同一实例第二次
+///   调用 (禁用后再启用) 时复用已有上下文, 只重新注册。
+/// - `stop`: 撤销自管资源 (本插件没有自管线程/定时器), 注册记录由主程序按挂载记录撤销。
 /// - `destroy`: 只释放本地内存; 不创建异步工作、不调用主程序注册接口。
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    AgentCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            agentGuardLogger(raw)(msg);
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto ctx = std::make_unique<AgentCtx>();
-            ctx->init(host);
-            raw = ctx.get();
+static void exampleAgentStart(AgentCtx&, const PluginxxOperatorNotify*, PluginxxString*);
 
-            // create 只做构造与接口查询: 注册事务由 start 执行
-            if (!ctx->iface.tools || !ctx->iface.tools->register_tool || !ctx->iface.broadcasts) {
-                return -1;
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    if (!host || !host->vtable) {
+        agentxx::plugin::detail::notifyLifecycleFailure(
+            host,
+            notify,
+            err,
+            "example_plugin: create requires host"
+        );
+        return;
+    }
+    agentxx::plugin::detail::createCtxEntry<AgentCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "example_plugin",
+        [](AgentCtx& ctx) -> std::string {
+            if (!ctx.iface.tools || !ctx.iface.tools->register_tool || !ctx.iface.broadcasts) {
+                return "example_plugin: host has no tools/broadcasts interface";
             }
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
+            return {};
+        },
+        exampleAgentStart
     );
 }
 
@@ -461,7 +456,7 @@ static pluginxx::Task<void>
     co_return;
 }
 
-static void*
+static void
     exampleAgentStart(AgentCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify) {
         if (error) {
@@ -471,12 +466,11 @@ static void*
                 "example_plugin start: notify required"
             );
         }
-        return nullptr;
+        return;
     }
     // 进程级启动: 本插件没有自管线程/定时器, 注册全在挂载阶段做
     ctx.log.info("example plugin started");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
 }
 
 static void* exampleAgentMount(
@@ -520,60 +514,55 @@ static void* exampleAgentMount(
     return later.provider();
 }
 
-static void* exampleAgentUnmount(
+static void exampleAgentUnmount(
     AgentCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
     // 工具/通知/订阅/提示词由主程序按挂载记录撤销
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
 }
 
-static void* exampleAgentStop(AgentCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void exampleAgentStop(AgentCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 本插件没有自管线程/定时器: stop 只给出完成信号。注册记录 (工具/hook/能力/
     // 订阅/prompt 贡献) 由主程序在 stop 后统一撤销, 这里不重复反注册, 避免与主程序
     // 的清理交叉。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT(
     AgentCtx,
-    exampleAgentStart,
     exampleAgentStop,
     exampleAgentMount,
     exampleAgentUnmount
 )
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<AgentCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(agentGuardLogger(ctx), [&] {
-        if (!ctx) {
-            return;
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<AgentCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](AgentCtx* ctx) {
+            if (!ctx) {
+                return;
+            }
+            delete ctx;
         }
-        delete ctx;
-    });
+    );
 }
 
 /// =====================================================================
 /// client 侧入口 (agentxx_client_*)
 /// =====================================================================
 
-extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const AgentxxClientPluginInfo* {
-            static const AgentxxClientPluginInfo info{
-                AGENTXX_CLIENT_PLUGIN_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("example_plugin"),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "Example client plugin: status item, panel, commands, event bridge"
-                ),
-            };
-            return &info;
-        }
+extern "C" PLUGINXX_EXPORT int32_t agentxx_client_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillClientPluginInfo(
+        out,
+        "example_plugin",
+        "1.0.0",
+        "Example client plugin: status item, panel, commands, event bridge"
     );
 }
 
@@ -894,7 +883,7 @@ static pluginxx::Task<void> exampleClientSetupAsync(ClientCtx& ctx) {
     co_return;
 }
 
-static void* exampleClientStart(
+static void exampleClientStart(
     ClientCtx&                    ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
@@ -907,7 +896,7 @@ static void* exampleClientStart(
                 "example_plugin client start: notify required"
             );
         }
-        return nullptr;
+        return;
     }
     // 注册事务写成协程: 每条注册都是提交 + co_await, 全部生效后才交回成功
     auto later = agentxx::plugin::finishLater(notify);
@@ -926,59 +915,71 @@ static void* exampleClientStart(
         later.ok();
         co_return;
     });
-    return later.provider();
 }
 
-static void* exampleClientStop(ClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void exampleClientStop(ClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // UI 注册与事件订阅由主程序在本事务后统一撤销 (主程序记录里已保存), 这里只给
     // 完成信号; 插件自身没有线程/定时器需要回收。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
 }
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {
-    ClientCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            clientGuardLogger(raw)(msg);
+extern "C" PLUGINXX_EXPORT void agentxx_client_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    if (!host || !host->vtable) {
+        agentxx::plugin::detail::notifyLifecycleFailure(
+            host,
+            notify,
+            err,
+            "example_plugin: client create requires host"
+        );
+        return;
+    }
+    agentxx::plugin::detail::createCtxEntry<ClientCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "example_plugin",
+        [](ClientCtx& ctx) -> std::string {
+            ctx.ui = ctx.iface.ui;
+            if (!ctx.iface.broadcasts || !ctx.iface.broadcasts->subscribe_broadcast) {
+                return "example_plugin: host has no broadcasts interface";
+            }
+            return {};
         },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto ctx = std::make_unique<ClientCtx>();
-            ctx->init(host);
-            ctx->ui = ctx->iface.ui;
-            raw     = ctx.get();
-
-            // create 只做构造与接口查询: UI 注册事务由 start 执行
-            if (!ctx->iface.broadcasts || !ctx->iface.broadcasts->subscribe_broadcast) {
-                return -1;
-            }
-            *plugin_ctx = ctx.release();
-            return 0;
-        }
+        exampleClientStart
     );
 }
 
-AGENTXX_PLUGIN_CLIENT_LIFECYCLE_EXPORT(ClientCtx, exampleClientStart, exampleClientStop)
+AGENTXX_CLIENT_PLUGIN_LIFECYCLE_EXPORT(ClientCtx, exampleClientStop)
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<ClientCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(clientGuardLogger(ctx), [&] {
-        if (!ctx || !ctx->host) {
+extern "C" PLUGINXX_EXPORT void agentxx_client_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<ClientCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](ClientCtx* ctx) {
+            if (!ctx || !ctx->host) {
+                delete ctx;
+                return;
+            }
+            // UI 注册与事件订阅在 stop 事务后由主程序统一撤销 (见 exampleClientStop):
+            // destroy 只释放本地内存, 不再调用主程序注册接口。
+            if (ctx->iface.log && ctx->iface.log->log) {
+                auto msgSv = agentxx::plugin::PluginStringView::fromCstr(
+                    "example client plugin unloaded"
+                );
+                ctx->iface.log->log(ctx->host, 2, &msgSv);
+            }
             delete ctx;
-            return;
         }
-        // UI 注册与事件订阅在 stop 事务后由主程序统一撤销 (见 exampleClientStop):
-        // destroy 只释放本地内存, 不再调用主程序注册接口。
-        if (ctx->iface.log && ctx->iface.log->log) {
-            auto msgSv
-                = agentxx::plugin::PluginStringView::fromCstr("example client plugin unloaded");
-            ctx->iface.log->log(ctx->host, 2, &msgSv);
-        }
-        delete ctx;
-    });
+    );
 }

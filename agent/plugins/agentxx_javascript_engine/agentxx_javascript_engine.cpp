@@ -768,7 +768,7 @@ public:
 
     /// 本引擎服务的插件侧
     ///
-    /// - 同一动态库导出两套入口 (`agentxx_plugin_agent_*` / `agentxx_plugin_client_*`),
+    /// - 同一动态库导出两套入口 (`agentxx_agent_plugin_*` / `agentxx_client_plugin_*`),
     ///   各自 `new JsEngine(Side)`
     /// - 引擎内部只有**桥**与**实例作用域**按侧区分; JS 线程、runtime、实例表、
     ///   定时器、停止收尾全部共用一套
@@ -10630,18 +10630,18 @@ void PLUGINXX_CALL JsEngine::keybindFire(void* ud) {
 // 插件入口 (主程序 dlsym)
 // =====================================================================
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    static const PluginxxInfo info{
-        PLUGINXX_API_VERSION,
-        0,
-        agentxx::plugin::PluginStringView::fromCstr("agentxx_javascript_engine"),
-        agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-        agentxx::plugin::PluginStringView::fromCstr(
-            "JS interpreter plugin (QuickJS): hosts type:js plugins"
-        ),
-    };
-    return &info;
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillAgentPluginInfo(
+        out,
+        "agentxx_javascript_engine",
+        "1.0.0",
+        "JS interpreter plugin (QuickJS): hosts type:js plugins"
+    );
 }
+
+/// 注册事务 / 停止事务 (定义在本文件末尾的入口区之前, 两个 create 共用)
+static void jsEngineStart(void*, const PluginxxOperatorNotify*, PluginxxString*);
+static void jsEngineStop(void*, const PluginxxOperatorNotify*, PluginxxString*);
 
 /// 能力方法异步启动 (interpreter.js): "load" 加载脚本到引擎 / "unload" 卸载
 /// - 统一异步操作模型: 快速校验在 io 线程内联完成; 脚本执行 (慢) 入队 JS
@@ -10774,39 +10774,61 @@ static void* PLUGINXX_CALL jsCapStart(
     }
 }
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: create 只构造上下文 (查询接口 + 加载主程序句柄),
-    // 不创建 runtime/线程, 也不提交任何运行时注册; 异常返回
-    // -1 走主程序加载失败清理路径
-    JsEngine* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* m) noexcept {
-            if (raw) {
-                raw->guardLog(m);
-            }
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto* engine = new JsEngine();
-            raw = engine; ///< create 段内异常路径日志可用 (函数出口随栈帧销毁)
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    // C ABI 边界异常守卫: create = 构造上下文 + 注册事务 (旧版 create + start 合并);
+    // 构造失败直接按失败通知, 主程序随后不再调 destroy (plugin_ctx 留空)。
+    if (!host || !host->vtable || !plugin_ctx) {
+        agentxx::plugin::detail::notifyLifecycleFailure(
+            host,
+            notify,
+            err,
+            "interpreter.js create: invalid arguments"
+        );
+        return;
+    }
+    // 可重入: 禁用后再启用走同一入口, 上下文复用, 只重跑注册事务
+    if (*plugin_ctx == nullptr) {
+        JsEngine* engine = nullptr;
+        try {
+            engine = new JsEngine();
             engine->setEngineHost(host);
-
-            // COM 风格接口表查询: entry 内一次性查询全部已知 IID (存入局部;
-            // 不可用函数级 static —— 多实例加载时各主程序接口表指针不同)
-            const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
-            if (!s_if.capabilities || !s_if.capabilities->register_capability || !s_if.log) {
-                delete engine;
-                raw = nullptr;
-                return -1;
-            }
-            *plugin_ctx = engine; ///< 所有权移交主程序 (destroy 时取回归还)
-            return 0;
+        } catch (...) {
+            ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
+                if (engine) {
+                    engine->guardLog(m);
+                }
+            });
+            delete engine;
+            agentxx::plugin::detail::notifyLifecycleFailure(
+                host,
+                notify,
+                err,
+                "interpreter.js create: out of memory"
+            );
+            return;
         }
-    );
+        // COM 风格接口表查询: 一次性查询全部已知 IID (存入局部;
+        // 不可用函数级 static —— 多实例加载时各主程序接口表指针不同)
+        const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
+        if (!s_if.capabilities || !s_if.capabilities->register_capability || !s_if.log) {
+            engine->guardLog("interpreter.js create: host lacks capabilities/log interface");
+            agentxx::plugin::detail::notifyLifecycleFailure(
+                host,
+                notify,
+                err,
+                "interpreter.js create: host lacks capabilities/log interface"
+            );
+            delete engine;
+            return;
+        }
+        *plugin_ctx = engine; ///< 所有权移交主程序 (destroy 时取回归还)
+    }
+    jsEngineStart(*plugin_ctx, notify, err);
 }
 
 /// 引擎 start (start 事务): 创建 JSRuntime + 专用 JS 线程, 并注册
@@ -10856,18 +10878,21 @@ static void PLUGINXX_CALL
     later.failed(reason);
 }
 
-static void* PLUGINXX_CALL jsEngineStart(
+static void PLUGINXX_CALL jsEngineStart(
     void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {
     auto* engine = static_cast<JsEngine*>(plugin_ctx); ///< 提升至 try 外 (catch 日志闭包使用)
     try {
+        // 失败路径的统一收尾: 写 error_out 并当场交回失败通知 (调用 -> 恰好一次 done)
         auto setErr = [&](const char* msg) {
-            if (error_out && engine && engine->host()) {
-                *error_out = agentxx::plugin::PluginString::fromCstr(engine->host(), msg);
-            }
-            return nullptr;
+            agentxx::plugin::detail::notifyLifecycleFailure(
+                engine != nullptr ? engine->host() : nullptr,
+                notify,
+                error_out,
+                msg
+            );
         };
         if (!engine || !notify || !notify->done) {
             return setErr("interpreter.js start: invalid lifecycle call");
@@ -10890,7 +10915,7 @@ static void* PLUGINXX_CALL jsEngineStart(
                 iface.log->log(host, 2, &loadedSv);
             }
             notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-            return nullptr; ///< 同步完成 (没有要等的事)
+            return; ///< 同步完成 (没有要等的事)
         }
         {
             // 能力 "interpreter.js" (异步方法处理器三件套): JS 插件 (C++ 壳) 经
@@ -10928,16 +10953,10 @@ static void* PLUGINXX_CALL jsEngineStart(
                 // 未受理 (参数错/实例正在关闭): 本次事务已启动的引擎要收回
                 delete state;
                 engine->requestStop(nullptr);
-                if (error_out != nullptr && error_out->data == nullptr) {
-                    *error_out = agentxx::plugin::PluginString::fromCstr(
-                        host,
-                        "interpreter.js start: capability registration was not accepted"
-                    );
-                }
-                return nullptr;
+                return setErr("interpreter.js start: capability registration was not accepted");
             }
             // 已受理: 结论在 jsCapRegDone 里交回 (堆对象同时充当 provider 句柄)
-            return static_cast<void*>(state);
+            return;
         }
     } catch (...) {
         ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
@@ -10950,7 +10969,7 @@ static void* PLUGINXX_CALL jsEngineStart(
                 = agentxx::plugin::PluginStringView::fromCstr("interpreter.js start: exception");
             notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
         }
-        return nullptr;
+        return;
     }
 }
 
@@ -10962,7 +10981,7 @@ static void* PLUGINXX_CALL jsEngineStart(
 /// - JS 线程的 join 与 JS_FreeRuntime 交给收尾线程执行 (不能在 IO 线程直接
 ///   join: JS 线程可能在主程序 vtable 调用中等待 IO 线程), done 在收尾完成后
 ///   从收尾线程上报 (完成通知允许来自任意线程)。
-static void* PLUGINXX_CALL jsEngineStop(
+static void PLUGINXX_CALL jsEngineStop(
     void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
@@ -10970,13 +10989,13 @@ static void* PLUGINXX_CALL jsEngineStop(
     auto* engine = static_cast<JsEngine*>(plugin_ctx); ///< 提升至 try 外 (catch 日志闭包使用)
     try {
         if (!engine || !notify || !notify->done) {
-            if (error_out && engine && engine->host()) {
-                *error_out = agentxx::plugin::PluginString::fromCstr(
-                    engine->host(),
-                    "interpreter.js stop: invalid lifecycle call"
-                );
-            }
-            return nullptr;
+            agentxx::plugin::detail::notifyLifecycleFailure(
+                engine != nullptr ? engine->host() : nullptr,
+                notify,
+                error_out,
+                "interpreter.js stop: invalid lifecycle call"
+            );
+            return;
         }
         PluginxxOperatorNotify ntfCopy = *notify;
         // 能力注册由主程序在停用/卸载时统一撤销 (detachInstanceRegistrations /
@@ -10985,8 +11004,8 @@ static void* PLUGINXX_CALL jsEngineStop(
         engine->requestStop([engine, ntfCopy]() mutable {
             ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
         });
-        // 已接受: 返回非空句柄, 完成通知在收尾线程发出 (幂等重复 stop 同样成立)
-        return engine->capOpToken();
+        // 已受理: 完成通知在收尾线程发出 (幂等重复 stop 同样成立)
+        return;
     } catch (...) {
         ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
             if (engine) {
@@ -10998,28 +11017,19 @@ static void* PLUGINXX_CALL jsEngineStop(
                 = agentxx::plugin::PluginStringView::fromCstr("interpreter.js stop: exception");
             notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
         }
-        return nullptr;
+        return;
     }
 }
 
-extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_stop(
     void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               err
 ) {
-    // 入口为 noexcept 守卫函数 (内部 try/catch 已分类上报, 异常不穿越 C ABI)
-    return jsEngineStart(plugin_ctx, notify, err);
+    jsEngineStop(plugin_ctx, notify, err);
 }
 
-extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_stop(
-    void*                         plugin_ctx,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               err
-) {
-    return jsEngineStop(plugin_ctx, notify, err);
-}
-
-extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_mount(
+extern "C" PLUGINXX_EXPORT void* agentxx_agent_plugin_mount(
     void*                              plugin_ctx,
     const AgentxxPluginAgentMountSpec* spec,
     const PluginxxOperatorNotify*      notify,
@@ -11059,22 +11069,21 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_mount(
     );
 }
 
-extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_unmount(
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_unmount(
     void*                         plugin_ctx,
     void*                         mount_ud,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*
+    PluginxxString*               err
 ) {
-    return agentxx::plugin::guardCall(
+    agentxx::plugin::guardCallVoid(
         [](const char* m) noexcept {
             (void)m;
         },
-        static_cast<void*>(nullptr),
-        [&]() -> void* {
+        [&]() {
             // 注销该 agent 的脚本实例: 工具/权限/提示词/订阅由主程序按挂载记录撤销,
             // 这里只收拾 JS 侧 (每个实例一份 JSContext + 定时器)
-            auto*       engine = static_cast<JsEngine*>(plugin_ctx);
-            auto*       handle = static_cast<JsEngine::ScopeHandle*>(mount_ud);
+            auto* engine = static_cast<JsEngine*>(plugin_ctx);
+            auto* handle = static_cast<JsEngine::ScopeHandle*>(mount_ud);
             if (engine && handle) {
                 engine->detachMountScope(handle->scope);
             }
@@ -11082,12 +11091,16 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_unmount(
             if (notify && notify->done) {
                 notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
             }
-            return nullptr;
         }
     );
+    (void)err;
 }
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
     auto* engine = static_cast<JsEngine*>(plugin_ctx);
     // C ABI 边界异常守卫: 销毁回调 (同步等待停止收尾 = 停线程 + 释放 runtime)
     // 异常不得外泄, 否则 JS 线程/runtime 泄漏且主程序卸载流程被打断;
@@ -11108,6 +11121,11 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
             delete engine;
         }
     ); // 停止 JS 线程并释放 runtime
+    // 释放完成即交回通知 (主程序收到后才会在工作线程 dlclose)
+    if (notify && notify->done) {
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    (void)err;
 }
 
 // =====================================================================
@@ -11118,80 +11136,88 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
 // 一份脚本一个实例, 没有 mount/unmount 入口。
 // =====================================================================
 
-extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        static_cast<const AgentxxClientPluginInfo*>(nullptr),
-        [&]() -> const AgentxxClientPluginInfo* {
-            static const AgentxxClientPluginInfo info{
-                AGENTXX_CLIENT_PLUGIN_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("agentxx_javascript_engine"),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "JS interpreter plugin (QuickJS): hosts type:js plugins (client side)"
-                ),
-            };
-            return &info;
-        }
+extern "C" PLUGINXX_EXPORT int32_t agentxx_client_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillClientPluginInfo(
+        out,
+        "agentxx_javascript_engine",
+        "1.0.0",
+        "JS interpreter plugin (QuickJS): hosts type:js plugins (client side)"
     );
 }
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_client_create(const PluginxxHost* host, void** plugin_ctx) {
-    // create 只构造上下文 (不创建 runtime/线程, 不做任何注册)
-    JsEngine* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* m) noexcept {
-            if (raw) {
-                raw->guardLog(m);
-            }
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto* engine = new JsEngine(JsEngine::Side::Client);
-            raw          = engine; ///< create 段内异常路径日志可用
+extern "C" PLUGINXX_EXPORT void agentxx_client_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    // 与 agent 侧同一套 create (= 构造 + 注册事务), 只是引擎按 client 侧分流
+    if (!host || !host->vtable || !plugin_ctx) {
+        agentxx::plugin::detail::notifyLifecycleFailure(
+            host,
+            notify,
+            err,
+            "interpreter.js create: invalid arguments"
+        );
+        return;
+    }
+    // 可重入: 禁用后再启用走同一入口, 上下文复用, 只重跑注册事务
+    if (*plugin_ctx == nullptr) {
+        JsEngine* engine = nullptr;
+        try {
+            engine = new JsEngine(JsEngine::Side::Client);
             engine->setEngineHost(host);
-            // 引擎自身要用的通用表 (日志 / JSON 参数解析 / 能力注册) 必须存在
-            const agentxx::plugin::ClientIfaces s_if
-                = agentxx::plugin::ClientIfaces::query(host);
-            const ::PluginxxCapabilitiesIface* caps
-                = pluginxx::queryInterface<::PluginxxCapabilitiesIface>(
-                    host,
-                    PLUGINXX_IFACE_CAPABILITIES
-                );
-            if (!s_if.log || !s_if.json || !caps) {
-                delete engine;
-                raw = nullptr;
-                return -1;
-            }
-            *plugin_ctx = engine; ///< 所有权移交主程序 (destroy 时取回归还)
-            return 0;
+        } catch (...) {
+            ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
+                if (engine) {
+                    engine->guardLog(m);
+                }
+            });
+            delete engine;
+            agentxx::plugin::detail::notifyLifecycleFailure(
+                host,
+                notify,
+                err,
+                "interpreter.js create: out of memory"
+            );
+            return;
         }
-    );
+        // 引擎自身要用的通用表 (日志 / JSON 参数解析 / 能力注册) 必须存在
+        const agentxx::plugin::ClientIfaces s_if = agentxx::plugin::ClientIfaces::query(host);
+        const ::PluginxxCapabilitiesIface*  caps
+            = pluginxx::queryInterface<::PluginxxCapabilitiesIface>(
+                host,
+                PLUGINXX_IFACE_CAPABILITIES
+            );
+        if (!s_if.log || !s_if.json || !caps) {
+            engine->guardLog("interpreter.js create: host lacks log/json/capabilities interface");
+            agentxx::plugin::detail::notifyLifecycleFailure(
+                host,
+                notify,
+                err,
+                "interpreter.js create: host lacks log/json/capabilities interface"
+            );
+            delete engine;
+            return;
+        }
+        *plugin_ctx = engine; ///< 所有权移交主程序 (destroy 时取回归还)
+    }
+    jsEngineStart(*plugin_ctx, notify, err);
 }
 
-extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_client_start(
+extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL agentxx_client_plugin_stop(
     void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               err
 ) {
-    // 与 agent 侧同一套 start 事务: 建 runtime + JS 线程, 注册能力 "interpreter.js"
-    return jsEngineStart(plugin_ctx, notify, err);
+    jsEngineStop(plugin_ctx, notify, err);
 }
 
-extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_client_stop(
+extern "C" PLUGINXX_EXPORT void agentxx_client_plugin_destroy(
     void*                         plugin_ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               err
 ) {
-    return jsEngineStop(plugin_ctx, notify, err);
-}
-
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) {
     auto* engine = static_cast<JsEngine*>(plugin_ctx);
     const PluginxxHost*     ownHost = engine ? engine->host() : nullptr;
     const PluginxxLogIface* ownLog  = nullptr;
@@ -11209,4 +11235,8 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_client_destroy(void* plugin_ctx) 
             delete engine;
         }
     );
+    if (notify && notify->done) {
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    (void)err;
 }

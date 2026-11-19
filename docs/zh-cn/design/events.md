@@ -382,7 +382,7 @@ content:
 - **取消与改延时**：`agentxx_async_manager {opt:"cancel", id}` 与
   `{opt:"delay", id, delayMs}`，`id` 是 **id 数组**（去重后逐条处理、逐条一行结果；模型给单个
   id 时由执行层按 schema 转成数组），只能动本会话启动的任务；`group` 批量入口已删除。
-  插件侧另有 `agentxx.agent.runtime` 的 `cancel_async_work`，agent 关停走
+  插件侧另有 `agentxx_agent_runtime` 的 `cancel_async_work`，agent 关停走
   `AgentHost::cancelAsyncWorks(ctx)`：排队中的直接出队并立即发终态，运行中的置取消令牌；
   被取消同样发终态，等待方不会挂到超时（机制见 8.2）；
 - **查询**：`agentxx_async_query {group}` / `{id}`；没开 `notify` 或错过投递时靠它拿结果；
@@ -545,7 +545,7 @@ content:
 
 | 需求 | 用法 |
 |---|---|
-| 只把一条消息塞进会话（不需要值/状态） | `agentxx.agent.runtime` 的 `register_trigger` / `register_timer` |
+| 只把一条消息塞进会话（不需要值/状态） | `agentxx_agent_runtime` 的 `register_trigger` / `register_timer` |
 | 通知别人"某频道的值变了" / 拿别人的当前值 | 广播表 `agentxx.broadcasts`（声明 / 发布 / 订阅 / 读 / 结束） |
 
 ### 12.1 插件发值：广播
@@ -582,7 +582,7 @@ content:
 
 ## 13. 已知取舍与未做的事项
 
-- **触发器/定时器还没有收敛到中枢**：`agentxx.agent.runtime` 的 `register_trigger` /
+- **触发器/定时器还没有收敛到中枢**：`agentxx_agent_runtime` 的 `register_trigger` /
   `register_timer` 仍然自带一份合并、忙时丢弃与输入拼装，与中枢的投递规则并存；
   原计划把它们改成"spec → `EventWaitSpec`"的参数转换，本轮没做（C ABI 与插件写法不变，
   纯内部收敛，需要单独一轮改动 + 回归）；

@@ -121,7 +121,7 @@ Enabling registers the `agentxx_git_worktree` tool (`agentxx::tools::GitWorktree
 - **Tool Operations**: `create` (create + bind) / `info` (list + current binding) / `status` (uncommitted changes & unmerged commits summary) / `remove` (delete; the sole deletion entry under the default retention policy).
 - **Bind on Creation**: A successful `create` writes directly to `Session::WorktreeBinding` (`{repoRoot}/.agentxx/agent/worktrees/{name}`, branch `agentxx/wt-{name}`, based on `base_ref` defaulting to current HEAD). All subsequent relative path resolutions and child process working directories for the session automatically switch to the worktree—ensuring correct behavior is platform-enforced rather than model-dependent. Simultaneously appends `.agentxx/` to `.git/info/exclude` (effective locally without polluting tracked files).
 - **Permission Boundary Enforcement** (Code-level constraint): Binds per-session isolation (`SessionFsIsolation`) into `PermissionMiddleware`: write operations in the main checkout tree are DENIED (reads remain unrestricted), with isolation taking precedence over whitelists and mode defaults. Filesystem tool relative paths resolve against the worktree via `normalizePermissionPath(path, sessionId)`, ensuring stable path-permission synchronization.
-- **Plugin Chain Propagation**: The `agentxx.agent.session` interface table's `get_session_work_dir(host, agent, session_id)` prioritizes worktree bindings (empty falls back to the default session workdir); before v3 it lived on the framework table `pluginxx.config`. Filesystem and execute_command plugins resolve paths dynamically per invocation using injected session IDs rather than static initialization caches.
+- **Plugin Chain Propagation**: The `agentxx_agent_session` interface table's `get_session_work_dir(host, agent, session_id)` prioritizes worktree bindings (empty falls back to the default session workdir); before v3 it lived on the framework table `pluginxx.config`. Filesystem and execute_command plugins resolve paths dynamically per invocation using injected session IDs rather than static initialization caches.
 - **Subagent Inheritance**: When `AgentHost` derives subagents, they inherit parent session worktree bindings (subagent `config.workDir` is preset to the worktree path with `inheritedWorktreePath` flag set). Permission Ask default rules and all toolchains automatically target the inherited worktree.
 - **Lifecycle Management**: Worktrees are preserved under a keep policy and do not auto-delete on session termination. Deletion via `remove` runs dual-layer safety checks (uncommitted changes, untracked files, unmerged commits); if work artifacts exist, deletion is rejected with instructions to commit first, requiring `force=true` to override.
 - Git underlying encapsulation: See `agent/lib/include/agentxx/tools/worktree.h` (direct argv execution bypassing shells, terminating entire process group on timeout; tested in `worktree`). Requires `AGENTXX_ENABLE_BOOST_PROCESS=ON`.
@@ -1684,7 +1684,7 @@ EventBus (Event Bus)
 - Agent side: 16 interface tables (`tools`, `hooks`, `events`, `capabilities`, `scheduler`, `session`, `plugins`, `config` including get/set_language, `model`, `cancel`, `prompt`, `json`, `log`, `resources`, `graph`, `tasks`; the tasks table takes `notify` as an out-param for host-managed background tasks).
 - Client side: 7 interface tables (`ui` v2 with tool renderers + instance decors, `events`, `session`, `wire`, `self`, `json`, `log`; see `client_plugin_api.h`).
 - Modern SDK (`plugin_kit.h`):
-  - `AGENTXX_PLUGIN_AGENT_EXPORT` / `AGENTXX_PLUGIN_CLIENT_EXPORT` declarative macros wrapping C ABI exception boundaries and context management.
+  - `AGENTXX_AGENT_PLUGIN_EXPORT` / `AGENTXX_CLIENT_PLUGIN_EXPORT` declarative macros wrapping C ABI exception boundaries and context management.
   - `ToolSchemaBuilder` fluent schema generator auto-merged with host `toolPrompt`.
   - `ArgReader` typed parameter reader (whole-string numeric parsing with range checks, floating-point to integer rounding toward the nearest integer, case-insensitive booleans: `true`/`yes`/`y`/`on`/`enable`/`enabled`/`1` and `false`/`no`/`n`/`off`/`disable`/`disabled`/`0`).
   - `CancelRegistry` centralized event-driven cancellation manager with `ScopedRegistration` RAII protection.
@@ -1735,7 +1735,7 @@ entering or leaving a worktree never changes the system prompt.
   `prompt.h` only declares members and the substitution API, so editing prompt text no longer
   rebuilds every translation unit that includes the header
   - The table holds **built-in tools only** (share_store / subagent / git_worktree); plugin tool
-    prompts live inside the plugins themselves (a few inject them via the `agentxx.agent.prompt`
+    prompts live inside the plugins themselves (a few inject them via the `agentxx_agent_prompt`
     interface, e.g. execute_command / codegraph / planning). An entry with the same tool name still
     overrides the plugin prompt (useful for customization/localization).
 

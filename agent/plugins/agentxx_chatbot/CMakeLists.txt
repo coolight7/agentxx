@@ -50,19 +50,17 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   add_library(${_target} OBJECT ${_CHATBOT_SOURCES})
   target_compile_definitions(${_target} PRIVATE
     "AGENTXX_PLUGIN_BUILTIN=1"
-    "agentxx_plugin_agent_create=agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}"
-    "agentxx_plugin_agent_get_info=agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}"
-    "agentxx_plugin_agent_destroy=agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}"
-    "agentxx_plugin_agent_start=agentxx_plugin_agent_builtin_start_${PLUGIN_NAME}"
-    "agentxx_plugin_agent_stop=agentxx_plugin_agent_builtin_stop_${PLUGIN_NAME}"
-    "agentxx_plugin_agent_mount=agentxx_plugin_agent_builtin_mount_${PLUGIN_NAME}"
-    "agentxx_plugin_agent_unmount=agentxx_plugin_agent_builtin_unmount_${PLUGIN_NAME}"
+    "agentxx_agent_plugin_create=agentxx_plugin_agent_builtin_create_${PLUGIN_NAME}"
+    "agentxx_agent_plugin_get_info=agentxx_plugin_agent_builtin_get_info_${PLUGIN_NAME}"
+    "agentxx_agent_plugin_destroy=agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}"
+    "agentxx_agent_plugin_stop=agentxx_plugin_agent_builtin_stop_${PLUGIN_NAME}"
+    "agentxx_agent_plugin_mount=agentxx_plugin_agent_builtin_mount_${PLUGIN_NAME}"
+    "agentxx_agent_plugin_unmount=agentxx_plugin_agent_builtin_unmount_${PLUGIN_NAME}"
     # client 侧入口 (侧边栏「机器人」栏) 同样改名, 避免多插件合并编译时符号冲突
-    "agentxx_plugin_client_create=agentxx_plugin_client_builtin_create_${PLUGIN_NAME}"
-    "agentxx_plugin_client_get_info=agentxx_plugin_client_builtin_get_info_${PLUGIN_NAME}"
-    "agentxx_plugin_client_destroy=agentxx_plugin_client_builtin_destroy_${PLUGIN_NAME}"
-    "agentxx_plugin_client_start=agentxx_plugin_client_builtin_start_${PLUGIN_NAME}"
-    "agentxx_plugin_client_stop=agentxx_plugin_client_builtin_stop_${PLUGIN_NAME}"
+    "agentxx_client_plugin_create=agentxx_plugin_client_builtin_create_${PLUGIN_NAME}"
+    "agentxx_client_plugin_get_info=agentxx_plugin_client_builtin_get_info_${PLUGIN_NAME}"
+    "agentxx_client_plugin_destroy=agentxx_plugin_client_builtin_destroy_${PLUGIN_NAME}"
+    "agentxx_client_plugin_stop=agentxx_plugin_client_builtin_stop_${PLUGIN_NAME}"
   )
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # chatbot_*.h / platform/*.h

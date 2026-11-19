@@ -638,13 +638,13 @@ endif()
 #   (cxx_pluginxx / 插件 / 测试 / 客户端) 都经 _AGENTXX_COMMON_CMAKE_ARGS 继承同一份
 #   FLAGS, 因此框架、使用方与插件看到的值一致; 插件不链接框架库也能拿到 (只用头文件)
 set(
-  AGENTXX_PLUGIN_API_VERSION "7"
+  AGENTXX_PLUGIN_API_VERSION "8"
   CACHE STRING "agentxx 使用的插件 API 契约代次 (宏覆盖 cxx_pluginxx 的默认值 1)"
 )
 # 配置缓存不会因为默认值改了而自动更新: 老的 build 目录里还是上一代的值, 不纠正会让
 # 插件与主程序编译到不同代次 (表现为加载阶段就被“API 版本过低”拦住)
-if (NOT AGENTXX_PLUGIN_API_VERSION STREQUAL "7")
-  set(AGENTXX_PLUGIN_API_VERSION "7" CACHE STRING
+if (NOT AGENTXX_PLUGIN_API_VERSION STREQUAL "8")
+  set(AGENTXX_PLUGIN_API_VERSION "8" CACHE STRING
     "agentxx 使用的插件 API 契约代次 (宏覆盖 cxx_pluginxx 的默认值 1)" FORCE)
 endif()
 if (NOT(CMAKE_CXX_FLAGS MATCHES "-DPLUGINXX_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}"

@@ -281,7 +281,7 @@ static pluginxx::Task<void>
 
 /// ==================== 生命周期 (create 只构造, start 进程级, mount 注册, stop 撤销) ====================
 
-static void* screenCaptureAgentStart(
+static void screenCaptureAgentStart( 
     ScreenCapturePluginCtx&       ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
@@ -292,12 +292,13 @@ static void* screenCaptureAgentStart(
     // 主程序配置要问 io 线程: 交给协程等 (插件执行线程上不等), 完事后再放行 start
     auto later = pluginxx::finishLater(notify);
     if (!later.active()) {
-        return nullptr;
+        return;
     }
     if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
         // 主程序没有 tasks 表 (旧版): 不能 spawn, 跳过取配置直接放行
         later.ok();
-        return later.provider();
+        later.provider();
+        return;
     }
     ctx.spawn([later](ScreenCapturePluginCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
         const std::string cfgStr = co_await c.configAsync();
@@ -320,7 +321,8 @@ static void* screenCaptureAgentStart(
         later.ok();
         co_return;
     });
-    return later.provider();
+    later.provider();
+    return;
 }
 
 static void* screenCaptureAgentMount(
@@ -362,24 +364,24 @@ static void* screenCaptureAgentMount(
     return later.provider();
 }
 
-static void* screenCaptureAgentUnmount(
+static void screenCaptureAgentUnmount( 
     ScreenCapturePluginCtx&,
     void*,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
 ) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 /// stop: 本插件不持有自管线程/定时器, 只上报完成 (主程序负责撤销注册)
-static void*
-    screenCaptureAgentStop(ScreenCapturePluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void screenCaptureAgentStop(
+    ScreenCapturePluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     ScreenCapturePluginCtx,
     "agentxx_screen_capture",
     "1.0.0",

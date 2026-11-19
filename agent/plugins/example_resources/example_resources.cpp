@@ -47,41 +47,36 @@ struct ResCtx : public agentxx::plugin::PluginBase {
     }
 };
 
-/// 从 get_own_info JSON 中提取字段值 (host->alloc, 用完 free)
-static std::string ownInfoString(
-    const PluginxxHost*                 host,
-    const agentxx::plugin::AgentIfaces& iface,
-    const char*                         key
-) {
-    if (!iface.plugins || !iface.plugins->get_own_info || !iface.json
-        || !iface.json->json_get_string) {
-        return {};
+/// 读自身清单字段 (协程形态: 表成员是“提交 + co_await”, 插件执行线程上不能同步等)
+static pluginxx::Task<std::string> ownInfoStringAsync(ResCtx& ctx, const char* key) {
+    const PluginxxHost* host = ctx.host;
+    if (!ctx.iface.plugins || !ctx.iface.plugins->get_own_info || !ctx.iface.json
+        || !ctx.iface.json->json_get_string) {
+        co_return std::string{};
     }
-    // 表成员是异步操作契约: 这里用阻塞形态取回清单 JSON
-    const auto infoJson = agentxx::plugin::detail::tableOpText(
-        host,
-        iface.cancel,
-        iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.plugins->get_own_info(host, cb, ud, err);
+    auto r = co_await pluginxx::tableOp(
+        ctx,
+        [host, &ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ctx.iface.plugins->get_own_info(host, cb, ud, err);
         }
     );
-    if (infoJson.empty()) {
-        return {};
+    if (!r.ok() || r.text().empty()) {
+        co_return std::string{};
     }
-    std::string    out;
-    PluginxxString val{nullptr, 0};
-    auto           infoSv = agentxx::plugin::PluginStringView::from(
+    const std::string infoJson{r.text()};
+    std::string       out;
+    PluginxxString    val{nullptr, 0};
+    auto              infoSv = agentxx::plugin::PluginStringView::from(
         infoJson.data(),
         infoJson.size()
     );
     auto keySv = agentxx::plugin::PluginStringView::fromCstr(key);
-    iface.json->json_get_string(host, &infoSv, &keySv, &val);
+    ctx.iface.json->json_get_string(host, &infoSv, &keySv, &val);
     if (val.data) {
         out.assign(val.data, static_cast<size_t>(val.size));
         agentxx::plugin::PluginString::free(host, &val);
     }
-    return out;
+    co_return out;
 }
 
 /// 库文件路径 → 所在目录 (get_own_info 的 path 为库路径, 资源按"库路径所在
@@ -94,51 +89,39 @@ static std::string dirOf(const std::string& path) {
     return path.substr(0, pos);
 }
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    // C ABI 边界异常守卫: 异常返回 NULL; 本边界为纯静态元数据 → 空操作日志
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const PluginxxInfo* {
-            static const PluginxxInfo info{
-                PLUGINXX_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("example_resources"),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "Example plugin contributing skill/memory/mcp resources "
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillAgentPluginInfo(
+        out,
+        "example_resources",
+        "1.0.0",
+        "Example plugin contributing skill/memory/mcp resources "
                     "(declarative manifest + runtime agentxx.agent.resources interface)"
-                ),
-            };
-            return &info;
-        }
     );
 }
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: 异常返回 -1 (创建失败); 日志闭包捕获局部裸指针
-    auto    ctx = std::make_unique<ResCtx>();
-    ResCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* m) noexcept {
-            if (raw) {
-                raw->logErr(m);
-            }
+static void resAgentStart(ResCtx&, const PluginxxOperatorNotify*, PluginxxString*);
+
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::createCtxEntry<ResCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "example_resources",
+        [](ResCtx& ctx) -> std::string {
+            return {};
         },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            ctx->init(host);
-            raw = ctx.get();
-
-            // create 只构造上下文与查询接口: 资源注册属于 start 事务
-            return 0;
+        [](ResCtx& c, const PluginxxOperatorNotify* n, PluginxxString* e) {
+            (void)resAgentStart(c, n, e);
         }
     );
 }
+
 
 /// ---------------- 实例生命周期 (create 构造 / start 注册 / stop 撤销) ----------------
 ///
@@ -152,10 +135,9 @@ extern "C" PLUGINXX_EXPORT int
 ///   统一摘除 (skills/memory/mcp 的 owner 记录), 这里不重复反注册。
 /// - `destroy`: 只释放本地内存, 不创建异步工作、不调用主程序注册接口。
 
-static void*
-    resAgentStart(ResCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    resAgentStart(ResCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 /// 挂载事务 (**协程形态**): 追加运行时 skill 目录 + 记一条日志
@@ -168,7 +150,7 @@ static pluginxx::Task<void>
     //   已生效的注册由主程序在 stop 后统一撤销。
     if (ctx.iface.resources && ctx.iface.resources->register_skill_dir && ctx.iface.log
         && ctx.iface.log->log) {
-        auto        base            = dirOf(ownInfoString(host, ctx.iface, "path"));
+        auto        base            = dirOf(co_await ownInfoStringAsync(ctx, "path"));
         std::string runtimeSkillDir = fmt::format("{}/skills_runtime", base);
         auto        regResult
             = co_await agentxx::plugin::registerSkillDir(ctx, ref.ptr(), runtimeSkillDir);
@@ -240,38 +222,34 @@ static void* resAgentMount(
     return later.provider();
 }
 
-static void* resAgentStop(ResCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void resAgentStop(ResCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void* resAgentUnmount(
+static void resAgentUnmount(
     ResCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT(
     ResCtx,
-    resAgentStart,
     resAgentStop,
     resAgentMount,
     resAgentUnmount
 )
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    // C ABI 边界异常守卫: 销毁回调异常不得外泄。
-    // 主程序已在 stop 后摘除本插件的全部资源 (skill/memory/mcp), destroy 只释放内存。
-    auto* ctx = static_cast<ResCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(
-        [ctx](const char* m) noexcept {
-            if (ctx) {
-                ctx->logErr(m);
-            }
-        },
-        [&] {
-            delete ctx;
-        }
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<ResCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](ResCtx* ctx) { delete ctx; }
     );
 }

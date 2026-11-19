@@ -314,11 +314,13 @@ ClientPluginInstance::~ClientPluginInstance() {
         );
         return;
     }
-    if (!destroyPlugin()) {
+    if (!pluginDestroyed) {
+        // destroy 从未完成 (或从未执行): 插件上下文还在, dlclose 会让残留代码跳进
+        // 已卸载的内存。宁可泄漏 DSO, 也不在这里强行关闭。
         XX_LOGE(
-            "[client_plugin] `{}` destroyed while {} lease(s) remain; refusing to dlclose",
-            name,
-            lifetime ? lifetime->leaseCount() : 0
+            "[client_plugin] `{}` destroyed before its destroy entry finished; keeping plugin "
+            "context and DSO loaded",
+            name
         );
         return;
     }
@@ -510,41 +512,57 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         co_return nullptr;
     }
 
-    // 元信息 (可选符号)
+    // 元信息 (可选符号; 框架给结构体, 插件填写 —— 见 pluginxx/api/abi.h)
     std::string name;
     std::string version;
     std::string desc;
     std::string err;
-    if (auto getInfo = reinterpret_cast<AgentxxClientPluginGetInfoFn>(
-            NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_GET_INFO, err)
+    if (auto getInfo = reinterpret_cast<PluginxxGetInfoFn>(
+            NativeLoader::sym(handle, AGENTXX_CLIENT_PLUGIN_SYMBOL_GET_INFO, err)
         )) {
         // C ABI 回调异常保护: 插件违约按"未导出"处理 (名字从库名推导)
-        const AgentxxClientPluginInfo* info = nullptr;
+        PluginxxInfo info{};
+        info.api_version = AGENTXX_CLIENT_PLUGIN_API_VERSION;
+        info.struct_size = static_cast<uint32_t>(sizeof(PluginxxInfo));
+        bool        infoReady = false;
+        std::string infoError;
         try {
-            info = getInfo();
+            const int32_t rc = getInfo(&info);
+            if (rc == 0 && info.name.data && info.name.size > 0) {
+                infoReady = true;
+            } else {
+                infoError = fmt::format("get_info returned {}", rc);
+            }
         } catch (const std::exception& e) {
-            XX_LOGW("[client_plugin] `{}` get_info threw: {}", path, e.what());
+            infoError = fmt::format("get_info threw: {}", e.what());
         } catch (...) {
-            XX_LOGW("[client_plugin] `{}` get_info threw unknown exception", path);
+            infoError = "get_info threw unknown exception";
         }
-        if (info) {
-            // 插件级闸门: 声明版本低于本主程序支持的最低版本时拒绝加载
-            // (与 agent 侧同一判据; 见 pluginxx/api/abi.h 的 PLUGINXX_MIN_API_VERSION)
-            if (info->api_version < AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION) {
+        if (!infoError.empty()) {
+            XX_LOGE("[client_plugin] `{}` metadata rejected: {}", path, infoError);
+            NativeLoader::close(handle);
+            co_return nullptr;
+        }
+        if (infoReady) {
+            // 插件级闸门: 插件要求的最低主程序版本高于本端支持的版本时拒绝加载
+            if (info.min_api_version > AGENTXX_CLIENT_PLUGIN_API_VERSION) {
                 XX_LOGE(
-                    "[client_plugin] `{}` api_version {} below minimum {}",
+                    "[client_plugin] `{}` requires API version {} but this host supports {}",
                     path,
-                    info->api_version,
-                    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION
+                    info.min_api_version,
+                    AGENTXX_CLIENT_PLUGIN_API_VERSION
                 );
                 NativeLoader::close(handle);
                 co_return nullptr;
             }
-            name    = std::string{info->name.data ? info->name.data : "", info->name.size};
-            version = std::string{info->version.data ? info->version.data : "", info->version.size};
-            desc    = std::string{
-                info->description.data ? info->description.data : "",
-                info->description.size
+            name    = std::string(info.name.data, static_cast<size_t>(info.name.size));
+            version = std::string{
+                info.version.data ? info.version.data : "",
+                static_cast<size_t>(info.version.size)
+            };
+            desc = std::string{
+                info.description.data ? info.description.data : "",
+                static_cast<size_t>(info.description.size)
             };
         }
     }
@@ -593,30 +611,29 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         }
     }
 
-    // entry 入口 (必需): 探测与加载合并 —— 一次 dlopen 内查符号
+    // 入口符号 (create / stop / destroy 三个都必需): 探测与加载合并 —— 一次 dlopen 内查符号
     std::string entryErr;
-    auto        entryFn = reinterpret_cast<AgentxxClientPluginCreateFn>(
-        NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE, entryErr)
+    auto        entryFn = reinterpret_cast<PluginxxCreateFn>(
+        NativeLoader::sym(handle, AGENTXX_CLIENT_PLUGIN_SYMBOL_CREATE, entryErr)
     );
-    std::string lifecycleErr;
-    auto        lifecycleStart = reinterpret_cast<PluginxxStartFn>(
-        NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_START, lifecycleErr)
+    std::string stopErr;
+    auto        lifecycleStop = reinterpret_cast<PluginxxStopFn>(
+        NativeLoader::sym(handle, AGENTXX_CLIENT_PLUGIN_SYMBOL_STOP, stopErr)
     );
-    lifecycleErr.clear();
-    auto lifecycleStop = reinterpret_cast<PluginxxStopFn>(
-        NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_STOP, lifecycleErr)
+    std::string destroyErr;
+    auto        lifecycleDestroy = reinterpret_cast<PluginxxDestroyFn>(
+        NativeLoader::sym(handle, AGENTXX_CLIENT_PLUGIN_SYMBOL_DESTROY, destroyErr)
     );
-    // start/stop 是必备入口 (create 只构造, start 注册, stop 撤销):
-    // 缺少任一符号说明插件未按当前契约导出, 直接拒绝加载。
-    if (entryFn && (!lifecycleStart || !lifecycleStop)) {
+    // create / stop / destroy 都必需: 缺任一说明插件未按当前契约导出, 拒绝加载。
+    if (entryFn && (!lifecycleStop || !lifecycleDestroy)) {
         XX_LOGE(
             "[client_plugin] `{}` missing lifecycle entry ({}: {}; {}: {}); plugins must export "
-            "start/stop",
+            "stop/destroy",
             path,
-            AGENTXX_PLUGIN_CLIENT_SYMBOL_START,
-            lifecycleStart ? "ok" : lifecycleErr,
-            AGENTXX_PLUGIN_CLIENT_SYMBOL_STOP,
-            lifecycleStop ? "ok" : lifecycleErr
+            AGENTXX_CLIENT_PLUGIN_SYMBOL_STOP,
+            lifecycleStop ? "ok" : stopErr,
+            AGENTXX_CLIENT_PLUGIN_SYMBOL_DESTROY,
+            lifecycleDestroy ? "ok" : destroyErr
         );
         releasePluginName(name);
         NativeLoader::close(handle);
@@ -629,7 +646,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
             XX_LOGE(
                 "[client_plugin] `{}` requires client-side interfaces but missing {}: {}",
                 path,
-                AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE,
+                AGENTXX_CLIENT_PLUGIN_SYMBOL_CREATE,
                 entryErr
             );
         } else if (allowMissingEntry) {
@@ -639,7 +656,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
             XX_LOGE(
                 "[client_plugin] `{}` missing {}: {}",
                 path,
-                AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE,
+                AGENTXX_CLIENT_PLUGIN_SYMBOL_CREATE,
                 entryErr
             );
         }
@@ -678,46 +695,24 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     // 生命周期入口 + 基类自引用 + 生命周期控制块 + 交给自己插件的主程序控制块
     // (host 视图放在进程级稳定的控制块里: 插件可能保存该指针并在卸载后继续调用,
     // 控制块 tombstone 保证这类迟到调用安全失败)
-    attachInstance(inst, lifecycleStart, lifecycleStop);
+    attachInstance(inst, entryFn, lifecycleStop, lifecycleDestroy);
 
-    // entry 卸载到内部线程池执行 (A2): 与 agent 侧一致 —— entry 内的表调用经
-    // `startTableOp` 投递到 client io 线程执行 (异步契约, 入口不等它);
-    // entry 在 io 线程执行会阻塞 client io 事件循环 (慢初始化/插件间调用时明显),
-    // 且违背契约声明的 "entry 运行在主程序线程池";
-    // 插件违约抛异常按 rc=-1 处理 (加载失败清理路径)
-    int rc = co_await utilxx::offloadAsync<int>(*pool_, [inst, entryFn]() -> asio::awaitable<int> {
-        try {
-            const auto rc       = entryFn(inst->hostView(), &inst->pluginCtx);
-            inst->pluginCreated = (inst->pluginCtx != nullptr);
-            co_return rc;
-        } catch (const std::exception& e) {
-            XX_LOGE("[client_plugin] `{}` entry threw: {}", inst->name, e.what());
-        } catch (...) {
-            XX_LOGE("[client_plugin] `{}` entry threw unknown exception", inst->name);
-        }
-        co_return -1;
-    });
-    if (rc != 0) {
-        XX_LOGE("[client_plugin] `{}` entry failed (rc={})", name, rc);
-        detachAll(inst.get());
-        inst->destroyPlugin();
-        releasePluginName(name);
-        // inst 随局部释放析构 → ~ClientPluginInstance → dlclose
-        co_return nullptr;
-    }
-
-    std::string startError;
-    if (!co_await awaitPluginLifecycle(
+    // 创建事务 = 构造 + 注册, 一个完成包定成败 (在插件执行线程上跑, 不占 client io 线程)
+    inst->pluginCtx = nullptr;
+    std::string createError;
+    if (!co_await pluginxx::awaitPluginLifecycleVoid(
             runtime(),
             inst,
-            inst->pluginCtx,
-            inst->lifecycleStart,
-            "client plugin start",
-            startError
+            [&](const PluginxxOperatorNotify* notify, PluginxxString* errorOut) {
+                entryFn(inst->hostView(), &inst->pluginCtx, notify, errorOut);
+            },
+            "client plugin create",
+            createError
         )) {
-        XX_LOGE("[client_plugin] `{}` start failed: {}", name, startError);
+        XX_LOGE("[client_plugin] `{}` create failed: {}", name, createError);
+        inst->pluginCreated = (inst->pluginCtx != nullptr);
         detachAll(inst.get());
-        inst->destroyPlugin();
+        co_await destroyInstanceAsync(inst);
         releasePluginName(name);
         if (inst->dlHandle) {
             NativeLoader::close(inst->dlHandle);
@@ -725,6 +720,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         }
         co_return nullptr;
     }
+    inst->pluginCreated    = (inst->pluginCtx != nullptr);
     inst->lifecycleStarted = true;
 
     inst->lifetime->setState(pluginxx::PluginInstanceState::Ready);

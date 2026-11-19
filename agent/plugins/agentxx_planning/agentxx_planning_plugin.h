@@ -16,6 +16,9 @@ using agentxx::plugin::ctxGuardLogger;
 using agentxx::plugin::pluginLog;
 using agentxx::plugin::pluginStrdup;
 
-struct PluginCtx : public agentxx::plugin::PluginBase {};
+struct PluginCtx : public agentxx::plugin::PluginBase {
+    /// 主程序数据目录 (挂载事务里读一次缓存; 之后工具/事件回调直接用它派生目录)
+    std::string dataDir;
+};
 
 } // namespace agentxx_planning_plugin

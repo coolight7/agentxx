@@ -49,22 +49,12 @@ static auto agentGuardLogger(AgentCtx* ctx) noexcept {
 
 /// ---------------- get_info ----------------
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const PluginxxInfo* {
-            static const PluginxxInfo info{
-                PLUGINXX_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("example_graph_node"),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "Example graph node plugin: intent router + datetime node, modifies agent graph"
-                ),
-            };
-            return &info;
-        }
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillAgentPluginInfo(
+        out,
+        "example_graph_node",
+        "1.0.0",
+        "Example graph node plugin: intent router + datetime node, modifies agent graph"
     );
 }
 
@@ -442,30 +432,29 @@ static pluginxx::Task<bool> modifyGraphToIntentFlow(
 ///   (GraphTypeSlot 失效使旧编译节点安全失败), 执行图保持当前定义。
 /// - `destroy`: 只释放本地内存。
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    AgentCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            agentGuardLogger(raw)(msg);
-        },
-        -1,
-        [&]() -> int {
-            if (!host || !host->vtable || !plugin_ctx) {
-                return -1;
-            }
-            auto ctx = std::make_unique<AgentCtx>();
-            ctx->init(host);
-            raw = ctx.get();
+static void exampleGraphAgentStart(AgentCtx&, const PluginxxOperatorNotify*, PluginxxString*);
 
-            if (!ctx->iface.graph || !ctx->iface.graph->register_node_type) {
-                return -1;
-            }
-            *plugin_ctx = ctx.release();
-            return 0;
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::createCtxEntry<AgentCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "example_graph_node",
+        [](AgentCtx& ctx) -> std::string {
+            return {};
+        },
+        [](AgentCtx& c, const PluginxxOperatorNotify* n, PluginxxString* e) {
+            (void)exampleGraphAgentStart(c, n, e);
         }
     );
 }
+
 
 /// 挂载事务 (mount): 登记自定义节点类型并改写执行图 (**协程形态**)
 /// - `ref` 为本次挂载的 agent 引用, 节点类型与该 agent 的图定义都记在它名下
@@ -513,7 +502,7 @@ static pluginxx::Task<void>
     co_return;
 }
 
-static void* exampleGraphAgentStart(
+static void exampleGraphAgentStart( 
     AgentCtx&                     ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
@@ -526,12 +515,12 @@ static void* exampleGraphAgentStart(
                 "example_graph_node start: notify required"
             );
         }
-        return nullptr;
+        return;
     }
     // 进程级启动: 本插件没有自管线程/定时器, 注册全在挂载阶段做
     ctx.log.info("example_graph_node started");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 static void* exampleGraphAgentMount(
@@ -576,35 +565,36 @@ static void* exampleGraphAgentMount(
     return later.provider();
 }
 
-static void* exampleGraphAgentUnmount(
+static void exampleGraphAgentUnmount(
     AgentCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
     // 节点类型与图定义由主程序按挂载记录撤销
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void*
-    exampleGraphAgentStop(AgentCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    exampleGraphAgentStop(AgentCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 没有自管线程/定时器; 注册记录由主程序在 stop 后撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT(
     AgentCtx,
-    exampleGraphAgentStart,
     exampleGraphAgentStop,
     exampleGraphAgentMount,
     exampleGraphAgentUnmount
 )
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<AgentCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(agentGuardLogger(ctx), [&] {
-        if (!ctx) {
-            return;
-        }
-        delete ctx;
-    });
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<AgentCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](AgentCtx* ctx) { delete ctx; }
+    );
 }

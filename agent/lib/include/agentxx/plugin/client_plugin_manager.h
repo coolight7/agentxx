@@ -517,10 +517,6 @@ public:
     /// unloadAsync 等 inflight 归零后移除, shutdownAll 进程退出路径约定无执行中)
     ~ClientPluginInstance();
 
-    /// 本端 destroy 入口符号名 (client 侧)
-    const char* pluginDestroySymbol() const noexcept override {
-        return AGENTXX_PLUGIN_CLIENT_SYMBOL_DESTROY;
-    }
 
     /// 日志前缀 (与 agent 侧插件主程序同进程共存时区分来源)
     std::string_view logTag() const noexcept override {
@@ -1075,14 +1071,19 @@ protected:
     /// client 侧插件入口符号名 (插件框架不硬编码主程序专名, 见 pluginxx/api/entry.h)
     ///
     /// 本类自带加载实现 (见上方说明), 但仍覆写本扩展点: 一来与插件框架默认保持一处定义,
-    /// 二来 [AGENTXX_PLUGIN_CLIENT_SYMBOL_*] 与插件导出宏共用同一批字符串常量。
+    /// 二来 [AGENTXX_CLIENT_PLUGIN_SYMBOL_*] 与插件导出宏共用同一批字符串常量。
     pluginxx::PluginEntrySymbols entrySymbols() const override {
         return {
-            AGENTXX_PLUGIN_CLIENT_SYMBOL_GET_INFO,
-            AGENTXX_PLUGIN_CLIENT_SYMBOL_CREATE,
-            AGENTXX_PLUGIN_CLIENT_SYMBOL_START,
-            AGENTXX_PLUGIN_CLIENT_SYMBOL_STOP,
+            AGENTXX_CLIENT_PLUGIN_SYMBOL_GET_INFO,
+            AGENTXX_CLIENT_PLUGIN_SYMBOL_CREATE,
+            AGENTXX_CLIENT_PLUGIN_SYMBOL_STOP,
+            AGENTXX_CLIENT_PLUGIN_SYMBOL_DESTROY,
         };
+    }
+
+    /// client 侧的 API 版本 (与 agent 侧不同代: 本端自己抬代次, 两端各算各的)
+    int32_t hostApiVersion() const noexcept override {
+        return AGENTXX_CLIENT_PLUGIN_API_VERSION;
     }
 
     /// 日志前缀 (与 agent 侧插件主程序同进程共存时区分来源)

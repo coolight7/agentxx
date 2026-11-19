@@ -201,11 +201,11 @@ static pluginxx::Task<void> ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
     co_return;
 }
 
-static void*
-    ragStart(RagPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void ragStart(
+    RagPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     (void)ctx;
-    return nullptr;
+    return;
 }
 
 static void* ragMount(
@@ -244,19 +244,19 @@ static void* ragMount(
     return st;
 }
 
-static void*
-    ragUnmount(RagPluginCtx&, void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void ragUnmount(
+    RagPluginCtx&, void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
     delete static_cast<RagAgentState*>(ud);
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void* ragStop(RagPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void ragStop( RagPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     RagPluginCtx,
     "agentxx_rag_search",
     "1.0.0",

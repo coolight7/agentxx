@@ -80,7 +80,7 @@ endif ()
 
 # ===== 插件动态库导出符号控制 =====
 # - 目标: 严格限制导出面, 仅主程序 dlsym/GetProcAddress 按名查找的入口符号
-#   (agentxx_plugin_agent_get_info/create/destroy + agentxx_plugin_client_get_info/create/destroy,
+#   (agentxx_agent_plugin_get_info/create/destroy + agentxx_client_plugin_get_info/create/destroy,
 #   见 plugin_api.h AGENTXX_PLUGIN_EXPORT) 导出, 其余全部隐藏:
 #   - 插件自身 C++ 内部符号 (STL/异常/typeinfo 等)
 #   - 第三方静态库符号 (simdjson/tree_sitter/io_uring/uchardet 等), 避免
@@ -99,7 +99,7 @@ if (XX_IS_ANDROID_D OR XX_IS_LINUX_D)
   # - 使用通配符而非精确符号名: 单端插件仅定义 agent 入口 (或 client 入口)
   #   之一, 精确名白名单在 Android lld (-Wl,--fatal-warnings, NDK 默认) 下
   #   会因 "symbol not defined" 报错; GNU ld 静默忽略但 lld 不会。
-  #   通配符未匹配时不报错, 且仍保证非 agentxx_plugin_agent_/agentxx_plugin_client_
+  #   通配符未匹配时不报错, 且仍保证非 agentxx_agent_plugin_/agentxx_client_plugin_
   #   前缀的符号全部隐藏
   set(_AGENTXX_EXPORT_SYMS_FILE "${CMAKE_CURRENT_BINARY_DIR}/plugin_symbols.map")
   file(WRITE "${_AGENTXX_EXPORT_SYMS_FILE}" "# agentxx 插件动态库导出符号白名单
@@ -108,8 +108,8 @@ if (XX_IS_ANDROID_D OR XX_IS_LINUX_D)
 # 通配符形式兼容单端插件 (仅定义 agent 或 client 之一) 在 lld 下的链接
 {
 global:
-  agentxx_plugin_agent_*;
-  agentxx_plugin_client_*;
+  agentxx_agent_plugin_*;
+  agentxx_client_plugin_*;
 local: *;
 };
 ")
@@ -162,13 +162,13 @@ elseif (XX_IS_MACOS_D OR XX_IS_IOS_D)
     set(_exp_file "${CMAKE_CURRENT_BINARY_DIR}/plugin_symbols_${target}.exp")
     set(_exp_content "# agentxx 插件动态库导出符号白名单 (Mach-O): ${target}\n")
     if (_has_agent)
-      foreach (_entry get_info create start stop destroy)
-        string(APPEND _exp_content "_agentxx_plugin_agent_${_entry}\n")
+      foreach (_entry get_info create stop destroy mount unmount)
+        string(APPEND _exp_content "_agentxx_agent_plugin_${_entry}\n")
       endforeach ()
     endif ()
     if (_has_client)
-      foreach (_entry get_info create start stop destroy)
-        string(APPEND _exp_content "_agentxx_plugin_client_${_entry}\n")
+      foreach (_entry get_info create stop destroy)
+        string(APPEND _exp_content "_agentxx_client_plugin_${_entry}\n")
       endforeach ()
     endif ()
     file(WRITE "${_exp_file}" "${_exp_content}")
@@ -353,16 +353,15 @@ set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_YAML_ARRAY "")
 foreach(_bp IN LISTS AGENTXX_BUILTIN_PLUGIN_NAMES)
   set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS
     "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_DECLS}
-extern \"C\" const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_get_info_${_bp}(void);
-extern \"C\" int32_t AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_create_${_bp}(const AgentxxPluginHost* host, void** plugin_ctx);
-extern \"C\" void AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_destroy_${_bp}(void* plugin_ctx);
-extern \"C\" void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_start_${_bp}(void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err);
-extern \"C\" void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_stop_${_bp}(void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err);
-extern \"C\" void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_mount_${_bp}(void* plugin_ctx, const struct AgentxxPluginAgentMountSpec* spec, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err);
-extern \"C\" void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_unmount_${_bp}(void* plugin_ctx, void* mount_ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err);")
+extern \"C\" int32_t PLUGINXX_CALL agentxx_plugin_agent_builtin_get_info_${_bp}(PluginxxInfo* out);
+extern \"C\" void PLUGINXX_CALL agentxx_plugin_agent_builtin_create_${_bp}(const PluginxxHost* host, void** plugin_ctx, const PluginxxOperatorNotify* notify, PluginxxString* err);
+extern \"C\" void PLUGINXX_CALL agentxx_plugin_agent_builtin_stop_${_bp}(void* plugin_ctx, const PluginxxOperatorNotify* notify, PluginxxString* err);
+extern \"C\" void PLUGINXX_CALL agentxx_plugin_agent_builtin_destroy_${_bp}(void* plugin_ctx, const PluginxxOperatorNotify* notify, PluginxxString* err);
+extern \"C\" void* PLUGINXX_CALL agentxx_plugin_agent_builtin_mount_${_bp}(void* plugin_ctx, const struct AgentxxPluginAgentMountSpec* spec, const PluginxxOperatorNotify* notify, PluginxxString* err);
+extern \"C\" void PLUGINXX_CALL agentxx_plugin_agent_builtin_unmount_${_bp}(void* plugin_ctx, void* mount_ud, const PluginxxOperatorNotify* notify, PluginxxString* err);")
   set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES
     "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}
-    { { \"${_bp}\", sizeof(\"${_bp}\") - 1 }, agentxx_plugin_agent_builtin_get_info_${_bp}, agentxx_plugin_agent_builtin_create_${_bp}, agentxx_plugin_agent_builtin_destroy_${_bp}, agentxx_plugin_agent_builtin_start_${_bp}, agentxx_plugin_agent_builtin_stop_${_bp}, reinterpret_cast<void*>(agentxx_plugin_agent_builtin_mount_${_bp}), reinterpret_cast<void*>(agentxx_plugin_agent_builtin_unmount_${_bp}) },")
+    { { \"${_bp}\", sizeof(\"${_bp}\") - 1 }, agentxx_plugin_agent_builtin_get_info_${_bp}, agentxx_plugin_agent_builtin_create_${_bp}, agentxx_plugin_agent_builtin_stop_${_bp}, agentxx_plugin_agent_builtin_destroy_${_bp}, reinterpret_cast<void*>(agentxx_plugin_agent_builtin_mount_${_bp}), reinterpret_cast<void*>(agentxx_plugin_agent_builtin_unmount_${_bp}) },")
 
   set(_yaml_path "${CMAKE_CURRENT_SOURCE_DIR}/${_bp}/plugin.yaml")
   if(EXISTS "${_yaml_path}")

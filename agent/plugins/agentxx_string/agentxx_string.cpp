@@ -108,12 +108,11 @@ static pluginxx::Task<void> stringSetupAsync(StringPluginCtx& ctx, ScopeRef ref)
     co_return;
 }
 
-static void*
-    stringStart(StringPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    stringStart(StringPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 无进程级工作 (无连接/线程/定时器)。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     (void)ctx;
-    return nullptr;
+    return;
 }
 
 static void* stringMount(
@@ -147,22 +146,22 @@ static void* stringMount(
     return later.provider();
 }
 
-static void* stringUnmount(
+static void stringUnmount(
     StringPluginCtx&,
     void*,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
 ) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void* stringStop(StringPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void stringStop(StringPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     StringPluginCtx,
     "agentxx_string",
     "1.0.0",

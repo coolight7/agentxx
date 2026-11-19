@@ -59,7 +59,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 - **多轮对话**: 支持完整的多轮对话管理，维护展示历史 (落库为 append-only 完整历史, 会话内存只常驻尾部窗口) 和会话 LLM 上下文 (可压缩的调用上下文) 双消息集
   - **会话是 LLM 上下文的唯一权威**: 上下文以 typed 形式 (`std::vector<neograph::ChatMessage>`) 存在会话里, 带单调递增版本号 `messagesVersion`; Json 形态 (`Session::llmMessagesJson()`) 只在持久化 / `WireGetContext` / 插件查询等边界按需惰性生成
-  - **图状态不再持有上下文**: neograph 执行图里没有 `messages` 通道, `state.serialize()` (每 super-step checkpoint、VALUES 事件、插件 stateJson) 的载荷与上下文大小无关; 需要上下文内容的插件经接口表 `agentxx.agent.context` 查询, 图状态里的只读通道 `xx_messagesMeta` 只给条数/版本/末尾消息摘要
+  - **图状态不再持有上下文**: neograph 执行图里没有 `messages` 通道, `state.serialize()` (每 super-step checkpoint、VALUES 事件、插件 stateJson) 的载荷与上下文大小无关; 需要上下文内容的插件经接口表 `agentxx_agent_context` 查询, 图状态里的只读通道 `xx_messagesMeta` 只给条数/版本/末尾消息摘要
   - 上下文变更只经 `Session::appendMessages` / `replaceMessages` / `truncateMessages` 单一入口 (节点与中间件经 `agentxx/nodes/session_context.h` 的入口调用), 不再有"图状态写通道 + 轮末整体覆盖对账"的双份拷贝
   - ReAct 循环路由由 `llm` 节点按"本轮是否有 tool_calls"返回 `Command.goto_node` (tools / agent_end) 给出, 不再依赖读上下文的条件边; 节点级 `xx_autoRoute=false` 可关闭, 交由图定义/自定义路由节点接管
 - **流式输出**: LLM 响应以增量 Delta 事件推送 (stream_begin / text_token / thinking_token / insert_message / update_message / stream_end + 界面状态类 turn_start / turn_end / node_start / node_end / message_tip / gen_status)，每个 Delta 携带单调递增 seq 用于重放与同步; **展示历史的唯一写者是 agent**: 消息边界/正文归组/耗时/折叠默认值/id 全在 agent 端决定, 客户端只按 op 维护副本 (按 id 追加文本 / 整条 upsert / 丢弃流式项), 不再有归组与回填启发式 (见下文 "展示历史 (viewMessages) 与客户端副本")
@@ -156,7 +156,7 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
   `.agentxx/agent/worktrees/` 内, 其读写按已注册规则照常处理 (否则会话对自身工作区
   的写操作也会被拒绝); filesystem 工具的相对路径经 `normalizePermissionPath(path,
   sessionId)` 按 worktree 解析, 权限规则与实际访问路径稳定匹配
-- **插件流程跟随**: 插件接口表 `agentxx.agent.session` 的
+- **插件流程跟随**: 插件接口表 `agentxx_agent_session` 的
   `get_session_work_dir(host, agent, session_id)` (worktree 绑定优先, 为空回退默认会话工作目录; v3 之前挂在通用表 `pluginxx.config` 上); filesystem 插件
   改为每次 execute 按注入的 sessionId 动态解析 (原 entry 时静态缓存),
   execute_command 插件同语义 —— 会话绑定后两个插件的路径基准即时切换
@@ -176,7 +176,7 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
 
 | 中间件 | 功能 |
 |--------|------|
-| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。**工具权限限制由工具来源方声明**: 插件在注册工具后经 `agentxx.agent.permission` 接口表声明 (作用域 读/写、目标参数名、目标类型 路径/文本/无, 见 [plugins.md](plugins.md) §8)，未声明的工具不参与权限判定 (直接放行)；中间件内不再硬编码任何工具名。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`)。默认规则由 yaml `permission.mode` 决定 (Ask=工作目录内 ALLOW + 其余 INTERRUPT / AllAsk=全部 INTERRUPT / Pass=全部 ALLOW / Deny=全部 DENY)，白名单 (whitelist) 始终放行、黑名单 (blacklist) 始终拒绝 (同路径黑名单优先)，未命中任何规则时由 `noRuleOperator` 回退。客户端可"记住本次选择"：权限询问卡片由声明式 UI 描述渲染 (见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h) 与预设模板 `preset::permissionCard`)，勾选值经中断结果 `values.remember` 回传，IO 端点据此在应答 (`RespPermission.remember`) 中带回用户意图，由权限中间件注册路径规则 (后续直接放行/拒绝不再询问；客户端与端点都不参与权限语义，规则表归中间件所有)。记住目录时该规则自动覆盖其全部子目录与文件 (同一最长前缀匹配语义)，读、写各自一套规则互不影响 |
+| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。**工具权限限制由工具来源方声明**: 插件在注册工具后经 `agentxx_agent_permission` 接口表声明 (作用域 读/写、目标参数名、目标类型 路径/文本/无, 见 [plugins.md](plugins.md) §8)，未声明的工具不参与权限判定 (直接放行)；中间件内不再硬编码任何工具名。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`)。默认规则由 yaml `permission.mode` 决定 (Ask=工作目录内 ALLOW + 其余 INTERRUPT / AllAsk=全部 INTERRUPT / Pass=全部 ALLOW / Deny=全部 DENY)，白名单 (whitelist) 始终放行、黑名单 (blacklist) 始终拒绝 (同路径黑名单优先)，未命中任何规则时由 `noRuleOperator` 回退。客户端可"记住本次选择"：权限询问卡片由声明式 UI 描述渲染 (见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h) 与预设模板 `preset::permissionCard`)，勾选值经中断结果 `values.remember` 回传，IO 端点据此在应答 (`RespPermission.remember`) 中带回用户意图，由权限中间件注册路径规则 (后续直接放行/拒绝不再询问；客户端与端点都不参与权限语义，规则表归中间件所有)。记住目录时该规则自动覆盖其全部子目录与文件 (同一最长前缀匹配语义)，读、写各自一套规则互不影响 |
 | **SkillMiddleware** | 技能文件 (SKILL.md) 的渐进式发现与加载 |
 | **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，内容拼接到 system 消息末尾（稳定前缀，可被上游 KV/前缀缓存命中） |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
@@ -2591,11 +2591,11 @@ EventBus (事件总线)
 ## 附录 B: 插件系统 v1 要点 (详见 plugins.md)
 
 - COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `pluginxx_strdup`), 能力按 IID 字符串查询独立接口表 (每张表四件套: IID + `struct_size` + `version`/`_VERSION` + `_MIN_VERSION` + `_BASELINE_SIZE`; 判定 = `version >= MIN_VERSION` 且 `struct_size >= BASELINE_SIZE`); 插件级要求 `api_version >= PLUGINXX_MIN_API_VERSION`
-- Agent 侧 19 张接口表: 9 张通用表 (`agentxx.*`: log / json / config / plugins / broadcasts / capabilities / scheduler / tasks / cancel, 另有不计入的 `agentxx.net`) + 10 张业务表 (`agentxx.agent.*`: tools / permission / session / context / model / prompt / resources / graph / mount / runtime)
+- Agent 侧 19 张接口表: 9 张通用表 (`agentxx.*`: log / json / config / plugins / broadcasts / capabilities / scheduler / tasks / cancel, 另有不计入的 `agentxx_plugin_net`) + 10 张业务表 (`agentxx.agent.*`: tools / permission / session / context / model / prompt / resources / graph / mount / runtime)
 - Client 侧 16 张接口表: 10 张通用表 (与 agent 侧同一套: log / json / config / plugins / broadcasts / capabilities / scheduler / tasks / cancel / net) + 6 张自有表 (`agentxx.client.*`: ui / session / wire / self / timer / keybind; 详见 client_plugin_api.h)。客户端事件走广播频道, 不再有 `events` / `json` / `log` 三张表
 - 附加成员与结构体规则: 表成员只能追加在表尾 (基线不变 + `ifaceHas` 判定), 重排/改签名/删成员要换 IID; 跨边界结构体 (spec/input) 统一带 `struct_size` (填充方填长度, 读取方 `specSizeOk`/`specHas` 判定) —— 见 plugins.md §17
 - 现代 SDK (plugin_kit.h): 
-  - `AGENTXX_PLUGIN_AGENT_EXPORT` / `AGENTXX_PLUGIN_CLIENT_EXPORT` 声明式导出宏, 自动包裹 C ABI 异常守卫与实例上下文生命周期
+  - `AGENTXX_AGENT_PLUGIN_EXPORT` / `AGENTXX_CLIENT_PLUGIN_EXPORT` 声明式导出宏, 自动包裹 C ABI 异常守卫与实例上下文生命周期
   - `ToolSchemaBuilder` 链式参数构建器，自动与主程序 `toolPrompt` 提示词覆盖融合
   - `ArgReader` 强类型参数读取: 字符串转整数/浮点要求**整个**字符串都是数值 (不接受 `"100 lines"` 这种前缀匹配, 整数还要求落在目标类型范围内), JSON 浮点值转整数按“相近整数”取整 (与向上取整相差不超过 1e-6 时向上, 否则向下), 字符串转布尔忽略大小写认 `true`/`yes`/`y`/`on`/`enable`/`enabled`/`1` 与 `false`/`no`/`n`/`off`/`disable`/`disabled`/`0`, 读不到时交回默认值或报参数错误
   - `CancelRegistry` 框架级事件驱动取消注册表，提供会话取消即时回调与 `ScopedRegistration` 防悬挂互斥保护
@@ -2651,5 +2651,5 @@ worktree 绑定是运行期经 `agentxx_git_worktree` 工具切换的临时状�
   - 内置段不被训练改写: 字符级变异与 LLM 补丁都按
     `AgentPrompt::isBuiltinSectionKey` (键名 `core-` 前缀) 跳过
   - 表中**只放内置工具** (share_store / subagent / git_worktree); 插件工具的提示词写在插件自身字面量里
-    (少数插件经 `agentxx.agent.prompt` 接口表注入, 如 execute_command / codegraph / planning),
+    (少数插件经 `agentxx_agent_prompt` 接口表注入, 如 execute_command / codegraph / planning),
     表里仍保留“同名条目存在时覆盖插件提示词” (定制/本地化时可用)

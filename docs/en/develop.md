@@ -36,12 +36,12 @@ The synchronous group also contains `json` `json_view` `json_reflection` `interr
 
 - **Built-in Tools**: All have been migrated to plugins (`agent/plugins/agentxx_*`). New tools should preferably be implemented as plugins (registered via `tool/fast_tool/blocking_tool` in `plugin_kit.h`), keeping identical names and behavior; unit tests directly test the same `*_impl.h` implementation.
 - **Middlewares**: Inherit from `MiddlewareWrapHandle<TState>` and select the hooks to mount via `MiddlewareHooks` (`onAgentcallStart/End`, `onModelcallStart/Run/End`, `onToolcallStart/End`; unmounted stages never run). Register them in stack order in `BaseAgent::initMiddleware` / `CodeAgent::initMiddleware`; middlewares' own toolcalls are collected automatically by `initMiddlewareTools`.
-- **Permissions**: Filesystem permissions use longest-prefix matching (`utilxx::XXRouter`) + wildcards `*` in `PermissionMiddlewareHandle`. The default rule comes from `permission.mode`. Plugins declare the permission restrictions of their own tools through the `agentxx.agent.permission` interface table after registering them; tools without a declaration are not checked at all.
+- **Permissions**: Filesystem permissions use longest-prefix matching (`utilxx::XXRouter`) + wildcards `*` in `PermissionMiddlewareHandle`. The default rule comes from `permission.mode`. Plugins declare the permission restrictions of their own tools through the `agentxx_agent_permission` interface table after registering them; tools without a declaration are not checked at all.
 - **Tool errors**: Throw `std::invalid_argument` for argument-check failures and `std::runtime_error` for runtime errors — `ToolcallWrapNode` formats them uniformly into `[Error: ...]` result text. Do not return `{"error": ...}` payloads (see [plugins.md](/docs/en/design/plugins.md) §8).
 
 ## 3. Plugin Development
 
-- **Declarative Export**: Prefer `AGENTXX_PLUGIN_AGENT_EXPORT` (client side `AGENTXX_PLUGIN_CLIENT_EXPORT`), which automatically generates C entry points with ABI exception guards and manages context lifecycle.
+- **Declarative Export**: Prefer `AGENTXX_AGENT_PLUGIN_EXPORT` (client side `AGENTXX_CLIENT_PLUGIN_EXPORT`), which automatically generates C entry points with ABI exception guards and manages context lifecycle.
 - **Fluent Schema & Typed Reader**: Declare tool argument schemas via `ctx.schema(toolName)` (auto-merged with host `toolPrompt`); read arguments with `ArgReader` by the type you ask for (a value it cannot convert is an argument error — no guessing, no partial values).
 - **Event-Driven Cancellation**: Register cancellation actions for subprocesses and long-running tasks via `ctx.cancelRegistry.registerCallback(sessionKey, cb)` (yielding an RAII `ScopedRegistration` guard) for millisecond-level instant termination.
 - **Follow the Three Iron Rules**: No mutable global statics / State recovered via `user_data` closures / Interface tables cached into instance context.

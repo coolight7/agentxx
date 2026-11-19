@@ -61,12 +61,11 @@ static pluginxx::Task<void> mathSetupAsync(MathPluginCtx& ctx, ScopeRef ref) {
     co_return;
 }
 
-static void*
-    mathStart(MathPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    mathStart(MathPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 本插件没有进程级工作 (无连接/线程/定时器): start 只给出完成信号。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     (void)ctx;
-    return nullptr;
+    return;
 }
 
 static void* mathMount(
@@ -100,7 +99,7 @@ static void* mathMount(
     return later.provider();
 }
 
-static void* mathUnmount(
+static void mathUnmount(
     MathPluginCtx&,
     void*,
     const PluginxxOperatorNotify* notify,
@@ -108,16 +107,16 @@ static void* mathUnmount(
 ) {
     // 注册由主程序在本挂载卸载时自动撤销; per-agent 状态由挂载销毁。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void* mathStop(MathPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void mathStop(MathPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 无自管线程/定时器; 注册记录由主程序在 stop 后统一撤销。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     MathPluginCtx,
     "agentxx_math",
     "1.0.0",

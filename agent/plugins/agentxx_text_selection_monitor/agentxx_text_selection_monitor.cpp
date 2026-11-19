@@ -384,14 +384,14 @@ void TextSelectionHolder::stop() {
 
 /// ==================== 生命周期 (create 只构造, start 进程级, mount 注册, stop 撤销) ====================
 
-static void* textSelectionAgentStart(
+static void textSelectionAgentStart(
     TextSelectionPluginCtx&       ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
 ) {
     ctx.holder.ctx = &ctx;
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 /// 挂载事务 (**协程形态**): 取工具提示词 + 建 schema + 注册工具
@@ -493,28 +493,27 @@ static void* textSelectionAgentMount(
     return later.provider();
 }
 
-static void* textSelectionAgentUnmount(
+static void textSelectionAgentUnmount(
     TextSelectionPluginCtx&,
     void*,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
 ) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 /// stop: 停止监听并摘除监听器 (可重复调用), 之后主程序才会调用 destroy
-static void*
-    textSelectionAgentStop(TextSelectionPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    textSelectionAgentStop(TextSelectionPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     try {
         ctx.holder.stop();
     } catch (...) {
     }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     TextSelectionPluginCtx,
     "agentxx_text_selection_monitor",
     "1.0.0",

@@ -141,7 +141,7 @@ void AudioStreamHolder::stop() {
 
 /// ==================== 生命周期 (create 只构造, start 进程级, mount 注册, stop 撤销) ====================
 
-static void* audioStreamAgentStart(
+static void audioStreamAgentStart( 
     AudioStreamPluginCtx&         ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
@@ -150,7 +150,7 @@ static void* audioStreamAgentStart(
     ctx.holder      = std::make_unique<AudioStreamHolder>();
     ctx.holder->ctx = &ctx;
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 /// 挂载事务 (**协程形态**): 取工具提示词 + 建 schema + 注册工具
@@ -263,19 +263,19 @@ static void* audioStreamAgentMount(
     return later.provider();
 }
 
-static void* audioStreamAgentUnmount(
+static void audioStreamAgentUnmount( 
     AudioStreamPluginCtx&,
     void*,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
 ) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 /// stop: 停止采集并摘除监听器 (可重复调用), 之后主程序才会调用 destroy
-static void*
-    audioStreamAgentStop(AudioStreamPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void audioStreamAgentStop(
+    AudioStreamPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (ctx.holder) {
         try {
             ctx.holder->stop();
@@ -283,10 +283,10 @@ static void*
         }
     }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_EXPORT(
+AGENTXX_AGENT_PLUGIN_EXPORT(
     AudioStreamPluginCtx,
     "agentxx_audio_stream",
     "1.0.0",

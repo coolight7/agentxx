@@ -42,47 +42,40 @@ static auto featureGuardLogger(FeatureCtx* ctx) noexcept {
     };
 }
 
-extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(void) {
-    return agentxx::plugin::guardCall(
-        [](const char*) noexcept {},
-        nullptr,
-        [&]() -> const PluginxxInfo* {
-            static const PluginxxInfo info{
-                PLUGINXX_API_VERSION,
-                0,
-                agentxx::plugin::PluginStringView::fromCstr("example_feature"),
-                agentxx::plugin::PluginStringView::fromCstr("2.0.0"),
-                agentxx::plugin::PluginStringView::fromCstr(
-                    "Example plugin: declare points / provide impl rows"
-                ),
-            };
-            return &info;
-        }
+extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* out) {
+    return agentxx::plugin::detail::fillAgentPluginInfo(
+        out,
+        "example_feature",
+        "2.0.0",
+        "Example plugin: declare points / provide impl rows"
     );
 }
 
 /// ---------------- 注册事务 (start) ----------------
 
-extern "C" PLUGINXX_EXPORT int
-    agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    FeatureCtx* raw = nullptr;
-    return agentxx::plugin::guardCall(
-        [&raw](const char* msg) noexcept {
-            featureGuardLogger(raw)(msg);
+static void featureAgentStart(FeatureCtx&, const PluginxxOperatorNotify*, PluginxxString*);
+
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
+    const PluginxxHost*           host,
+    void**                        plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::createCtxEntry<FeatureCtx>(
+        host,
+        plugin_ctx,
+        notify,
+        err,
+        "example_feature",
+        [](FeatureCtx& ctx) -> std::string {
+            return {};
         },
-        -1,
-        [&]() -> int {
-            if (!host || !plugin_ctx) {
-                return -1;
-            }
-            auto* ctx = new FeatureCtx();
-            raw       = ctx;
-            ctx->init(host);
-            *plugin_ctx = ctx;
-            return 0;
+        [](FeatureCtx& c, const PluginxxOperatorNotify* n, PluginxxString* e) {
+            (void)featureAgentStart(c, n, e);
         }
     );
 }
+
 
 /// 挂载事务 (mount): 登记实现行与通知订阅 (**协程形态**)
 /// - `ref` 为本次挂载的 agent 引用, 全部登记都记在该 agent 名下
@@ -201,7 +194,7 @@ static pluginxx::Task<void>
     co_return;
 }
 
-static void* featureAgentStart(
+static void featureAgentStart( 
     FeatureCtx&                   ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
@@ -214,12 +207,12 @@ static void* featureAgentStart(
                 "example_feature start: notify required"
             );
         }
-        return nullptr;
+        return;
     }
     // 进程级启动: 本插件没有自管线程/定时器, 注册全在挂载阶段做
     ctx.log.info("example_feature started");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
 static void* featureAgentMount(
@@ -264,33 +257,37 @@ static void* featureAgentMount(
     return later.provider();
 }
 
-static void* featureAgentUnmount(
+static void featureAgentUnmount(
     FeatureCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
     // 实现行与订阅由主程序按挂载记录撤销
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-static void*
-    featureAgentStop(FeatureCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void    featureAgentStop(FeatureCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 反注册由主程序在 stop 后统一撤销 (实现行随实例走), 这里只给完成信号
     ctx.log.info("example_feature stopped");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return nullptr;
+    return;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT(
     FeatureCtx,
-    featureAgentStart,
     featureAgentStop,
     featureAgentMount,
     featureAgentUnmount
 )
 
-extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
-    auto* ctx = static_cast<FeatureCtx*>(plugin_ctx);
-    agentxx::plugin::guardCallVoid(featureGuardLogger(ctx), [&] {
-        delete ctx;
-    });
+extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               err
+) {
+    agentxx::plugin::detail::destroyCtxEntry<FeatureCtx>(
+        plugin_ctx,
+        notify,
+        err,
+        [](FeatureCtx* ctx) { delete ctx; }
+    );
 }

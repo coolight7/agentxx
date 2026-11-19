@@ -39,12 +39,12 @@
   (`onAgentcallStart/End`、`onModelcallStart/Run/End`、`onToolcallStart/End`; 未指定的阶段天然不执行),
   在 `BaseAgent::initMiddleware` / `CodeAgent::initMiddleware` 中按栈顺序注册; 中间件的 toolcalls 由
   `initMiddlewareTools` 自动收集进工具列表
-- **权限**：文件系统权限经 `PermissionMiddlewareHandle` 的最长前缀匹配 (`utilxx::XXRouter`) + 通配符 `*`，默认规则由 `permission.mode` 决定；新增受控资源需定义询问分类并走 `service.permission` 主题。插件工具的工具权限限制由插件自己在注册工具后声明（`agentxx.agent.permission` 接口表，含作用域与目标参数）；未声明的工具不参与权限判定
+- **权限**：文件系统权限经 `PermissionMiddlewareHandle` 的最长前缀匹配 (`utilxx::XXRouter`) + 通配符 `*`，默认规则由 `permission.mode` 决定；新增受控资源需定义询问分类并走 `service.permission` 主题。插件工具的工具权限限制由插件自己在注册工具后声明（`agentxx_agent_permission` 接口表，含作用域与目标参数）；未声明的工具不参与权限判定
 - **工具错误**: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`, 由 `ToolcallWrapNode` 统一格式化为 `[Error: ...]` 结果文本; 不要返回 `{"error": ...}` 形态 (详见 [plugins.md](design/plugins.md) §8)
 
 ## 3. 插件开发
 
-- **声明式宏**: 推荐直接使用 `AGENTXX_PLUGIN_AGENT_EXPORT` (client 侧 `AGENTXX_PLUGIN_CLIENT_EXPORT`)，自动生成入口符号并包装 C ABI 异常守卫与实例生命周期
+- **声明式宏**: 推荐直接使用 `AGENTXX_AGENT_PLUGIN_EXPORT` (client 侧 `AGENTXX_CLIENT_PLUGIN_EXPORT`)，自动生成入口符号并包装 C ABI 异常守卫与实例生命周期
 - **声明式 Schema & 提取**: 通过 `ctx.schema(toolName)` 链式声明参数类型与说明，自动与主程序 `toolPrompt` 覆盖融合；在执行函数内用 `ArgReader` 按目标类型读取参数 (转不了就是参数错误, 不猜也不取一部分)
 - **事件驱动取消**: 长耗时外部进程或阻塞 IO 统一通过 `ctx.cancelRegistry.registerCallback(sessionKey, cb)` 注册取消动作（支持 `ScopedRegistration` RAII 自动反注册与防悬挂互斥保护），实现毫秒级即时终止
 - **遵守三铁律**：无可变全局 static / 状态经 `user_data` 闭包恢复 / 接口表缓存入实例上下文

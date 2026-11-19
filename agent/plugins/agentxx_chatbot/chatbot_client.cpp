@@ -223,14 +223,14 @@ pluginxx::Task<void> chatbotClientSetupAsync(ChatbotClientCtx& ctx) {
     co_return;
 }
 
-void* chatbotClientStart(
+void chatbotClientStart(
     ChatbotClientCtx&             ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
 ) {
     if (!notify || !notify->done) {
         agentxx::plugin::PluginString::set(ctx.host, error, "client start: notify required");
-        return nullptr;
+        return;
     }
     auto later = agentxx::plugin::finishLater(notify);
     ctx.spawn([later](ChatbotClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
@@ -245,10 +245,9 @@ void* chatbotClientStart(
         later.ok();
         co_return;
     });
-    return later.provider();
 }
 
-void* chatbotClientStop(
+void chatbotClientStop(
     ChatbotClientCtx&,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
@@ -257,12 +256,12 @@ void* chatbotClientStop(
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
-    return nullptr;
+    return;
 }
 
 } // namespace
 
-AGENTXX_PLUGIN_CLIENT_EXPORT(
+AGENTXX_CLIENT_PLUGIN_EXPORT(
     ChatbotClientCtx,
     "agentxx_chatbot",
     "1.1.0",

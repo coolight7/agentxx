@@ -54,13 +54,13 @@ PluginInstance::~PluginInstance() {
         );
         return;
     }
-    if (!destroyPlugin()) {
-        // 析构不能绕过仍在运行的插件代码。此处宁可保留动态库句柄，
-        // 也不能在 worker/callback 仍可能执行时 dlclose。
+    if (!pluginDestroyed) {
+        // destroy 从未完成 (或从未执行): 插件上下文还在, dlclose 会让残留代码跳进
+        // 已卸载的内存。宁可泄漏 DSO, 也不在这里强行关闭。
         XX_LOGE(
-            "Plugin `{}` destroyed while {} lease(s) remain; refusing to dlclose",
-            name,
-            lifetime ? lifetime->leaseCount() : 0
+            "Plugin `{}` destroyed before its destroy entry finished; keeping plugin "
+            "context and DSO loaded",
+            name
         );
         return;
     }
@@ -631,7 +631,7 @@ void PluginManager::onInstanceEnabledChanged(PluginInstance& inst, bool enabled)
     }
 }
 
-/// 实例加载完成: 解析插件侧的挂载/卸载入口 (`agentxx_plugin_agent_{mount,unmount}`)
+/// 实例加载完成: 解析插件侧的挂载/卸载入口 (`agentxx_agent_plugin_{mount,unmount}`)
 ///
 /// - 两个符号都是**可选能力**: 缺失说明本插件不提供 agent 侧能力,
 ///   它的 `start` 里也不应该注册任何 agent 级实体 (会被 `ERR_NO_AGENT` 拒);
@@ -644,11 +644,11 @@ void PluginManager::onInstanceLoaded(PluginInstance& inst) {
     if (inst.dlHandle) {
         std::string symErr;
         void*       mountSym
-            = pluginxx::NativeLoader::sym(inst.dlHandle, AGENTXX_PLUGIN_AGENT_SYMBOL_MOUNT, symErr);
+            = pluginxx::NativeLoader::sym(inst.dlHandle, AGENTXX_AGENT_PLUGIN_SYMBOL_MOUNT, symErr);
         symErr.clear();
         void* unmountSym = pluginxx::NativeLoader::sym(
             inst.dlHandle,
-            AGENTXX_PLUGIN_AGENT_SYMBOL_UNMOUNT,
+            AGENTXX_AGENT_PLUGIN_SYMBOL_UNMOUNT,
             symErr
         );
         inst.mountFn   = reinterpret_cast<AgentxxPluginAgentMountFn>(mountSym);
@@ -827,26 +827,26 @@ std::string PluginManager::diagnosePluginPath(std::string_view path) const {
         std::string symErr;
         if (!pluginxx::NativeLoader::sym(
                 handle,
-                std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE}.c_str(),
+                std::string{AGENTXX_AGENT_PLUGIN_SYMBOL_CREATE}.c_str(),
                 symErr
             )) {
-            missing.push_back(std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE});
+            missing.push_back(std::string{AGENTXX_AGENT_PLUGIN_SYMBOL_CREATE});
         }
         symErr.clear();
         if (!pluginxx::NativeLoader::sym(
                 handle,
-                std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_START}.c_str(),
+                std::string{AGENTXX_AGENT_PLUGIN_SYMBOL_STOP}.c_str(),
                 symErr
             )) {
-            missing.push_back(std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_START});
+            missing.push_back(std::string{AGENTXX_AGENT_PLUGIN_SYMBOL_STOP});
         }
         symErr.clear();
         if (!pluginxx::NativeLoader::sym(
                 handle,
-                std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_STOP}.c_str(),
+                std::string{AGENTXX_AGENT_PLUGIN_SYMBOL_DESTROY}.c_str(),
                 symErr
             )) {
-            missing.push_back(std::string{AGENTXX_PLUGIN_AGENT_SYMBOL_STOP});
+            missing.push_back(std::string{AGENTXX_AGENT_PLUGIN_SYMBOL_DESTROY});
         }
     }
     pluginxx::NativeLoader::close(handle);
@@ -858,8 +858,8 @@ std::string PluginManager::diagnosePluginPath(std::string_view path) const {
         }
         return fmt::format(
             "动态库 `{}` 缺少主程序入口符号: {} (插件必须导出 create/destroy/start/stop 五个入口; "
-            "C++ 插件用 AGENTXX_PLUGIN_AGENT_EXPORT 宏一次生成, 手写 create/destroy 的用 "
-            "AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT 补 start/stop; 另外检查导出白名单是否把入口"
+            "C++ 插件用 AGENTXX_AGENT_PLUGIN_EXPORT 宏一次生成, 手写 create/destroy 的用 "
+            "AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT 补 start/stop; 另外检查导出白名单是否把入口"
             "符号也隐藏了)",
             libPath,
             list
