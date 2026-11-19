@@ -321,6 +321,8 @@ static void applyServerRuntimeConfig(
     config->pluginMountPolicy = yamlCfg.pluginMountPolicy;
     config->pluginMountList   = yamlCfg.pluginMountList;
     config->pluginMountArgs   = yamlCfg.pluginMountArgs;
+    // 插件工作池线程数 (yaml `plugin.thread_pool_workers`): 两端共用的同一个键
+    config->pluginThreadPoolWorkers = yamlCfg.pluginThreadPoolWorkers;
     if (config->pluginMountPolicy != agentxx::agent::PluginMountPolicy::All) {
         XX_LOGI(
             "[Config] plugin.mount: policy={} list={}",
@@ -1166,9 +1168,11 @@ Options:
             [agent, server, hostHolder]() -> asio::awaitable<void> {
                 // 插件管理器 (进程一份): 先加载插件再 init (init 内各 agent 自己挂载)
                 auto host = agentxx::agent::AgentHost::create(
-                    {.ioCtx      = agent->ioCtx,
-                     .pluginList = agent->getContext()->agentConfig->plugins,
-                 .primaryAgent = agent->getContext()}
+                    {.ioCtx = agent->ioCtx,
+                     .pluginWorkerThreads
+                     = agent->getContext()->agentConfig->pluginThreadPoolWorkers,
+                     .pluginList    = agent->getContext()->agentConfig->plugins,
+                     .primaryAgent = agent->getContext()}
                 );
                 co_await host->loadPluginsAsync();
                 if (auto pluginHost = host->pluginHost()) {
@@ -1221,13 +1225,13 @@ Options:
             config->logPrintSummarizationResultTokenCount  = true;
             // 远程 client 进程只加载 client 侧插件 (yaml plugins 段经 sides
             // 过滤, 见 ClientPluginManager::loadConfiguredClientPlugins)
-            runRemoteTui(agentUrl, agentToken, remoteModel, config->plugins);
+            runRemoteTui(agentUrl, agentToken, remoteModel, config->plugins, config->pluginThreadPoolWorkers);
         } else {
             config->logPrintToolcall                       = false;
             config->logPrintMessagesBeforeLLM              = false;
             config->logPrintMessagesBeforeLLMWithSystemMsg = false;
             config->logPrintSummarizationResultTokenCount  = false;
-            runRemoteCli(agentUrl, agentToken, remoteModel, config->plugins);
+            runRemoteCli(agentUrl, agentToken, remoteModel, config->plugins, config->pluginThreadPoolWorkers);
         }
         return 0;
     }

@@ -135,7 +135,7 @@ std::vector<std::shared_ptr<GraphTypeSlot>> PluginInstance::allGraphSlots() cons
 // 管理器构造 / 析构
 // =====================================================================
 
-PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primaryAgent) :
+PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primaryAgent, size_t workerThreads) :
     primaryAgent_(std::move(primaryAgent)) {
     // 通用表 (capabilities / broadcasts / scheduler / tasks 等) 需要主程序数据的入口
     // 经本类取数 (见 pluginxx/host/domain_services.h): 在任何 vtable 入口被调用之前注入。
@@ -149,6 +149,19 @@ PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primary
     // 主 agent 的总线: 主程序发在总线上的应用话题镜像到广播频道 (插件只能订阅广播)
     if (auto primary = primaryAgent_.lock(); primary) {
         attachEventBus(primary->bus);
+    }
+    // 工作池与插件执行线程: 管理器构造即起 —— 插件代码与插件阻塞工作总是有地方跑,
+    // 不再有“首次加载才建 / 没有就用 io 线程”的分支。
+    const size_t workers = workerThreads == 0 ? kDefaultWorkerThreads : workerThreads;
+    try {
+        workerPool_ = std::make_shared<asio::thread_pool>(workers);
+    } catch (const std::exception& e) {
+        XX_LOGE("Plugin worker pool could not be created: {}", e.what());
+    }
+    if (pluginThread_.start("agentxx-plugin")) {
+        setPluginExecutor(pluginThread_.executor());
+    } else {
+        XX_LOGE("Plugin executor thread could not start; plugin callbacks run on the IO thread");
     }
 }
 

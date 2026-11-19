@@ -240,16 +240,15 @@ void PluginManager::setWorkerThreadPool(std::shared_ptr<asio::thread_pool> pool)
     workerPool_ = std::move(pool);
 }
 
-/// 备用线程池: 只在没有任何可用池时创建 (每次管理器一份, 不复用全局)
+/// 备用线程池: 只在池被显式清空时创建 (正常路径由构造函数建好)
 void PluginManager::ensureWorkerPool() {
     if (workerPool_) {
         return;
     }
-    auto workers = std::max(2u, std::thread::hardware_concurrency() / 2);
-    workerPool_  = std::make_shared<asio::thread_pool>(workers);
+    workerPool_ = std::make_shared<asio::thread_pool>(kDefaultWorkerThreads);
     XX_LOGW(
-        "Plugin offload: no injected worker pool, created a private pool ({} thread(s))",
-        workers
+        "Plugin offload: worker pool was missing, recreated with {} thread(s)",
+        kDefaultWorkerThreads
     );
 }
 
@@ -272,17 +271,17 @@ bool PluginManager::postToWorkerThread(std::function<void()> fn) {
         }
     };
 
-    // 1. 注入的池 (AgentHost 的进程共享池 / agent 自己的池)
+    // 1. 本管理器的池 (构造即建; 测试/嵌入方可换成外部池)
     if (workerPool_ && submit(*workerPool_)) {
         return true;
     }
-    // 2. 主 agent 上下文的池 (未注入时的默认来源)
+    // 2. 主 agent 上下文的池 (外部注入的共享池优先时走这条)
     if (auto ctx = primaryAgent_.lock(); ctx && ctx->threadPool) {
         if (submit(*ctx->threadPool)) {
             return true;
         }
     }
-    // 3. 备用: 管理器自建池
+    // 3. 兜底: 重建自己的池
     //    agent 上下文可能已释放、从未挂载, 或其池已停止; 插件阻塞工作仍应能执行
     //    (否则阻塞工具全部报 offload 失败)
     ensureWorkerPool();

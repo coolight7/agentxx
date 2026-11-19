@@ -96,9 +96,10 @@ static std::shared_ptr<agentxx::plugin::ClientPluginManager> setupClientPlugins(
     asio::any_io_executor      ex,
     std::shared_ptr<IoT>       io,
     const std::string&         sessionId,
-    const ClientPluginConfigs& plugins
+    const ClientPluginConfigs& plugins,
+    size_t                     workerThreads
 ) {
-    auto mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
+    auto mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(ex, workerThreads);
     mgr->setUiAdapter(std::make_shared<AdapterT>(io));
     mgr->setSessionId(sessionId);
     agentxx::plugin::registerBuiltinToolRenderers(*mgr);
@@ -241,7 +242,8 @@ static asio::awaitable<void>
         clientEx,
         io,
         sessionId,
-        plugins
+        plugins,
+        agent->getContext()->agentConfig->pluginThreadPoolWorkers
     );
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
@@ -299,7 +301,13 @@ static asio::awaitable<void>
     // 构建组件时读取); 加载 (协程) 在 start() 之后进行, 期间注册的面板经
     // postToUi 排队, UI 线程启动后正常挂载
     auto pluginMgr
-        = setupClientPlugins<TUIClientAgentIO, TuiPluginAdapter>(clientEx, tui, sessionId, plugins);
+        = setupClientPlugins<TUIClientAgentIO, TuiPluginAdapter>(
+            clientEx,
+            tui,
+            sessionId,
+            plugins,
+            agent->getContext()->agentConfig->pluginThreadPoolWorkers
+        );
     tui->start();
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
@@ -341,7 +349,8 @@ static asio::awaitable<void> runRemoteCliAsync(
     std::string         url,
     std::string         token,
     std::string         model,
-    ClientPluginConfigs plugins
+    ClientPluginConfigs plugins,
+    size_t              workerThreads
 ) {
     auto ex = co_await asio::this_coro::executor;
     auto io = std::make_shared<StdIOClientAgentIO>();
@@ -352,8 +361,13 @@ static asio::awaitable<void> runRemoteCliAsync(
     io->setSessionId(sessionId);
     // client 插件系统: 加载 + 加载 (远程 client 进程只加载 client 侧插件;
     // 与 agent 侧条目的 sides 过滤由管理器完成)
-    auto pluginMgr
-        = setupClientPlugins<StdIOClientAgentIO, CliPluginAdapter>(ex, io, sessionId, plugins);
+    auto pluginMgr = setupClientPlugins<StdIOClientAgentIO, CliPluginAdapter>(
+        ex,
+        io,
+        sessionId,
+        plugins,
+        workerThreads
+    );
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
     agent::WsAgentIOTransport::Config transportCfg;
@@ -424,7 +438,8 @@ void runRemoteCli(
     std::string_view    url,
     std::string_view    token,
     std::string_view    model,
-    ClientPluginConfigs plugins
+    ClientPluginConfigs plugins,
+    size_t              workerThreads
 ) {
     asio::io_context ctx;
     asio::co_spawn(
@@ -433,7 +448,8 @@ void runRemoteCli(
             std::string{url},
             std::string{token},
             std::string{model},
-            std::move(plugins)
+            std::move(plugins),
+            workerThreads
         ),
         asio::detached
     );
@@ -444,7 +460,8 @@ static asio::awaitable<void> runRemoteTuiAsync(
     std::string         url,
     std::string         token,
     std::string         model,
-    ClientPluginConfigs plugins
+    ClientPluginConfigs plugins,
+    size_t              workerThreads
 ) {
     auto ex = co_await asio::this_coro::executor;
 
@@ -457,8 +474,13 @@ static asio::awaitable<void> runRemoteTuiAsync(
     io->setRemoteUrl(url);
     // client 插件系统: 加载须在 start() 之前 (ctx_.pluginManager 在 UI 线程
     // 构建组件时读取); 加载在 start() 后进行 (面板经 postToUi 排队挂载)
-    auto pluginMgr
-        = setupClientPlugins<TUIClientAgentIO, TuiPluginAdapter>(ex, io, sessionId, plugins);
+    auto pluginMgr = setupClientPlugins<TUIClientAgentIO, TuiPluginAdapter>(
+        ex,
+        io,
+        sessionId,
+        plugins,
+        workerThreads
+    );
     io->start();
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
@@ -570,7 +592,8 @@ void runRemoteTui(
     std::string_view    url,
     std::string_view    token,
     std::string_view    model,
-    ClientPluginConfigs plugins
+    ClientPluginConfigs plugins,
+    size_t              workerThreads
 ) {
     asio::io_context ctx;
     asio::co_spawn(
@@ -579,7 +602,8 @@ void runRemoteTui(
             std::string{url},
             std::string{token},
             std::string{model},
-            std::move(plugins)
+            std::move(plugins),
+            workerThreads
         ),
         asio::detached
     );

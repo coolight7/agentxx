@@ -2716,8 +2716,10 @@ public:
     /// - `scope` 是本挂载的作用域引用 (mount 时存下来的那份); 会话属于某个作用域
     /// - `key` 为空 = 该作用域的默认会话工作目录
     /// - 主程序未实现该能力或查询失败时返回空串
-    /// - 线程规则同 [addShareStore] (IO 线程上靠主程序内联执行);
-    ///   协程里请用 [workDirAsync]
+    /// - 线程规则: `get_session_work_dir` 的工作体在主程序 io 上, 完成回调是同步桥
+    ///   (就地在 io 上调用), 因此插件执行线程上真等不会自己等自己 —— 工具的
+    ///   `execute_start` 就在那条线程上解析运行目录; 协程里优先用 [workDir]
+    ///   的 ticket 形态
     std::string workDir(const PluginxxScopeRef* scope, PluginxxStringView key = {}) const {
         if (!host || !iface.session || !iface.session->get_session_work_dir) {
             return {};
@@ -2726,7 +2728,9 @@ public:
             *this,
             [this, scope, &key](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return iface.session->get_session_work_dir(host, scope, &key, cb, ud, err);
-            }
+            },
+            0,
+            pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
         );
         return out.ok() ? std::string{out.text()} : std::string{};
     }
@@ -3281,15 +3285,18 @@ namespace detail {
 
 /// runtime 表的同步形态 (阻塞): 只关心成败
 ///
-/// 表成员是异步契约; 这里的便捷层给生命周期与工具体里的同步写法用 ——
-/// 调用方本来就在主程序 IO 线程时主程序内联完成, 不产生等待。
+/// 表成员是异步契约; 这里的便捷层给生命周期与工具体里的同步写法用。
+/// `runtime` 表的工作体在主程序 io 上 (注册/改配置), 完成回调是同步桥 ——
+/// 就地在 io 上调用, 因此插件执行线程上真等不会自己等自己。
 template<typename Ctx, typename StartFn>
 inline int32_t runtimeCall(const Ctx& ctx, StartFn&& start) {
     auto res = pluginxx::tableOpSyncWait(
         ctx.host,
         ctx.iface.cancel,
         ctx.iface.scheduler,
-        std::forward<StartFn>(start)
+        std::forward<StartFn>(start),
+        0,
+        pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
     );
     return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
 }
@@ -3301,7 +3308,9 @@ inline int32_t runtimeCallText(const Ctx& ctx, StartFn&& start, std::string& out
         ctx.host,
         ctx.iface.cancel,
         ctx.iface.scheduler,
-        std::forward<StartFn>(start)
+        std::forward<StartFn>(start),
+        0,
+        pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
     );
     if (!res.ok()) {
         return AGENTXX_RESULT_ERR_INTERNAL;

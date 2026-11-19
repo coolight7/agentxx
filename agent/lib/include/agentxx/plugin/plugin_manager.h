@@ -16,6 +16,7 @@
 #include "pluginxx/host/domain_services.h"
 #include "pluginxx/host/host_core.h"
 #include "pluginxx/host/manifest.h"
+#include "pluginxx/runtime/plugin_thread.h"
 #include "utilxx_base/json.h"
 #include <chrono>
 #include <functional>
@@ -154,14 +155,16 @@ private:
 ///
 /// 线程模型 (与 client 侧 ClientPluginManager 同一套):
 /// - **io 线程**: 全部主程序状态 (实例表/挂载表/注册表/图/定时器) 与会话业务;
-/// - **插件执行线程** (一条, 由 AgentHost 起并经 `setPluginExecutor` 挂上): 插件代码
-///   只在这条线程上执行 —— 工具/图节点/能力行的 body、生命周期入口、通道事件、
-///   后台任务事件、广播订阅、`sleep`/`offload` 的完成回调都经
-///   `pluginxx::dispatchToPlugin` 投过去;
+/// - **插件执行线程** (一条, **管理器构造即起**): 插件代码只在这条线程上执行 ——
+///   工具/图节点/能力行的 body、生命周期入口、通道事件、后台任务事件、广播订阅、
+///   `sleep`/`offload` 的完成回调都经 `pluginxx::dispatchToPlugin` 投过去;
+/// - **工作池** (一个, 构造即建, 默认 3 条, 配置 `plugin.thread_pool_workers`):
+///   插件阻塞工具、`dlopen`/`dlclose`、工具 offload、会话加载、git worktree、
+///   媒体附件全部共用它 —— 一个端只有一个池;
 /// - 两条线程只经投递交互: io 侧只受理、投递、推状态机, **从不阻塞等插件线程**;
 ///   插件调表 = 投到 io 的异步操作, 完成回调再投回插件线程。
-/// - 没配插件执行器时 (`setPluginExecutor` 未调用, 测试与嵌入方常见) 行为与改造前
-///   完全一致: 插件代码就在 io 线程上跑。
+/// - 测试与嵌入方仍可经 `setPluginExecutor` / `setWorkerThreadPool` 换掉默认线程与池
+///   (主程序不再有“没有插件线程/没有池”的分支)。
 class PluginManager : public pluginxx::PluginHostLifecycle<PluginInstance>,
                       public std::enable_shared_from_this<PluginManager>,
                       public pluginxx::DomainServices {
@@ -176,6 +179,12 @@ public:
     /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §8 与根 `AGENTS.md`
     ///   (测试模块 `boundaries` 会校验三者一致)
     inline static constexpr size_t kInterfaceTableCount = 9 + 10;
+
+    /// 本管理器唯一的工作池 (构造即建; 插件阻塞工作 / dlopen / 会话加载等共用)
+    /// - 主程序把它交给 `AgentContext::threadPool`, 工具 offload / 会话加载等借用方共用它
+    std::shared_ptr<asio::thread_pool> workerPool() const {
+        return workerPool_;
+    }
 
     /// 清单行 (诊断与界面展示; 主程序视图)
     struct PluginListView {
@@ -229,7 +238,15 @@ public:
     /// - `primaryAgent`: 主程序级配置的来源 (语言 / 模型 / 工作目录这类**没有 agent
     ///   参数**的接口取它的值)。多 agent 场景下由启动方传入根 agent;
     /// - 单个 agent 自建管理器时也用它 (见 `BaseAgent` 的 `plugin_system` 步骤)。
-    explicit PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primaryAgent);
+    /// 工作池默认线程数 (`plugin.thread_pool_workers` 未配时用它)
+    static constexpr size_t kDefaultWorkerThreads = 3;
+
+    /// - `primaryAgent`: 主 agent 上下文 (通用表取主程序数据用)
+    /// - `workerThreads`: 工作池线程数 (0 = [kDefaultWorkerThreads])
+    explicit PluginManager(
+        std::weak_ptr<agentxx::agent::AgentContext> primaryAgent,
+        size_t                                      workerThreads = 0
+    );
     ~PluginManager();
 
     PluginManager(const PluginManager&)            = delete;
@@ -907,8 +924,12 @@ private:
         std::string_view                                  payloadJson
     );
 
-    /// offload 工作线程池 (由创建方注入; 空时按需创建私有池)
+    /// offload 工作池 (构造即建; 也可以用 [setWorkerThreadPool] 换成外部池)
     std::shared_ptr<asio::thread_pool> workerPool_;
+
+    /// 插件执行线程 (构造即起; 插件代码全在这条线上跑)
+    pluginxx::PluginExecutorThread pluginThread_;
+
 
     /// 网络服务 (懒创建; 与 [netMutex_] 一起使用)
     std::shared_ptr<PluginNetService> netService_;

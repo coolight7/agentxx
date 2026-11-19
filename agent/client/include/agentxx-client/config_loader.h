@@ -91,6 +91,9 @@ struct YamlAppConfig {
     agent::PluginMountPolicy        pluginMountPolicy = agent::PluginMountPolicy::All;
     std::vector<std::string>        pluginMountList;
     utilxx_base::Json               pluginMountArgs;
+    /// 插件工作池线程数 (yaml `plugin.thread_pool_workers`; 默认 3)
+    /// - **两端共用**: 客户端建自己的插件管理器时读同一个值
+    size_t                          pluginThreadPoolWorkers = 3;
     std::map<std::string, agent::ModelConfig> models;
     /// MCP 服务器配置 (yaml `mcp` 列表项, key 为命名空间)
     /// - timeout 字段按秒配置, 0 = 不限制, 未配置默认 120 秒

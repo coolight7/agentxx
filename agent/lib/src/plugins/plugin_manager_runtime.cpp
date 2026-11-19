@@ -292,10 +292,15 @@ int32_t PluginManager::runtimeMountRoot(
     if (inst->mountFn == nullptr && inst->unmountFn == nullptr) {
         onInstanceLoaded(*inst);
     }
-    // 挂载前先把容器这份插件管理器注入: init 的 plugin_mount 步骤要按策略挂载
-    if (auto pluginHost = host->pluginHost()) {
-        ctx->pluginManager      = pluginHost;
-        ctx->pluginManagerOwned = false;
+    // 挂载前先把插件管理器注入: init 的 plugin_mount 步骤要按策略挂载。
+    // 必须是**拥有本插件的管理器** (`this`): 容器那份 (`host->pluginHost()`) 在
+    // 嵌入/测试场景里可以是另一个实例, 用它挂载会导致根上一个插件工具也没有。
+    // 已经有管理器时不动它 (调用方给的才是它想用的那份)。
+    if (!ctx->pluginManager) {
+        if (auto self = weak_from_this().lock()) {
+            ctx->pluginManager      = std::move(self);
+            ctx->pluginManagerOwned = false;
+        }
     }
 
     // ---- 记录先建出来 (init 期间的状态与失败都要能查到) ----

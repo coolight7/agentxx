@@ -270,6 +270,14 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 if (h2->cancelFn) {
                     h2->cancelFn();
                 }
+                // 取消回调可能被投递到插件执行线程: 先等它跑到再断言
+                for (int i = 0;
+                     i < 100 && st->cancelCount.load(std::memory_order_relaxed) == 0;
+                     ++i) {
+                    asio::steady_timer waitTimer(ex);
+                    waitTimer.expires_after(std::chrono::milliseconds(2));
+                    co_await waitTimer.async_wait(asio::use_awaitable);
+                }
                 // cancel_fn 被调用 (协作式)
                 XX_TEST_EXPECT_TRUE(st->cancelCount.load(std::memory_order_relaxed) >= 1);
                 // 取消后仍可上报完成 (主程序幂等; 不 UAF)

@@ -84,25 +84,31 @@ std::string normalizeIntent(std::string_view s) {
 /// 从主程序查询会话 LLM 上下文 (json 数组; 图状态不再包含 messages 通道)
 ///
 /// - 上下文由会话持有 (唯一权威), 经 agentxx.agent.context 接口表查询;
-///   接口不可用/查询失败时返回空数组 (老主程序降级: 路由退化为 fallback)
-utilxx_base::Json sessionMessages(
-    const AgentCtx&                    ctx,
+/// - **协程形态**: 节点执行业务跑在插件自己的执行线程上, 那里不能同步等表调用
+///   (kit 的同步入口在插件线程上直接拒绝), 因此这里 `co_await` 凭据;
+/// - 接口不可用/查询失败时返回空数组 (老主程序降级: 路由退化为 fallback)
+pluginxx::Task<utilxx_base::Json> sessionMessages(
+    AgentCtx&                          ctx,
     const agentxx::plugin::ScopeRef&   ref,
     const agentxx::plugin::RootRequest& req
 ) {
-    const auto text = ctx.getSessionMessages(ref, req.scope());
-    if (text.empty()) {
-        return utilxx_base::Json::array();
+    if (!ctx.iface.context || !ctx.iface.context->get_messages) {
+        co_return utilxx_base::Json::array();
+    }
+    auto result = co_await ctx.getSessionMessages(ctx, ref, req.scope());
+    const auto text = result.text();
+    if (!result.ok() || text.empty()) {
+        co_return utilxx_base::Json::array();
     }
     try {
-        auto msgs = utilxx_base::Json::parse(text);
+        auto msgs = utilxx_base::Json::parse(std::string{text});
         if (msgs.is_array()) {
-            return msgs;
+            co_return msgs;
         }
     } catch (...) {
         // 解析失败按空上下文处理
     }
-    return utilxx_base::Json::array();
+    co_return utilxx_base::Json::array();
 }
 
 /// 获取最后一条 assistant 消息内容 (无则返回空)
@@ -143,26 +149,28 @@ bool lastAssistantHasToolCalls(const utilxx_base::Json& messages) {
 
 } // namespace
 
-/// 意图识别节点执行 (快同步):
+/// 意图识别节点执行 (**协程节点**):
 /// - 第一次经过: 读最后 assistant 消息内容, 匹配 config intents 枚举 →
 ///   写 __route__ (命中) / fallback (未命中); 同时标记 __intent_checked=true
 /// - 后续轮次: 按 "最后一条 assistant 是否带 tool_calls" 写 __route__ (tools/end), 保持原
 ///   agent loop 行为
 /// - config: {"intents": ["datetime", "normal"], "fallback": "normal"}
-std::string intentRouterRun(
+pluginxx::Task<std::string> intentRouterRun(
     AgentCtx&                          ctx,
     const agentxx::plugin::ScopeRef&   ref,
     const agentxx::plugin::RootRequest& req
 ) {
-    const std::string_view config_json = agentxx::plugin::nodeConfigOf(req);
-    auto                   state       = utilxx_base::Json::parse(agentxx::plugin::nodeStateOf(req));
-    auto                   messages    = sessionMessages(ctx, ref, req);
+    // 输入由 RootRequest 拥有, 挂起期间仍然有效; 先拷一份避免依赖这个细节
+    const std::string configJson{agentxx::plugin::nodeConfigOf(req)};
+    const std::string stateJson{agentxx::plugin::nodeStateOf(req)};
+    auto              state    = utilxx_base::Json::parse(stateJson);
+    auto              messages = co_await sessionMessages(ctx, ref, req);
 
     // 解析 config: intents 枚举 + fallback
     std::vector<std::string> intents;
     std::string              fallback = "normal";
-    if (!config_json.empty()) {
-        auto cfg = utilxx_base::Json::parse(config_json);
+    if (!configJson.empty()) {
+        auto cfg = utilxx_base::Json::parse(configJson);
         if (cfg.is_object()) {
             if (cfg.contains("intents") && cfg["intents"].is_array()) {
                 for (const auto& i : cfg["intents"]) {
@@ -202,7 +210,7 @@ std::string intentRouterRun(
         // - 对 messages 通道的 overwrite 写由主程序转成会话上下文替换
         //   (图状态不再持有上下文), 语义与旧版一致
         if (route != fallback && messages.is_array() && !messages.empty()) {
-            const auto origin    = sessionMessages(ctx, ref, req);
+            const auto   origin  = co_await sessionMessages(ctx, ref, req);
             messages             = utilxx_base::Json::array();
             const size_t n       = origin.size();
             bool         removed = false;
@@ -222,7 +230,7 @@ std::string intentRouterRun(
                     utilxx_base::Json(route).dump(),
                     messages.dump()
                 );
-                return payload;
+                co_return payload;
             }
         }
         // 未命中/未移除: 仅写路由标记
@@ -230,7 +238,7 @@ std::string intentRouterRun(
             R"_({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}}]}})_",
             utilxx_base::Json(route).dump()
         );
-        return payload;
+        co_return payload;
     }
 
     // 后续轮次: 等价图条件 xx_has_tool_calls (插件自己从会话上下文判断)
@@ -239,7 +247,7 @@ std::string intentRouterRun(
         R"_({{"writes":[{{"channel":"__route__","value":{}}}]}})_",
         utilxx_base::Json(route).dump()
     );
-    return payload;
+    co_return payload;
 }
 
 /// 时间输出节点执行 (快同步): 写当前系统日期时间到 messages channel

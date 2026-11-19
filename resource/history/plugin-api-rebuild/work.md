@@ -9,8 +9,8 @@
 | 2 | 命名：入口符号与导出宏、`entrySymbols()`、全部表编号改下划线 | 完成（与步 3/4/11 合并为一次 ABI 换代, 见下节） |
 | 3 | `get_info` 填表化 + 删 `AgentxxClientPluginInfo` | 完成（同上） |
 | 4 | 框架通用化收尾（注释/示例去端化 + `boundaries` 规则） | 完成（同上） |
-| 5 | 两侧管理器启动即构造 + 删 `ensurePluginThread` | 待开始 |
-| 6 | 线程池统一（管理器持一个池，默认 3 条，`plugin.thread_pool_workers`，两端同值；删其余四个池） | 待开始 |
+| 5 | 两侧管理器启动即构造 + 删 `ensurePluginThread` | 完成（见下节“步 5 + 6”） |
+| 6 | 线程池统一（管理器持一个池，默认 3 条，`plugin.thread_pool_workers`，两端同值；删其余四个池） | 完成（同上） |
 | 7 | 4 个同步受理入口改提交（含 `OpCore` 操作编号原子化与登记线程安全化） | 待开始 |
 | 8 | `is_canceled` 改快照 + JS 引擎轮询 | 待开始 |
 | 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 待开始 |
@@ -134,6 +134,75 @@ agentxx:
 7. **测试夹具**：手工构造的 `ClientPluginInstance` 补 `runtime`（真实实例必有）；
    `test_client_plugins` 的接口名断言改成下划线 IID；`test_boundaries` 的 IID 提取接受
    `PLUGINXX_TABLE_ID` / `AGENTXX_TABLE_ID` 两种拼法，并清空同步等待豁免名单。
+
+## 实施记录：步 5 + 6（管理器启动即构造 + 线程池统一）
+
+目标: 管理器在构造时就建好插件执行线程与工作池，没有“没配插件就没有线程/池”的第二种形态；
+两端各只有一个池，线程数由 `plugin.thread_pool_workers`（默认 3）给。
+
+### 已改内容
+
+- `PluginManager`（agent 侧）: ctor 第二参 `workerThreads`（0 = 默认 3），构造里建
+  `asio::thread_pool` 与 `pluginxx::PluginExecutorThread`（线程名 `agentxx-plugin`）并
+  `setPluginExecutor`；新增 public `workerPool()`。
+- `ClientPluginManager`: 同样的 ctor 参数与构造即起线程（`agentxx-client-plugin`）;
+  删 `ensurePluginThread()` 与懒建的 `pool_`，dlopen 派发改用同一个 `workerPool_`。
+- `AgentHost`: 删自己的 `threadPool_` / `pluginThread_`，构造里建 `PluginManager` 并与
+  `ioCtx` 绑定；`threadPool()` 转发到管理器的池；`loadPluginsAsync` 用 `pluginsLoaded_` 幂等，
+  不再创建管理器。`Config::threadPoolWorkers` 改名 `pluginWorkerThreads`。
+- 配置: 新增 `plugin.thread_pool_workers`（两端共读，`AgentConfig::pluginThreadPoolWorkers`
+  / `YamlAppConfig::pluginThreadPoolWorkers`），`main.cpp` 映射给 `AgentHost::Config` 与
+  远端模式的两个 runner。
+- `PluginManagerBase` 新增 public `pluginExecutor()`（测试/嵌入方把插件线程上的活跑完）。
+
+### 偏差与后续
+
+- `AgentContext::threadPool` 由 `AgentHost` 填**管理器的池**（同一个对象），不再单独建池；
+  嵌入方/测试可以继续 `setWorkerThreadPool` 覆盖。
+- `tableOpSyncWait` 的“插件线程上拒绝”现在真的会命中（以前测试里常常没有插件线程）。
+  为了让**框架自己**仍能取到运行上下文，`workDir()` / `runtimeCall()` / `config` 一类
+  “工作体在主程序 io 上”的读表入口显式传 `allowOnPluginThread`（完成回调是同步桥，
+  就地在 io 调用，不会自己等自己）；计划 §3.5 第 14 条要求把 `workDir`/`argsJson` 改成
+  由主程序写进工具运行 spec，那一步（10b）落地时把这些放宽一起删掉。
+- 一侧管理器在测试里可能同时存在两份（测试自建 + 容器自建）。`mount_root` 原来把
+  `host->pluginHost()` 强塞给新建的根，导致“插件挂在测试管理器里、根却拿到容器那份空管理器、
+  人设根上一个工具都没有”。改为只在根还没有管理器时注入**本管理器**（拥有该插件的那份）。
+
+### 验证与修复
+
+编译: 顶层 Debug 通过; 25 个插件 DLL 重编通过。
+
+全量测试: `agentxx_test --log-level warn` → **passed=43828 failed=0**（比基线多的 3 条是本次新增断言）。
+
+过程中发现并修掉的问题:
+
+1. **插件侧取消句柄 use-after-free（`plugins` 模块 ASan 崩）**：取消投递到插件线程后，
+   插件可能已经调过 `done` 并按完成包释放了取消句柄。`OpCore::invokePluginCancel` 原来只
+   复查 `Completed`，而 `Completed` 是**完成包在 io 上提交**才置位 —— 中间那段窗口里插件
+   侧句柄已经没了。改为复查 `submitted()`（`done` 一被接受就在插件线程上置位）。同时把
+   `finishIfDone` 的桥接分支改成“先 `notifyHost` 再 `destroyFrame`”，让“提交 done”严格早于
+   “释放取消句柄”。
+2. **`sleep`/`offload` 回调的同步桥标记越界读（ASan stack-buffer-overflow）**：`commit` 无条件
+   按指针读 `ud` 的前 8 字节判断同步桥，而这些入口的 `ud` 是插件的任意数据（测试里是 `&int`）。
+   改为只有表调用传来的上下文才做这个判定（`OpCore::setCallback(cb, ud, mayBeSyncBridge)`）。
+3. **投递路径的完成回调失去 lease 保护**：插件回调改成投递到插件线程后，回调执行时操作
+   自己的 lease 已经释放（就地调用时是活到回调返回的）。把 provider/caller 的 lease 捕获进
+   投递闭包，保持“回调期间双方仍在保护下”的语义。
+4. **`is_io_thread` 在首次派发前回答不了**：插件线程 id 只在“动作真的在插件线程上跑”时
+   才知道，而 `bindPluginExecutor` 之后可能还没有任何派发。绑定后补投一个空动作记录线程 id。
+5. **无主操作保活表没有加锁**：`emitPointAsync` 等入口可以从插件线程与 io 同时建无主操作，
+   `detachedHandles` 的清表会释放另一线程正在遍历的句柄（chatbot 模块全量跑时 ASan
+   heap-use-after-free）。加 `detachedHandlesMutex`。
+6. **插件 / 测试夹具要适应“插件代码在插件线程上”**：
+   - `example_graph_node` 的意图节点改为协程节点（`co_await` 取会话上下文；同步读在插件
+     线程上会被拒 → 路由永远退化到 fallback，`plugins` 模块的 datetime 用例因此失败）；
+   - `test_start_fail` 测试插件的 `mount` 改成异步状态机（原来假定表调用内联完成）；
+   - `test_plugin_runtime` 夹具：`drainPluginThread` 等待期间同时推进 io（插件线程可能在同步
+     桥里等 io）；`onIo` 断言改成“插件回调线程”（插件线程或 io）；驱动票用例改成确定时序
+     （闸门驱动占住插件线程后再测“取消尚未开始”）；`is_io_thread` 断言改成新语义；
+     顺序断言接受“completion 先于 callback”（完成回调现在是投递的）；
+   - `test_client_plugins` 的 drain 同时推进 client 插件线程；
+   - `lifecycle` 探针的表调用显式 `allowOnPluginThread`（工作体在主程序侧）。
 
 ## 设计过程
 

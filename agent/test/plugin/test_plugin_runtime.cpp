@@ -112,12 +112,47 @@ struct RuntimeFixture {
         return OpCore::create(manager->runtime(), provider, caller, "runtime regression");
     }
 
+    /// 把已排队的插件回调跑完 (等到插件线程空下来)
+    ///
+    /// 管理器现在**构造即起**插件执行线程, 插件代码 (accept/完成回调/驱动票) 都在那条
+    /// 线上跑; 只 poll io 会把“已经投进插件队列但还没执行”的步骤当成已完成。
+    /// 这里往插件执行器 post 一个哨兵并等它执行 —— 队列 FIFO, 哨兵跑完就说明前面的活
+    /// 都跑完了。未配独立插件线程时它等于 io 执行器, 直接返回。
+    void drainPluginThread() {
+        if (!manager || !manager->hasPluginExecutor()) {
+            return;
+        }
+        auto ex = manager->pluginExecutor();
+        if (!ex) {
+            return;
+        }
+        auto reached = std::make_shared<std::atomic<bool>>(false);
+        asio::post(ex, [reached] { reached->store(true, std::memory_order_release); });
+        for (int i = 0; i < 2000 && !reached->load(std::memory_order_acquire); ++i) {
+            // 插件线程可能正在同步等 io (同步桥查表): 等待期间顺手推进 io,
+            // 否则两边互等 (插件线程等 io 的完成, 而 io 没人跑)
+            io.restart();
+            io.poll();
+            io.restart();
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+    }
+
     void drain() {
-        io.restart();
-        io.poll();
-        // io_context becomes stopped after an empty poll. Keep the fixture's
-        // normal state distinct from an explicit stop used by fault tests.
-        io.restart();
+        // 插件线程与 io 线程来回投递 (完成包 → 回调 → 再投回 io), 一次轮询不够:
+        // 交替推进几轮, 直到两边都不再有就绪的活。
+        for (int round = 0; round < 6; ++round) {
+            drainPluginThread();
+            io.restart();
+            const auto ran = io.poll();
+            // io_context becomes stopped after an empty poll. Keep the fixture's
+            // normal state distinct from an explicit stop used by fault tests.
+            io.restart();
+            if (ran == 0 && round > 0) {
+                break;
+            }
+        }
+        drainPluginThread();
     }
 
     /// 推进 IO 直到没有新的就绪处理器：生命周期事务包含多级投递
@@ -236,10 +271,14 @@ struct CallbackState {
         state.noteCallbackContext();
     }
 
-    /// 记下回调现场 (是否在 io 线程 / 双方 lease 是否仍在)
+    /// 记下回调现场 (是否在主程序的回调线程 / 双方 lease 是否仍在)
+    ///
+    /// 回调线程 = 插件代码的执行线程 (配了插件执行器时是那条线程, 否则是 io 线程)。
+    /// 它不是工作池线程也不是任意线程 —— 旧断言写的 `onIo` 就是这个意思。
     void noteCallbackContext() {
         if (fixture) {
-            onIo                    = fixture->manager->isIoThread();
+            onIo                    = fixture->manager->isIoThread()
+                                      || fixture->manager->isPluginThread();
             protectedDuringCallback = fixture->provider->lifetime->leaseCount() != 0
                                       && fixture->caller->lifetime->leaseCount() != 0;
         }
@@ -287,7 +326,9 @@ struct ShutdownOrderProbe {
             probe.order->push("callback");
         }
         probe.destroyDuringCallback = probe.provider && probe.provider->pluginDestroyed;
-        probe.onIo                  = probe.manager && probe.manager->isIoThread();
+        // 回调线程 = 插件代码的执行线程 (插件执行器 > io)
+        probe.onIo = probe.manager
+                     && (probe.manager->isIoThread() || probe.manager->isPluginThread());
     }
 };
 
@@ -412,7 +453,8 @@ void PLUGINXX_CALL lifecycleCreateHook(
     auto& probe = *static_cast<LifecycleProbe*>(*plugin_ctx);
     ++probe.starts;
     if (probe.tools && probe.host) {
-        // 表成员是异步契约: 生命周期入口在主程序 IO 线程上, 内联完成
+        // 表成员是异步契约; 探针挂在插件执行线程上跑, 工具注册的工作体在主程序 io 上,
+        // 完成回调是同步桥 (就地在 io 调用) —— 真等不会自己等自己
         auto res = pluginxx::tableOpSyncWait(
             probe.host,
             probe.cancel,
@@ -426,7 +468,9 @@ void PLUGINXX_CALL lifecycleCreateHook(
                     ud,
                     err
                 );
-            }
+            },
+            0,
+            pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
         );
         probe.partialRegistration = res.ok();
     }
@@ -448,7 +492,9 @@ void PLUGINXX_CALL lifecycleCreateHook(
                     ud,
                     err
                 );
-            }
+            },
+            0,
+            pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
         );
         probe.partialGraphRegistration = gop.ok();
     }
@@ -478,7 +524,9 @@ void PLUGINXX_CALL
                     ud,
                     err
                 );
-            }
+            },
+            0,
+            pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
         );
     }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
@@ -1160,7 +1208,8 @@ TestResult testPluginRuntime() {
             +[](void* ud, int32_t status, void* value, const PluginxxStringView*) {
                 auto& state = *static_cast<State*>(ud);
                 state.done  = status == PLUGINXX_OPERATOR_OK && value == ud;
-                state.onIo  = state.fixture->manager->isIoThread();
+                state.onIo  = state.fixture->manager->isIoThread()
+                              || state.fixture->manager->isPluginThread();
                 // 派发本身也持一份 lease (op 一份 + 派发项一份), 因此这里只判 "非零"
                 state.protectedDuringCallback
                     = state.fixture->provider->lifetime->leaseCount() != 0;
@@ -1998,8 +2047,14 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(order.at(0), std::string{"cancel"});
         XX_TEST_EXPECT_EQ(order.at(1), std::string{"resumed"});
         XX_TEST_EXPECT_EQ(order.at(2), std::string{"doneSubmitted"});
-        XX_TEST_EXPECT_EQ(order.at(3), std::string{"callback"});
-        XX_TEST_EXPECT_EQ(order.at(4), std::string{"completion"});
+        // 配了插件执行器时完成回调是**投递**到那条线程的, 主程序的完成处理器
+        // (清索引/记账) 在 io 上就地跑 —— 因此 completion 可能先于 callback。
+        // 两者都不应在 destroy 之前或之后错位 (见下一行与上面的 destroy 断言)。
+        const bool callbackThenCompletion
+            = order.at(3) == std::string{"callback"} && order.at(4) == std::string{"completion"};
+        const bool completionThenCallback
+            = order.at(3) == std::string{"completion"} && order.at(4) == std::string{"callback"};
+        XX_TEST_EXPECT_TRUE(callbackThenCompletion || completionThenCallback);
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
 
         // lease 归零后销毁才发生 (destroy 不能早于 callback 与 done)。
@@ -2344,49 +2399,98 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_TRUE(runtime->request_driver != nullptr);
             XX_TEST_EXPECT_TRUE(runtime->cancel_driver != nullptr);
             XX_TEST_EXPECT_TRUE(runtime->is_io_thread != nullptr);
-            // is_io_thread: RuntimeFixture 由当前线程加载 io executor, 因此本线程
-            // 就是该实例的 "IO 线程" (真实主程序里是 io_context 的 run 线程)。
-            XX_TEST_EXPECT_EQ(runtime->is_io_thread(host), 1);
+            // is_io_thread: 有独立插件执行器时它回答的是"当前线程是不是该实例的
+            // 插件执行线程" (没有插件线程时才是 io 线程)。本线程跑 io → 0;
+            // 插件线程上 → 1。
+            XX_TEST_EXPECT_EQ(runtime->is_io_thread(host), 0);
+            {
+                std::atomic<int> seen{-1};
+                auto             ex = f.manager->pluginExecutor();
+                XX_TEST_EXPECT_TRUE(static_cast<bool>(ex));
+                if (ex) {
+                    asio::post(ex, [&seen, host, runtime] {
+                        seen.store(runtime->is_io_thread(host), std::memory_order_release);
+                    });
+                    for (int i = 0; i < 2000 && seen.load(std::memory_order_acquire) < 0; ++i) {
+                        std::this_thread::sleep_for(std::chrono::microseconds(200));
+                    }
+                }
+                XX_TEST_EXPECT_EQ(seen.load(), 1);
+            }
 
             struct DriveProbe {
-                int calls = 0;
+                std::atomic<int>  calls{0};
+                /// 回调实际跑在申请线程上 (只在"内联执行"时才是 true)
+                std::atomic<bool> onCaller{false};
+                /// 闸门驱动用: 进入点 / 放行
+                std::atomic<bool> entered{false};
+                std::atomic<bool> release{false};
+                std::thread::id   caller{};
             } probe;
+            probe.caller = std::this_thread::get_id();
 
             // 驱动回调必须是无捕获函数 (C ABI 函数指针), 经 user_data 取上下文。
             auto driveFn = [](void* ud) {
                 auto* p = static_cast<DriveProbe*>(ud);
-                ++p->calls;
+                if (std::this_thread::get_id() == p->caller) {
+                    p->onCaller.store(true, std::memory_order_release);
+                }
+                p->calls.fetch_add(1, std::memory_order_acq_rel);
+            };
+            // 闸门驱动: 占住插件线程直到测试放行 (用来拿到"尚未开始"的确定时序)
+            auto gatedDriveFn = [](void* ud) {
+                auto* p = static_cast<DriveProbe*>(ud);
+                if (std::this_thread::get_id() == p->caller) {
+                    p->onCaller.store(true, std::memory_order_release);
+                }
+                p->calls.fetch_add(1, std::memory_order_acq_rel);
+                p->entered.store(true, std::memory_order_release);
+                while (!p->release.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
             };
 
-            // 1) 申请请求恒异步: 申请返回时回调必须尚未执行
+            // 1) 申请恒异步: 回调绝不在申请线程上内联执行 (有插件执行器时它在
+            //    插件线程上跑, 可能比本线程走下一条断言还早)
             PluginxxString  err{nullptr, 0};
             PluginxxDriver* ticket = runtime->request_driver(host, driveFn, &probe, &err);
             XX_TEST_EXPECT_TRUE(ticket != nullptr);
-            XX_TEST_EXPECT_EQ(probe.calls, 0);
-            // 请求在排队期间持有实例 lease (卸载等待必然覆盖它)
+            XX_TEST_EXPECT_FALSE(probe.onCaller.load());
+            // 请求在排队/执行期间持有实例 lease (卸载等待必然覆盖它)
             XX_TEST_EXPECT_GE(f.provider->activeDriverCount(), size_t{1});
             XX_TEST_EXPECT_GE(f.provider->lifetime->leaseCount(), size_t{1});
 
-            // 2) 推进 IO: 恰好执行一次
-            f.drain();
+            // 2) 插件线程与 io 都推进后: 恰好执行一次
             f.drainAll();
-            XX_TEST_EXPECT_EQ(probe.calls, 1);
+            XX_TEST_EXPECT_EQ(probe.calls.load(), 1);
             XX_TEST_EXPECT_EQ(f.provider->activeDriverCount(), size_t{0});
             XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
 
             // 3) 重复推进不得再次执行 (每张请求至多一次)
             f.drainAll();
-            XX_TEST_EXPECT_EQ(probe.calls, 1);
+            XX_TEST_EXPECT_EQ(probe.calls.load(), 1);
 
             // 4) 取消尚未开始的请求: 不再执行, lease 立刻释放
+            //    时序要确定: 先让插件线程卡在一张闸门驱动上, 取消的这张就必定还没
+            //    轮到 (有插件线程时"申请完立刻取消"是竞态, 不能当作未开始)
+            DriveProbe blocker;
+            blocker.caller = std::this_thread::get_id();
+            PluginxxDriver* hold = runtime->request_driver(host, gatedDriveFn, &blocker, &err);
+            XX_TEST_EXPECT_TRUE(hold != nullptr);
+            for (int i = 0; i < 5000 && !blocker.entered.load(std::memory_order_acquire); ++i) {
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            }
+            XX_TEST_EXPECT_TRUE(blocker.entered.load());
+            const int callsBeforeCancel = probe.calls.load();
             PluginxxDriver* Canceled = runtime->request_driver(host, driveFn, &probe, &err);
             XX_TEST_EXPECT_TRUE(Canceled != nullptr);
-            XX_TEST_EXPECT_GE(f.provider->lifetime->leaseCount(), size_t{1});
             runtime->cancel_driver(Canceled);
+            XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1}); // 只剩 hold
+            blocker.release.store(true, std::memory_order_release);
+            f.drainAll();
+            XX_TEST_EXPECT_EQ(probe.calls.load(), callsBeforeCancel); // 取消后不再执行
             XX_TEST_EXPECT_EQ(f.provider->activeDriverCount(), size_t{0});
             XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
-            f.drainAll();
-            XX_TEST_EXPECT_EQ(probe.calls, 1); // 取消后不再执行
             runtime->cancel_driver(Canceled); // 幂等
             runtime->cancel_driver(nullptr);   // 空指针安全
 

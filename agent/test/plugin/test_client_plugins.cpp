@@ -30,6 +30,7 @@
 #include "asio/detached.hpp"
 #include "asio/executor_work_guard.hpp"
 #include "asio/io_context.hpp"
+#include "asio/post.hpp"
 #include "asio/use_awaitable.hpp"
 #include "pluginxx/runtime/instance_base.h"
 #include "utilxx_base/log.h"
@@ -3404,10 +3405,23 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             m->plugins_.emplace(inst->name, inst);
             return inst;
         };
-        auto drainIo = [](asio::io_context& io) {
-            for (int i = 0; i < 8; ++i) {
+        // 管理器自带插件执行线程: 禁用/启用事务在插件线程上跑, 推进要把两边都跑完
+        auto drainIo = [](asio::io_context& io, agentxx::plugin::ClientPluginManager& mgr) {
+            for (int round = 0; round < 8; ++round) {
                 io.restart();
                 io.poll();
+                auto ex = mgr.pluginExecutor();
+                if (!ex) {
+                    continue;
+                }
+                // 哨兵: 插件线程按 FIFO 执行, 它跑完说明之前派发的回调都已结束
+                std::atomic<bool> reached{false};
+                asio::post(ex, [&reached] {
+                    reached.store(true, std::memory_order_release);
+                });
+                for (int spin = 0; spin < 2000 && !reached.load(std::memory_order_acquire); ++spin) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(200));
+                }
             }
             io.restart();
         };
@@ -3426,7 +3440,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_FALSE(inst->enabled);
         XX_TEST_EXPECT_TRUE(inst->userDisabled);
         XX_TEST_EXPECT_EQ(probe.stops, 0);
-        drainIo(io);
+        drainIo(io, *mgr2);
         XX_TEST_EXPECT_EQ(probe.stops, 1);
         XX_TEST_EXPECT_TRUE(inst->lifecycleStopped);
         XX_TEST_EXPECT_EQ(
@@ -3438,7 +3452,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         mgr2->enable("fake_lifecycle");
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_FALSE(inst->userDisabled);
-        drainIo(io);
+        drainIo(io, *mgr2);
         XX_TEST_EXPECT_EQ(probe.starts, 1);
         XX_TEST_EXPECT_FALSE(inst->lifecycleStopped);
         XX_TEST_EXPECT_EQ(
@@ -3461,7 +3475,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             }),
             asio::detached
         );
-        drainIo(io);
+        drainIo(io, *mgr2);
         XX_TEST_EXPECT_TRUE(closed);
         XX_TEST_EXPECT_EQ(probe.stops, 2);
         XX_TEST_EXPECT_TRUE(mgr2->find("fake_lifecycle") == nullptr);

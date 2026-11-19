@@ -124,8 +124,10 @@ public:
     struct Config {
         /// agent 节点容器 io_context (空 = 自建, 调用方负责 run)
         std::shared_ptr<asio::io_context> ioCtx = nullptr;
-        /// 共享 threadPool 线程数 (0 = 默认 hardware_concurrency/2)
-        size_t threadPoolWorkers = 0;
+        /// 插件工作池线程数 (`plugin.thread_pool_workers`, 0 = 默认 3)
+        /// - 一个端只有一个池: 插件阻塞工作、dlopen/dlclose、工具 offload、会话加载
+        ///   都共用它 (池归插件管理器所有)
+        size_t pluginWorkerThreads = 0;
         /// 进程内根数上限 (含内置根; 超出时 [mountRoot] 返回空)
         size_t maxRoots = 8;
         /// agent 构造工厂 (默认 CodeAgent; 可注入自定义 BaseAgent 子类)
@@ -146,10 +148,11 @@ public:
 
     std::shared_ptr<asio::io_context>          ioCtx();
     std::shared_ptr<agentxx::events::EventBus> hostBus();
+    /// 共享工作池 (= 插件管理器的那一个; 供工具 offload / 会话加载等借用)
     std::shared_ptr<asio::thread_pool>         threadPool();
     AgentRegistry&                             registry();
 
-    /// 本容器的插件管理器 (唯一实例; 未加载插件时为空)
+    /// 本容器的插件管理器 (构造即建, 不再等插件加载)
     /// - 各 agent 在 `init` 前把它放进 `AgentContext::pluginManager`, 由 agent 自己
     ///   `mountAgentAsync` 挂载 (见 `BaseAgent::init` 的 `plugin_mount` 步骤)
     std::shared_ptr<agentxx::plugin::PluginManager> pluginHost() const;
@@ -484,22 +487,17 @@ private:
 
     Config                                      cfg_;
     std::shared_ptr<asio::io_context>           ioCtx_;
-    std::shared_ptr<asio::thread_pool>          threadPool_;
     std::shared_ptr<agentxx::events::EventBus>  hostBus_;
     AgentRegistry                               registry_;
     /// 进程共享的模型注册表 (所有 AgentNode 一份: provider 实例与模型清单共用)
     /// - 首个 agent `init` 时从自己的 `availableModels` 填进来, 之后的 agent 只
     ///   补自己才认识的那些; 容器与 agent 同一条 io 线程, 不需要锁
     std::shared_ptr<agentxx::agent::ModelProviderRegistry> modelRegistry_;
-    /// 插件执行线程: 所有插件回调 (start/mount/工具/事件/驱动票) 都在这条线上跑
-    ///
-    /// - **声明在 [pluginHost_] 之前**: 成员逆序析构, 所以插件管理器先释放
-    ///   (卸载/拆挂载走完), 线程最后停;
-    /// - 仅在真的加载插件时启动 (`loadPluginsAsync`), 没插件就不会多一条线程。
-    pluginxx::PluginExecutorThread pluginThread_;
-    /// 插件管理器 (进程一份; 由 [loadPluginsAsync] 建立)
+    /// 插件管理器 (进程一份; **构造即建**, 并自带插件执行线程与工作池)
     /// - 声明在 roots_ 之前: 成员逆序析构, 这样 agent 先释放 (拆挂载) 再关管理器
     std::shared_ptr<agentxx::plugin::PluginManager> pluginHost_;
+    /// 配置里的插件是否已加载过 ([loadPluginsAsync] 的本幂标志)
+    bool pluginsLoaded_ = false;
     /// 已挂载的根 (含内置根; 按挂载顺序)
     std::vector<MountedRoot> roots_;
     /// 内置根 (便于频繁读取不搜表)

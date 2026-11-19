@@ -235,7 +235,7 @@ std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
     // 两处赋值同一个值, 后到的 injectShared 不产生变化。
     if (auto primary = host->cfg_.primaryAgent.lock(); primary != nullptr) {
         primary->host       = self;
-        primary->threadPool = host->threadPool_;
+        primary->threadPool = host->threadPool();
         // 模型注册表同样提前给: 插件 `start` 里挂的根也可能要查模型
         if (!host->modelRegistry_) {
             host->modelRegistry_ = std::make_shared<agentxx::agent::ModelProviderRegistry>();
@@ -313,12 +313,14 @@ AgentHost::AgentHost(Config cfg) :
     } else {
         ioCtx_ = std::make_shared<asio::io_context>();
     }
-    size_t poolThreads = cfg_.threadPoolWorkers;
-    if (0 == poolThreads) {
-        poolThreads = std::max(2u, std::thread::hardware_concurrency() / 2);
-    }
-    threadPool_ = std::make_shared<asio::thread_pool>(poolThreads);
-    hostBus_    = std::make_shared<agentxx::events::EventBus>(ioCtx_->get_executor());
+    hostBus_ = std::make_shared<agentxx::events::EventBus>(ioCtx_->get_executor());
+    // 插件管理器: 构造即建 (插件执行线程 + 工作池随之起来), 没配插件也不空着 ——
+    // 插件在 `start` 里就会建自己的根, 那时就要有管理器与总线的镜像。
+    pluginHost_ = std::make_shared<agentxx::plugin::PluginManager>(
+        cfg_.primaryAgent,
+        cfg_.pluginWorkerThreads
+    );
+    pluginHost_->setIoExecutor(ioCtx_->get_executor());
 }
 
 AgentHost::~AgentHost() = default;
@@ -332,7 +334,7 @@ std::shared_ptr<agentxx::events::EventBus> AgentHost::hostBus() {
 }
 
 std::shared_ptr<asio::thread_pool> AgentHost::threadPool() {
-    return threadPool_;
+    return pluginHost_ ? pluginHost_->workerPool() : nullptr;
 }
 
 AgentRegistry& AgentHost::registry() {
@@ -344,25 +346,16 @@ std::shared_ptr<agentxx::plugin::PluginManager> AgentHost::pluginHost() const {
 }
 
 asio::awaitable<void> AgentHost::loadPluginsAsync() {
-    if (pluginHost_) {
+    if (pluginsLoaded_) {
         co_return; // 幂等: 插件只加载一次
     }
+    pluginsLoaded_ = true;
     if (cfg_.pluginList.empty()) {
         co_return;
     }
-    // 管理器级: 加载阶段还没有挂载, 但插件 `start` 的进程级注册需要主 agent 的上下文
-    // (总线 / 语言 / 模型), 所以由调用方把主 agent 交给管理器
-    pluginHost_ = std::make_shared<agentxx::plugin::PluginManager>(cfg_.primaryAgent);
-    // offload 工作线程池直接注入: 插件阻塞工具不依赖主 agent 上下文是否已挂载
-    pluginHost_->setWorkerThreadPool(threadPool_);
-    pluginHost_->setIoExecutor(ioCtx_->get_executor());
-    // 插件执行线程: 插件代码 (回调/协程驱动/工具) 全部搬到这条线上, io 线程只做
-    // 受理与投递 —— 插件里读一次慢盘不再卡住整条 io 线程。启动失败时保持旧行为
-    // (插件代码与 io 同线程), 不因为起不了线程而拒绝加载插件。
-    if (pluginThread_.start("agentxx-plugin")) {
-        pluginHost_->setPluginExecutor(pluginThread_.executor());
-    } else {
-        XX_LOGW("Plugin executor thread could not start; plugin callbacks run on the IO thread");
+    // 管理器已在构造函数建好 (含插件执行线程与工作池), 这里只加载配置里的插件
+    if (!pluginHost_) {
+        co_return;
     }
     XX_LOGI("Loading {} plugin(s) into the agent host", cfg_.pluginList.size());
     co_await pluginHost_->loadConfiguredPlugins(cfg_.pluginList);
@@ -551,7 +544,7 @@ void AgentHost::injectShared(std::shared_ptr<agentxx::agent::AgentContext> ctx) 
     }
     // 共享基础设施: threadPool 上提共享 (避免每 agent 一份线程池),
     // host 引用 (供节点/工具经 AgentContext 知道 agent 节点容器)
-    ctx->threadPool = threadPool_;
+    ctx->threadPool = threadPool();
     ctx->host       = weak_from_this();
     // 模型注册表: 进程一份 (provider 实例与模型清单共用, 所有 AgentNode 共享)。
     // 表还是空的, 由各个 agent 的 `initModelRegistry` 依次填 (只补表里没有的)。
@@ -1204,7 +1197,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         };
     }
     /// 注入共享基础设施与 agent 节点容器引用
-    subCtx->threadPool = threadPool_;
+    subCtx->threadPool = threadPool();
     subCtx->host       = weak_from_this();
     // 模型注册表: 与所有 AgentNode 共一份 (provider 与连接池复用, 模型清单一致)
     // - 子代理原本每个都新建 registry: 同一模型会有 N 份 provider 实例

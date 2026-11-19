@@ -59,22 +59,13 @@ asio::awaitable<std::string> ClientPluginManager::runLoaderTask(std::function<st
 // 调度表 (阻塞工作的工作线程池)
 // =====================================================================
 
-/// 工作线程数: 客户端只服务界面与少量网络/文件工作, 固定 2 个线程即可
-/// (agent 侧有注入池时用注入的, 客户端插件管理器没有注入方, 自建一份)
-static constexpr size_t kClientWorkerThreads = 2;
-
 bool ClientPluginManager::postToWorkerThread(std::function<void()> fn) {
     if (!fn) {
         return false;
     }
-    // 只由 client io 线程调用 (见 domain_services.h 的线程约定), 懒建不需要锁
     if (!workerPool_) {
-        try {
-            workerPool_ = std::make_shared<asio::thread_pool>(kClientWorkerThreads);
-        } catch (const std::exception& e) {
-            XX_LOGW("[client_plugin] offload pool could not be created: {}", e.what());
-            return false;
-        }
+        XX_LOGW("[client_plugin] offload unavailable: worker pool is missing");
+        return false;
     }
     // 工作体包在 shared_ptr 里: 投递失败时不会被移走, 便于日志里说明
     auto task = std::make_shared<std::function<void()>>(std::move(fn));

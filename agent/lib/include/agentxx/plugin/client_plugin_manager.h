@@ -569,7 +569,12 @@ public:
         std::vector<std::string> optionalInterfaces;
     };
 
-    explicit ClientPluginManager(asio::any_io_executor ex);
+    /// 工作池默认线程数 (`plugin.thread_pool_workers` 未配时用它)
+    static constexpr size_t kDefaultWorkerThreads = 3;
+
+    /// - `ex`: client io 执行器 (全部状态变更在这条线上)
+    /// - `workerThreads`: 工作池线程数 (0 = [kDefaultWorkerThreads])
+    explicit ClientPluginManager(asio::any_io_executor ex, size_t workerThreads = 0);
     ~ClientPluginManager();
 
     ClientPluginManager(const ClientPluginManager&)            = delete;
@@ -1114,15 +1119,10 @@ private:
     ///
     /// - **声明在最前**: 成员逆序析构, 它的 stop() 最后跑 —— 实例表/注册表/线程池
     ///   都已拆完, 线程才停;
+    /// - **构造即起** (没有 client 插件也建有线程);
     /// - 从插件线程自身销毁管理器时 `stop()` 会 detach 而不 join (见
     ///   [pluginxx::PluginExecutorThread::stop])。
     pluginxx::PluginExecutorThread pluginThread_;
-
-    /// 保证插件执行线程已就绪 (幂等; 首次加载插件时调一次)
-    ///
-    /// 线程起不来时只记警告: 插件代码退回 client io 线程, 功能不受影响
-    /// (与改造前一致), 不因为一条线程起不来而拒绝加载插件。
-    void ensurePluginThread();
 
     /// 发一条客户端频道值 (io 线程; 幂等声明 + 发布, 失败只记日志)
     void publishClientChannel(std::string_view channel, const std::string& payloadJson);
@@ -1156,10 +1156,10 @@ private:
     /// [ClientUiRegistry::instanceGenerations])
     void setRegistryGeneration(std::string_view plugin, uint64_t generation, bool present);
 
-    /// 内部线程池 (dlopen/entry 卸载执行; shutdownAll 时 join)
-    std::unique_ptr<asio::thread_pool> pool_;
-
-    /// 插件阻塞工作的线程池 (懒创建; DomainServices::postToWorkerThread 用)
+    /// 本管理器唯一的工作池 (构造即建; dlopen/dlclose、插件阻塞工作共用)
+    ///
+    /// 与 agent 侧同一模型: 一个端只有一个池, 数量由 `plugin.thread_pool_workers`
+    /// 决定 (`shutdownAll` 时 join)。
     std::shared_ptr<asio::thread_pool> workerPool_;
 
     std::shared_ptr<PluginUiAdapter> uiAdapter_; ///< 注入后不可变 (io 线程读写)

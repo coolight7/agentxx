@@ -354,6 +354,11 @@ public:
     /// 本 agent 的插件挂载策略 (yaml `plugin.mount.policy`; 默认 All)
     PluginMountPolicy pluginMountPolicy = PluginMountPolicy::All;
 
+    /// 插件工作池线程数 (yaml `plugin.thread_pool_workers`; 默认 3, 0 也按 3)
+    /// - **一个端只有一个池**: 插件阻塞工具、dlopen/dlclose、工具 offload、会话加载
+    ///   都共用它; 两端同值 (客户端的插件管理器也读这个键)
+    size_t pluginThreadPoolWorkers = 3;
+
     /// `pluginMountPolicy == Listed` 时要挂的插件名 (yaml `plugin.mount.list`)
     std::vector<std::string> pluginMountList{};
 

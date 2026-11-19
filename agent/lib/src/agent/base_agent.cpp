@@ -515,10 +515,17 @@ asio::awaitable<void> BaseAgent::init() {
             if (agentContext->pluginManager) {
                 ownsPluginHost_ = false;
             } else {
+                // 没有主程序注入的管理器: 自建一份 (它自带插件执行线程与工作池)
                 agentContext->pluginManager
-                    = std::make_shared<agentxx::plugin::PluginManager>(agentContext);
-                // offload 线程池直接注入: 插件阻塞工具不必经上下文回查
-                agentContext->pluginManager->setWorkerThreadPool(agentContext->threadPool);
+                    = std::make_shared<agentxx::plugin::PluginManager>(
+                        agentContext,
+                        agentContext->agentConfig ? agentContext->agentConfig->pluginThreadPoolWorkers
+                                                  : 0
+                    );
+                // 上下文有自己的池时以它为准 (主程序注入的共享池优先)
+                if (agentContext->threadPool) {
+                    agentContext->pluginManager->setWorkerThreadPool(agentContext->threadPool);
+                }
                 ownsPluginHost_ = true;
             }
             // 加载 io executor: 插件 vtable 的跨线程调用 (JS 线程等) 经 post 到 io 线程

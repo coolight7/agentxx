@@ -337,31 +337,29 @@ ClientPluginInstance::~ClientPluginInstance() {
 // ClientPluginManager
 // =====================================================================
 
-ClientPluginManager::ClientPluginManager(asio::any_io_executor ex) :
+ClientPluginManager::ClientPluginManager(asio::any_io_executor ex, size_t workerThreads) :
     pluginxx::PluginHostLifecycle<ClientPluginInstance>(std::move(ex)),
-    pool_(std::make_unique<asio::thread_pool>(1)),
     uiRegistry_(std::make_shared<const ClientUiRegistry>()) {
     // 通用表 (log/json/config/plugins/broadcasts/...) 需要主程序数据时经这里取
     // (必须在任何 vtable 入口被调用之前注入)
     setDomainServices(this);
     // 客户端频道: 插件在 start 里就会订阅, 因此管理器构造时就声明好 (幂等)
     declareClientChannels();
-    // 插件执行线程在首次加载插件时由 [ensurePluginThread] 起 (没有 client 插件时不建线程,
-    // 与 agent 侧同一取舍)。
-}
-
-void ClientPluginManager::ensurePluginThread() {
-    if (hasPluginExecutor()) {
-        return;
+    // 工作池与插件执行线程: 构造即起 (没有 client 插件也建有), 与 agent 侧同一模型
+    const size_t workers = workerThreads == 0 ? kDefaultWorkerThreads : workerThreads;
+    try {
+        workerPool_ = std::make_shared<asio::thread_pool>(workers);
+    } catch (const std::exception& e) {
+        XX_LOGE("[client_plugin] worker pool could not be created: {}", e.what());
     }
-    if (!pluginThread_.start("agentxx-client-plugin")) {
-        XX_LOGW(
+    if (pluginThread_.start("agentxx-client-plugin")) {
+        setPluginExecutor(pluginThread_.executor());
+    } else {
+        XX_LOGE(
             "[client_plugin] plugin executor thread could not start; plugin callbacks run on the "
             "client IO thread"
         );
-        return;
     }
-    setPluginExecutor(pluginThread_.executor());
 }
 
 ClientPluginManager::~ClientPluginManager() {
@@ -370,9 +368,6 @@ ClientPluginManager::~ClientPluginManager() {
     warnPendingCloseOnDestroy("client");
     if (workerPool_) {
         workerPool_->join();
-    }
-    if (pool_) {
-        pool_->join();
     }
 }
 
@@ -444,8 +439,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     const agentxx::agent::PluginConfig* cfg,
     bool                                allowMissingEntry
 ) {
-    // 插件执行线程: 必须在任何 start/回调之前就绪 (幂等; 没有 client 插件时不建线程)
-    ensurePluginThread();
+    // 插件执行线程与工作池已在构造函数起好 (没有 client 插件也建有)
     // 内置简写: builtin://<name> 在 client 侧暂无内置 registry, 按目录探测
     // 回退 (若插件以目录形式存在于默认 plugins/<name> 则按目录加载,
     // 否则视为仅 agent 侧内置, 静默跳过)
@@ -499,10 +493,10 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
         libPath = resolvePluginEntryPath(std::filesystem::path(path), manifestEntry);
     }
 
-    // dlopen 卸载到内部线程池 (避免阻塞 io 线程)
+    // dlopen 卸载到工作池 (避免阻塞 io 线程)
     std::string dlErr;
     void*       handle = co_await utilxx::offloadAsync<void*>(
-        *pool_,
+        *workerPool_,
         [libPath, &dlErr]() -> asio::awaitable<void*> {
             co_return NativeLoader::open(libPath, dlErr);
         }
@@ -3069,7 +3063,7 @@ static PluginxxOperatorHandle* PLUGINXX_CALL xx_cnet_call(
         std::shared_ptr<pluginxx::OpCore> core;
         try {
             core = pluginxx::OpCore::createDetached(mgr->runtime(), "net." + opStr);
-            core->setCallback(cb, cb_ud);
+            core->setCallback(cb, cb_ud, true);
             core->accept();
         } catch (const std::exception& e) {
             agentxx::plugin::hostMemorySetString(error_out, e.what());

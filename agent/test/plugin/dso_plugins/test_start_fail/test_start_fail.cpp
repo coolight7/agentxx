@@ -1,6 +1,6 @@
 /// test_start_fail_plugin —— 加载期 start 失败回滚用例的测试专用插件 (真实 DSO)
 ///
-/// 行为：start 依次完成全部注册，然后**主动失败**：
+/// 行为：mount 依次完成全部注册，然后**主动失败**：
 ///   1. 注册工具           `dso_rollback_tool`
 ///   2. 注册图节点类型      `dso_rollback_type`
 ///   3. 订阅事件            `plugin.test_start_fail_plugin.watch`
@@ -8,33 +8,38 @@
 ///   5. 订阅通知型功能埋点频道 `agentxx.agent.point.model.start`
 ///   6. 注册能力            `dso.rollback.cap`
 ///   7. 注册资源            skill 目录 `/tmp/agentxx_dso_rollback_skills`
-///   8. 发布 `{"step":"all","ok":true}` 到 `plugin.test_start_fail_plugin.probe`，然后返回 NULL + error
+///   8. 发布 `{"step":"all","ok":true}` 到 `plugin.test_start_fail_plugin.probe`，然后以失败收尾
 ///
-/// 若任一步骤失败，则发布 `{"step":"<name>","ok":false}` 并返回该失败。
+/// 若任一步骤失败，则发布 `{"step":"<name>","ok":false}` 并以该失败收尾。
 /// 测试据此验证：
-/// - start 失败必须回滚全部已生效注册（工具/图/订阅/prompt/功能埋点订阅/能力/资源）；
+/// - 挂载失败必须回滚全部已生效注册（工具/图/订阅/prompt/功能埋点订阅/能力/资源）；
 /// - 回滚后再次加载同一 DSO 仍能重新注册同名条目（第一次的注册没有残留）。
 ///
 /// 仅使用纯 C ABI 头；不依赖 libagentxx。
+///
+/// 线程与协议要点: 表成员是异步契约 —— 插件代码跑在自己的执行线程上 (主程序没起
+/// 插件线程时是 io 线程), 注册结果经回调交回同一条线程, 因此这里**不能**同步等,
+/// 只能用一个小状态机逐步推进, 终态经 mount 的 `notify.done` 上报。
 #include "agentxx/plugin/api/plugin_api.h"
 
 #include <cstdio>
 #include <cstring>
+#include <new>
+#include <string>
 
 namespace {
-
-constexpr PluginxxStringView cstrView(const char* text) {
-    uint64_t length = 0;
-    while (text[length] != '\0') {
-        ++length;
-    }
-    return PluginxxStringView{text, length};
-}
 
 PluginxxStringView sv(const char* text) {
     PluginxxStringView view{};
     view.data = text;
     view.size = static_cast<uint64_t>(std::strlen(text));
+    return view;
+}
+
+PluginxxStringView svOf(const std::string& text) {
+    PluginxxStringView view{};
+    view.data = text.data();
+    view.size = static_cast<uint64_t>(text.size());
     return view;
 }
 
@@ -63,6 +68,7 @@ const void* queryIface(const PluginxxHost* host, const char* iid) {
 
 /// 发布进度事件 (供测试断言每一步都真实执行过)
 /// - 插件不再有事件表: 进度走广播频道 (先声明再发; 同一频道重复声明是幂等)
+/// - 声明与发布的载荷由主程序当场复制, 因此这里的字面量/栈缓冲只在调用期间有效
 void report(const PluginxxHost* host, const char* step, bool ok) {
     const auto* broadcasts
         = static_cast<const PluginxxBroadcastsIface*>(queryIface(host, PLUGINXX_IFACE_BROADCASTS));
@@ -72,7 +78,7 @@ void report(const PluginxxHost* host, const char* step, bool ok) {
     const auto decl = sv(R"({"id":"plugin.test_start_fail_plugin.probe","cache":"latest"})");
     if (broadcasts->declare_broadcast) {
         PluginxxString declErr{nullptr, 0};
-        // 表成员是异步契约: 不关心结果, 只受理 (本插件在 start 里跑, 主程序内联完成)
+        // 表成员是异步契约: 不关心结果, 只受理
         broadcasts->declare_broadcast(host, &decl, nullptr, nullptr, &declErr);
         if (declErr.data) {
             host->vtable->free(declErr.data);
@@ -95,11 +101,6 @@ void report(const PluginxxHost* host, const char* step, bool ok) {
     if (pubErr.data) {
         host->vtable->free(pubErr.data);
     }
-}
-
-const char* failStep(const PluginxxHost* host, const char* step) {
-    report(host, step, false);
-    return step;
 }
 
 void* PLUGINXX_CALL
@@ -137,16 +138,244 @@ struct ProbeCtx {
     const PluginxxHost* host = nullptr;
 };
 
-/// 同步等待一次表调用的完成 (本插件在 `start` 里跑, 主程序 IO 线程会内联回调)
-struct RegProbe {
-    bool    done   = false;
-    int32_t status = PLUGINXX_OPERATOR_FAILED;
+/// 挂载事务的每一步 (顺序即注册顺序; 名字用于失败时上报)
+constexpr int         kMountStepCount = 7;
+constexpr const char* kMountStepNames[kMountStepCount]
+    = {"tool", "graph", "subscribe", "prompt", "point_subscribe", "capability", "resource"};
+
+/// 挂载事务的状态机 (表成员是异步契约, 只能一步接一步推进)
+///
+/// - `syncDepth` 记"当前是否仍在 mount 入口的调用栈里": 没有独立插件线程时表调用
+///   会内联完成, 终态回调可能在 `probeMount` 返回之前就跑到 —— 那时不能 delete,
+///   交给入口收尾;
+/// - `completed` 与 `syncDepth` 配合说明"已经收过尾了"。
+struct MountJob {
+    const PluginxxHost*    host     = nullptr;
+    PluginxxOperatorNotify notify{nullptr, nullptr};
+    std::string            agentId;
+    uint64_t               mountSeq   = 0;
+    int                    step       = 0;
+    int                    syncDepth  = 0;
+    bool                   completed  = false;
 };
 
-void PLUGINXX_CALL regToolDone(void* ud, int32_t status, const PluginxxStringView*) {
-    auto* probe   = static_cast<RegProbe*>(ud);
-    probe->done   = true;
-    probe->status = status;
+void runMountStep(MountJob* job);
+
+/// 收尾 (失败): 上报这一步的失败并交回终态
+void finishMountFail(MountJob* job, const char* step, const std::string& message) {
+    if (!job || job->completed) {
+        return;
+    }
+    job->completed = true;
+    report(job->host, step, false);
+    std::string text = message.empty() ? std::string{"registration rejected"} : message;
+    const auto  view = svOf(text);
+    if (job->notify.done) {
+        job->notify.done(job->notify.host_ud, PLUGINXX_OPERATOR_FAILED, &view);
+    }
+    if (job->syncDepth == 0) {
+        delete job;
+    }
+}
+
+/// 收尾 (主动失败): 全部注册都已生效, 这里按用例要求失败以触发回滚
+void finishMountOnPurpose(MountJob* job) {
+    if (!job || job->completed) {
+        return;
+    }
+    job->completed = true;
+    report(job->host, "all", true);
+    const auto view = sv("mount failed on purpose after full registration");
+    if (job->notify.done) {
+        job->notify.done(job->notify.host_ud, PLUGINXX_OPERATOR_FAILED, &view);
+    }
+    if (job->syncDepth == 0) {
+        delete job;
+    }
+}
+
+/// 一步注册的完成回调 (插件执行线程; 没起插件线程时是 io 线程)
+void PLUGINXX_CALL mountStepDone(void* ud, int32_t status, const PluginxxStringView* payload) {
+    auto* job = static_cast<MountJob*>(ud);
+    if (!job || job->completed) {
+        return;
+    }
+    if (status != PLUGINXX_OPERATOR_OK) {
+        std::string message = "registration failed";
+        if (payload && payload->data && payload->size > 0) {
+            message.assign(payload->data, static_cast<size_t>(payload->size));
+        }
+        finishMountFail(job, kMountStepNames[job->step], message);
+        return;
+    }
+    ++job->step;
+    runMountStep(job);
+}
+
+/// 把当前 `step` 指向的注册提交出去 (受理失败就地收尾)
+void runMountStep(MountJob* job) {
+    if (!job || job->completed) {
+        return;
+    }
+    if (job->step >= kMountStepCount) {
+        finishMountOnPurpose(job);
+        return;
+    }
+    const PluginxxHost* host = job->host;
+    PluginxxScopeRef    ref{};
+    ref.struct_size = sizeof(PluginxxScopeRef);
+    ref.id          = svOf(job->agentId);
+    ref.seq         = job->mountSeq;
+
+    PluginxxString          err{nullptr, 0};
+    PluginxxOperatorHandle* op = nullptr;
+    switch (job->step) {
+    case 0: { // 工具
+        const auto* tools = static_cast<const AgentxxPluginToolsIface*>(
+            queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_TOOLS)
+        );
+        if (!tools || !tools->register_tool) {
+            finishMountFail(job, "tool_iface", "tools interface is unavailable");
+            return;
+        }
+        AgentxxPluginToolSpec tool{};
+        tool.name            = sv("dso_rollback_tool");
+        tool.description     = sv("rollback probe tool");
+        tool.parameters_json = sv("{}");
+        tool.execute_start   = &probeToolStart;
+        op = tools->register_tool(host, &ref, &tool, &mountStepDone, job, &err);
+        break;
+    }
+    case 1: { // 图节点类型
+        const auto* graph = static_cast<const AgentxxPluginGraphIface*>(
+            queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_GRAPH)
+        );
+        if (!graph || !graph->register_node_type) {
+            finishMountFail(job, "graph_iface", "graph interface is unavailable");
+            return;
+        }
+        AgentxxPluginGraphNodeTypeSpec node{};
+        node.type               = sv("dso_rollback_type");
+        node.run_start          = &probeNodeRunStart;
+        node.config_schema_json = sv("{}");
+        op = graph->register_node_type(host, &ref, &node, &mountStepDone, job, &err);
+        break;
+    }
+    case 2: { // 广播订阅 (频道必须先声明再订阅)
+        const auto* broadcasts = static_cast<const PluginxxBroadcastsIface*>(
+            queryIface(host, PLUGINXX_IFACE_BROADCASTS)
+        );
+        if (!broadcasts || !broadcasts->subscribe_broadcast) {
+            finishMountFail(job, "broadcasts_iface", "broadcasts interface is unavailable");
+            return;
+        }
+        if (broadcasts->declare_broadcast) {
+            const auto     decl = sv(R"({"id":"plugin.test_start_fail_plugin.watch","cache":"none"})");
+            PluginxxString declErr{nullptr, 0};
+            broadcasts->declare_broadcast(host, &decl, nullptr, nullptr, &declErr);
+            if (declErr.data) {
+                host->vtable->free(declErr.data);
+            }
+        }
+        const auto watchTopic = sv("plugin.test_start_fail_plugin.watch");
+        op                    = broadcasts->subscribe_broadcast(
+            host,
+            &ref,
+            &watchTopic,
+            &onProbeEvent,
+            job,
+            nullptr,
+            &mountStepDone,
+            job,
+            &err
+        );
+        break;
+    }
+    case 3: { // prompt 贡献
+        const auto* prompt = static_cast<const AgentxxPluginPromptIface*>(
+            queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_PROMPT)
+        );
+        if (!prompt || !prompt->set_prompt) {
+            finishMountFail(job, "prompt_iface", "prompt interface is unavailable");
+            return;
+        }
+        const auto promptJson = sv(R"({"appendSystemPrompts":{"dso_rollback":"probe"}})");
+        op = prompt->set_prompt(host, &ref, &promptJson, &mountStepDone, job, &err);
+        break;
+    }
+    case 4: { // 订阅通知型功能埋点 (频道由主程序声明, 这里只订阅)
+        const auto* broadcasts = static_cast<const PluginxxBroadcastsIface*>(
+            queryIface(host, PLUGINXX_IFACE_BROADCASTS)
+        );
+        if (!broadcasts || !broadcasts->subscribe_broadcast) {
+            finishMountFail(job, "broadcasts_iface", "broadcasts interface is unavailable");
+            return;
+        }
+        const auto pointTopic = sv("agentxx.agent.point.model.start");
+        op                    = broadcasts->subscribe_broadcast(
+            host,
+            &ref,
+            &pointTopic,
+            &onProbeEvent,
+            job,
+            nullptr,
+            &mountStepDone,
+            job,
+            &err
+        );
+        break;
+    }
+    case 5: { // 能力注册
+        const auto* capabilities = static_cast<const PluginxxCapabilitiesIface*>(
+            queryIface(host, PLUGINXX_IFACE_CAPABILITIES)
+        );
+        if (!capabilities || !capabilities->register_capability) {
+            finishMountFail(job, "capabilities_iface", "capabilities interface is unavailable");
+            return;
+        }
+        PluginxxCapabilitySpec capSpec{};
+        capSpec.version     = PLUGINXX_API_VERSION;
+        capSpec.struct_size = sizeof(PluginxxCapabilitySpec);
+        capSpec.id          = sv("dso.rollback.cap");
+        capSpec.impls       = PLUGINXX_CAPABILITY_IMPLS_ONE;
+        capSpec.merge       = PLUGINXX_CAPABILITY_MERGE_NONE;
+        capSpec.phases      = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
+        capSpec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
+        capSpec.sync        = 0;
+        capSpec.run_start   = &probeCapabilityStart;
+        capSpec.user_data   = nullptr;
+        op = capabilities->register_capability(
+            host,
+            &ref,
+            &capSpec,
+            &mountStepDone,
+            job,
+            &err
+        );
+        break;
+    }
+    default: { // 资源注册 (skill 扫描目录; 所有权归本插件, 卸载/回滚时摘除)
+        const auto* resources = static_cast<const AgentxxPluginResourcesIface*>(
+            queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES)
+        );
+        if (!resources || !resources->register_skill_dir) {
+            finishMountFail(job, "resources_iface", "resources interface is unavailable");
+            return;
+        }
+        const auto skillDir = sv("/tmp/agentxx_dso_rollback_skills");
+        op = resources->register_skill_dir(host, &ref, &skillDir, &mountStepDone, job, &err);
+        break;
+    }
+    }
+
+    if (op == nullptr) {
+        std::string message = "registration rejected";
+        if (err.data) {
+            message.assign(err.data, static_cast<size_t>(err.size));
+            host->vtable->free(err.data);
+        }
+        finishMountFail(job, kMountStepNames[job->step], message);
+    }
 }
 
 } // namespace
@@ -160,7 +389,7 @@ extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* o
     out->name            = sv("test_start_fail_plugin");
     out->version         = sv("1.0.0");
     out->description
-        = sv("Test-only plugin: fails start after full registration (rollback fixture)");
+        = sv("Test-only plugin: fails mount after full registration (rollback fixture)");
     return 0;
 }
 
@@ -196,214 +425,46 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
     }
 }
 
-/// 挂载事务: 逐步注册 (任一步失败即返回, 主程序回滚已生效的注册)
-/// - v2 起 agent 级注册必须带引用, 因此整段从 start 搬到 mount
+/// 挂载事务: 逐步注册 (任一步失败即收尾, 主程序回滚已生效的注册)
+///
+/// 返回非空 = 已受理, 终态经 `notify.done` 交回; 表调用内联完成时可能在这里就收尾,
+/// 那时返回 NULL (主程序按"已提交完成"处理, 不会重复收尾)。
 static void* probeMount(
     void*                              plugin_ctx,
     const AgentxxPluginAgentMountSpec* spec,
     const PluginxxOperatorNotify*      notify,
     PluginxxString*                    error_out
 ) {
-    (void)notify;
-    PluginxxScopeRef ref{};
-    ref.struct_size = sizeof(PluginxxScopeRef);
-    if (spec) {
-        ref.id  = spec->agent_id;
-        ref.seq = spec->mount_seq;
-    }
+    (void)error_out;
     auto* ctx = static_cast<ProbeCtx*>(plugin_ctx);
-    if (!ctx || !ctx->host) {
-        if (error_out) {
-            error_out->data = nullptr;
-            error_out->size = 0;
+    if (!ctx || !ctx->host || !spec || !notify || !notify->done) {
+        if (notify && notify->done) {
+            auto msg = sv("test_start_fail: invalid mount call");
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &msg);
         }
         return nullptr;
     }
-    const PluginxxHost* host = ctx->host;
-
-    // 1. 工具
-    const auto* tools = static_cast<const AgentxxPluginToolsIface*>(
-        queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_TOOLS)
-    );
-    if (!tools || !tools->register_tool) {
-        setError(host, error_out, failStep(host, "tool_iface"));
+    auto* job = new (std::nothrow) MountJob();
+    if (!job) {
+        auto msg = sv("test_start_fail: out of memory");
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &msg);
         return nullptr;
     }
-    AgentxxPluginToolSpec tool{};
-    tool.name            = sv("dso_rollback_tool");
-    tool.description     = sv("rollback probe tool");
-    tool.parameters_json = sv("{}");
-    tool.execute_start   = &probeToolStart;
-    // 表成员是异步契约: 本插件在 `start` 里跑 (主程序 IO 线程), 主程序会内联完成
-    RegProbe reg{};
-    PluginxxString regErr{nullptr, 0};
-    auto* regOp = tools->register_tool(host, &ref, &tool, &regToolDone, &reg, &regErr);
-    if (regOp == nullptr || !reg.done || reg.status != PLUGINXX_OPERATOR_OK) {
-        setError(host, error_out, failStep(host, "tool"));
+    job->host   = ctx->host;
+    job->notify = *notify;
+    job->mountSeq = spec->mount_seq;
+    if (spec->agent_id.data != nullptr) {
+        job->agentId.assign(spec->agent_id.data, static_cast<size_t>(spec->agent_id.size));
+    }
+    // 第一步之后的推进由 [mountStepDone] 完成 (同一实例的调用按受理顺序执行)
+    ++job->syncDepth;
+    runMountStep(job);
+    --job->syncDepth;
+    if (job->completed) {
+        delete job;
         return nullptr;
     }
-
-    // 2. 图节点类型
-    const auto* graph = static_cast<const AgentxxPluginGraphIface*>(
-        queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_GRAPH)
-    );
-    if (!graph || !graph->register_node_type) {
-        setError(host, error_out, failStep(host, "graph_iface"));
-        return nullptr;
-    }
-    AgentxxPluginGraphNodeTypeSpec node{};
-    node.type               = sv("dso_rollback_type");
-    node.run_start          = &probeNodeRunStart;
-    node.config_schema_json = sv("{}");
-    // 表成员是异步契约: 本插件在 `start` 里跑 (主程序 IO 线程), 会内联完成
-    RegProbe nodeReg{};
-    PluginxxString nodeErr{nullptr, 0};
-    auto* nodeOp = graph->register_node_type(host, &ref, &node, &regToolDone, &nodeReg, &nodeErr);
-    if (nodeOp == nullptr || !nodeReg.done || nodeReg.status != PLUGINXX_OPERATOR_OK) {
-        setError(host, error_out, failStep(host, "graph"));
-        return nullptr;
-    }
-
-    // 3. 广播订阅
-    const auto* broadcasts
-        = static_cast<const PluginxxBroadcastsIface*>(queryIface(host, PLUGINXX_IFACE_BROADCASTS));
-    if (!broadcasts || !broadcasts->subscribe_broadcast) {
-        setError(host, error_out, failStep(host, "broadcasts_iface"));
-        return nullptr;
-    }
-    const auto watchTopic = sv("plugin.test_start_fail_plugin.watch");
-    // 广播频道必须先声明再订阅 (声明为属主发布 + 不缓存)
-    if (broadcasts->declare_broadcast) {
-        const auto     watchDecl = sv(R"({"id":"plugin.test_start_fail_plugin.watch","cache":"none"})");
-        PluginxxString declErr{nullptr, 0};
-        broadcasts->declare_broadcast(host, &watchDecl, nullptr, nullptr, &declErr);
-        if (declErr.data) {
-            host->vtable->free(declErr.data);
-        }
-    }
-    // 表成员是异步契约: 本插件在 `start` 里跑 (主程序 IO 线程), 会内联完成
-    RegProbe subReg{};
-    PluginxxString subErr{nullptr, 0};
-    auto* subOp = broadcasts->subscribe_broadcast(
-        host,
-        &ref,
-        &watchTopic,
-        &onProbeEvent,
-        ctx,
-        nullptr,
-        &regToolDone,
-        &subReg,
-        &subErr
-    );
-    if (subErr.data) {
-        host->vtable->free(subErr.data);
-    }
-    if (subOp == nullptr || !subReg.done || subReg.status != PLUGINXX_OPERATOR_OK) {
-        setError(host, error_out, failStep(host, "subscribe"));
-        return nullptr;
-    }
-
-    // 4. prompt 贡献
-    const auto* prompt = static_cast<const AgentxxPluginPromptIface*>(
-        queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_PROMPT)
-    );
-    if (!prompt || !prompt->set_prompt) {
-        setError(host, error_out, failStep(host, "prompt_iface"));
-        return nullptr;
-    }
-    const auto promptJson = sv(R"({"appendSystemPrompts":{"dso_rollback":"probe"}})");
-    // 表成员是异步契约: 本插件在 `start` 里跑 (主程序 IO 线程), 主程序会内联完成
-    RegProbe promptReg{};
-    PluginxxString promptErr{nullptr, 0};
-    auto* promptOp = prompt->set_prompt(host, &ref, &promptJson, &regToolDone, &promptReg, &promptErr);
-    if (promptOp == nullptr || !promptReg.done || promptReg.status != PLUGINXX_OPERATOR_OK) {
-        setError(host, error_out, failStep(host, "prompt"));
-        return nullptr;
-    }
-
-    // 5. 订阅通知型功能埋点 (频道由主程序声明, 这里只订阅; 回滚时随实例整批撤销)
-    const auto pointTopic = sv("agentxx.agent.point.model.start");
-    RegProbe pointReg{};
-    PluginxxString pointErr{nullptr, 0};
-    auto* pointOp = broadcasts->subscribe_broadcast(
-        host,
-        &ref,
-        &pointTopic,
-        &onProbeEvent,
-        ctx,
-        nullptr,
-        &regToolDone,
-        &pointReg,
-        &pointErr
-    );
-    if (pointErr.data) {
-        host->vtable->free(pointErr.data);
-    }
-    if (pointOp == nullptr || !pointReg.done || pointReg.status != PLUGINXX_OPERATOR_OK) {
-        setError(host, error_out, failStep(host, "point_subscribe"));
-        return nullptr;
-    }
-
-    // 6. 能力注册
-    const auto* capabilities = static_cast<const PluginxxCapabilitiesIface*>(
-        queryIface(host, PLUGINXX_IFACE_CAPABILITIES)
-    );
-    if (!capabilities || !capabilities->register_capability) {
-        setError(host, error_out, failStep(host, "capabilities_iface"));
-        return nullptr;
-    }
-    const auto             capability = sv("dso.rollback.cap");
-    PluginxxCapabilitySpec capSpec{};
-    capSpec.version     = PLUGINXX_API_VERSION;
-    capSpec.struct_size = sizeof(PluginxxCapabilitySpec);
-    capSpec.id          = capability;
-    capSpec.impls       = PLUGINXX_CAPABILITY_IMPLS_ONE;
-    capSpec.merge       = PLUGINXX_CAPABILITY_MERGE_NONE;
-    capSpec.phases      = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
-    capSpec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
-    capSpec.sync        = 0;
-    capSpec.run_start   = &probeCapabilityStart;
-    capSpec.user_data   = ctx;
-    // 表成员是异步契约: 本插件在 `start` 里跑 (主程序 IO 线程), 会内联完成
-    RegProbe       capReg{};
-    PluginxxString capErr{nullptr, 0};
-    auto*          capOp = capabilities->register_capability(
-        host,
-        &ref,
-        &capSpec,
-        &regToolDone,
-        &capReg,
-        &capErr
-    );
-    if (capErr.data) {
-        host->vtable->free(capErr.data);
-    }
-    if (capOp == nullptr || !capReg.done || capReg.status != PLUGINXX_OPERATOR_OK) {
-        setError(host, error_out, failStep(host, "capability"));
-        return nullptr;
-    }
-
-    // 7. 资源注册 (skill 扫描目录; 所有权归本插件, 卸载/回滚时摘除)
-    const auto* resources = static_cast<const AgentxxPluginResourcesIface*>(
-        queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES)
-    );
-    if (!resources || !resources->register_skill_dir) {
-        setError(host, error_out, failStep(host, "resources_iface"));
-        return nullptr;
-    }
-    const auto skillDir = sv("/tmp/agentxx_dso_rollback_skills");
-    RegProbe resReg{};
-    PluginxxString resErr{nullptr, 0};
-    auto* resOp = resources->register_skill_dir(host, &ref, &skillDir, &regToolDone, &resReg, &resErr);
-    if (resOp == nullptr || !resReg.done || resReg.status != PLUGINXX_OPERATOR_OK) {
-        setError(host, error_out, failStep(host, "resource"));
-        return nullptr;
-    }
-
-    // 8. 全部注册成功后主动失败 (触发主程序回滚)
-    report(host, "all", true);
-    setError(host, error_out, "mount failed on purpose after full registration");
-    return nullptr;
+    return job;
 }
 
 extern "C" PLUGINXX_EXPORT void* agentxx_agent_plugin_mount(

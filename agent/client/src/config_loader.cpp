@@ -1084,6 +1084,27 @@ static YamlAppConfig parseYamlConfigNode(
         }
     }
 
+    // 工作池线程数 (yaml `plugin.thread_pool_workers`): 一个端只有一个池,
+    // 插件阻塞工作 / dlopen / 工具 offload / 会话加载共用; 两端同值
+    if (const auto workersNode = mapChild(mapChild(root, "plugin"), "thread_pool_workers");
+        isNodePresent(workersNode)) {
+        const auto raw = resolveEnvVars(
+            workersNode.as<std::string>(""),
+            dotEnvVars,
+            overrideEnvVars
+        );
+        int parsed = static_cast<int>(cfg.pluginThreadPoolWorkers);
+        if (parseFullNumber(raw, parsed) && parsed > 0) {
+            cfg.pluginThreadPoolWorkers = static_cast<size_t>(parsed);
+        } else {
+            XX_LOGW(
+                "[Config] Warning: plugin.thread_pool_workers invalid value `{}`, using {}",
+                raw,
+                cfg.pluginThreadPoolWorkers
+            );
+        }
+    }
+
     // 挂载策略 (yaml `plugin.mount`): 本 agent 挂哪些插件、各自的挂载级参数
     // - 列表写法 `mount: [{name, args}]`: 只挂列出的插件 (= policy listed)
     // - 映射写法 `mount: {policy: all|none|listed, list: [名字], plugins: [{name, args}]}`
