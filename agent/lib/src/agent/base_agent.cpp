@@ -1899,6 +1899,10 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
     session->setCancelToken(cancelToken);
+    // 插件在自己线程上查 `is_canceled` 时读这份快照 (不能同步等 IO)
+    if (agentContext && agentContext->sessionCancelSnapshot) {
+        agentContext->sessionCancelSnapshot->bind(sessionId, cancelToken);
+    }
 
     // 中断等待超时: 由 AgentRunner 内部统一解析 (取 IO 端点
     // SessionServerAgentIO::interruptTimeout 配置, <=0 不限制)

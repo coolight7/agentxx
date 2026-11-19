@@ -10,6 +10,7 @@
 #include "agentxx/plugin/plugin_mount.h"
 #include "agentxx/plugin/runtime_state.h"
 #include "agentxx/plugin/tool_registry.h"
+#include "agentxx/plugins/session_cancel_snapshot.h"
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
@@ -24,6 +25,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace agentxx {
@@ -943,6 +945,33 @@ private:
 
     /// 挂载序号分配器 (每次成功建立挂载 +1)
     uint64_t nextMountSeq_ = 1;
+
+    // =====================================================================
+    // 会话取消快照 (插件线程只读)
+    // =====================================================================
+
+    /// 一个 agent 的取消快照登记 (序号用于校验过期引用)
+    struct CancelSnapshotEntry {
+        uint64_t                                        mountSeq = 0;
+        std::shared_ptr<agentxx::plugin::SessionCancelSnapshot> snapshot;
+    };
+
+    /// 按 agent id 登记的快照 (io 线程写, 任意线程读)
+    /// - `is_canceled` 由插件线程调用, 不能去查 [mounts_] (那是 io 线程状态)
+    mutable std::mutex cancelSnapshotsMutex_;
+    std::unordered_map<std::string, CancelSnapshotEntry> cancelSnapshots_;
+
+    /// 登记/摘除挂载对应的快照 (io 线程)
+    void retainCancelSnapshot(
+        std::string_view                                          agentId,
+        uint64_t                                                  mountSeq,
+        const std::shared_ptr<agentxx::plugin::SessionCancelSnapshot>& snapshot
+    );
+    void releaseCancelSnapshot(std::string_view agentId);
+
+    /// 取引用对应的快照 (**任意线程**; 空 = 引用无效/未挂载)
+    std::shared_ptr<agentxx::plugin::SessionCancelSnapshot>
+        cancelSnapshotOf(const PluginxxScopeRef* agent) const;
 };
 
 } // namespace plugin

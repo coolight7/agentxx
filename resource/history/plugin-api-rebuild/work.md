@@ -11,9 +11,9 @@
 | 4 | 框架通用化收尾（注释/示例去端化 + `boundaries` 规则） | 完成（同上） |
 | 5 | 两侧管理器启动即构造 + 删 `ensurePluginThread` | 完成（见下节“步 5 + 6”） |
 | 6 | 线程池统一（管理器持一个池，默认 3 条，`plugin.thread_pool_workers`，两端同值；删其余四个池） | 完成（同上） |
-| 7 | 4 个同步受理入口改提交（含 `OpCore` 操作编号原子化与登记线程安全化） | 待开始 |
-| 8 | `is_canceled` 改快照 + JS 引擎轮询 | 待开始 |
-| 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 待开始 |
+| 7 | 4 个同步受理入口改提交（含 `OpCore` 操作编号原子化与登记线程安全化） | 完成（见下节“步 7”：全量 passed=43828 failed=0） |
+| 8 | `is_canceled` 改快照 + JS 引擎轮询 | 完成（全量 passed=43837 failed=0） |
+| 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 待做（9a 尝试后回退：退订去等待触发 ASan UAF，见“步 8”小节末） |
 | 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 待开始 |
 | 10b | 工具体收成一个：`tool`（`pluginxx::Task` 体）+ 删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync`（53 处） | 待开始 |
 | 10c | `offload` / `sleep` 改“提交即返回 ticket” + `whenAll` 泛化/变参 | 待开始 |
@@ -203,6 +203,109 @@ agentxx:
      顺序断言接受“completion 先于 callback”（完成回调现在是投递的）；
    - `test_client_plugins` 的 drain 同时推进 client 插件线程；
    - `lifecycle` 探针的表调用显式 `allowOnPluginThread`（工作体在主程序侧）。
+
+## 实施记录：步 7（4 个同步受理入口改提交）
+
+目标：插件线程上不再有“受理一次操作”要等 io 的地方。涉四个表成员：
+`capabilities.invoke_capability(_ex)` / `scheduler.sleep` / `scheduler.offload` /
+`tasks.register_task`（最后一条同时消掉 `ctx.spawn` 的同步登记）。
+
+### 已改内容
+
+`cxx_pluginxx`（子模块）：
+
+- `runtime/runtime.h`：`PluginRuntime::nextOperationId` 改 `std::atomic<uint64_t>`
+  （受理前移到调用线程后，编号可能被多线程同时分配）。
+- `runtime/instance_base.h`：
+  - 新增 `recordsMutex` 保护 `operatorHandles` / `completionEndpoints` / `outstandingOps`
+    三张登记表（建操作在调用线程、收尾在 io 线程）；
+  - `enabled` 改 `std::atomic<bool>`（插件线程受理时要读“还能不能起新动作”），
+    头文件里的线程约定注释同步。
+- `runtime/op_driver.h`：
+  - `create` / `createDetached` 的编号改 `fetch_add`，实例登记在 `recordsMutex` 下；
+  - 新增 `pluginFailure(std::string_view)`：以失败完成包终结“句柄已经交出去”的操作；
+  - 新增 `startReportingFailure(drive, error)` + `finishStart(..., reportWhenNotStarted)`：
+    “没受理”不再静默 `reject`（那会让插件侧 awaiter / Promise 永远等不到结果）。
+- `host/lifecycle.h`：`detachAll` 取 `outstandingOps` 快照时加锁。
+- `host/host_core.h`：
+  - 新增 `acceptOnIo(core, body)`：调用线程上已受理的操作把工作体交给 io（调用线程就是 io
+    时直接执行，时序与改造前一致）；工作体抛异常 / 投递失败都转成失败完成包；
+  - `invokeCapabilityAsync` 拆成“受理（建 Operation + 挂租约 + 登记句柄）+ 工作体（查能力链、
+    起链 / 起应用实现）”，工作体在 io 线程；
+  - `sleep`：受理与定时器分离，取消只置标记并把“取消定时器”投回 io（定时器仍只在 io 上碰）；
+  - `offload`：受理后由 io 线程把工作体交给工作池；
+  - `registerTask`：全部受理工作都在调用线程完成（不碰任何 io 线程状态）。
+- `host/tables_impl.h`：四个入口去掉 `ioCallSyncKeep`，直接调管理器的新形态。
+- `api/tables.h`：四个成员 + `cancel_task` 的线程/拒绝语义文档按新行为重写。
+
+agentxx：
+
+- `enabled` 变原子类型的读取点补 `.load()`：`plugin_manager_lifecycle.cpp`（加载日志的 fmt 参数、
+  `pluginListJson` 的 JSON 赋值）、`plugin_manager_adapters.cpp`（拒绝日志的 fmt 参数）、
+  `test_plugin_dispatch.cpp`（`waitFor` 的 lambda 返回 `atomic<bool>` 拷不动）。
+
+### 语义变化（需知）
+
+- 四个入口的“拒绝”收窄为**只表示受理不了**（运行时不可用 / 实例已收尾 / 参数形状错）；
+  “能力没声明 / 没有实现行”“没有工作池”这类**业务失败改为完成包上报**
+  （`PLUGINXX_OPERATOR_FAILED` + 原因），因为句柄已经交回插件、收不回来。
+  kit 的 awaiter 与 JS 引擎两侧本来就把 NULL 与失败状态分开处理，无需改动。
+- `capabilities.invoke_*` 从 io 线程调用时时序不变（`acceptOnIo` 在 io 上就地执行工作体）。
+
+### 验证与修复
+
+编译: 顶层 Debug 通过；25 个插件 DLL 无需重编（ABI 未变）。
+
+模块: `plugin_runtime` `plugin_executor` `plugin_bridge` `plugin_dispatch` `plugins`
+`client_plugins` `plugin_multi_instance` `plugin_host_mount` `plugin_multi_mount` `plugin_cleanup`
+`plugin_sdk` `plugin_feature` `plugin_point` `feature_points` `plugin_broadcast` `plugin_resources`
+`plugin_agent_runtime` `plugin_example_runtime` `plugin_example_chatbot` `filesystem` 全绿。
+
+全量: `agentxx_test --log-level warn` → **passed=43828 failed=0**。
+
+过程中修掉一处与本步无关的时序 flake（`test_plugin_runtime` 里 `request_driver` 之后
+“还没执行”的两条断言）：插件线程可能已经跑完，而它上面的注释也写明“可能更早”，
+因此改成“仍挂着时才要求有 lease”——断言与注释原本自相矛盾。
+
+## 实施记录：步 8（`is_canceled` 改读快照）
+
+目标：`agentxx.agent.session.is_canceled` 不再同步等一次 io。入口本身仍然是同步的
+（返回 1/0，JS 侧要当场给值），但数据源改成主程序维护的跨线程快照。
+
+### 已改内容
+
+- 新增 `agent/lib/include/agentxx/plugins/session_cancel_snapshot.h`（header-only）：
+  `SessionCancelSnapshot` = 一把小表的互斥 + `会话 id → shared_ptr<CancelToken>`；
+  `canceled()` 任意线程可调，锁小表后再问令牌自己的原子标志（不碰会话对象）；
+  未登记的会话按未取消回答。
+- `AgentContext`：新增 `sessionCancelSnapshot`（构造即建好，插件任何时候查都不为空）。
+- `BaseAgent::runTurnAsync`：建本轮 `CancelToken` 的地方顺手 `bind(sessionId, token)`。
+- `PluginManager`：
+  - `cancelSnapshotsMutex_` + `std::unordered_map<agentId, {mountSeq, snapshot}>`，
+    `retainCancelSnapshot` / `releaseCancelSnapshot` / `cancelSnapshotOf`（最后一个任意线程可调）；
+  - 挂载建立（`attachMountSync` / `mountAgentAsync`）登记，`unmountAgentAsync` 与
+    `unmountAllAgentsAsync` 摘除；空引用走 `primaryAgent_` 弱引用（lock 本身线程安全）；
+  - `isSessionCanceled` 改成只读快照；`xx_session_Canceled` 去掉 `ioCallSyncKeep`。
+- `plugin_api.h`：`is_canceled` 的 ABI 注释改成“读快照 + 令牌原子标志”。
+
+### 验证
+
+- `plugin_runtime` 新增快照单测（跨线程读、令牌取消、同一会话换令牌、解绑、空 id），
+  `plugins` 里原有的 `is_canceled` 入口断言照旧通过。
+- 模块 `plugin_runtime` `plugin_broadcast` `plugin_dispatch` `plugin_sdk` `plugins`：
+  passed=1808 failed=0。
+- 全量：`agentxx_test --log-level warn` → **passed=43837 failed=0**
+  （比上一轮多 9 条，即新增的快照断言）。
+
+### 步 9a（退订去等待）尝试后回退
+
+`unsubscribePluginBroadcast` 去 `fut.wait()` 需要簿记闭包自己持一份句柄强引用（它可能比
+实例活得久），做法是给 `PluginxxSubscription` 加 `enable_shared_from_this` 并在投递时
+捕获 `shared_ptr`。实测 `plugin_runtime` 的退订用例直接 ASan 崩：
+`heap-use-after-free` 在 `BroadcastRegistry::unsubscribe` 的 `mutex_.lock()`
+（指针来自“已释放的 16 字节区 +12”），即撤销时拿到的句柄/注册表已失效。
+本次不带着不确定的改动前进，已**整体回退**到原来的同步等待，待单独定位；
+步 9 的 `disable` / `enable` 返 `Task<bool>` 也同步推迟（见下方“偏差与后续”）。
 
 ## 设计过程
 

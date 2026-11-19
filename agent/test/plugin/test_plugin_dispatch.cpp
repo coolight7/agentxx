@@ -424,7 +424,7 @@ asio::awaitable<void> test_dispatcher_lifecycle() {
         f.mgr->onTurnEnd();
         XX_TEST_EXPECT_TRUE(hasDispatchHandle(f));
         f.mgr->enable("example_plugin");
-        XX_TEST_EXPECT_TRUE(co_await waitFor([&]() { return inst->enabled; }));
+        XX_TEST_EXPECT_TRUE(co_await waitFor([&]() { return inst->enabled.load(); }));
         XX_TEST_EXPECT_TRUE(hasDispatchHandle(f));
         XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_plugin", std::chrono::seconds{5}));
         f.mgr->flushPendingCleanup();

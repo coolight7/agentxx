@@ -808,6 +808,8 @@ static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_work_dir(
 /// `agentxx.agent.session.is_canceled`
 /// - `agent` 必须有效: 引用无效返回 0 (未取消) 并记一条警告
 /// - 只是主动查询: 权威的取消通知始终是取消回调
+/// - **不阻塞调用线程**: 读主程序维护的取消快照 (`SessionCancelSnapshot`),
+///   因此插件线程 / JS 线程可直接调用 (旧实现同步等一次 IO)
 static int32_t PLUGINXX_CALL xx_session_Canceled(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
@@ -820,21 +822,8 @@ static int32_t PLUGINXX_CALL xx_session_Canceled(
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(thread_id)) {
             return 0;
         }
-        if (!scopeOk(mgr, agent)) {
-            return 0;
-        }
-        auto mgrPtr = mgr;
-        auto tid    = svToStr(thread_id);
-        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, agent, tid]() -> int32_t {
-            return mountCall(
-                mgrPtr,
-                agent,
-                [] { return int32_t{0}; },
-                [mgrPtr, agent, tid](PluginMount&) {
-                    return mgrPtr->isSessionCanceled(agent, tid) ? 1 : 0;
-                }
-            );
-        });
+        const auto tid = svToStr(*thread_id);
+        return mgr->isSessionCanceled(agent, tid) ? 1 : 0;
     });
 }
 

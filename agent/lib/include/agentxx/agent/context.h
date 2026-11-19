@@ -3,6 +3,7 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/prompt_sources.h"
+#include "agentxx/plugins/session_cancel_snapshot.h"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
 #include "utilxx_base/log.h"
@@ -953,6 +954,15 @@ public:
     /// - 只有拥有者才会在上下文析构时调 `shutdownAll()`; 共享管理器属于主程序,
     ///   单个 agent 退出不能把全进程的插件都卸掉
     bool pluginManagerOwned = true;
+
+    /// 会话取消状态快照 (插件线程查 `is_canceled` 时读它)
+    ///
+    /// - 会话与取消令牌归 IO 线程, 插件在自己的线程上问"这个会话取消了吗"时
+    ///   不能同步等一次 IO (会把插件卡住), 因此改读这份快照:
+    ///   开轮时由 IO 线程登记令牌 (`base_agent.cpp` 的 runTurn 开头);
+    /// - 构造时就建好, 插件任何时候查都不为空 (没有登记的会话按未取消)
+    std::shared_ptr<plugin::SessionCancelSnapshot> sessionCancelSnapshot
+        = std::make_shared<plugin::SessionCancelSnapshot>();
 
     /// 本 agent 的插件挂载 (agent 级注册实体都在这里)
     /// - `plugin_mount` 步骤由主程序建立并赋值; 插件工具/提示词/功能埋点/图/资源

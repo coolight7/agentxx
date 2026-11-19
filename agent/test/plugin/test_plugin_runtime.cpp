@@ -4,10 +4,12 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/plugins/session_cancel_snapshot.h"
 #include "asio/co_spawn.hpp"
 #include "asio/io_context.hpp"
 #include "asio/thread_pool.hpp"
 #include "asio/use_future.hpp"
+#include "neograph/graph/cancel.h"
 #include "neograph/graph/registry.h"
 #include "neograph/graph/run_context.h"
 #include "neograph/graph/state.h"
@@ -535,6 +537,32 @@ void PLUGINXX_CALL
 
 TestResult testPluginRuntime() {
     TestResult result;
+
+    /// 会话取消快照: 登记/查询可跨线程进行 (插件线程问 `is_canceled` 不等 IO)
+    {
+        SessionCancelSnapshot snapshot;
+        auto                 token = std::make_shared<neograph::graph::CancelToken>();
+        snapshot.bind("sess-a", token);
+        XX_TEST_EXPECT_EQ(snapshot.size(), size_t{1});
+        XX_TEST_EXPECT_FALSE(snapshot.canceled("sess-a"));
+        XX_TEST_EXPECT_FALSE(snapshot.canceled("sess-b"));
+        XX_TEST_EXPECT_FALSE(snapshot.canceled(""));
+        std::atomic<int> seen{-1};
+        std::thread      reader([&snapshot, &seen] {
+            seen.store(snapshot.canceled("sess-a") ? 1 : 0, std::memory_order_release);
+        });
+        reader.join();
+        XX_TEST_EXPECT_EQ(seen.load(), 0);
+        token->cancel();
+        XX_TEST_EXPECT_TRUE(snapshot.canceled("sess-a"));
+        // 同一会话再次开轮: 新令牌顶掉旧令牌
+        auto next = std::make_shared<neograph::graph::CancelToken>();
+        snapshot.bind("sess-a", next);
+        XX_TEST_EXPECT_FALSE(snapshot.canceled("sess-a"));
+        snapshot.unbind("sess-a");
+        XX_TEST_EXPECT_FALSE(snapshot.canceled("sess-a"));
+        XX_TEST_EXPECT_EQ(snapshot.size(), size_t{0});
+    }
 
     /// 拒绝不回调，双方登记和 lease 完整回滚；同步 done 仍为接受。
     {
@@ -2456,9 +2484,12 @@ TestResult testPluginRuntime() {
             PluginxxDriver* ticket = runtime->request_driver(host, driveFn, &probe, &err);
             XX_TEST_EXPECT_TRUE(ticket != nullptr);
             XX_TEST_EXPECT_FALSE(probe.onCaller.load());
-            // 请求在排队/执行期间持有实例 lease (卸载等待必然覆盖它)
-            XX_TEST_EXPECT_GE(f.provider->activeDriverCount(), size_t{1});
-            XX_TEST_EXPECT_GE(f.provider->lifetime->leaseCount(), size_t{1});
+            // 还没轮到执行时必然持有实例 lease (卸载等待必然覆盖它);
+            // 插件线程已经跑完时这两项归零也是正常结果 (上一条注释已说明"可能更早").
+            if (probe.calls.load() == 0) {
+                XX_TEST_EXPECT_GE(f.provider->activeDriverCount(), size_t{1});
+                XX_TEST_EXPECT_GE(f.provider->lifetime->leaseCount(), size_t{1});
+            }
 
             // 2) 插件线程与 io 都推进后: 恰好执行一次
             f.drainAll();

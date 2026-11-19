@@ -222,6 +222,8 @@ std::shared_ptr<PluginMount>
         nextMountSeq_++
     );
     mounts_.push_back(mount);
+    // 插件线程查 `is_canceled` 用: 按 agent id 登记快照 (读侧不碰 mounts_)
+    retainCancelSnapshot(agentId, mount->mountSeq(), ctx->sessionCancelSnapshot);
     // 挂载 agent 的总线: 与主 agent 同一套镜像 (多 agent 下各订阅一份, 注册表只有一份)
     attachEventBus(ctx->bus);
     // 通知型功能埋点的派发器: 建挂载就挂上并常驻 (插件靠订阅同名广播收到, 不需要登记)
@@ -257,6 +259,7 @@ asio::awaitable<std::shared_ptr<PluginMount>>
             nextMountSeq_++
         );
         mounts_.push_back(mount);
+        retainCancelSnapshot(agentId, mount->mountSeq(), ctx->sessionCancelSnapshot);
         mount->ensureHookDispatch();
     }
 
@@ -318,6 +321,7 @@ asio::awaitable<void> PluginManager::unmountAgentAsync(std::string_view agentId)
     // 派发器属于挂载: 拆挂载时一并从中间件链上摸掉
     mount->detachHookDispatch();
     std::erase(mounts_, mount);
+    releaseCancelSnapshot(agentId);
     XX_LOGI("agent '{}' 已拆全部插件挂载", mount->agentId());
     co_return;
 }
@@ -331,6 +335,10 @@ asio::awaitable<void> PluginManager::unmountAllAgentsAsync() {
         }
     }
     mounts_.clear();
+    {
+        std::lock_guard lock(cancelSnapshotsMutex_);
+        cancelSnapshots_.clear();
+    }
     co_return;
 }
 
@@ -728,7 +736,7 @@ void notePluginLoaded(
         inst->subscriptions.size(),
         inst->capabilityRegistrations.size(),
         inst->mountFn != nullptr,
-        inst->enabled
+        inst->enabled.load()
     );
 }
 
@@ -1106,7 +1114,7 @@ std::string PluginManager::getPluginJson(const std::string& name) {
     item["description"]         = inst->description;
     item["path"]                = inst->path;
     item["config"]              = inst->configPath;
-    item["enabled"]             = inst->enabled;
+    item["enabled"]             = inst->enabled.load();
     // 工具按挂载汇总 (与 listPluginsJson 同一来源: 实例本身的只读视图不带工具)
     PluginListView view;
     fillInstanceView(view, *inst);

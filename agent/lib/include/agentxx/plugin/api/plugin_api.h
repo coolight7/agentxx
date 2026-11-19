@@ -516,7 +516,8 @@ typedef struct AgentxxPluginSessionIface {
         PluginxxString*           error_out
     );
     /// (v3) 查询会话当前轮次是否已取消 (**同步**; advisory 定位, 权威通知始终是取消回调):
-    /// - 保留同步: 取消状态是一个原子标记, 任意线程直接读, 不跨执行体、不产生等待
+    /// - 保留同步: 主程序在开轮时把取消令牌登记进一份跨线程快照, 这里读的就是
+    ///   那份快照 + 令牌自己的原子标志 —— 任意线程直接读, 不跨执行体、不产生等待
     /// - `agent` 必须非空 (引用无效返回 0 并记警告)
     /// - 返回 1 已取消 / 0 未取消
     int32_t(PLUGINXX_CALL* is_canceled)(

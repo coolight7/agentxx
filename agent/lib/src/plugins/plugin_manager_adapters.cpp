@@ -223,7 +223,7 @@ int PluginMount::registerTool(PluginInstance* inst, const AgentxxPluginToolSpec*
             "Plugin `{}` registerTool rejected: instance is closing or disabled "
             "(enabled={}, state={})",
             inst->name,
-            inst->enabled,
+            inst->enabled.load(),
             inst->lifetime ? pluginxx::pluginInstanceStateName(inst->lifetime->state())
                            : "no-lifetime"
         );

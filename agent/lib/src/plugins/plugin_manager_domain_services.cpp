@@ -426,16 +426,52 @@ bool PluginManager::isSessionCanceled(const PluginxxScopeRef* agent, std::string
     if (sessionId.empty()) {
         return false;
     }
-    // 取消状态属于具体 agent 的会话: 带引用时取该挂载的 agent
-    auto c = agentContextOf(agent);
-    if (!c) {
-        return false;
+    // 插件线程/JS 线程直接问: 只读快照, 不同步等 IO
+    auto snapshot = cancelSnapshotOf(agent);
+    return snapshot != nullptr && snapshot->canceled(sessionId);
+}
+
+void PluginManager::retainCancelSnapshot(
+    std::string_view agentId,
+    uint64_t mountSeq,
+    const std::shared_ptr<agentxx::plugin::SessionCancelSnapshot>& snapshot
+) {
+    if (agentId.empty()) {
+        return;
     }
-    auto session = c->getSession(sessionId);
-    if (!session || !session->getCancelToken()) {
-        return false;
+    std::lock_guard lock(cancelSnapshotsMutex_);
+    cancelSnapshots_[std::string{agentId}] = CancelSnapshotEntry{mountSeq, snapshot};
+}
+
+void PluginManager::releaseCancelSnapshot(std::string_view agentId) {
+    if (agentId.empty()) {
+        return;
     }
-    return session->getCancelToken()->is_cancelled();
+    std::lock_guard lock(cancelSnapshotsMutex_);
+    cancelSnapshots_.erase(std::string{agentId});
+}
+
+std::shared_ptr<agentxx::plugin::SessionCancelSnapshot>
+    PluginManager::cancelSnapshotOf(const PluginxxScopeRef* agent) const {
+    if (agent == nullptr) {
+        // 空引用 = 主程序级调用: 取主 agent (弱引用 lock 本身是线程安全的)
+        auto primary = primaryAgent_.lock();
+        return primary ? primary->sessionCancelSnapshot : nullptr;
+    }
+    if (!pluginxx_scope_ref_ok(agent) || agent->id.data == nullptr || agent->id.size == 0) {
+        return nullptr;
+    }
+    const std::string     agentId{agent->id.data, static_cast<size_t>(agent->id.size)};
+    std::lock_guard       lock(cancelSnapshotsMutex_);
+    auto                  it = cancelSnapshots_.find(agentId);
+    if (it == cancelSnapshots_.end()) {
+        return nullptr;
+    }
+    // seq = 0 表示不校验 (FFI / 测试自行构造引用时可用), 与 mountOf 同一规则
+    if (agent->seq != 0 && it->second.mountSeq != agent->seq) {
+        return nullptr;
+    }
+    return it->second.snapshot;
 }
 
 std::string PluginManager::getToolPromptJson(const std::string& toolName) {
