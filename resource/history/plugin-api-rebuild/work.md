@@ -13,7 +13,7 @@
 | 6 | 线程池统一（管理器持一个池，默认 3 条，`plugin.thread_pool_workers`，两端同值；删其余四个池） | 完成（同上） |
 | 7 | 4 个同步受理入口改提交（含 `OpCore` 操作编号原子化与登记线程安全化） | 完成（见下节“步 7”：全量 passed=43828 failed=0） |
 | 8 | `is_canceled` 改快照 + JS 引擎轮询 | 完成（全量 passed=43837 failed=0） |
-| 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 待做（9a 尝试后回退：退订去等待触发 ASan UAF，见“步 8”小节末） |
+| 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 9a 完成（全量 passed=43837 failed=0）；9b（`disable`/`enable`）待做 |
 | 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 待开始 |
 | 10b | 工具体收成一个：`tool`（`pluginxx::Task` 体）+ 删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync`（53 处） | 待开始 |
 | 10c | `offload` / `sleep` 改“提交即返回 ticket” + `whenAll` 泛化/变参 | 待开始 |
@@ -297,15 +297,24 @@ agentxx：
 - 全量：`agentxx_test --log-level warn` → **passed=43837 failed=0**
   （比上一轮多 9 条，即新增的快照断言）。
 
-### 步 9a（退订去等待）尝试后回退
+### 步 9a（退订去等待）
 
-`unsubscribePluginBroadcast` 去 `fut.wait()` 需要簿记闭包自己持一份句柄强引用（它可能比
-实例活得久），做法是给 `PluginxxSubscription` 加 `enable_shared_from_this` 并在投递时
-捕获 `shared_ptr`。实测 `plugin_runtime` 的退订用例直接 ASan 崩：
-`heap-use-after-free` 在 `BroadcastRegistry::unsubscribe` 的 `mutex_.lock()`
-（指针来自“已释放的 16 字节区 +12”），即撤销时拿到的句柄/注册表已失效。
-本次不带着不确定的改动前进，已**整体回退**到原来的同步等待，待单独定位；
-步 9 的 `disable` / `enable` 返 `Task<bool>` 也同步推迟（见下方“偏差与后续”）。
+`unsubscribePluginBroadcast` 原来在非 io 线程上 `fut.wait()` —— 插件在自己的线程退订、
+JS 引擎实例收尾都要等一次 io。现在改成**不等**：置 `alive=false` 后，把簿记需要的状态
+（注册表 / 令牌 / 频道 id / 实例弱引用）**按值**带走，投递到 io 线程后立即返回。
+
+第一次尝试（给 `PluginxxSubscription` 加 `enable_shared_from_this`、闭包捕获 `shared_ptr`）
+在 `plugin_runtime` 的退订用例上直接 ASan 崩（`BroadcastRegistry::unsubscribe` 的
+`mutex_.lock()` 读到已释放内存）—— 句柄保活与投递闭包混在一起时，谁活多久说不清。
+改成“闭包只带值、不持句柄”后不再有问题：
+
+- `revokeSubscription` 不变（io 路径、以及投递不了时的就地分支仍走它）；
+- 投递分支自己撤注册表条目（按 `broadcastId` + `token`），并按频道 id 清掉实例订阅表里
+  **已失效**的条目（新增 `detail::forgetSubscription`，定义在 `instance_base.h`）；
+- `sub->token` 在返回前就置 0：重复撤销、迟到执行都变成空操作。
+
+验证：`plugin_runtime` 755 / `plugin_broadcast` 96 / `plugin_sdk` 141 全绿；
+全量 `passed=43837 failed=0`（与本步之前完全一致，说明行为未变）。
 
 ## 设计过程
 
