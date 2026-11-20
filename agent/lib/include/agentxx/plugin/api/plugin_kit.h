@@ -119,8 +119,6 @@ using pluginxx::yield;
 namespace detail {
 
 // 通用表的阻塞调用形态 (定义在 pluginxx/kit/kit.h): 只取正文 / 只看成败
-using pluginxx::detail::tableOpOk;
-using pluginxx::detail::tableOpText;
 
 /// 取一个 host 分配的字符串出参 (用完释放)
 template<typename Fn>
@@ -1133,276 +1131,6 @@ inline void notifyError(const PluginxxOperatorNotify* notify, std::string_view r
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &sv);
 }
 
-
-/* ==================== 业务表便捷入口 (插件侧) ====================
- *
- * 表成员是异步契约, 这几个便捷函数用阻塞形态取结果, 给生命周期回调与工具体里的
- * 同步写法用: 调用方本来就在主程序 IO 线程时主程序是**内联完成**的, 不产生等待;
- * 在插件自己的线程上则真等到完成。
- */
-
-/// 读当前完整提示词 JSON (主程序未提供该表或查询失败时返回空串)
-inline std::string
-    promptJson(const PluginxxHost* host, const AgentIfaces& iface, const PluginxxScopeRef* agent) {
-    if (!host || !iface.prompt || !iface.prompt->get_prompt) {
-        return {};
-    }
-    auto res = pluginxx::tableOpSyncWait(
-        host,
-        iface.cancel,
-        iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.prompt->get_prompt(host, agent, cb, ud, err);
-        }
-    );
-    return res.ok() ? std::string(res.text()) : std::string{};
-}
-
-/// 写回本插件贡献的提示词段 (返回 `AGENTXX_RESULT_OK` 表示成功)
-inline int32_t setPromptJson(
-    const PluginxxHost*     host,
-    const AgentIfaces&      iface,
-    const PluginxxScopeRef* agent,
-    std::string_view        json
-) {
-    if (!host || !iface.prompt || !iface.prompt->set_prompt) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    auto payloadSv = PluginStringView::from(json.data(), json.size());
-    auto res       = pluginxx::tableOpSyncWait(
-        host,
-        iface.cancel,
-        iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.prompt->set_prompt(host, agent, &payloadSv, cb, ud, err);
-        }
-    );
-    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
-}
-
-/// 读该 agent 的主模型及关联配置 JSON (未加载时返回空串)
-inline std::string modelConfigJson(
-    const PluginxxHost*     host,
-    const AgentIfaces&      iface,
-    const PluginxxScopeRef* agent
-) {
-    if (!host || !iface.model || !iface.model->get_config) {
-        return {};
-    }
-    auto res = pluginxx::tableOpSyncWait(
-        host,
-        iface.cancel,
-        iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.model->get_config(host, agent, cb, ud, err);
-        }
-    );
-    return res.ok() ? std::string(res.text()) : std::string{};
-}
-
-/// 读该 agent 当前执行图 JSON 定义 (主程序未提供该表或读取失败时返回空串)
-inline std::string
-    graphJson(const PluginxxHost* host, const AgentIfaces& iface, const PluginxxScopeRef* agent) {
-    if (!host || !iface.graph || !iface.graph->get_graph_json) {
-        return {};
-    }
-    auto res = pluginxx::tableOpSyncWait(
-        host,
-        iface.cancel,
-        iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.graph->get_graph_json(host, agent, cb, ud, err);
-        }
-    );
-    return res.ok() ? std::string(res.text()) : std::string{};
-}
-
-/// 当前执行图名称 (读取失败时返回空串)
-inline std::string
-    graphName(const PluginxxHost* host, const AgentIfaces& iface, const PluginxxScopeRef* agent) {
-    if (!host || !iface.graph || !iface.graph->get_graph_name) {
-        return {};
-    }
-    auto res = pluginxx::tableOpSyncWait(
-        host,
-        iface.cancel,
-        iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.graph->get_graph_name(host, agent, cb, ud, err);
-        }
-    );
-    return res.ok() ? std::string(res.text()) : std::string{};
-}
-
-/// 写回执行图 JSON 定义 (返回 `AGENTXX_RESULT_OK` 表示受理并已生效)
-inline int32_t setGraphJson(
-    const PluginxxHost*     host,
-    const AgentIfaces&      iface,
-    const PluginxxScopeRef* agent,
-    std::string_view        json
-) {
-    if (!host || !iface.graph || !iface.graph->set_graph_json) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    auto payloadSv = PluginStringView::from(json.data(), json.size());
-    auto res       = pluginxx::tableOpSyncWait(
-        host,
-        iface.cancel,
-        iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.graph->set_graph_json(host, agent, &payloadSv, cb, ud, err);
-        }
-    );
-    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
-}
-
-/// 本插件向该 agent 贡献的资源清单 JSON (读取失败时返回空串)
-inline std::string ownResourcesJson(
-    const PluginxxHost*     host,
-    const AgentIfaces&      iface,
-    const PluginxxScopeRef* agent
-) {
-    if (!host || !iface.resources || !iface.resources->get_own_resources) {
-        return {};
-    }
-    auto res = pluginxx::tableOpSyncWait(
-        host,
-        iface.cancel,
-        iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.resources->get_own_resources(host, agent, cb, ud, err);
-        }
-    );
-    return res.ok() ? std::string(res.text()) : std::string{};
-}
-
-/// 资源登记/注销的公共实现 (单个字符串入参, 阻塞形态)
-template<typename Fn>
-inline int32_t resourceOpSync(
-    const PluginxxHost* host,
-    const AgentIfaces&  iface,
-    std::string_view    arg,
-    Fn&&                start
-) {
-    auto argSv = PluginStringView::from(arg.data(), arg.size());
-    auto res   = pluginxx::tableOpSyncWait(
-        host,
-        iface.cancel,
-        iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return start(argSv, cb, ud, err);
-        }
-    );
-    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
-}
-
-/// 登记技能目录 (返回 `AGENTXX_RESULT_OK` 表示完成时已生效)
-inline int32_t registerSkillDir(
-    const PluginxxHost*     host,
-    const AgentIfaces&      iface,
-    const PluginxxScopeRef* agent,
-    std::string_view        path
-) {
-    if (!host || !iface.resources || !iface.resources->register_skill_dir) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    return resourceOpSync(host, iface, path, [&](PluginxxStringView view,
-                                                       PluginxxOperatorCallback cb,
-                                                       void* ud,
-                                                       PluginxxString* err) {
-        return iface.resources->register_skill_dir(host, agent, &view, cb, ud, err);
-    });
-}
-
-/// 撤销技能目录
-inline int32_t unregisterSkillDir(
-    const PluginxxHost*     host,
-    const AgentIfaces&      iface,
-    const PluginxxScopeRef* agent,
-    std::string_view        path
-) {
-    if (!host || !iface.resources || !iface.resources->unregister_skill_dir) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    return resourceOpSync(host, iface, path, [&](PluginxxStringView view,
-                                                       PluginxxOperatorCallback cb,
-                                                       void* ud,
-                                                       PluginxxString* err) {
-        return iface.resources->unregister_skill_dir(host, agent, &view, cb, ud, err);
-    });
-}
-
-/// 登记记忆文件
-inline int32_t registerMemoryFile(
-    const PluginxxHost*     host,
-    const AgentIfaces&      iface,
-    const PluginxxScopeRef* agent,
-    std::string_view        path
-) {
-    if (!host || !iface.resources || !iface.resources->register_memory_file) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    return resourceOpSync(host, iface, path, [&](PluginxxStringView view,
-                                                       PluginxxOperatorCallback cb,
-                                                       void* ud,
-                                                       PluginxxString* err) {
-        return iface.resources->register_memory_file(host, agent, &view, cb, ud, err);
-    });
-}
-
-/// 撤销记忆文件
-inline int32_t unregisterMemoryFile(
-    const PluginxxHost*     host,
-    const AgentIfaces&      iface,
-    const PluginxxScopeRef* agent,
-    std::string_view        path
-) {
-    if (!host || !iface.resources || !iface.resources->unregister_memory_file) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    return resourceOpSync(host, iface, path, [&](PluginxxStringView view,
-                                                       PluginxxOperatorCallback cb,
-                                                       void* ud,
-                                                       PluginxxString* err) {
-        return iface.resources->unregister_memory_file(host, agent, &view, cb, ud, err);
-    });
-}
-
-/// 登记 MCP 服务器 (完成时已握手)
-inline int32_t registerMcpServer(
-    const PluginxxHost*     host,
-    const AgentIfaces&      iface,
-    const PluginxxScopeRef* agent,
-    std::string_view        specJson
-) {
-    if (!host || !iface.resources || !iface.resources->register_mcp_server) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    return resourceOpSync(host, iface, specJson, [&](PluginxxStringView view,
-                                                            PluginxxOperatorCallback cb,
-                                                            void* ud,
-                                                            PluginxxString* err) {
-        return iface.resources->register_mcp_server(host, agent, &view, cb, ud, err);
-    });
-}
-
-/// 撤销 MCP 服务器
-inline int32_t unregisterMcpServer(
-    const PluginxxHost*     host,
-    const AgentIfaces&      iface,
-    const PluginxxScopeRef* agent,
-    std::string_view        nameSpace
-) {
-    if (!host || !iface.resources || !iface.resources->unregister_mcp_server) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    return resourceOpSync(host, iface, nameSpace, [&](PluginxxStringView view,
-                                                            PluginxxOperatorCallback cb,
-                                                            void* ud,
-                                                            PluginxxString* err) {
-        return iface.resources->unregister_mcp_server(host, agent, &view, cb, ud, err);
-    });
-}
 
 /* ==================== 网络便捷入口 (插件侧) ====================
  *
@@ -2541,9 +2269,9 @@ inline detail::ToolSchemaAwaiter schemaOf(const Ctx& ctx, std::string_view tool)
 /// 通用能力 (host / iface / log / config / language / strdup / jsonEscape /
 /// cancelRegistry / 协程驱动桥 / 后台协作任务) 全部继承自 [pluginxx::PluginBaseT],
 /// 以 agent 侧接口表聚合 [AgentIfaces] 作为其模板实参;
-/// 本类只补齐 agent 业务 helper: 工具模式构建 (schema)、工具提示词描述 (toolPrompt)、
-/// 会话工作目录 (workDir)、会话取消查询 (sessionCanceled)、会话共享存储
-/// (addShareStore), 并在 [onHostReady] 中挂钩业务事件。
+/// 本类只补齐 agent 业务 helper: 会话工作目录 (workDir)、会话取消查询
+/// (sessionCanceled)、会话共享存储 (addShareStore), 并在 [onHostReady] 中挂钩业务事件。
+/// 工具提示词与模式构建用文件里的 `toolPromptOf` / `schemaOf` 协程入口。
 class PluginBase : public pluginxx::PluginBaseT<AgentIfaces> {
 public:
 
@@ -2603,67 +2331,10 @@ public:
         co_return (r.ok() && !r.text().empty()) ? std::string{r.text()} : std::string{"en"};
     }
 
-    /// 声明式工具模式构建器 (基于工具提示词描述)
-    ToolSchemaBuilder schema(std::string_view toolName) const {
-        return ToolSchemaBuilder(toolPrompt(toolName));
-    }
-
-    /// 工具提示词描述 (**协程形态**: `co_await` 后 `.text()` 是 JSON)
-    template<typename Ctx>
-    pluginxx::TableOpTicket toolPrompt(const Ctx& ctx, std::string_view tool) const {
-        auto toolSv = std::string{tool};
-        return tableOp(ctx, [this, toolSv](auto cb, auto ud, auto err) {
-            auto v = PluginStringView::from(toolSv.data(), toolSv.size());
-            if (!host || !iface.prompt || !iface.prompt->get_tool_prompt) {
-                return static_cast<PluginxxOperatorHandle*>(nullptr);
-            }
-            return iface.prompt->get_tool_prompt(host, &v, cb, ud, err);
-        });
-    }
-
-    /// 工具提示词描述 (经主程序 agentxx.agent.prompt 接口表查询; 缺失时返回空描述)
-    ToolPromptText toolPrompt(std::string_view tool) const {
-        ToolPromptText res;
-        if (!host || !iface.prompt || !iface.prompt->get_tool_prompt) {
-            return res;
-        }
-        auto           toolSv = PluginStringView::from(tool.data(), tool.size());
-        // 表成员是异步契约: 生命周期/工具体里的同步取值走阻塞形态
-        auto op = pluginxx::tableOpSyncWait(
-            host,
-            iface.cancel,
-            iface.scheduler,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return iface.prompt->get_tool_prompt(host, &toolSv, cb, ud, err);
-            }
-        );
-        if (!op.ok()) {
-            return res;
-        }
-        std::string jsonStr(op.text());
-        try {
-            auto j = utilxx_base::Json::parse(jsonStr);
-            if (j.contains("depict") && j["depict"].is_string()) {
-                res.depict = j["depict"].get<std::string>();
-            }
-            if (j.contains("args") && j["args"].is_object()) {
-                for (const auto& [k, v] : j["args"].items()) {
-                    if (v.is_string()) {
-                        utilxx_base::insertOrAssignHeterogeneous(res.args, k, v.get<std::string>());
-                    }
-                }
-            }
-        } catch (...) {
-        }
-        return res;
-    }
-
     /// 写入会话共享存储 (经主程序 agentxx.agent.session 接口表; 返回新条目 id, 失败 -1)
     ///
-    /// - **同步等待形态**: 只给工具实现体 / 插件自己的线程 (它们不能写成协程);
-    /// - 在主程序 IO 线程上调用同样可用: 主程序的表操作在 IO 线程上是内联执行的
-    ///   (见 `tableOpSyncWait` 的线程规则), 不会卡住;
-    /// - 协程里请用 [addShareStoreAsync]。
+    /// - **只给同步工具体** (它们不能写成协程, 且跑在工作线程池上, 不会卡住插件线程);
+    /// - 协程里请用下面的 `addShareStore(ctx, ...)` 形态。
     int64_t addShareStore(
         const ScopeRef&    agent,
         PluginxxStringView tid,
@@ -2686,7 +2357,7 @@ public:
 
     /// 写入会话共享存储 (**协程形态**; `co_await` 后取 `.integer(-1)` 读 id)
     ///
-    /// 与阻塞形态同名: 第一个参数是插件实例上下文 (推带驱动桥), 返回 ticket。
+    /// 与同步形态同名: 第一个参数是插件实例上下文 (推带驱动桥), 返回 ticket。
     template<typename Ctx>
     auto addShareStore(
         Ctx&               ctx,
@@ -2712,29 +2383,6 @@ public:
         return addShareStore(agent, PluginStringView::from(tid.data(), tid.size()), content);
     }
 
-    /// 会话生效的工作目录 (经主程序 agentxx.agent.session 接口表)
-    /// - `scope` 是本挂载的作用域引用 (mount 时存下来的那份); 会话属于某个作用域
-    /// - `key` 为空 = 该作用域的默认会话工作目录
-    /// - 主程序未实现该能力或查询失败时返回空串
-    /// - 线程规则: `get_session_work_dir` 的工作体在主程序 io 上, 完成回调是同步桥
-    ///   (就地在 io 上调用), 因此插件执行线程上真等不会自己等自己 —— 工具的
-    ///   `execute_start` 就在那条线程上解析运行目录; 协程里优先用 [workDir]
-    ///   的 ticket 形态
-    std::string workDir(const PluginxxScopeRef* scope, PluginxxStringView key = {}) const {
-        if (!host || !iface.session || !iface.session->get_session_work_dir) {
-            return {};
-        }
-        auto out = tableOpSyncWait(
-            *this,
-            [this, scope, &key](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return iface.session->get_session_work_dir(host, scope, &key, cb, ud, err);
-            },
-            0,
-            pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
-        );
-        return out.ok() ? std::string{out.text()} : std::string{};
-    }
-
     /// 会话生效的工作目录 (**协程形态**)
     template<typename Ctx>
     auto workDir(Ctx& ctx, const ScopeRef& agent, std::string_view key = {}) const {
@@ -2745,10 +2393,6 @@ public:
             auto sv = PluginStringView::from(k.data(), k.size());
             return iface.session->get_session_work_dir(host, &r, &sv, cb, ud, err);
         });
-    }
-
-    std::string workDir(const PluginxxScopeRef* scope, std::string_view key) const {
-        return workDir(scope, PluginStringView::from(key.data(), key.size()));
     }
 
     /// 读取会话 LLM 上下文 (**协程形态**: `co_await` 后 `.text()` 是 JSON 数组文本)
@@ -2790,45 +2434,6 @@ public:
 
     bool sessionCanceled(const PluginxxScopeRef* scope, std::string_view key) const {
         return sessionCanceled(scope, PluginStringView::from(key.data(), key.size()));
-    }
-
-    /// 读取会话 LLM 上下文 (经主程序 agentxx.agent.context 接口表)
-    /// - 上下文不在图状态里 (会话为唯一权威), 需要内容时经此查询
-    /// - 返回 JSON 数组文本; 主程序未实现该能力或查询失败时返回空串
-    std::string getSessionMessages(const ScopeRef& agent, std::string_view tid) const {
-        if (!host || !iface.context || !iface.context->get_messages) {
-            return {};
-        }
-        auto           ref   = agent.raw();
-        auto           tidSv = PluginStringView::from(tid.data(), tid.size());
-        // 表成员是异步契约: 这里用阻塞形态等结果 (调用方在 IO 线程时是内联完成)
-        auto res = pluginxx::tableOpSyncWait(
-            host,
-            iface.cancel,
-            iface.scheduler,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return iface.context->get_messages(host, &ref, &tidSv, cb, ud, err);
-            }
-        );
-        return res.ok() ? std::string(res.text()) : std::string{};
-    }
-
-    /// 会话 LLM 上下文条数 (主程序未实现该能力时返回 -1)
-    int64_t sessionMessagesCount(const ScopeRef& agent, std::string_view tid) const {
-        if (!host || !iface.context || !iface.context->messages_count) {
-            return -1;
-        }
-        auto ref   = agent.raw();
-        auto tidSv = PluginStringView::from(tid.data(), tid.size());
-        auto res   = pluginxx::tableOpSyncWait(
-            host,
-            iface.cancel,
-            iface.scheduler,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return iface.context->messages_count(host, &ref, &tidSv, cb, ud, err);
-            }
-        );
-        return res.ok() ? res.integer(-1) : int64_t{-1};
     }
 
     /// 会话 LLM 上下文条数 (**协程形态**: `co_await` 后 `.integer(-1)`)

@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -124,8 +125,8 @@ static NetResult netCallWait(
 
 /// 一次 WebSocket 往返的交互状态
 ///
-/// 事件在管理器 io 线程到达 (广播回调), `run()` 在工作线程上等条件变量;
-/// `alive` 在退订前置 false, 保证晚到的回调不会访问已销毁的状态。
+/// 网络事件在插件执行线程到达 (广播回调), 发起往返的工作线程在这上面等条件变量;
+/// `alive` 在退订前置 false, 之后到达的发布在主程序侧就不会再回调进来。
 struct WsRoundTripState {
     std::mutex              mtx;
     std::condition_variable cv;
@@ -174,6 +175,44 @@ void PLUGINXX_CALL onCdpNetEvent(const PluginxxStringView* payloadJson, void* ud
         }
     }
     state->cv.notify_all();
+}
+
+/// 订阅结果: 完成回调写回, 发起订阅的工作线程在 [CdpSubWait::cv] 上等
+struct CdpSubWait {
+    std::mutex              mtx;
+    std::condition_variable cv;
+    bool                    done = false;
+    PluginxxSubscription*   sub  = nullptr;
+};
+
+/// 订阅完成回调的上下文 (**回调自己释放**)
+///
+/// 第一个字段是“不是主程序同步等待”的标记: 主程序会按这个指针读 8 字节判断
+/// 要不要就地回调。
+struct CdpSubPending {
+    uint64_t    magic = 0;
+    CdpSubWait* wait  = nullptr;
+};
+
+/// 订阅完成回调 (插件执行线程): 句柄以十进制文本放在 `payload` 里交回
+void PLUGINXX_CALL onCdpSubscribed(void* ud, int32_t status, const PluginxxStringView* payload) {
+    std::unique_ptr<CdpSubPending> keep(static_cast<CdpSubPending*>(ud));
+    if (!keep || keep->wait == nullptr) {
+        return;
+    }
+    PluginxxSubscription* sub = nullptr;
+    if (status == PLUGINXX_OPERATOR_OK && payload != nullptr && payload->data != nullptr
+        && payload->size > 0) {
+        sub = pluginxx::pluginxxSubscriptionFromText(
+            std::string_view{payload->data, static_cast<size_t>(payload->size)}
+        );
+    }
+    {
+        std::lock_guard<std::mutex> lock(keep->wait->mtx);
+        keep->wait->sub  = sub;
+        keep->wait->done = true;
+    }
+    keep->wait->cv.notify_all();
 }
 
 /// 组装给文本选择器用的 CDP 动作 (定义在插件上下文之后, 因为它要用到 ctx 的接口表)
@@ -242,25 +281,49 @@ std::string cdpWsRoundTrip(
         /*anyonePublish=*/false,
         /*cacheLatest=*/false
     );
-    PluginxxSubscription* sub = agentxx::plugin::subscribePluginBroadcast(
-        ctx.host,
-        ctx.iface.broadcasts,
-        nullptr,
-        topic,
-        &onCdpNetEvent,
-        &state
-    );
+    PluginxxSubscription* sub = nullptr;
+    {
+        // 订阅走“提交 + 完成回调”: 句柄只能经 payload 交回。完成回调派发在插件执行线程上,
+        // 这里不是那条线程, 所以可以等它; 提交被拒时不会有回调。
+        CdpSubWait    subWait;
+        auto*         pending = new CdpSubPending{0, &subWait};
+        const auto    topicSv = PluginStringView::from(topic.data(), topic.size());
+        PluginxxString err{nullptr, 0};
+        auto*         op = ctx.iface.broadcasts->subscribe_broadcast(
+            ctx.host,
+            nullptr,
+            &topicSv,
+            &onCdpNetEvent,
+            &state,
+            nullptr,
+            &onCdpSubscribed,
+            pending,
+            &err
+        );
+        if (op == nullptr) {
+            delete pending;
+            if (err.data != nullptr) {
+                PluginString::free(ctx.host, &err);
+            }
+            return {};
+        }
+        std::unique_lock<std::mutex> lock(subWait.mtx);
+        subWait.cv.wait(lock, [&subWait]() {
+            return subWait.done;
+        });
+        sub = subWait.sub;
+    }
     if (!sub) {
         return {};
     }
 
-    // 退订与“置 alive=false”成对出现: 置位后再退订, 晚到的回调只会看到 alive=false
+    // 退订与“置 alive=false”成对出现: 置位后再退订, 之后到达的发布不会再回调进来
     auto teardown = [&]() {
         {
             std::lock_guard<std::mutex> lock(state.mtx);
             state.alive = false;
         }
-        // 阻塞形态退订 (插件 io 线程不是主程序 io 线程)
+        // 退订是提交即返回: 调用方不在这条线程上等主程序的簿记
         agentxx::plugin::unsubscribePluginBroadcastNoWait(ctx.host, ctx.iface.broadcasts, sub);
     };
 

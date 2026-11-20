@@ -14,7 +14,7 @@
 | 7 | 4 个同步受理入口改提交（含 `OpCore` 操作编号原子化与登记线程安全化） | 完成（见下节“步 7”：全量 passed=43828 failed=0） |
 | 8 | `is_canceled` 改快照 + JS 引擎轮询 | 完成（全量 passed=43837 failed=0） |
 | 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 完成（9a / 9b 均已落地，见下节） |
-| 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 部分完成（框架侧阻塞读已清零 + JS 引擎改 NoWait；`tableOpSyncWait` 删除与 kit 拆头待做，见下节偏差） |
+| 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 部分完成（插件侧阻塞订阅与 16 个无调用点 helper 已清；框架侧删同步桥已尝试但**回退**，原因与后续见“收尾之二”；kit 拆头待做） |
 | 10b | 工具体收成一个：`tool`（按体形态分派 Task / 同步 / asio 协程）+ 删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync`（65 处） | 完成（入口合并；`polled_tool` 降为内部实现，poll-one 退场留到下一步，见下节；全量 passed=43867 failed=0） |
 | 10c | `offload` / `sleep` 改“提交即返回 ticket” + `whenAll` 泛化/变参 | 完成（`plugin_bridge` 302；全量 passed=43867 failed=0） |
 | 11 | `create`/`start` 合并（返回 void、可重入）+ `destroy` 改异步 + 插件迁移 | 完成（全量回归 passed=43825 failed=0） |
@@ -579,28 +579,134 @@ step 10 的另一半（删同步桥 + `tableOpSyncWait` / `ioCallSync*` / kit �
 - 全量：`Total: passed=43867 failed=0`（含 `plugin_bridge` 302、`plugin_runtime` 755、`plugins` 704、
   `plugin_example_chatbot` 265、`client_plugins` 842）。
 
+## 实施记录：步 10（收尾之一：插件侧阻塞订阅清零 + kit 阻塞助手清理）
+
+### 已改内容
+
+插件侧最后一个阻塞订阅点（`agentxx_text_selection_monitor.cpp` 的 `cdpWsRoundTrip`）改成
+“提交 + 完成回调拿句柄”：
+
+- 新增 `CdpSubWait`（互斥量 + 条件变量 + 句柄）与 `CdpSubPending`（首字段 8 字节标记 +
+  指向 `CdpSubWait` 的指针，**回调自己释放**）；
+- 订阅改直接调 `broadcasts->subscribe_broadcast(host, nullptr, &topic, handler, ud, nullptr, cb,
+  pending, &err)`，句柄经 `pluginxx::pluginxxSubscriptionFromText` 转回；
+- 工作线程等在 `CdpSubWait::cv` 上（回调派发在插件执行线程，不是这条线程，所以不会自等）；
+- 退订继续用 `unsubscribePluginBroadcastNoWait`（提交即返回）；
+- 顺带修正 `WsRoundTripState` / `onCdpNetEvent` 的注释：广播回调实际在**插件执行线程**上
+  （不是主程序 io 线程，`host_core.h` 的订阅包装 `dispatchToPlugin`）
+
+kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已无调用点**的阻塞助手：
+
+| 删除项 | 原位置 | 替代（已在用） |
+|---|---|---|
+| `promptJson` / `setPromptJson` / `modelConfigJson` / `graphJson` / `graphName` / `setGraphJson` / `ownResourcesJson`（host 形态） | 业务表便捷入口（阻塞段） | 同名 `(ctx, …)` 协程形态 |
+| `registerSkillDir` / `unregisterSkillDir` / `registerMemoryFile` / `unregisterMemoryFile` / `registerMcpServer` / `unregisterMcpServer`（host 形态） | 同上 | 同名 `(ctx, …)` 协程形态 |
+| `detail::resourceOpSync` | 同上 | `detail::resourceOpAsync` |
+| `PluginBase::schema(name)` / `PluginBase::toolPrompt(name)`（阻塞） | 实例上下文 | `schemaOf(ctx, …)` / `toolPromptOf(ctx, …)` |
+| `PluginBase::workDir(scope, key)`（阻塞） | 实例上下文 | `workDir(ctx, agent, key)` 协程形态 |
+| `PluginBase::getSessionMessages(agent, tid)` / `sessionMessagesCount(agent, tid)`（阻塞） | 实例上下文 | 同名 `(ctx, …)` 协程形态 |
+| `using pluginxx::detail::tableOpOk` / `tableOpText` | 文件头 | — |
+
+保留（都有真实调用点，删不掉）：`PluginBase::addShareStore`（`agentxx_execute_command` 的 4 处
+**同步工具体**）、`checkPathDecisions` / `filterPathPermissions`（filesystem 的同步工具体）、
+`detail::runtimeCall*`（kit 自己的 `mountRoot` / `openChannel` / `sendText` 等同步便捷层）、
+四个广播阻塞助手（测试在用）、框架 `PluginBaseT::config/argsJson/configPath/language/setLanguage`
+（`example_runtime` 的 `args()`）。
+
+### 为什么 `tableOpSyncWait` 与同步桥本轮仍不删（关键发现）
+删同步桥的前提是“**没有任何插件代码在自己的执行线程上阻塞等表**”，而这条前提今天不成立，
+卡点比之前记录的更清楚：
+
+1. **`create` 事务**：`PluginManager::runLoaderTask` 把 `dlopen`/`create` 投到工作池线程
+   （主程序侧不阻塞插件线程），但**测试夹具与 `enable` 路径**经 `dispatchToPlugin` 把 `create`
+   放在插件执行线程上跑（`test_plugin_runtime` 的 `LifecycleProbe` 就是这条），那里的表调用
+   只有同步桥能让它当场完成；
+2. **kit 自己的运行时便捷层**：`mountRoot` / `unmountRoot` / `openChannel` / `closeChannel` /
+   `sendInput` / `sendText` / … 都是“调用即得结果”，内部走 `detail::runtimeCall*`
+   （`allowOnPluginThread`）。插件在 `start`（工作池线程）里用没事，但**工具体里 `sendText`**
+   就跑在插件线程上；
+3. **框架基类的五个阻塞读**（`config` / `argsJson` / `configPath` / `language` / `setLanguage`）
+   用 `kMainSideWaitPolicy` = 允许插件线程等待，`example_runtime` 的 `args()` 就是它；
+4. **路径权限复核与共享存储写入**：filesystem 的 `checkPathDecisions`、execute_command 的
+   `addShareStore` 都在**工作池上的同步工具体**里 —— 这两处在同步桥删掉之后仍然可用
+   （等待方不是插件线程，完成回调投到插件线程即可），所以它们**不是**阻塞点；
+   但反过来，`example_runtime` 的 `args()` 这类“插件线程上的阻塞读”会退化成静默空值。
+
+结论：删同步桥要先做三件事（下一步）：
+
+- 把 kit 运行时便捷层与框架基类的阻塞形态改成“插件线程上拒绝”的一致语义，并给
+  `test_plugin_runtime` 的探针改成 `tableOpCallback` + `finishLater(notify)` 的异步形态；
+- `example_runtime` 的参数在 `create`（工作池线程）里读好存进 ctx，工具体里不再阻塞；
+- 之后才能删 `pluginxx/api/sync_bridge.h`、`OpCore::commit` 的 `mayBeBridge` 分支、
+  `SyncWaitThreadPolicy`、`abi_util.h` 的 `ioCallSync*`、`tables_impl.h` 的
+  `onInstanceIo` / `queryStringIo`（后两者是死代码），并把 `boundaries` 第 16 条规则升级成
+  “插件源码不得出现任何阻塞形态”。
+
+### 验证
+
+- 构建：`cmake --build agent/build/windows-debug --config Debug` 通过（exit=0）。
+- 全量回归：`Total: passed=43865 failed=2`，两处都在 `input_delivery`
+  （`test_inject_only_in_request` 的 `Content offloaded` / share store 取回断言）——
+  单跑该模块 `passed=139 failed=0`，当时的构建与控制台任务在并行跑，判为计时抖动；
+  提交前重跑全量确认（见下节“收尾”）。
+
+## 尝试过但**已回退**：删同步桥 + `tableOpSyncWait` 收紧
+
+已完整实现、顶层构建通过（exit=0），但全量回归暴露 **3 个模块的功能回归**后全部回退
+（子模块与相关文件已 `git checkout`），回退理由与后续路线记在这里，下次直接按此做。
+
+### 当时改了什么（回退前）
+
+- 删 `pluginxx/api/sync_bridge.h`（`SyncBridgeCallback` / `invokeSyncBridge` /
+  `isSyncBridgeCallback` / `SyncWaitThreadPolicy`）；
+- `OpCore::setCallback(cb, ud, mayBeSyncBridge)` → 两参，`callbackMayBeBridge_` 与
+  `commit` 的就地调用分支删除（完成回调一律按 `dispatchToPlugin` 投递）；
+- `tableOpSyncWait` 只剩一种语义：**插件执行线程上直接失败**，其余线程真等；
+- `tables_impl.h` 删两个死代码骨架 `onInstanceIo` / `queryStringIo`；
+- `test_plugin_executor` 删两组同步桥用例、`test_plugin_runtime` 的 `LifecycleProbe`
+  改成 “提交 + 完成回调 + `later.ok()`” 异步形态（这个改法本身是对的，回退后可以再拿回来）。
+
+### 回退原因（全量回归 `passed=43879 failed=8`）
+
+- `plugin_runtime` 6 处：探针的 `pending` 计数写出了 use-after-free（表调用在 io 线程上是
+  内联完成的，先 `++pending` 再发下一个步骤会被提前收尾）；探针改法修好后应能绿；
+- `plugin_example_runtime` / `plugin_example_chatbot` 各 1 处：`mountRoot` 失败。
+  根因是**同步桥不只服务测试**：kit 的整个运行时便捷层（`mountRoot` / `unmountRoot` /
+  `openChannel` / `closeChannel` / `sendInput` / `sendText` / `respondInterrupt` /
+  `listRuntimeJson` / `addTrigger` / `removeTrigger`）都是“调用即得结果”，内部走
+  `detail::runtimeCall*` + `allowOnPluginThread`。
+  这些调用发生在三类位置上：
+  1. `create` / `start`：agent 侧有插件线程时跑在加载线程（无障碍），但**测试夹具、
+     `enable` 路径、以及没配插件执行器的嵌入方**会让插件代码跑在 io 线程上 ——
+     此时 `scheduler.is_io_thread` 返回真（`isRuntimePluginThread` 在无执行器时退化为
+     `isRuntimeIoThread`），阻塞被拒；
+  2. **工具体**（`sendText` 一类）在插件线程上跑，阻塞被拒；
+  3. `stop` 里 `unmountRoot`（chatbot）同理。
+  同步桥正是让这三类位置可用的机制：它在完成线程上就地唤醒等待方，所以
+  “插件线程阻塞等 io”不会自己等自己；删掉它就必须把整个运行时便捷层改成协程、
+  并改写 chatbot / example_runtime 的启动与工具路径 —— 那是另一个量级的改动。
+
+### 下次要按这个顺序做
+
+1. kit 运行时便捷层补协程形态（`mountRootOf` / `unmountRootOf` / `openChannelOf` /
+   `closeChannelOf` / `sendInputOf` / `sendTextOf` / `respondInterruptOf` /
+   `listRuntimeOf` / `addTriggerOf` / `removeTriggerOf` / `registerTimerOf`，均返回
+   `pluginxx::TableOpTicket`；`openChannel` 的转接对象要由协程帧保活到成功后写入
+   `ctx.runtimeChannelShims`）；
+2. `agentxx_chatbot`（`chatbotStartBody` 的 mountRoot/unmountRoot、`runtime.openChannel` /
+   `closeChannel`、`sendInput`、`respondInterrupt`、`listRuntimeJson`、stop 里的 `unmountRoot`）
+   与 `example_runtime`（`runtimeStart` / `runtimeStop` / `sendText` / `listRuntimeJson`）
+   逐处改成 `co_await`；工具体的同步形态若需要阻塞，就改成**同步体**（工作池）而不是插件线程；
+3. `test_plugin_runtime` 探针改成异步（本次已验证的写法，注意 `pending` 先算总数）；
+4. 以上绿了之后再删同步桥（同上清单）并升级 `boundaries` 规则 16。
+
 ## 剩余工作（做完 10b / 10a 之后的具体清单）
 
-1. **步 10 的另一半：删同步桥**。现在插件侧只剩一处阻塞订阅
-   （`agentxx_text_selection_monitor.cpp:245`，CDP 往返助手，跑在插件自有线程上）；
-   kit 里那批阻塞 helper 只剩“定义 + kit 内部互相调用”，没有插件使用者：
-   `declarePluginBroadcast(host,…)` / `publishPluginBroadcast(host,…)` /
-   `subscribePluginBroadcast(host,…)` / `unsubscribePluginBroadcast(host,…)` /
-   `workDir(...)` / `argsJson()` / `configPath()`（`plugin_kit.h`）。
-   要做的：
-   - `text_selection_monitor` 的订阅改成“提交 + 回调拿句柄”（照 `chatbot_net.cpp` 的写法；
-     句柄迟到且 `alive=false` 时在回调里 `unsubscribePluginBroadcastNoWait`）；
-   - 删 kit 那批阻塞 helper 与 `using pluginxx::tableOpSyncWait` 一行；
-   - 测试迁移（`tableOpSyncWait` 约 20 处、阻塞广播 helper 约 8 处）：
-     `test_plugins.cpp`（154/164/215/268/1648-1664/2046-2047/3257/3451/3483/3550/4082）、
-     `test_plugin_resources.cpp`（409/440/514）、`test_plugin_runtime.cpp`（462/486/518/1574/1923/2328）、
-     `test_plugin_host_mount.cpp`（335/358/479/489）、`test_plugin_agent_runtime.cpp:139`、
-     `test_plugin_broadcast.cpp:155`、`test_plugin_executor.cpp:853`、
-     `test_client_plugins.cpp`（1372-1425/1663-1679）—— 大部分所在函数已是协程，改 `co_await` 即可；
-   - 最后删框架侧：`pluginxx/api/sync_bridge.h`、`tableOpSyncWait` / `tableOpText` / `tableOpOk`、
-     `SyncWaitThreadPolicy`、`isSyncBridgeCallback` 与 `OpCore::commit` 里的同步桥分支、
-     `abi_util.h` 的 `ioCallSync*`、`tables_impl.h` 的 `onInstanceIo` / `queryStringIo`
-     （两处是死代码）。删完 `boundaries` 的第 16 条规则（禁止阻塞形态）才有意义。
+1. **步 10 剩下的只有 kit 拆头**（已在两轮里做完的部分见上文两个“实施记录”节）。
+   阻塞面现状：插件源码里 `tableOpSyncWait` 零处（`boundaries` 规则 16 扫描 `plugins/` 与
+  `lib/`）；kit 内部还剩四处：广播阻塞入口、`addShareStore`（同步工具体）、
+  `checkPathDecisions`、`clientTableOp`；测试里仍有约 20 处（都在 io 线程上，靠
+  `startTableOp` 的当场回调拿到结果）。
 2. **kit 拆三个头**（`plugin_kit.h` / `agent_plugin_kit.h` / `client_plugin_kit.h`）+ 31 个包含点。
    难点是现状**不是按端分块**：client 的两段在 734/834 行（`client 表便捷调用` / `client 展示面
    便捷入口`），而两边共用的 `PluginBase` 在 2537、`ClientPluginBase` 在 6250；拆之前要先把
