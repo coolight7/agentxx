@@ -485,6 +485,8 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
     }
 
     agentxx::agent::AsyncWorkSpec spec;
+    /// 任务目标行: 让模型一眼看出这次后台跑的是哪个工具/哪个子代理
+    std::string               targetLine;
     spec.creatorAgentId   = state.ctx->agentId;
     spec.creatorSessionId = sessionId;
     spec.resultId         = callId;
@@ -501,6 +503,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
             throw std::invalid_argument{"Arg `args.subagent` is required for `agentxx_subagent`"};
         }
         spec.kind    = agentxx::agent::AsyncWorkKind::Agent;
+        targetLine   = fmt::format("subagent={}\n", subagent);
         spec.message = toolArgs.value("message", std::string{});
         if (toolArgs.contains("messages") && toolArgs["messages"].is_array()) {
             spec.messages = toolArgs["messages"];
@@ -536,6 +539,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
         spec.kind     = agentxx::agent::AsyncWorkKind::Tool;
         spec.toolName = toolName;
         spec.toolArgs = toolArgs;
+        targetLine    = fmt::format("tool={}\n", toolName);
         if (spec.name.empty()) {
             spec.name = toolName;
         }
@@ -550,6 +554,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
     }
 
     std::string out = fmt::format("Async started, id={}\n", submitted.asyncId);
+    out += targetLine;
     if (submitted.delayMs > 0) {
         out += fmt::format(
             "Starts in {} (delayMs={}): the task stays queued until then. "
