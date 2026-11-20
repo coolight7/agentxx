@@ -499,7 +499,7 @@ static pluginxx::Task<void>
         SchemaBuilder b;
         b.str("query", p.args.contains("query") ? p.args["query"] : def.query);
         b.integer("limit", p.args.contains("limit") ? p.args["limit"] : def.limit, 20);
-        co_await agentxx::plugin::blocking_tool(
+        co_await agentxx::plugin::tool(
             ctx,
             ref,
             "agentxx_codegraph_search",
@@ -559,7 +559,7 @@ static pluginxx::Task<void>
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             3
         );
-        co_await agentxx::plugin::blocking_tool(
+        co_await agentxx::plugin::tool(
             ctx,
             ref,
             "agentxx_codegraph_context",
@@ -602,7 +602,7 @@ static pluginxx::Task<void>
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             3
         );
-        co_await agentxx::plugin::blocking_tool(
+        co_await agentxx::plugin::tool(
             ctx,
             ref,
             "agentxx_codegraph_callers",
@@ -640,7 +640,7 @@ static pluginxx::Task<void>
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             3
         );
-        co_await agentxx::plugin::blocking_tool(
+        co_await agentxx::plugin::tool(
             ctx,
             ref,
             "agentxx_codegraph_callees",
@@ -679,7 +679,7 @@ static pluginxx::Task<void>
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             10
         );
-        co_await agentxx::plugin::blocking_tool(
+        co_await agentxx::plugin::tool(
             ctx,
             ref,
             "agentxx_codegraph_path",

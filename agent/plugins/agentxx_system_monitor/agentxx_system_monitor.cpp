@@ -230,7 +230,7 @@ struct SysMonCtx : public PluginBase {
 static pluginxx::Task<void> sysMonMountSetupAsync(SysMonCtx& ctx, ScopeRef ref) {
     // 1. 工具
     auto schema = (co_await agentxx::plugin::schemaOf(ctx, "agentxx_get_system_core_info")).build();
-    co_await blocking_tool(
+    co_await tool(
          ctx,
          ref,
         "agentxx_get_system_core_info",

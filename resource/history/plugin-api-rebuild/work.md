@@ -15,7 +15,7 @@
 | 8 | `is_canceled` 改快照 + JS 引擎轮询 | 完成（全量 passed=43837 failed=0） |
 | 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 完成（9a / 9b 均已落地，见下节） |
 | 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 待开始 |
-| 10b | 工具体收成一个：`tool`（`pluginxx::Task` 体）+ 删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync`（53 处） | 待开始 |
+| 10b | 工具体收成一个：`tool`（按体形态分派 Task / 同步 / asio 协程）+ 删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync`（65 处） | 完成（入口合并；`polled_tool` 降为内部实现，poll-one 退场留到下一步，见下节；全量 passed=43867 failed=0） |
 | 10c | `offload` / `sleep` 改“提交即返回 ticket” + `whenAll` 泛化/变参 | 完成（`plugin_bridge` 302；全量 passed=43867 failed=0） |
 | 11 | `create`/`start` 合并（返回 void、可重入）+ `destroy` 改异步 + 插件迁移 | 完成（全量回归 passed=43825 failed=0） |
 | 12 | 测试夹具统一带插件线程与池 | 待开始 |
@@ -475,6 +475,64 @@ kit 拆三个头：`plugin_kit.h` 现在 7265 行，`kit::` 段从 6132 行起�
 - 第一条到期后一次恢复就收齐两条，主程序只收到一个终态；
 - offload：返回值可取（`"A7"`）、工作体抛的异常到 `await` 处才抛（`"boom"`）；
 - 变参 `whenAll(tableOp, offload, sleep)`：三类混用按传入顺序取结果，前面未完成时不会提前完成。
+
+## 实施记录：步 10b（工具体收成一个 `tool`）
+
+### 已改内容
+
+- `plugin_kit.h`：删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync` 四个入口，
+  对外只剩一个 `tool`；三个实现体收进 `detail`：
+    - `detail::registerToolWithTaskBody`（原 `tool`，`pluginxx::Task<T>` 体，桥驱动）；
+    - `detail::registerToolWithSyncBody`（原 `blocking_tool`，同步体 → 工作池线程）；
+    - `detail::registerToolWithAwaitableBody`（原 `polled_tool`，`asio::awaitable<T>` 体，受控轮询）。
+- 形态判定 `detail::toolBodyKindOf<Fn, Ctx>()`：kit 协程体（`(Ctx&, args, OpCtl)` / `OpCtl&` 两种写法
+  都识别，返回 `Task<T>`）→ asio 协程体（`(Ctx&, args, tid, workDir, 取消令牌)` 且返回
+  `asio::awaitable<T>`）→ 否则按同步体（原 8 种签名，返回值 `std::string` / `ToolResult` 都支持）。
+  对不上的体落进同步体分支，在编译期报错（不会静默当成协程跑）。
+- 65 处调用点改名 `tool(`（14 `fast_tool` + 47 `blocking_tool` + 4 `polled_tool`，含注释里的名字），
+  涉及 19 个插件与 `test_plugins` / `test_plugin_bridge` 两个测试文件；4 处 `polled_tool` 用例（case 11~14）
+  的语义不变（仍是受控轮询），只是换了入口名。
+- `agent/test/plugin/negative_compile/`：`positive_control.cpp` 补 `ScopeRef{}` 并覆盖三种体
+  （原来的片段停在“tool 没有 agent 参数”的旧签名，Linux gate 上本来就是假阳性）；
+  `wrong_polled_return.cpp` 删除（合并后“awaitable 签名返回字符串”是合法的同步体，不再是反例）；
+  `wrong_tool_return.cpp` 改成“同步体返回 int”这一条真反例。
+- 同时修正三处 `// \toolPromptOf` 式的残缺注释（`plugin_kit.h` 的三个实现体里）。
+
+### 语义变化（需知）
+
+- 原 `fast_tool` 的体**不再在插件执行线程上内联执行**，而是走同步体路径在工作池线程上跑。
+  好处是不再可能“同步体卡住插件执行线程”；代价是每次调用占一条池线程（默认 3 条）。
+  受影响的 14 处（math / planning / system / example_multi_mount / example_plugin / example_runtime）
+  行为与断言未变。
+- 三种体都不在插件执行线程上跑：kit 协程体挂起后不占线程，同步体在工作池，asio 协程体在
+  主程序 IO 线程上按受控轮询推进（与原来一致）。
+
+### 与 plan.md 的偏差（`polled_tool` 没删，降为内部实现）
+
+plan.md 的 10b 还写了“`tool` 不再走 poll-one、删 `polled_tool`”。本轮**只做入口合并**：
+
+- 6 处 polled 体（filesystem 三处异步读写、execute_command 两处子进程管道、example_plugin 一处
+  asio 定时器）等的都是内核就绪事件；改成 `co_await offload(...)` 等于退回各插件已有的同步实现，
+  一次大文件读写 / 一条长命令会长期占住一条工作线程（默认池 3 条），并丢掉 io_uring / IOCP 的收益；
+- “首步当场推进 + `resumePluginCoroutine` 改 `request_driver`”是协程运行时的整体改造（图节点、
+  `call_tool` awaiter 共用同一套驱动），plan.md §3.9 末尾也写明这一步可以放到下一步。
+
+所以 `polled_tool` 只是从对外入口降为 `detail::registerToolWithAwaitableBody`：对外只剩一个 `tool`，
+poll-one 整块退场留到“第二步”，届时这 6 处体不用再改代码。
+
+### 验证
+
+- 构建：`cmake --build agent/build/windows-debug --config Debug` 通过。首轮有 1 处编译错误：
+  第三参写成 `OpCtl&` 的 kit 协程体没被识别成 Task 体（`is_invocable` 用 `OpCtl` 按值探测，
+  `OpCtl&` 参数绑不上右值）→ 掉进同步体分支报 C2064；判定补 `OpCtl&` 分支后通过。
+- 插件组：`plugin_bridge 302` / `plugin_runtime 755` / `plugin_sdk 141` / `plugins 704` /
+  `plugin_cleanup 90` / `plugin_dispatch 112` / `plugin_executor 684` / `plugin_host_mount 147` /
+  `plugin_agent_runtime 221` / `plugin_example_runtime 50` / `plugin_example_chatbot 265` /
+  `plugin_multi_mount 47` / `plugin_multi_instance 80` —— 合计 3598 通过、0 失败。
+- 全量：`Total: passed=43866 failed=1`，唯一失败是 `boundaries` 规则 15（新写的注释里用了停用词
+  “承载”）；改为“保存”后单跑 `boundaries` = `passed=20 failed=0`。
+- 遗留（步 13）：`docs/{zh-cn,en}/design/plugins.md`、`docs/{zh-cn,en}/develop.md`、
+  `docs/{zh-cn,en}/design/index.md` 仍有 66 处旧入口名要改。
 
 ## 设计过程
 

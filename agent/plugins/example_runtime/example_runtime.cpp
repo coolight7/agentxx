@@ -205,7 +205,7 @@ void onChannelEventImpl(RuntimeCtx& ctx, const agentxx::plugin::ChannelEvent& ev
 /// 给被挂的 agent 注册的工具 (mount 回调里做)
 static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::AgentRef ref) {
     // 1) 往通道投一条消息 (等同平台收到一条用户消息)
-    co_await agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "example_runtime_say",
@@ -238,7 +238,7 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
     );
 
     // 2) 发一条事件 (由 COALESCE 触发器合并后投进通道)
-    co_await agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "example_runtime_ping",
@@ -269,7 +269,7 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
     );
 
     // 3) 运行时状态 (插件自查用: 根 / 通道 / 触发器 / 定时器一览)
-    co_await agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "example_runtime_status",

@@ -115,7 +115,7 @@ static pluginxx::Task<void>
     auto        p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_ui_control_keyboard_mouse");
     std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
 
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "agentxx_ui_control_keyboard_mouse",

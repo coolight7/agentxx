@@ -7,14 +7,14 @@
 ///     由插件入口从主程序接口表取值 (agentxx.agent.session.get_session_work_dir /
 ///     agentxx.agent.session.is_canceled), 便于测试直测纯逻辑
 ///   - 统一异步操作模型 (受控轮询): 协程版执行体 *ExecuteAsync 由插件入口经
-///     `plugin_kit::polled_tool` 注册 —— 协程跑在插件实例本地 reactor (桥的
+///     `plugin_kit::tool` 注册 —— 协程跑在插件实例本地 reactor (桥的
 ///     local_executor) 上, 管道/子进程/计时器都绑定到该 executor, 由主程序 IO
 ///     线程经 driver 请求 `poll_one` 有界步进 (有进展立即续, 无进展退避,
 ///     无未完成操作时不驱动); 并发多条命令共享同一条驱动序列与同一个 reactor,
 ///     不再每条命令占死一个主程序阻塞线程至超时
 ///     (见 plugin_kit.h 与 docs/zh-cn/design/plugins.md §16)
 ///   - AGENTXX_ENABLE_BOOST_PROCESS 关闭时的 popen 回退为阻塞实现 (*Execute
-///     同步函数), 由入口经 plugin_kit.h 的 blocking_tool (offload 工作线程) 注册
+///     同步函数), 由入口经 plugin_kit.h 的 tool (offload 工作线程) 注册
 
 /// ## 输出结果压缩
 /// - 禁用 ToolcallNode 的自动压缩，改由自己实现压缩, 分别独立对 stdout、stderr 压缩
@@ -993,7 +993,7 @@ inline asio::awaitable<ToolResult> runProcPipeline(
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
 // =====================================================================
 // 执行体 —— 协程版 (受控轮询路径; BOOST_PROCESS 可用时唯一注册路径)
-// - 在插件实例本地 reactor 上 spawn (经 plugin_kit::polled_tool), 挂起点让出给
+// - 在插件实例本地 reactor 上 spawn (经 plugin_kit::tool), 挂起点让出给
 //   主程序 IO 线程;
 //   返回带状态的结果 (超时/取消分别是失败/取消); 参数错误仍抛异常
 //   (由 C ABI 边界/适配器捕获转 error_out)
@@ -1215,7 +1215,7 @@ inline asio::awaitable<ToolResult> windowsExecuteAsync(
 #else
 // =====================================================================
 // 执行体 —— popen 回退版 (仅 AGENTXX_ENABLE_BOOST_PROCESS 关闭时编译/注册)
-// - 阻塞实现: 只允许经 plugin_kit.h 的 blocking_tool (offload 工作线程) 注册,
+// - 阻塞实现: 只允许经 plugin_kit.h 的 tool (offload 工作线程) 注册,
 // 禁止在主程序 IO 线程 / 受控轮询协程内直接调用
 // - 无法指定子进程工作目录: 未给 `cwd` 时继承 agent 进程 cwd; 给了 `cwd` 时用
 //   `cd` 命令前缀切目录 (见下方 bashExecute), 无会话取消支持

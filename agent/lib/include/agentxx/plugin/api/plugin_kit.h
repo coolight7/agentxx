@@ -7,8 +7,8 @@
 ///   包含它, 并把其中的名字逐条 using 引入 `agentxx::plugin`, 插件源码书写
 ///   `agentxx::plugin::Xxx` 与拆分前完全一致;
 /// - **本头只提供 agent 业务 helper**: 接口表聚合 (AgentIfaces / ClientIfaces)、
-///   工具模式构建 (ToolSchemaBuilder)、工具注册 (tool / fast_tool / blocking_tool /
-///   polled_tool)、图节点 (graph node)、工具权限声明、阻塞便捷调用
+///   工具模式构建 (ToolSchemaBuilder)、工具注册 (tool)、图节点 (graph node)、
+///   工具权限声明、阻塞便捷调用
 ///   (call_tool)、client 侧特化渲染与实例上下文 (ClientPluginBase)、
 ///   界面组件加载 (描述层 `pluginxx::ui` 与扩展 kit `agentxx::ui::kit`)。
 #pragma once
@@ -2882,7 +2882,7 @@ protected:
             this
         );
         if (!roundStartSub_) {
-            // 订阅失败时取消标记只能靠每个工具根开始时自清 (见 polled_tool/blocking_tool),
+            // 订阅失败时取消标记只能靠每个工具根开始时自清 (见 detail::registerToolWith*Body),
             // 这里明确提示一次, 避免以后排查只能靠现象
             log.warn(
                 "plugin kit: subscribe `agentxx.agent.round.start` failed; session cancel "
@@ -3970,7 +3970,7 @@ inline std::string listAsyncWorkJson(Ctx& ctx, std::string_view sessionId = {}) 
 
 /* ==================== 插件框架 detail 名的引入 (pluginxx/kit/kit.h) ====================
  *
- * 业务 helper (polled_tool / graph node / call_tool awaiter) 需要插件框架协程设施的
+ * 业务 helper (tool 的协程体 / graph node / call_tool awaiter) 需要插件框架协程设施的
  * detail 类型与函数; 同样以 using 声明引入, 类型本体仍在 pluginxx::detail 一份。
  */
 namespace detail {
@@ -4485,7 +4485,7 @@ inline pluginxx::TableOpTicket providePoint(
     );
 }
 
-/// ==================== (kit::tool / fast_tool / blocking_tool / point / capability)
+/// ==================== (kit::tool / point / capability)
 /// ====================
 
 namespace detail {
@@ -4550,43 +4550,10 @@ inline PluginxxOperatorNotify frameNotify(const AgentxxPluginToolNotify& tool) n
     return PluginxxOperatorNotify{tool.done_frame, tool.host_ud};
 }
 
-/// 注册插件工具 (生命周期回调里的同步形态)
-///
-/// 表成员是异步操作契约, 而 `start` / `mount` 是同步 C 函数: 这里用阻塞形态拿结果。
-/// 调用方本来就在主程序 IO 线程时是**内联执行**的, 不产生等待; 在插件自己的线程
-/// (如后台工具线程) 上则真等待, 与旧同步表调用的阻塞行为一致。
-///
-/// - `return` `AGENTXX_RESULT_OK` 成功; 主程序未提供该表 `ERR_UNSUPPORTED`;
-///   其余失败 `ERR_INTERNAL` (原因记日志)
-template<typename Ctx>
-inline int32_t registerToolSync(
-    const Ctx&                   ctx,
-    const PluginxxScopeRef*      agent,
-    const AgentxxPluginToolSpec* spec
-) {
-    if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    auto res = pluginxx::tableOpSyncWait(
-        ctx.host,
-        ctx.iface.cancel,
-        ctx.iface.scheduler,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ctx.iface.tools->register_tool(ctx.host, agent, spec, cb, ud, err);
-        }
-    );
-    if (!res.ok() && ctx.iface.log && ctx.iface.log->log) {
-        const std::string why
-            = res.accepted() ? std::string(res.text()) : std::string(res.startError);
-        const PluginxxStringView view{why.data(), static_cast<uint64_t>(why.size())};
-        ctx.iface.log->log(ctx.host, 3, &view);
-    }
-    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
-}
-
 /// 工具注册的"调用即提交"形态 (返回 ticket, 由调用方 `co_await`)
 ///
-/// 与 [registerToolSync] 的区别只有等待方式: 这里提交完就返回, 注册是否生效由
+/// 提交完就返回, 注册是否生效由 `co_await` 的结果说了算 —— 生命周期里
+/// "登记完再放行"的顺序靠 await 完再 `later.ok()` 保证。
 /// `co_await` 的结果说了算 —— 生命周期里"登记完再放行"的顺序靠 await 完再
 /// `later.ok()` 保证。
 template<typename Ctx>
@@ -4606,10 +4573,74 @@ inline pluginxx::TableOpTicket
     );
 }
 
-} // namespace detail
+/// 工具体的形态 (由"体怎么跑"决定; 对插件作者都只是同一个 [tool])
+///
+/// - `Task`: `pluginxx::Task<T>` 协程体, 可 `co_await` kit 原语
+///   (`sleep` / `offload` / `call_tool` / `invoke_cap`), 挂起期间不占线程;
+/// - `Awaitable`: `asio::awaitable<T>` 协程体, 等 asio 原生 I/O (管道 / 文件 / 定时器);
+/// - `Sync`: 普通函数体, 在工作池线程上执行, 可以阻塞 (文件 IO / 子进程 / 目录扫描)。
+enum class ToolBodyKind { Task, Awaitable, Sync };
 
+/// 返回值是否 `pluginxx::Task<T>` (kit 协程体)
+template<typename T>
+struct IsTaskToolResult : std::false_type {};
+
+template<typename T>
+struct IsTaskToolResult<pluginxx::Task<T>> : std::true_type {};
+
+/// 返回值是否 `asio::awaitable<T>` (asio 协程体)
+template<typename T>
+struct IsAwaitableToolResult : std::false_type {};
+
+template<typename T>
+struct IsAwaitableToolResult<asio::awaitable<T>> : std::true_type {};
+
+/// 判定工具体的形态
+///
+/// kit 协程体的第三个参数两种写法都支持 (`OpCtl` 按值 / `OpCtl&` 按引用), 两个都要试一次;
+/// 其余判据只看"能这样调用且返回该协程类型", 对不上的一律按同步体处理, 因此写错
+/// 返回类型的协程体不会被悄悄当成协程跑, 而是落进同步体分支在编译期报错。
+template<typename Fn, typename Ctx>
+constexpr ToolBodyKind toolBodyKindOf() noexcept {
+    using FnType = std::decay_t<Fn>;
+    if constexpr (std::is_invocable_v<FnType&, Ctx&, std::string_view, OpCtl&>) {
+        if constexpr (IsTaskToolResult<
+                          std::invoke_result_t<FnType&, Ctx&, std::string_view, OpCtl&>>::value) {
+            return ToolBodyKind::Task;
+        }
+    } else if constexpr (std::is_invocable_v<FnType&, Ctx&, std::string_view, OpCtl>) {
+        if constexpr (IsTaskToolResult<
+                          std::invoke_result_t<FnType&, Ctx&, std::string_view, OpCtl>>::value) {
+            return ToolBodyKind::Task;
+        }
+    }
+    if constexpr (std::is_invocable_v<
+                      FnType&,
+                      Ctx&,
+                      std::string_view,
+                      std::string_view,
+                      std::string_view,
+                      const PluginxxCancelToken*>) {
+        if constexpr (IsAwaitableToolResult<
+                          std::invoke_result_t<
+                              FnType&,
+                              Ctx&,
+                              std::string_view,
+                              std::string_view,
+                              std::string_view,
+                              const PluginxxCancelToken*>>::value) {
+            return ToolBodyKind::Awaitable;
+        }
+    }
+    return ToolBodyKind::Sync;
+}
+
+/// 注册 kit 协程体工具 (`pluginxx::Task<T>` 体)
+///
+/// 体随注册信息一起保存, 每次调用新建一条 Job 保存参数/取消令牌/结果;
+/// 首步由主程序的协程驱动推进, 挂起后不占线程 (等的是 kit 原语的回调)。
 template<typename Ctx, typename TaskFn>
-inline pluginxx::TableOpTicket tool(
+inline pluginxx::TableOpTicket registerToolWithTaskBody(
     Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view name,
@@ -4622,7 +4653,7 @@ inline pluginxx::TableOpTicket tool(
     auto& storage = ctx.storage_;
     // 工具描述用插件自己的字面量: 注册时不再回读主程序的提示词表 —— 那是一次表调用,
     // 插件执行线程上不允许等它 (协作方式: 需要按表里的文本注册就先 co_await
-    // 	oolPromptOf, 再把取到的描述传进来)
+    // toolPromptOf, 再把取到的描述传进来)
     std::string finalDepict(depict);
     storage.push_back(std::move(finalDepict));
     storage.push_back(std::string(schema));
@@ -4689,7 +4720,7 @@ inline pluginxx::TableOpTicket tool(
             cancelReg = &shim->ctx->cancelRegistry;
         }
         auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-        // 同 polled_tool: 新操作开始先清掉上一次会话取消留下的标记
+        // 新操作开始先清掉上一次会话取消留下的标记
         if (cancelReg && !request.scopeKey.empty()) {
             cancelReg->clearCanceled(request.scopeKey);
         }
@@ -4744,114 +4775,21 @@ inline pluginxx::TableOpTicket tool(
     return detail::registerToolTicket(ctx, agent, spec);
 }
 
-template<typename Ctx, typename SyncFn>
-inline pluginxx::TableOpTicket fast_tool(
-    Ctx&             ctx,
-    const ScopeRef&  agent,
-    std::string_view name,
-    std::string_view depict,
-    std::string_view schema,
-    SyncFn&&         fn,
-    int64_t          default_timeout_ms = 0,
-    int32_t          flags              = 0
-) {
-    auto& storage = ctx.storage_;
-    // 工具描述用插件自己的字面量: 注册时不再回读主程序的提示词表 —— 那是一次表调用,
-    // 插件执行线程上不允许等它 (协作方式: 需要按表里的文本注册就先 co_await
-    // 	oolPromptOf, 再把取到的描述传进来)
-    std::string finalDepict(depict);
-    storage.push_back(std::move(finalDepict));
-    storage.push_back(std::string(schema));
-
-    struct FastShim {
-        Ctx*                 ctx = nullptr;
-        std::decay_t<SyncFn> fn;
-    };
-
-    auto shim = ctx.storeShim(std::make_unique<FastShim>(FastShim{&ctx, std::forward<SyncFn>(fn)}));
-
-    AgentxxPluginToolSpec spec{};
-    // 跨边界结构体长度: 0 = 基线布局; 这里按当前布局填写 (见 plugin_spec.h)
-    spec.struct_size = sizeof(AgentxxPluginToolSpec);
-    spec.name        = PluginStringView::from(name.data(), name.size());
-    spec.description = PluginStringView::from(
-        storage[storage.size() - 2].data(),
-        storage[storage.size() - 2].size()
-    );
-    spec.parameters_json    = PluginStringView::from(storage.back().data(), storage.back().size());
-    spec.user_data          = shim;
-    spec.default_timeout_ms = default_timeout_ms;
-    spec.flags              = flags;
-
-    spec.execute_start = [](void*                          user_data,
-                            const PluginxxStringView*      args_json,
-                            const PluginxxStringView*      thread_id,
-                            const PluginxxStringView*      tool_call_id,
-                            const AgentxxPluginToolNotify* notify,
-                            PluginxxString*                error_out) -> void* {
-        auto* shim = static_cast<FastShim*>(user_data);
-        (void)tool_call_id;
-        try {
-            std::string_view args(
-                args_json && args_json->data ? args_json->data : "{}",
-                args_json ? static_cast<size_t>(args_json->size) : 0
-            );
-            std::string_view tid(
-                thread_id && thread_id->data ? thread_id->data : "",
-                thread_id ? static_cast<size_t>(thread_id->size) : 0
-            );
-            // 实现体返回 `std::string` (成功) 或 `ToolResult` (带状态/附件), 两者都接受
-            std::string result;
-            std::string metadata;
-            ToolStatus  status = ToolStatus::Ok;
-            if constexpr (std::is_invocable_v<SyncFn, Ctx&, std::string_view, std::string_view>) {
-                detail::toolBodyResultTo(
-                    shim->fn(*shim->ctx, args, tid), result, metadata, status
-                );
-            } else if constexpr (std::is_invocable_v<SyncFn, Ctx&, std::string_view>) {
-                detail::toolBodyResultTo(shim->fn(*shim->ctx, args), result, metadata, status);
-            } else {
-                detail::toolBodyResultTo(shim->fn(args), result, metadata, status);
-            }
-
-            if (notify && notify->done) {
-                auto resultSv  = PluginStringView::from(result.data(), result.size());
-                auto metadSv   = PluginStringView::from(metadata.data(), metadata.size());
-                notify->done(
-                    notify->host_ud,
-                    detail::toolStatusOfOperator(status),
-                    &resultSv,
-                    &metadSv
-                );
-            }
-        } catch (const std::exception& e) {
-            if (notify && notify->done) {
-                std::string what    = e.what();
-                auto        errSv   = PluginStringView::from(what.data(), what.size());
-                auto        emptySv = PluginStringView::from(nullptr, 0);
-                notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv, &emptySv);
-            } else if (error_out) {
-                *error_out = PluginString::fromCstr(shim->ctx->host, e.what());
-            }
-        } catch (...) {
-            if (notify && notify->done) {
-                auto errSv   = PluginStringView::fromCstr("unknown error");
-                auto emptySv = PluginStringView::from(nullptr, 0);
-                notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv, &emptySv);
-            } else if (error_out) {
-                *error_out = PluginString::fromCstr(shim->ctx->host, "unknown error in fast_tool");
-            }
-        }
-        return nullptr;
-    };
-
-    spec.execute_cancel = nullptr;
-
-    return detail::registerToolTicket(ctx, agent, spec);
-}
-
+/// 注册同步体工具 (体在工作池线程上执行, 可以阻塞)
+///
+/// 支持的体签名 (按此顺序匹配第一个成立的):
+/// - `(Ctx&, args, tid, workDir, const PluginxxCancelToken*)`
+/// - `(Ctx&, args, tid, const PluginxxCancelToken*)`
+/// - `(Ctx&, args, tid, workDir)`
+/// - `(Ctx&, args, const PluginxxCancelToken*)`
+/// - `(args, const PluginxxCancelToken*)`
+/// - `(Ctx&, args, tid)`
+/// - `(Ctx&, args)`
+/// - `(args)`
+///
+/// 返回 `std::string` 表示成功, 返回 `ToolResult` 可以表达失败/取消与附件。
 template<typename Ctx, typename BlockFn>
-inline pluginxx::TableOpTicket blocking_tool(
+inline pluginxx::TableOpTicket registerToolWithSyncBody(
     Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view name,
@@ -4864,7 +4802,7 @@ inline pluginxx::TableOpTicket blocking_tool(
     auto& storage = ctx.storage_;
     // 工具描述用插件自己的字面量: 注册时不再回读主程序的提示词表 —— 那是一次表调用,
     // 插件执行线程上不允许等它 (协作方式: 需要按表里的文本注册就先 co_await
-    // 	oolPromptOf, 再把取到的描述传进来)
+    // toolPromptOf, 再把取到的描述传进来)
     std::string finalDepict(depict);
     storage.push_back(std::move(finalDepict));
     storage.push_back(std::string(schema));
@@ -5128,7 +5066,7 @@ inline pluginxx::TableOpTicket blocking_tool(
                 } else if (error_out) {
                     *error_out = PluginString::fromCstr(
                         shim->ctx->host,
-                        "blocking tool: scheduler offload rejected"
+                        "tool: scheduler offload rejected"
                     );
                 }
                 delete job;
@@ -5138,7 +5076,7 @@ inline pluginxx::TableOpTicket blocking_tool(
             if (error_out && shim && shim->ctx) {
                 *error_out = PluginString::fromCstr(
                     shim->ctx->host,
-                    "blocking tool: scheduler offload unavailable"
+                    "tool: scheduler offload unavailable"
                 );
             }
             delete job;
@@ -5165,7 +5103,8 @@ inline pluginxx::TableOpTicket blocking_tool(
     return detail::registerToolTicket(ctx, agent, spec);
 }
 
-/* ==================== 受控轮询工具 (polled_tool) ====================
+
+/* ==================== 受控轮询实现 (tool 的 asio 协程体走这条) ====================
  *
  * 适用: 业务体是 **asio 协程**、等待的是**插件本地 reactor 上的内核就绪事件**
  * (socket 收发 / 子进程管道 / 文件 IO / 本地 steady_timer) 的工具。
@@ -5178,32 +5117,29 @@ inline pluginxx::TableOpTicket blocking_tool(
  * - 连续有进展超过 `PollOneBridge::kPollBurstMax` 步 → 强制让出一次, 交给主程序;
  * - **没有未完成的 polled 操作时不申请请求、不建定时器** (空闲零开销)。
  *
- * 业务签名与 [blocking_tool] 完全一致 (只把返回值换成 `asio::awaitable<std::string>`
- * 或 `asio::awaitable<ToolResult>` —— 后者可以返回失败/取消),
- * 因此迁移通常只是换一个注册函数名:
+ * 业务签名与同步体的 5 参数形态一致 (只把返回值换成 `asio::awaitable<std::string>`
+ * 或 `asio::awaitable<ToolResult>` —— 后者可以返回失败/取消):
  * ```cpp
- * polled_tool(ctx, name, depict, schema,
+ * tool(ctx, ref, name, depict, schema,
  *     [](Ctx& c, std::string_view args, std::string_view tid, std::string_view workDir,
  *        const PluginxxCancelToken* cancel) -> asio::awaitable<std::string> {
  *         ArgReader reader(args);
- *         co_return co_await doAsync(reader.raw(), c.workDir? ...);
+ *         co_return co_await doReadAsync(reader.raw(), workDir);
  *     });
  * ```
  *
  * 约束 (与实现一起遵守):
  * - **不要**在 polled 协程里做重 CPU/阻塞工作: 它运行在主程序 IO 线程上
- *   (目录遍历 / 全文件扫描 / 向量相似度这类继续用 `blocking_tool`);
+ *   (目录遍历 / 全文件扫描 / 向量相似度这类继续用同步体);
  * - **不要**在 polled 协程里 `co_await` kit 的 `Task` 型原语 (`sleep`/`call_tool`/
  *   `invoke_cap`): 它们的 awaiter 依赖 kit 自有 promise 接口, 而这里是
  *   `asio::awaitable`。需要等待时用 asio 原生 `steady_timer` (pump 下可用) 或经
  *   `bridge().local_executor()` 投递后续步骤;
  */
 
-namespace detail {
-
 /// 受控轮询工具的 Job 侧取消查询 (kit 自造的会话级令牌, 不是主程序 token):
 /// 只读 Job 的取消标志与实例 CancelRegistry, 生命周期与该 polled 根相同。
-/// 模板参数是 `polled_tool` 内的局部 Job 类型 (在其完整之后实例化)。
+/// 模板参数是 `registerToolWithAwaitableBody` 内的局部 Job 类型 (在其完整之后实例化)。
 template<typename Job>
 inline int32_t PLUGINXX_CALL polledJobTokenIsRequestedAbi(const PluginxxCancelToken* token) {
     auto* job = (token && token->host_ud) ? static_cast<const Job*>(token->host_ud) : nullptr;
@@ -5214,7 +5150,7 @@ inline int32_t PLUGINXX_CALL polledJobTokenIsRequestedAbi(const PluginxxCancelTo
 ///
 /// - 异常映射: `CanceledException` → Canceled, 其它异常 → FAILED;
 /// - 业务体正常返回但期间已请求取消 → Canceled (payload 为空, 与
-///   `blocking_tool` 的取消语义一致);
+///   同步体的取消语义一致);
 /// - 本协程自身不决定"由谁上报/释放 Job": 由 [runPolledPumpJob] 收尾。
 template<typename Job>
 inline asio::awaitable<void> runPolledToolBody(Job* job) {
@@ -5284,10 +5220,13 @@ inline asio::awaitable<void> runPolledPumpJob(Job* job) {
     root->runCleanup();
 }
 
-} // namespace detail
-
+/// 注册 asio 协程体工具 (`asio::awaitable<T>` 体)
+///
+/// 只给必须等内核就绪对象的工具用 (子进程管道 / 异步文件 IO): 这类等待没有
+/// 主程序可见的唤醒源, 由桥以受控轮询推进 (有操作在跑才申请驱动、空闲零开销)。
+/// 其余场景用同步体或 kit 协程体。
 template<typename Ctx, typename PolledFn>
-inline pluginxx::TableOpTicket polled_tool(
+inline pluginxx::TableOpTicket registerToolWithAwaitableBody(
     Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view name,
@@ -5306,15 +5245,15 @@ inline pluginxx::TableOpTicket polled_tool(
             std::string_view,
             std::string_view,
             const PluginxxCancelToken*>,
-        "polled_tool 业务体签名必须是 (Ctx&, std::string_view args, std::string_view tid, "
-        "std::string_view workDir, const PluginxxCancelToken*) -> asio::awaitable<std::string "
-        "or ToolResult>"
+        "asio 协程体工具的签名必须是 (Ctx&, std::string_view args, std::string_view tid, "
+        "std::string_view workDir, const PluginxxCancelToken*) -> "
+        "asio::awaitable<std::string or ToolResult>"
     );
 
     auto& storage = ctx.storage_;
     // 工具描述用插件自己的字面量: 注册时不再回读主程序的提示词表 —— 那是一次表调用,
     // 插件执行线程上不允许等它 (协作方式: 需要按表里的文本注册就先 co_await
-    // 	oolPromptOf, 再把取到的描述传进来)
+    // toolPromptOf, 再把取到的描述传进来)
     std::string finalDepict(depict);
     storage.push_back(std::move(finalDepict));
     storage.push_back(std::string(schema));
@@ -5475,6 +5414,76 @@ inline pluginxx::TableOpTicket polled_tool(
 
     return detail::registerToolTicket(ctx, agent, spec);
 }
+
+} // namespace detail
+
+/// 注册插件工具 (**唯一入口**: 按实现体的形态选跑法)
+///
+/// 三种写法都对同一件事 —— "调用时跑一段插件代码, 把结果交回主程序":
+/// - `pluginxx::Task<T>` 体: `(Ctx&, args, OpCtl)`, 协程里 `co_await` kit 原语;
+///   阻塞段写 `co_await pluginxx::offload(ex, ...)`, 延迟写 `co_await pluginxx::sleep(c, ms)`;
+/// - `asio::awaitable<T>` 体: `(Ctx&, args, tid, workDir, 取消令牌)`, 只给必须等
+///   内核就绪对象的工具用 (子进程管道 / 异步文件 IO);
+/// - 同步体: 上面 8 种签名之一 (见 [detail::registerToolWithSyncBody]),
+///   在工作池线程上跑, 可以直接阻塞。
+///
+/// `T` 可以是 `std::string` / `std::string_view` / `ToolResult`: 直接返回字符串
+/// 等于成功, 要表达失败或带附件时返回 `ToolResult`。
+///
+/// 线程: 三种体都不在插件执行线程上跑 (协程体挂起后不占线程, 同步体在工作池上),
+/// 因此插件执行线程上的派发、其它插件的回调不会被一次工具调用挡住。
+///
+/// - `default_timeout_ms` 主程序侧单次调用超时 (0 = 用配置默认值)
+/// - `flags` 预留位 (`AGENTXX_PLUGIN_TOOL_FLAG_*`)
+/// - `return` 注册 ticket (调用即提交, `co_await` 后看 `.ok()`)
+template<typename Ctx, typename ToolFn>
+inline pluginxx::TableOpTicket tool(
+    Ctx&             ctx,
+    const ScopeRef&  agent,
+    std::string_view name,
+    std::string_view depict,
+    std::string_view schema,
+    ToolFn&&         fn,
+    int64_t          default_timeout_ms = 0,
+    int32_t          flags              = 0
+) {
+    constexpr auto kind = detail::toolBodyKindOf<ToolFn, Ctx>();
+    if constexpr (kind == detail::ToolBodyKind::Task) {
+        return detail::registerToolWithTaskBody(
+            ctx,
+            agent,
+            name,
+            depict,
+            schema,
+            std::forward<ToolFn>(fn),
+            default_timeout_ms,
+            flags
+        );
+    } else if constexpr (kind == detail::ToolBodyKind::Awaitable) {
+        return detail::registerToolWithAwaitableBody(
+            ctx,
+            agent,
+            name,
+            depict,
+            schema,
+            std::forward<ToolFn>(fn),
+            default_timeout_ms,
+            flags
+        );
+    } else {
+        return detail::registerToolWithSyncBody(
+            ctx,
+            agent,
+            name,
+            depict,
+            schema,
+            std::forward<ToolFn>(fn),
+            default_timeout_ms,
+            flags
+        );
+    }
+}
+
 
 namespace detail {
 
@@ -5659,7 +5668,7 @@ inline pluginxx::TableOpTicket graph_node(
  * 不参与判定。
  *
  * 典型用法 (文件系统类工具):
- *     blocking_tool(ctx, "my_read", depict, schema, fn);
+ *     tool(ctx, ref, "my_read", depict, schema, fn);
  *     registerReadPathPermission(ctx, "my_read", "path");
  *
  * 权限声明属于附加能力: 主程序未加载权限中间件时返回非 0, 插件可忽略 (工具

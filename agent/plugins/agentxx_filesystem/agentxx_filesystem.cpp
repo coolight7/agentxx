@@ -1,14 +1,14 @@
 /// agentxx_filesystem —— 文件系统工具插件 (list / read / write / edit / glob / grep)
 ///
-/// 分工 (见 plugin_kit.h 的 polled_tool 说明):
+/// 分工 (见 plugin_kit.h 的 tool 说明):
 /// - `read` / `write` / `edit`: 实现体是 asio 协程 (`asio::stream_file` 异步读写),
 ///   等待的是插件本地 reactor 上的文件 IO 就绪事件, 因此文件异步 I/O 可用时注册为
-///   **声明式受控轮询**工具 —— 大文件读写不再占用主程序工作线程池;
+///   **asio 协程体** (`tool`) —— 大文件读写不再占用工作线程池;
 ///   文件异步 I/O 不可用 (编译期未启用, 或运行环境的 io_uring 被 seccomp 拦截)
-///   时回退同步实现, 改注册 `blocking_tool` (offload 工作线程);
+///   时回退同步实现, 改注册同步体 (`tool`, offload 工作线程);
 ///   可用性判断统一走 `utilxx_base::isAsyncFileIoSupported()`;
 /// - `list` / `glob` / `grep`: 目录遍历 + 全文件扫描 + 正则/编码转换, 这是 CPU/阻塞
-///   工作而非异步 IO, 放进受控轮询只会阻塞主程序 IO 线程, 因此保持 `blocking_tool`。
+///   工作而非异步 IO, 放进受控轮询只会阻塞主程序 IO 线程, 因此保持同步体 (`tool`)。
 #include "agentxx_fs_plugin.h"
 #include "asio/awaitable.hpp"
 #include "filesystem_impl.h"
@@ -302,7 +302,7 @@ static pluginxx::Task<void> fsSetupAsync(FsPluginCtx& ctx, ScopeRef ref) {
               .number("timeout", kTimeoutDesc, false, 60.0)
               .build();
 
-    co_await blocking_tool(
+    co_await tool(
          ctx,
          ref,
         kNameList,
@@ -352,7 +352,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
               .build();
 
     if (utilxx_base::isAsyncFileIoSupported()) {
-        polled_tool(
+        tool(
              ctx,
              ref,
             kNameRead,
@@ -376,7 +376,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             kReadFlags
         );
     } else {
-        blocking_tool(
+        tool(
              ctx,
              ref,
             kNameRead,
@@ -408,7 +408,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
               .string("path", kPathDescMedia, /*required=*/true)
               .build();
 
-    co_await blocking_tool(
+    co_await tool(
         ctx,
         ref,
         kNameReadMedia,
@@ -446,7 +446,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
               .build();
 
     if (utilxx_base::isAsyncFileIoSupported()) {
-        polled_tool(
+        tool(
              ctx,
              ref,
             kNameWrite,
@@ -470,7 +470,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             kWriteFlags
         );
     } else {
-        blocking_tool(
+        tool(
              ctx,
              ref,
             kNameWrite,
@@ -526,7 +526,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
               .build();
 
     if (utilxx_base::isAsyncFileIoSupported()) {
-        polled_tool(
+        tool(
              ctx,
              ref,
             kNameEdit,
@@ -547,7 +547,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             }
         );
     } else {
-        blocking_tool(
+        tool(
              ctx,
              ref,
             kNameEdit,
@@ -590,7 +590,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                           .number("timeout", kTimeoutDesc, false, 60.0)
                           .build();
 
-    co_await blocking_tool(
+    co_await tool(
          ctx,
          ref,
         kNameGlob,
@@ -645,7 +645,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                           .number("timeout", kTimeoutDesc, false, 60.0)
                           .build();
 
-    co_await blocking_tool(
+    co_await tool(
          ctx,
          ref,
         kNameGrep,
@@ -684,7 +684,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                           .boolean("overwrite", kReplaceOverwriteDesc, false, false)
                           .build();
 
-    co_await blocking_tool(
+    co_await tool(
          ctx,
          ref,
         kNameMove,
@@ -723,7 +723,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                           .boolean("overwrite", kReplaceOverwriteDesc, false, false)
                           .build();
 
-    co_await blocking_tool(
+    co_await tool(
          ctx,
          ref,
         kNameCopy,
@@ -760,7 +760,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                             .boolean("recursive", kRemoveRecursiveDesc, false, false)
                             .build();
 
-    co_await blocking_tool(
+    co_await tool(
          ctx,
          ref,
         kNameRemove,

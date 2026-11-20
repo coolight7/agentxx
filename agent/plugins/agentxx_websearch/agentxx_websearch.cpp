@@ -53,7 +53,7 @@ constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 ///
 /// - 主程序把完成回调派发在**主程序 io 线程**上, 所以在这里等不会自锁;
 /// - 在主程序 io 线程上等会把整个主程序卡住, 这种情况直接按错误返回;
-/// - 工具实现体本来就是阻塞形态 (`blocking_tool`), 所以可以这么等。
+/// - 工具实现体本来就是阻塞形态 (`tool`), 所以可以这么等。
 ///   协程里不要用它的思路 (那是 `co_await` 的事)。
 static agentxx::plugin::NetResult netCallWait(
     const PluginxxHost*           host,
@@ -175,7 +175,7 @@ static HttpResult netHttpExecute(WebsearchPluginCtx& ctx, const HttpRequestSpec&
 /// 注册事务 (start 的实际内容): 读取主程序配置并注册三个工具。
 ///
 /// 两个工具的实现体都是**同步**函数: 网络经主程序 `<应用名>.net` 表的
-/// `http.fetch` (异步受理 + 工作线程上等结果), 因此注册为 `blocking_tool` ——
+/// `http.fetch` (异步受理 + 工作线程上等结果), 因此注册为 `tool` ——
 /// 等待期间只占一个工作线程, 不在主程序 io 线程上阻塞。
 static pluginxx::Task<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRef ref) {
     if (ctx.iface.model && ctx.iface.model->get_config) {
@@ -210,7 +210,7 @@ static pluginxx::Task<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRe
               .object("header", kHeaderArgDesc)
               .build();
 
-    co_await blocking_tool(
+    co_await tool(
         ctx,
         ref,
         kNameFetch,
@@ -244,7 +244,7 @@ static pluginxx::Task<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRe
                                 .object("header", kHeaderArgDesc)
                                 .build();
 
-        blocking_tool(
+        tool(
             ctx,
             ref,
             kNameSearch,

@@ -2459,13 +2459,13 @@ inline ToolResult fileGrepExecute(
 
 // =====================================================================
 // 协程版执行体 (read / write / edit)
-// - 插件入口经 plugin_kit::polled_tool 注册: 协程跑在插件本地 reactor 上,
+// - 插件入口经 plugin_kit::tool 注册: 协程跑在插件本地 reactor 上,
 //   由主程序受控轮询 (driver 请求 + poll_one) 驱动 asio::stream_file 的异步 IO;
 //   上述 *Execute 同步版仍由 list / glob / grep 使用 (CPU/遍历类工具走
-//   blocking_tool + offload, 是显式例外);
+//   同步体 + offload, 是显式例外);
 // - 文件异步 I/O 的可用性由 utilxx_base::isAsyncFileIoSupported() 判断
 //   (编译期宏 + 运行时 io_uring 探测), 不可用时 *ExecuteAsync 回退同步实现,
-//   注册侧同样按该判断改走 blocking_tool, 行为与 offload 一致;
+//   注册侧同样按该判断改走同步体, 行为与 offload 一致;
 //   本回退亦供测试等直调场景保持单一入口
 // =====================================================================
 #if defined(ASIO_HAS_FILE) || defined(BOOST_ASIO_HAS_FILE)

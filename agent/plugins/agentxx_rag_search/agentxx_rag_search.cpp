@@ -142,7 +142,7 @@ static pluginxx::Task<void> ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
                       )
                       .build();
 
-    co_await blocking_tool(
+    co_await tool(
         ctx,
         st.ref,
         kNameSearch,

@@ -180,7 +180,7 @@ static pluginxx::Task<void>
               )
               .build();
 
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "agentxx_audio_stream",

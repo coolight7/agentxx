@@ -23,7 +23,7 @@ struct SysPluginCtx : public PluginBase {};
 static pluginxx::Task<void> sysSetupAsync(SysPluginCtx& ctx, ScopeRef ref) {
     auto schema = (co_await agentxx::plugin::schemaOf(ctx, kNameDatetime)).build();
 
-    co_await fast_tool(
+    co_await tool(
         ctx,
         ref,
         kNameDatetime,

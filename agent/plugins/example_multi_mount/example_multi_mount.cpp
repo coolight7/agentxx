@@ -99,7 +99,7 @@ static void multiMountStop(
 static pluginxx::Task<void>
     registerMultiMountTools(MultiMountCtx& ctx, std::shared_ptr<MountState> state) {
     // 工具 1: 计数 +1 (计数按挂载隔离)
-    co_await agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         state->ref,
         "multi_mount_incr",
@@ -128,7 +128,7 @@ static pluginxx::Task<void>
     );
 
     // 工具 2: 本挂载的状态 (含 config_json, 用于验证 plugin.mount[].args 覆盖)
-    co_await agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         state->ref,
         "multi_mount_state",

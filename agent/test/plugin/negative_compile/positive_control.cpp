@@ -7,9 +7,46 @@ using namespace agentxx::plugin;
 struct Ctx : PluginBase {};
 
 void usePositive(Ctx& ctx) {
-    tool(ctx, "pos.tool", "d", "{}", [](Ctx&, std::string_view args, OpCtl) -> Task<std::string> {
-        co_return std::string{args};
-    });
+    // 1. kit 协程体 (Task 体): 可以在体内 co_await kit 原语
+    tool(
+        ctx,
+        ScopeRef{},
+        "pos.tool",
+        "d",
+        "{}",
+        [](Ctx&, std::string_view args, OpCtl) -> Task<std::string> {
+            co_return std::string{args};
+        }
+    )
+        .forget();
+
+    // 2. 同步体: 在工作池线程上跑, 可以直接阻塞
+    tool(
+        ctx,
+        ScopeRef{},
+        "pos.sync",
+        "d",
+        "{}",
+        [](Ctx&, std::string_view args) -> std::string {
+            return std::string{args};
+        }
+    )
+        .forget();
+
+    // 3. asio 协程体: 等待插件本地 reactor 上的内核就绪事件
+    tool(
+        ctx,
+        ScopeRef{},
+        "pos.polled",
+        "d",
+        "{}",
+        [](Ctx&, std::string_view, std::string_view, std::string_view, const PluginxxCancelToken*)
+            -> asio::awaitable<std::string> {
+            co_return std::string{};
+        }
+    )
+        .forget();
+
     // 功能埋点实现行 = 能力行 (实现体收载荷, 返回结果正文)
     providePoint(ctx, ScopeRef{}, "pos.point", [](Ctx&, std::string_view payload) -> std::string {
         return std::string{payload};
@@ -19,18 +56,8 @@ void usePositive(Ctx& ctx) {
         return {};
     })
         .forget();
-    graph_node(ctx, "pos.node", "{}", [](Ctx&, const RootRequest&) -> std::string {
+    graph_node(ctx, ScopeRef{}, "pos.node", "{}", [](Ctx&, const RootRequest&) -> std::string {
         return "{}";
-    });
-    // 受控轮询工具: 业务体是 asio 协程 (等待插件本地 reactor 上的内核就绪事件)
-    polled_tool(
-        ctx,
-        "pos.polled",
-        "d",
-        "{}",
-        [](Ctx&, std::string_view, std::string_view, std::string_view, const PluginxxCancelToken*)
-            -> asio::awaitable<std::string> {
-            co_return std::string{};
-        }
-    );
+    })
+        .forget();
 }

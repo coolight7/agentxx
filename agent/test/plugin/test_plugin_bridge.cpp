@@ -1079,7 +1079,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(harness.cancelCalls, 0); // 两者请求都已执行, 无需取消
     }
 
-    /// 11. 受控轮询 (`polled_tool`): 插件本地 reactor 上的等待由 pump 推进。
+    /// 11. 受控轮询 (`tool` 的 asio 协程体): 插件本地 reactor 上的等待由 pump 推进。
     ///     - 首步不内联 (start 返回时业务体未运行, 只有桥的一次请求);
     ///     - 有进展 (本轮 poll_one 执行到 handler) 立即续票, 不等退避;
     ///     - 无进展时恰好安排一次 10ms 退避 (期间不新增请求);
@@ -1093,7 +1093,7 @@ TestResult testPluginBridge() {
 
         int  bodyRuns   = 0;
         bool sawPumping = false;
-        agentxx::plugin::polled_tool(
+        agentxx::plugin::tool(
             ctx,
             g_agentRef,
             "polled_timer",
@@ -1190,7 +1190,7 @@ TestResult testPluginBridge() {
         ctx.init(&host);
         g_capturedTool = CapturedTool{};
 
-        agentxx::plugin::polled_tool(
+        agentxx::plugin::tool(
             ctx,
             g_agentRef,
             "polled_cancel",
@@ -1278,7 +1278,7 @@ TestResult testPluginBridge() {
         g_capturedTool = CapturedTool{};
 
         int bodyRuns = 0;
-        agentxx::plugin::polled_tool(
+        agentxx::plugin::tool(
             ctx,
             g_agentRef,
             "polled_stop",
@@ -1334,7 +1334,7 @@ TestResult testPluginBridge() {
         g_capturedTool = CapturedTool{};
 
         constexpr int kSteps = agentxx::plugin::detail::PollOneBridge::kPollBurstMax + 40;
-        agentxx::plugin::polled_tool(
+        agentxx::plugin::tool(
             ctx,
             g_agentRef,
             "polled_burst",

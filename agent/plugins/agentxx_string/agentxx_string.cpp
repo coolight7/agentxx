@@ -45,7 +45,7 @@ static pluginxx::Task<void> stringSetupAsync(StringPluginCtx& ctx, ScopeRef ref)
                              .string("content", "The HTML string to convert.", /*required=*/true)
                              .build();
 
-    co_await blocking_tool(
+    co_await tool(
         ctx,
         ref,
         kNameHtml2Md,
@@ -84,7 +84,7 @@ static pluginxx::Task<void> stringSetupAsync(StringPluginCtx& ctx, ScopeRef ref)
                             .boolean("ignore_case", kIgnoreCaseDesc, false, false)
                             .build();
 
-    co_await blocking_tool(
+    co_await tool(
         ctx,
         ref,
         kNameRegexp,

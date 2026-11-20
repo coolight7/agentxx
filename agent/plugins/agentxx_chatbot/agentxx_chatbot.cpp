@@ -693,12 +693,12 @@ std::string
 
 /// 给一个 agent 注册 `chatbot_*` 工具 (7 个 + 调试工具)
 ///
-/// 工作体**统一用 `blocking_tool`**: 它们都要 `runOnIoBlocking` 等插件 io 线程的结果,
-/// 而插件 io 线程反过来也会找主程序 IO 线程 (开通道 / 投输入 / 要面板驱动票)。
-/// 一旦当成 `fast_tool` (在主程序 IO 线程上就地执行), 两边就会互等 —— 实测表现为
+/// 工作体**统一写成同步体** (注册入口仍是 `tool`): 它们都要 `runOnIoBlocking` 等
+/// 插件 io 线程的结果, 而插件 io 线程反过来也会找主程序 IO 线程 (开通道 / 投输入 /
+/// 要面板驱动票)。同步体跑在工作池线程上, 两边就只是等, 不会互相堵死 ——
+/// 在插件执行线程上就地跑则会互等, 实测表现为
 /// "Plugin operation `chatbot_status` start blocked IO for over 100ms", 极端情况一直
-/// 卡到 25 秒工具超时 (调用方看到 "chatbot 插件未就绪")。offload 到工作线程后两边
-/// 都只是等, 不会互相堵死。
+/// 卡到 25 秒工具超时 (调用方看到 "chatbot 插件未就绪")。
 ///
 /// 内部把编译期已知的处理函数包成 lambda, 这样 SDK 不需要知道 `ChatbotToolDeps` 的类型。
 /// 注册 6 个 chatbot_* 工具 (**协程形态**)
@@ -749,7 +749,7 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
         });
     };
 
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "chatbot_send_message",
@@ -761,7 +761,7 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
         sendMessage
     );
 
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "chatbot_chat_info",
@@ -772,7 +772,7 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
         }
     );
 
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "chatbot_history",
@@ -783,7 +783,7 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
         }
     );
 
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "chatbot_status",
@@ -794,7 +794,7 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
         }
     );
 
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "chatbot_set_mode",
@@ -811,7 +811,7 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
             return ac::toolRecallMessage(*deps, t, a);
         });
     };
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "chatbot_recall_message",
@@ -827,7 +827,7 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
             return ac::toolTask(*deps, t, a);
         });
     };
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "chatbot_task",
@@ -854,7 +854,7 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
             return ac::toolDebugOutbox(*deps, a);
         });
     };
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "chatbot_debug_inject",
@@ -863,7 +863,7 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
         kDebugInjectSchema,
         debugInject
     );
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "chatbot_debug_outbox",
@@ -879,7 +879,7 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
             return ac::toolDebugPlatform(*deps, a);
         });
     };
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "chatbot_debug_platform",

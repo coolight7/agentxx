@@ -2,7 +2,7 @@
 ///
 /// 演示能力:
 /// 1. 工具注册:
-///    - example_echo (快同步 fast_tool, io 线程直跑; 返回字符串 = 永远成功)
+///    - example_echo (同步体, 工作池线程上跑; 返回字符串 = 永远成功)
 ///    - example_fail_demo (返回 ToolResult 的对照: 失败靠状态, 不靠抛异常或文本前缀)
 ///    - example_caller (锚定 Task 协程, 经 call_tool 异步互调)
 ///    - example_sleep (锚定 Task 协程, 经 co_await sleep 精确唤醒)
@@ -164,8 +164,8 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
 /// - 每条登记都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到失败原因
 static pluginxx::Task<void>
     exampleAgentSetup(AgentCtx& ctx, agentxx::plugin::AgentRef ref) {
-    // 1.1 echo: 快同步内联工具 (fast_tool)
-    co_await agentxx::plugin::fast_tool(
+    // 1.1 echo: 最简单的同步体工具
+    co_await agentxx::plugin::tool(
          ctx,
          ref,
         "example_echo",
@@ -185,7 +185,7 @@ static pluginxx::Task<void>
     //   不加 `[Error: ...]` 前缀 (主程序统一排版)
     // - `ToolResult::ok(文本)` 与直接返回字符串等价
     // - 与 example_echo 对照: 一个返回字符串 (永远成功), 一个能表达失败
-    co_await agentxx::plugin::fast_tool(
+    co_await agentxx::plugin::tool(
          ctx,
          ref,
         "example_fail_demo",
@@ -300,16 +300,16 @@ static pluginxx::Task<void>
         }
     );
 
-    // 1.5 polled_timer: 受控轮询样例 (声明式 `polled_tool`)
+    // 1.5 polled_timer: asio 协程体样例 (`tool` 的 awaitable 形态)
     //
-    // 业务体是 asio 协程, 等待的是**插件本地 reactor** 上的 `steady_timer`:
+    // 业务体是 `asio::awaitable`, 等待的是**插件本地 reactor** 上的 `steady_timer`:
     // 这类等待没有"主程序可见唤醒源", 因此由桥以受控轮询推进 ——
     // - 有未完成的 polled 操作时才申请驱动请求 (空闲零开销);
     // - 有进展立刻续下一次请求, 无进展退避 10ms, 突发 256 步后强制让出;
     // - 主程序不提供 `scheduler.request_driver`/`scheduler.sleep` 时自动降级为
     //   offload 工作线程 + 局部 io_context 跑完 (行为对业务体透明)。
     // 返回的 pumpOnStart 证明该协程确实以"受控轮询根"身份运行。
-    co_await agentxx::plugin::polled_tool(
+    co_await agentxx::plugin::tool(
          ctx,
          ref,
         "example_polled_timer",

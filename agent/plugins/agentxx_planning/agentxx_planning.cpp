@@ -449,7 +449,7 @@ static pluginxx::Task<void>
                   .string("notes", kArgNotesDesc)
                   .build();
 
-        co_await agentxx::plugin::fast_tool(
+        co_await agentxx::plugin::tool(
             *ctx,
             ref,
             kNamePlanning,

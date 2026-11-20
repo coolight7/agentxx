@@ -414,7 +414,7 @@ static pluginxx::Task<void> textSelectionAgentSetup(
               )
               .build();
 
-    co_await blocking_tool(
+    co_await tool(
         ctx,
         ref,
         "agentxx_text_selection_monitor",

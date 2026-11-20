@@ -2,11 +2,11 @@
 ///
 /// 两个工具的实现体都是 asio 协程 (`bashExecuteAsync` / `windowsExecuteAsync`):
 /// 子进程管道绑定到协程 executor, 等待的是插件本地 reactor 上的管道就绪事件,
-/// 因此注册为**声明式受控轮询**工具 (`polled_tool`, 见 plugin_kit.h)。
+/// 因此注册为 asio 协程体工具 (`tool`, 见 plugin_kit.h)。
 /// 并发多条命令共享同一条 polled 驱动序列与同一个本地 reactor, 不再每条命令
 /// 占死一个主程序工作线程直到超时 (会话取消经 CancelRegistry 事件驱动 kill 进程组)。
 /// 只有关闭 `AGENTXX_ENABLE_BOOST_PROCESS` 的 popen 回退实现仍是阻塞函数,
-/// 继续走 `blocking_tool` (offload 工作线程)。
+/// 继续走同步体 (`tool`, offload 工作线程)。
 ///
 /// 工具提示词由本插件负责 (原 libagentxx 的 AgentPrompt 环境探测已迁移至此):
 /// start 事务内先探测运行环境 (python/node 与 Windows 侧 PowerShell), 再把
@@ -126,7 +126,7 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
               .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-    co_await polled_tool(
+    co_await tool(
         ctx,
         ref,
         kNameWindows,
@@ -168,7 +168,7 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
         }
     );
 #else
-    co_await blocking_tool(
+    co_await tool(
         ctx,
         ref,
         kNameWindows,
@@ -232,7 +232,7 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
               .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-    co_await polled_tool(
+    co_await tool(
         ctx,
         ref,
         kNameBash,
@@ -274,7 +274,7 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
         }
     );
 #else
-    co_await blocking_tool(
+    co_await tool(
         ctx,
         ref,
         kNameBash,

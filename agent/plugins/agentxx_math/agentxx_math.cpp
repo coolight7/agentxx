@@ -47,7 +47,7 @@ static pluginxx::Task<void> mathSetupAsync(MathPluginCtx& ctx, ScopeRef ref) {
               )
               .build();
 
-    co_await fast_tool(
+    co_await tool(
         ctx,
         ref,
         kNameCalculate,

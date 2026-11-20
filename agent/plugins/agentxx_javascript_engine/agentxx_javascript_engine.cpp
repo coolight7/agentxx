@@ -5589,7 +5589,7 @@ JSValue JsEngine::bridgeCall(
             spec.description = agentxx::plugin::PluginStringView::from(desc.data(), desc.size());
             spec.parameters_json
                 = agentxx::plugin::PluginStringView::from(paramsJson.data(), paramsJson.size());
-            // 与 C++ kit 的 fast_tool / blocking_tool / polled_tool 同一组可选项:
+            // 与 C++ kit 的 tool 同一组可选项:
             // - timeoutMs: 本次调用的默认超时 (0 = 不限), 超时按普通失败结束
             // - autoSummary / parallelSafe / repeatCallCheck: 工具行为标志 (见 plugin_api.h)
             spec.default_timeout_ms = propInt64(ctx, specObj, "timeoutMs", 0);

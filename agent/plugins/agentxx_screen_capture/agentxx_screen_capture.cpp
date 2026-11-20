@@ -194,7 +194,7 @@ static pluginxx::Task<void>
     auto        p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_screen_capture");
     std::string depict = p.depict.empty() ? kScreenCaptureDefaultDepict : p.depict;
 
-    co_await agentxx::plugin::blocking_tool(
+    co_await agentxx::plugin::tool(
         ctx,
         ref,
         "agentxx_screen_capture",

@@ -1257,7 +1257,7 @@ throw new Error("top-level rollback probe");
             static SlowCtx slowCtx;
             slowCtx.init(inst23->hostView());
             const auto slowRef = scopeRefOf(*ctx->pluginManager);
-            agentxx::plugin::blocking_tool(
+            agentxx::plugin::tool(
                 slowCtx,
                 slowRef,
                 "slow_timeout_tool",
@@ -1922,7 +1922,7 @@ throw new Error("top-level rollback probe");
             static SlowCtx slowCtx;
             slowCtx.init(inst31->hostView());
             const auto slowRef = scopeRefOf(*ctx->pluginManager);
-            agentxx::plugin::blocking_tool(
+            agentxx::plugin::tool(
                 slowCtx,
                 slowRef,
                 "timeout_tool",
@@ -1948,7 +1948,7 @@ throw new Error("top-level rollback probe");
             ctx->pluginMount->unregisterTool(inst31.get(), "timeout_tool");
         }
 
-        // 31.6 异常守卫: blocking_tool 异常守卫保护 —— 用户 execute 抛异常时
+        // 31.6 异常守卫: tool 异常守卫保护 —— 用户 execute 抛异常时
         //      适配层转 PLUGINXX_OPERATOR_FAILED, 异常不穿越 C ABI
         {
             struct BoomCtx : public agentxx::plugin::PluginBase {};
@@ -1956,7 +1956,7 @@ throw new Error("top-level rollback probe");
             static BoomCtx boomCtx;
             boomCtx.init(inst31->hostView());
             const auto boomRef = scopeRefOf(*ctx->pluginManager);
-            agentxx::plugin::blocking_tool(
+            agentxx::plugin::tool(
                 boomCtx,
                 boomRef,
                 "boom_tool",
@@ -1985,7 +1985,7 @@ throw new Error("top-level rollback probe");
             static MsgCtx msgCtx;
             msgCtx.init(inst31->hostView());
             const auto msgRef = scopeRefOf(*ctx->pluginManager);
-            agentxx::plugin::blocking_tool(
+            agentxx::plugin::tool(
                 msgCtx,
                 msgRef,
                 "error_looking_text_tool",
@@ -2760,7 +2760,7 @@ throw new Error("top-level rollback probe");
         FakeCtx fctx;
         fctx.init(fakeInst->hostView());
         const auto fakeRef = scopeRefOf(*rollbackCtx->pluginManager);
-        agentxx::plugin::fast_tool(
+        agentxx::plugin::tool(
             fctx,
             fakeRef,
             "fake_rollback_tool",
@@ -3030,7 +3030,7 @@ throw new Error("top-level rollback probe");
     }
 
     // ---- 38d-2. agentxx_filesystem 备用注册: 关闭文件异步 I/O 后重新加载插件,
-    //          read/write/edit 应改注册 blocking_tool (offload 阻塞池) 且功能不变
+    //          read/write/edit 应改注册同步体 (tool, offload 阻塞池) 且功能不变
     //          (对应容器/虚拟化下 io_uring 被 seccomp 拦截的部署环境) ----
     {
         /// 作用域结束恢复自动探测 (含异常路径)
@@ -3064,7 +3064,7 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(editTool != nullptr);
 
             if (writeTool && readTool && editTool) {
-                // write / read / edit 全程走同步备用实现 (blocking_tool)
+                // write / read / edit 全程走同步备用实现 (tool)
                 auto w = (co_await writeTool->execute_async(utilxx_base::Json{
                     {"path",      file                           },
                     {"content",   "hello fallback\nsecond line\n"},

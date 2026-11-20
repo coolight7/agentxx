@@ -115,7 +115,7 @@ void PLUGINXX_CALL toolNotifyDoneSingle(
 
 /// 整帧完成回调: `frame` 已经是 [encodeToolResultFrame] 的产物
 ///
-/// 用到它的地方: 受控轮询工具 (`plugin_kit.h` 的 `polled_tool`) 在插件侧把两段
+/// 用到它的地方: `tool` 的 asio 协程体路径 (`plugin_kit.h`) 在插件侧把两段
 /// 拼成帧, 经 `PolledRoot::notifyHost` 的单一字符串通道交上来。
 /// 非帧内容 (例如框架放弃根时给的失败原因) 同样走这里, 收端会当作正文处理。
 void PLUGINXX_CALL toolNotifyFrame(
