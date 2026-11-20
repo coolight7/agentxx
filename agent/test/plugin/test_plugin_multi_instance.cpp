@@ -403,7 +403,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             }
 
             // A 停用引擎 (级联停JS 插件, 线程退出) → B 完全不受影响
-            ctxA->pluginManager->disable("agentxx_javascript_engine");
+            co_await ctxA->pluginManager->disable("agentxx_javascript_engine");
             for (int i = 0; i < 300 && jsA && !jsA->lifecycleStopped; ++i) {
                 co_await sleepMsMI(10);
             }
@@ -421,7 +421,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             }
 
             // A 重新启用 → 引擎线程重建, 脚本重新加载; B 的实例继续可用
-            ctxA->pluginManager->enable("agentxx_javascript_engine");
+            co_await ctxA->pluginManager->enable("agentxx_javascript_engine");
             for (int i = 0; i < 400 && !ctxA->toolRegistry->contains("js_hello"); ++i) {
                 co_await sleepMsMI(10);
             }

@@ -30,6 +30,8 @@
 #define XX_TEST_PASSED result.passed
 #define XX_TEST_FAILED result.failed
 
+#include "agentxx-test/plugin/coroutine_runner.h"
+
 namespace agentxx::plugin {
 /// 主程序 vtable 加载入口（定义在 plugin_manager_vtable.cpp；测试用它给伪实例
 /// 拿到真实接口表，从而直接驱动 C ABI 入口）。
@@ -1702,8 +1704,13 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.mount->registerTool(inst.get(), &probe->spec), 0);
         XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
 
-        // ---- disable: 主程序侧同步摘除；stop 事务投递到 IO 线程 ----
-        f.manager->disable("lifecycle_plugin");
+        // ---- disable: 主程序侧摘除 + stop 事务已走完 (disable 返回即已落定) ----
+        const bool disabledOk
+            = agentxx::test::runPluginCoroutine(
+                f.manager->ioExecutor(),
+                f.manager->disable("lifecycle_plugin")
+            );
+        XX_TEST_EXPECT_TRUE(disabledOk);
         XX_TEST_EXPECT_FALSE(inst->enabled);
         XX_TEST_EXPECT_TRUE(inst->userDisabled);
         XX_TEST_EXPECT_EQ(
@@ -1711,19 +1718,23 @@ TestResult testPluginRuntime() {
             static_cast<int>(pluginxx::PluginInstanceState::Disabled)
         );
         XX_TEST_EXPECT_FALSE(f.manager->registry()->contains("runtime_tool"));
-        XX_TEST_EXPECT_FALSE(inst->lifecycleStopped); // stop 尚未执行
-        XX_TEST_EXPECT_EQ(probe->stops, baseStops);
-        f.drainAll();
-        XX_TEST_EXPECT_EQ(probe->stops, baseStops + 1);
+        // 启停已是可等待的协程: 返回时 stop 事务已完成 (不再“投递了就不管”)
         XX_TEST_EXPECT_TRUE(inst->lifecycleStopped);
+        XX_TEST_EXPECT_EQ(probe->stops, baseStops + 1);
+        f.drainAll();
         XX_TEST_EXPECT_TRUE(inst->allToolNames().empty()); // 记录已清空，等待 start 重新声明
 
-        // ---- enable: start 事务重新注册 ----
-        f.manager->enable("lifecycle_plugin");
+        // ---- enable: create 事务重新注册 ----
+        const bool enabledOk
+            = agentxx::test::runPluginCoroutine(
+                f.manager->ioExecutor(),
+                f.manager->enable("lifecycle_plugin")
+            );
+        XX_TEST_EXPECT_TRUE(enabledOk);
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_FALSE(inst->userDisabled);
-        f.drainAll();
         XX_TEST_EXPECT_EQ(probe->starts, baseStarts + 1);
+        f.drainAll();
         XX_TEST_EXPECT_FALSE(inst->lifecycleStopped);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
@@ -1739,9 +1750,9 @@ TestResult testPluginRuntime() {
 
         // ---- 重复 enable/disable 不累积重复项 ----
         for (int i = 0; i < 3; ++i) {
-            f.manager->disable("lifecycle_plugin");
+            agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->disable("lifecycle_plugin"));
             f.drainAll();
-            f.manager->enable("lifecycle_plugin");
+            agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("lifecycle_plugin"));
             f.drainAll();
         }
         XX_TEST_EXPECT_EQ(probe->starts, baseStarts + 4);
@@ -1750,8 +1761,8 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(inst->allToolObjects().size(), size_t{1});
 
         // ---- 禁用后立刻启用（stop 事务仍在队列）: 先 stop 再 start ----
-        f.manager->disable("lifecycle_plugin");
-        f.manager->enable("lifecycle_plugin");
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->disable("lifecycle_plugin"));
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("lifecycle_plugin"));
         f.drainAll();
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_FALSE(inst->lifecycleStopped);
@@ -1761,12 +1772,12 @@ TestResult testPluginRuntime() {
 
         // ---- start 失败: 回到 Disabled、不留部分注册；再次启用可恢复 ----
         probe->failStart = true;
-        f.manager->disable("lifecycle_plugin");
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->disable("lifecycle_plugin"));
         f.drainAll();
         const int startsBeforeFail      = probe->starts;
         probe->partialRegistration      = false;
         probe->partialGraphRegistration = false;
-        f.manager->enable("lifecycle_plugin");
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("lifecycle_plugin"));
         f.drainAll();
         XX_TEST_EXPECT_EQ(probe->starts, startsBeforeFail + 1);
         XX_TEST_EXPECT_TRUE(probe->partialRegistration);      // start 确实留下过部分注册
@@ -1782,7 +1793,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(graphSlot && !graphSlot->snapshot().active); // 槽位失效
 
         probe->failStart = false;
-        f.manager->enable("lifecycle_plugin");
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("lifecycle_plugin"));
         f.drainAll();
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_EQ(
@@ -1795,7 +1806,7 @@ TestResult testPluginRuntime() {
 
         // ---- 关闭流程中的实例不接受启用状态变化 ----
         inst->lifetime->requestClose();
-        f.manager->disable("lifecycle_plugin");
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->disable("lifecycle_plugin"));
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
@@ -1837,7 +1848,7 @@ TestResult testPluginRuntime() {
         top->depends        = {"mid", "side"}; // 菱形: top 经 mid/side 两级依赖 leaf
 
         // ---- 三级 + 菱形级联禁用 ----
-        f.manager->disable("leaf");
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->disable("leaf"));
         XX_TEST_EXPECT_FALSE(leaf->enabled);
         XX_TEST_EXPECT_TRUE(leaf->userDisabled);
         XX_TEST_EXPECT_FALSE(mid->enabled);
@@ -1849,7 +1860,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_FALSE(top->userDisabled);
 
         // ---- 启用按依赖顺序恢复全部被级联禁用的插件 ----
-        f.manager->enable("leaf");
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("leaf"));
         XX_TEST_EXPECT_TRUE(leaf->enabled);
         XX_TEST_EXPECT_TRUE(mid->enabled);
         XX_TEST_EXPECT_TRUE(side->enabled);
@@ -1858,18 +1869,18 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_FALSE(top->blockedByDependencies);
 
         // ---- 用户显式禁用的插件不被级联恢复 ----
-        f.manager->disable("top");
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->disable("top"));
         XX_TEST_EXPECT_TRUE(top->userDisabled);
-        f.manager->disable("leaf");
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->disable("leaf"));
         XX_TEST_EXPECT_FALSE(mid->enabled);
         XX_TEST_EXPECT_TRUE(mid->blockedByDependencies);
         XX_TEST_EXPECT_TRUE(top->userDisabled); // 用户禁用标记不被级联改写
-        f.manager->enable("leaf");
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("leaf"));
         XX_TEST_EXPECT_TRUE(mid->enabled);
         XX_TEST_EXPECT_TRUE(side->enabled);
         XX_TEST_EXPECT_FALSE(top->enabled); // 用户显式禁用: 级联不恢复
         XX_TEST_EXPECT_TRUE(top->userDisabled);
-        f.manager->enable("top"); // 用户显式启用
+        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("top")); // 用户显式启用
         XX_TEST_EXPECT_TRUE(top->enabled);
         XX_TEST_EXPECT_FALSE(top->userDisabled);
     }
@@ -2196,7 +2207,7 @@ TestResult testPluginRuntime() {
         neograph::graph::GraphState state;
         neograph::graph::RunContext runCtx;
         auto runNode = [&](const std::shared_ptr<PluginGraphNode>& node) -> std::string {
-            auto future = asio::co_spawn(
+            auto fut = asio::co_spawn(
                 f.io,
                 [&]() -> asio::awaitable<std::string> {
                     try {
@@ -2208,17 +2219,8 @@ TestResult testPluginRuntime() {
                 },
                 asio::use_future
             );
-            for (int i = 0;
-                 i < 200
-                 && future.wait_for(std::chrono::milliseconds{0}) != std::future_status::ready;
-                 ++i) {
-                f.io.restart();
-                f.io.poll();
-            }
-            if (future.wait_for(std::chrono::milliseconds{0}) != std::future_status::ready) {
-                return "<timeout>";
-            }
-            return future.get();
+            // 节点回调经插件执行线程完成: 单次 poll 不足, 由夹具持续推进 IO 并让出 CPU
+            return f.waitFutureValue(std::move(fut)).value_or("<timeout>");
         };
 
         // 注册有效时节点正常执行插件回调。
@@ -2486,7 +2488,9 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_FALSE(probe.onCaller.load());
             // 还没轮到执行时必然持有实例 lease (卸载等待必然覆盖它);
             // 插件线程已经跑完时这两项归零也是正常结果 (上一条注释已说明"可能更早").
-            if (probe.calls.load() == 0) {
+            // 只有"驱动票还没被执行"时 lease 必然还在: calls 与 activeDriverCount 的变化
+            // 不是原子的, 满负载下会出现 calls==0 且票已完结的瞬间。
+            if (probe.calls.load() == 0 && f.provider->activeDriverCount() > 0) {
                 XX_TEST_EXPECT_GE(f.provider->activeDriverCount(), size_t{1});
                 XX_TEST_EXPECT_GE(f.provider->lifetime->leaseCount(), size_t{1});
             }

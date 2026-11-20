@@ -237,14 +237,14 @@ asio::awaitable<void> test_impl_row_lifecycle() {
     // (注册本数看 `list_capabilities`, 不在统一注册清单里计)
 
     // 禁用: 实现行被摘除 → 回落核心实现
-    f.mgr->disable("example_feature");
+    co_await f.mgr->disable("example_feature");
     auto afterDisable = co_await askTokens(f, "probe text after disable");
     XX_TEST_EXPECT_TRUE(afterDisable.ok);
     XX_TEST_EXPECT_EQ(afterDisable.by, std::string{agentxx::feature::points::kOwnerCountTokens});
     XX_TEST_EXPECT_TRUE(afterDisable.tokens > 0);
 
     // 启用: 生命周期重新驱动一次注册事务 (投递到 io 线程) → 又由插件给值
-    f.mgr->enable("example_feature");
+    co_await f.mgr->enable("example_feature");
     XX_TEST_EXPECT_TRUE(co_await waitRowActive(f));
     auto afterEnable = co_await askTokens(f, "probe text after enable");
     XX_TEST_EXPECT_TRUE(afterEnable.ok);

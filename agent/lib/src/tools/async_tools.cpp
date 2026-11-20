@@ -122,8 +122,7 @@ bool creatorHasTool(
         return false;
     }
     if (ctx->engine.lock()) {
-        if (auto it = ctx->builtinToolIndex.find(toolName);
-            it != ctx->builtinToolIndex.end()) {
+        if (auto it = ctx->builtinToolIndex.find(toolName); it != ctx->builtinToolIndex.end()) {
             return it->second != nullptr;
         }
     }
@@ -152,12 +151,11 @@ std::string renderEntryDetail(const Json& entry, bool withResult = true) {
         }
     } else if (state == "queued") {
         // 延时中: 还给模型一个"还有多久"的定量信息 (原地不动就是排队)
-        const auto remaining = delayRemainingMs(entry);
-        out += fmt::format(
+        const auto remaining  = delayRemainingMs(entry);
+        out                  += fmt::format(
             " ahead={}{}",
             entry.value("queueAhead", int64_t{0}),
-            remaining > 0 ? fmt::format(" delay={} left", formatDelay(remaining))
-                          : std::string{}
+            remaining > 0 ? fmt::format(" delay={} left", formatDelay(remaining)) : std::string{}
         );
     }
     if (entry.value("hasError", false)) {
@@ -171,10 +169,7 @@ std::string renderEntryDetail(const Json& entry, bool withResult = true) {
         );
     }
     if (entry.contains("runTimeoutMs")) {
-        out += fmt::format(
-            " runTimeout={}",
-            formatDelay(entry.value("runTimeoutMs", int64_t{0}))
-        );
+        out += fmt::format(" runTimeout={}", formatDelay(entry.value("runTimeoutMs", int64_t{0})));
     }
     if (entry.value("canceled", false)) {
         out += " canceled=true";
@@ -423,10 +418,10 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
     // 同样的任务, 模型看不到任何有用信息。其余工具 (含其他后台任务管理工具、内置工具、
     // 插件工具、子代理) 都允许异步启动
     if (toolName == get_name()) {
-        throw std::invalid_argument{
-            fmt::format("Arg `tool` must not be `{}` itself (that only nests the same call)",
-                        toolName)
-        };
+        throw std::invalid_argument{fmt::format(
+            "Arg `tool` must not be `{}` itself (that only nests the same call)",
+            toolName
+        )};
     }
     Json toolArgs = Json::object();
     if (args.contains("args")) {
@@ -499,7 +494,6 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
     spec.notifyDelivery = notify ? std::string{"next-step"} : std::string{};
     spec.name           = label;
 
-    std::string startedAs;
     if (toolName == "agentxx_subagent") {
         // 子代理: 参数与直接调用完全一致, 内部按 agent 任务提交
         const auto subagent = toolArgs.value("subagent", std::string{});
@@ -530,7 +524,6 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
         // 环境继承: 后台跑的也是"同一个主会话的子代理", 插件/工具/MCP/Skill/Memory
         // 与直接调用 `agentxx_subagent` 一致 (tools=[] 时执行层仍会跳过插件挂载)
         spec.inherit = agentxx::agent::SubagentInherit::full();
-        startedAs    = fmt::format("subagent={}", subagent);
     } else {
         // 普通工具: 内置/中间件工具 (图引擎持有) 与插件/动态注册工具都行
         if (!creatorHasTool(state.ctx, toolName)) {
@@ -546,7 +539,6 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
         if (spec.name.empty()) {
             spec.name = toolName;
         }
-        startedAs = fmt::format("tool={}", toolName);
     }
     spec.delay        = std::chrono::milliseconds{delayMs};
     spec.queueTimeout = std::chrono::milliseconds{queueTimeoutMs};
@@ -557,12 +549,11 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
         throw std::runtime_error{fmt::format("background task rejected: {}", submitted.error)};
     }
 
-    std::string out = fmt::format("[Async started] id={} {}\n", submitted.asyncId, startedAs);
+    std::string out = fmt::format("Async started, id={}\n", submitted.asyncId);
     if (submitted.delayMs > 0) {
         out += fmt::format(
-            "Starts in {} (delayMs={}): the task stays queued until then. Use "
-            "agentxx_async_manager {{opt:\"delay\", id:[\"{}\"], delayMs:0}} to drop the "
-            "remaining delay.\n",
+            "Starts in {} (delayMs={}): the task stays queued until then. "
+            "Use agentxx_async_manager to drop the remaining delay.\n",
             formatDelay(submitted.delayMs),
             submitted.delayMs,
             submitted.asyncId
@@ -588,12 +579,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
         );
     }
     out += fmt::format(
-        "Check with agentxx_async_query {{id:\"{}\"}} or {{group:\"running\"}}, block for it with "
-        "agentxx_async_await {{id:\"{}\"}}, cancel with agentxx_async_manager "
-        "{{opt:\"cancel\", id:[\"{}\"]}}.",
-        submitted.asyncId,
-        submitted.asyncId,
-        submitted.asyncId
+        "Check with agentxx_async_query, wait for it with agentxx_async_await, cancel with agentxx_async_manager."
     );
     co_return agentxx::util::ToolResult::ok(std::move(out));
 }
@@ -793,9 +779,9 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
     }
 
     agentxx::events::EventWaitSpec spec;
-    spec.event  = std::string{kAsyncDoneEvent};
-    spec.ref    = asyncId;
-    spec.mode   = "first";
+    spec.event   = std::string{kAsyncDoneEvent};
+    spec.ref     = asyncId;
+    spec.mode    = "first";
     spec.timeout = std::chrono::milliseconds{timeoutMs};
     co_return agentxx::util::ToolResult::ok(agentxx::events::renderAwaitTimeout(spec, timeoutMs));
 }
@@ -832,8 +818,7 @@ std::vector<std::string> parseIdList(const Json& args) {
 }
 
 /// 整数参数 (`camelCase` 优先, 兼容 `snake_case` 写法)
-int64_t
-    intArg(const Json& args, std::string_view camel, std::string_view snake, int64_t fallback) {
+int64_t intArg(const Json& args, std::string_view camel, std::string_view snake, int64_t fallback) {
     if (args.contains(camel)) {
         return args.value<int64_t>(camel, fallback);
     }
@@ -893,8 +878,7 @@ neograph::ChatTool AsyncManagerTool::get_definition() const {
     return {get_name(), prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<agentxx::util::ToolResult>
-    AsyncManagerTool::execute_async(const Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult> AsyncManagerTool::execute_async(const Json& arguments) {
     const auto args  = arguments.is_object() ? arguments : Json::object();
     auto       state = acquire(agentContext.lock(), args);
 
@@ -969,14 +953,12 @@ asio::awaitable<agentxx::util::ToolResult>
         }
         ++okCount;
         lines.push_back(
-            delayMs > 0
-                ? fmt::format("- {}: delay set to {}", asyncId, formatDelay(delayMs))
-                : fmt::format("- {}: delay removed, it can start now", asyncId)
+            delayMs > 0 ? fmt::format("- {}: delay set to {}", asyncId, formatDelay(delayMs))
+                        : fmt::format("- {}: delay removed, it can start now", asyncId)
         );
     }
 
-    std::string out
-        = fmt::format("[Async manager] opt={} ok={}/{}", opt, okCount, ids.size());
+    std::string out = fmt::format("opt={} ok={}/{}", opt, okCount, ids.size());
     if (opt == "delay") {
         out += fmt::format(" delayMs={}", delayMs);
     }

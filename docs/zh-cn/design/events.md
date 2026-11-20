@@ -350,7 +350,7 @@ content:
 父会话 toolcall: agentxx_async_run {tool:"agentxx_subagent", args:{subagent:"task", message:"..."}}
   或:          agentxx_async_run {tool:"agentxx_execute_bash_command", args:{command:"...", timeout:0}}
   -> AgentHost::submitAsyncWork 立即受理: 入队, 返回 {started:true, asyncId:"async-7"}
-  -> 工具结果文本: [Async started] id=async-7 ... (结果默认自己回来, 也可 query/await/manager)
+  -> 工具结果文本: Async started, id=async-7 ... (结果默认自己回来, 也可 query/await/manager)
   -> 队列 (默认按创建者) 有名额时后台跑; 失败/取消同样发布
   -> 结果值发到固定事件名 agentxx.agent.async.done, 值里用 asyncId 区分是哪一条
   -> 提交时就替会话登记了一条 next-step 定向等待: 轮次在跑 -> 下一次模型调用前插入;

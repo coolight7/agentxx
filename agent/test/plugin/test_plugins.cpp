@@ -1,4 +1,5 @@
 #include "agentxx-test/plugin/test_plugins.h"
+
 #include "agentxx-test/test_coro_util.h"
 
 #include "agentxx/agent/context.h"
@@ -525,7 +526,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
 
     // ---- 7. 禁用 → 工具摘除 / 广播订阅撤掉; 启用 → 恢复 ----
     {
-        ctx->pluginManager->disable("example_plugin");
+        co_await ctx->pluginManager->disable("example_plugin");
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->registry()->contains("example_caller"));
         XX_TEST_EXPECT_FALSE(inst->enabled);
@@ -538,7 +539,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(found);
         }
 
-        ctx->pluginManager->enable("example_plugin");
+        co_await ctx->pluginManager->enable("example_plugin");
         // 启用是 start 事务 (投递到所属 IO 线程执行): 等待插件重新声明注册
         for (int i = 0; i < 200 && !ctx->toolRegistry->contains("example_echo"); ++i) {
             co_await sleepMs(5);
@@ -1335,7 +1336,7 @@ throw new Error("top-level rollback probe");
             };
             XX_TEST_EXPECT_TRUE(hasDispatch(false));
             ctx->pluginManager->onTurnBegin(); // 轮次执行中
-            ctx->pluginManager->disable("example_plugin");
+            co_await ctx->pluginManager->disable("example_plugin");
             XX_TEST_EXPECT_FALSE(inst24->enabled);
             // 派发器仍在链上, 且没有被停用
             XX_TEST_EXPECT_TRUE(hasDispatch(false));
@@ -1343,7 +1344,7 @@ throw new Error("top-level rollback probe");
             ctx->pluginManager->onTurnEnd();
             XX_TEST_EXPECT_TRUE(hasDispatch(false));
             // 启用: start 事务重新订阅, 派发器依旧只有一份
-            ctx->pluginManager->enable("example_plugin");
+            co_await ctx->pluginManager->enable("example_plugin");
             XX_TEST_EXPECT_TRUE(inst24->enabled);
             const auto& handles = ctx->middlewareHandleContext->handles;
             XX_TEST_EXPECT_EQ(
@@ -1370,13 +1371,13 @@ throw new Error("top-level rollback probe");
             co_await sleepMs(50);
         }
         if (engine25 && js25) {
-            ctx->pluginManager->disable("example_js"); // 用户手动禁用
+            co_await ctx->pluginManager->disable("example_js");// 用户手动禁用
             XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
             // 启用引擎 → 不应级联恢复被用户手动禁用的JS 插件
-            ctx->pluginManager->enable("agentxx_javascript_engine");
+            co_await ctx->pluginManager->enable("agentxx_javascript_engine");
             XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
             // 用户显式启用 → 恢复
-            ctx->pluginManager->enable("example_js");
+            co_await ctx->pluginManager->enable("example_js");
             XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js")->enabled);
             co_await ctx->pluginManager->unloadAsync("example_js");
             co_await ctx->pluginManager->unloadAsync("agentxx_javascript_engine");
@@ -1399,7 +1400,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("plugin.agentxx_javascript_engine.interpreter.js") == 1);
 
         // 禁用引擎 → 级联禁用JS 插件 → 两者 stop (引擎退出 JS 线程并释放 runtime)
-        ctx->pluginManager->disable("agentxx_javascript_engine");
+        co_await ctx->pluginManager->disable("agentxx_javascript_engine");
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->find("example_js")->enabled);
         for (int i = 0; i < 300 && !engine25b->lifecycleStopped; ++i) {
             co_await sleepMs(10);
@@ -1416,7 +1417,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == js25b);
 
         // 重新启用引擎 → 级联恢复JS 插件: 引擎重建线程, 脚本重新 load
-        ctx->pluginManager->enable("agentxx_javascript_engine");
+        co_await ctx->pluginManager->enable("agentxx_javascript_engine");
         for (int i = 0; i < 400 && !ctx->toolRegistry->contains("js_hello"); ++i) {
             co_await sleepMs(10);
         }
@@ -1433,8 +1434,8 @@ throw new Error("top-level rollback probe");
 
         // disable/enable 紧邻 (stop 事务仍在飞行中): start 事务必须先补齐 stop
         // 再重建, 能力名不得冲突、脚本工具不得重复或丢失。
-        ctx->pluginManager->disable("agentxx_javascript_engine");
-        ctx->pluginManager->enable("agentxx_javascript_engine");
+        co_await ctx->pluginManager->disable("agentxx_javascript_engine");
+        co_await ctx->pluginManager->enable("agentxx_javascript_engine");
         for (int i = 0; i < 600 && !ctx->toolRegistry->contains("js_hello"); ++i) {
             co_await sleepMs(10);
         }
@@ -1657,7 +1658,7 @@ throw new Error("top-level rollback probe");
                     R"({"k":"v"})"
                 )
             );
-            ctx->pluginManager->disable("example_plugin");
+            co_await ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回 false)
             XX_TEST_EXPECT_FALSE(
                 agentxx::plugin::publishPluginBroadcast(
@@ -3213,14 +3214,14 @@ throw new Error("top-level rollback probe");
             );
 
             // 4. 禁用: 工具与权限声明一并摘除 (未声明 => 直接放行)
-            ctx->pluginManager->disable("agentxx_filesystem");
+            co_await ctx->pluginManager->disable("agentxx_filesystem");
             XX_TEST_EXPECT_TRUE(permission->toolPermission("agentxx_filesystem_write") == nullptr);
             XX_TEST_EXPECT_TRUE(
                 co_await permission->checkToolPermission("agentxx_filesystem_write", writeArgs)
             );
 
             // 5. 重新启用: start 事务重新注册工具并重新声明权限 (异步收尾, 等它就绪)
-            ctx->pluginManager->enable("agentxx_filesystem");
+            co_await ctx->pluginManager->enable("agentxx_filesystem");
             for (int i = 0;
                  i < 200 && permission->toolPermission("agentxx_filesystem_write") == nullptr;
                  ++i) {

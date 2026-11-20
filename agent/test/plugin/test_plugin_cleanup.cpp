@@ -220,7 +220,7 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     XX_TEST_EXPECT_GE(handlesBefore, size_t{1});
 
     // ---- 禁用: 主程序侧生效注册全部摘除, 实例内记录保留 (启用时 start 重新声明) ----
-    f.mgr->disable("example_plugin");
+    co_await f.mgr->disable("example_plugin");
     XX_TEST_EXPECT_FALSE(inst->enabled);
     XX_TEST_EXPECT_FALSE(f.ctx->toolRegistry->contains("example_echo"));
     // 新模型: 禁用 = 从挂载上拆下来, 挂载记录随之一并删除 (启用时由插件的
@@ -236,7 +236,7 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     }
 
     // ---- 启用: start 事务重新声明 (投递到 io 线程协程, 轮询等待) ----
-    f.mgr->enable("example_plugin");
+    co_await f.mgr->enable("example_plugin");
     const bool enabledAgain = co_await waitFor([&]() {
         return f.ctx->toolRegistry->contains("example_echo");
     });
@@ -446,7 +446,7 @@ asio::awaitable<void> test_graph_definition_slot() {
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{"agentxx_math"});
 
     // 禁用也会释放 (与卸载同一路径), 恢复基础定义
-    f.mgr->disable("agentxx_math");
+    co_await f.mgr->disable("agentxx_math");
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{});
     XX_TEST_EXPECT_EQ(f.ctx->pluginMount->getGraphJson(), baseJson);
     co_return;

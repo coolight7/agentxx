@@ -1701,7 +1701,7 @@ asio::awaitable<void> runBody(
         ));
 
         // 禁用: 主程序侧注册整批摘除 → 运行时对象按归属回收
-        mgr->disable(inst->name);
+        co_await mgr->disable(inst->name);
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
             30s,

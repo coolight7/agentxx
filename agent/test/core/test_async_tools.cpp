@@ -143,8 +143,8 @@ public:
         };
     }
 
-    asio::awaitable<agentxx::util::ToolResult>
-        execute_async(const utilxx_base::Json& arguments) override {
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json& arguments
+    ) override {
         {
             std::lock_guard<std::mutex> lock(mutex);
             lastArgs = arguments;
@@ -160,9 +160,8 @@ public:
         // 见 [test_tool_closure_lifetime]
         {
             std::lock_guard<std::mutex> lock(mutex);
-            markerAfterSleep = arguments.is_object()
-                                   ? arguments.value("marker", std::string{})
-                                   : std::string{};
+            markerAfterSleep
+                = arguments.is_object() ? arguments.value("marker", std::string{}) : std::string{};
             finished = true;
         }
         if (arguments.is_object() && arguments.value("fail", false)) {
@@ -224,8 +223,7 @@ public:
         };
     }
 
-    asio::awaitable<agentxx::util::ToolResult>
-        execute_async(const utilxx_base::Json&) override {
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json&) override {
         std::string body;
         for (int i = 1; i <= 400; ++i) {
             body += fmt::format("big-output-line-{:04d} ------------------------------\n", i);
@@ -255,7 +253,7 @@ struct AtFixture {
 };
 
 bool buildFixture(const std::shared_ptr<AtFixture>& fx, size_t maxConcurrent = 3) {
-    fx->sim = startDaSimServer();
+    fx->sim                       = startDaSimServer();
     g_da_sim_response_content     = "async subagent result";
     g_da_sim_tool_calls           = Json::array();
     g_da_sim_tool_calls_remaining = -1;
@@ -263,15 +261,15 @@ bool buildFixture(const std::shared_ptr<AtFixture>& fx, size_t maxConcurrent = 3
     g_da_sim_fail_count           = 0;
     g_da_sim_request_count        = 0;
 
-    fx->io                   = std::make_shared<asio::io_context>();
-    fx->cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
-    fx->cfg->model.baseUrl   = "http://127.0.0.1:" + std::to_string(fx->sim.port);
-    fx->cfg->model.apiKey    = "EMPTY";
-    fx->cfg->model.modelName = "test-sim";
-    fx->cfg->prompt.systemPrompt = "You are a helpful assistant.";
-    fx->cfg->permissionMode      = agentxx::agent::PermissionMode::Pass;
-    fx->cfg->llmMaxRetry         = 1;
-    fx->cfg->enableAsyncWork     = true;
+    fx->io                          = std::make_shared<asio::io_context>();
+    fx->cfg                         = std::make_shared<agentxx::agent::AgentConfig>();
+    fx->cfg->model.baseUrl          = "http://127.0.0.1:" + std::to_string(fx->sim.port);
+    fx->cfg->model.apiKey           = "EMPTY";
+    fx->cfg->model.modelName        = "test-sim";
+    fx->cfg->prompt.systemPrompt    = "You are a helpful assistant.";
+    fx->cfg->permissionMode         = agentxx::agent::PermissionMode::Pass;
+    fx->cfg->llmMaxRetry            = 1;
+    fx->cfg->enableAsyncWork        = true;
     fx->cfg->asyncWorkMaxConcurrent = maxConcurrent;
 
     auto              io = fx->io;
@@ -306,8 +304,7 @@ bool buildFixture(const std::shared_ptr<AtFixture>& fx, size_t maxConcurrent = 3
 }
 
 /// 执行工具并把异常转成带前缀的文本 (成功/失败都返回正文)
-asio::awaitable<std::string>
-    execTool(agentxx::tools::XXToolBase& tool, Json args) {
+asio::awaitable<std::string> execTool(agentxx::tools::XXToolBase& tool, Json args) {
     try {
         auto result = co_await tool.execute_async(args);
         co_return std::move(result.text);
@@ -322,8 +319,8 @@ std::string parseAsyncId(std::string_view text) {
     if (pos == std::string_view::npos) {
         return {};
     }
-    auto rest = text.substr(pos + 3);
-    const auto end = rest.find_first_of(" \n");
+    auto       rest = text.substr(pos + 3);
+    const auto end  = rest.find_first_of(" \n");
     return std::string{rest.substr(0, end)};
 }
 
@@ -335,10 +332,10 @@ asio::awaitable<void> test_start_tool_notify_default() {
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
     agentxx::tools::AsyncRunTool tool{fx->ctx()};
-    std::string                     text;
-    std::string                     asyncId;
-    std::string                     ctxSessionId;
-    std::string                     toolGotSessionId;
+    std::string                  text;
+    std::string                  asyncId;
+    std::string                  ctxSessionId;
+    std::string                  toolGotSessionId;
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         text = co_await execTool(
@@ -347,7 +344,7 @@ asio::awaitable<void> test_start_tool_notify_default() {
                 {"tool",      "at_test_sleep"      },
                 {"args",      Json{{"sleepMs", 20}}},
                 {"sessionId", fx->sessionId        },
-            }
+        }
         );
         asyncId = parseAsyncId(text);
         // 等任务跑完 (结果由任务自己发事件)
@@ -357,7 +354,7 @@ asio::awaitable<void> test_start_tool_notify_default() {
         });
     }));
 
-    XX_TEST_EXPECT_TRUE(text.starts_with("[Async started] id="));
+    XX_TEST_EXPECT_TRUE(text.starts_with("Async started, id="));
     XX_TEST_EXPECT_TRUE(contains(text, "tool=at_test_sleep"));
     XX_TEST_EXPECT_TRUE(contains(text, "inserted into this conversation"));
     XX_TEST_EXPECT_FALSE(asyncId.empty());
@@ -376,7 +373,9 @@ asio::awaitable<void> test_start_tool_notify_default() {
 
     // notify: 结果作为一条输入落到了会话
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
-        co_return co_await waitUntil([&] { return !fx->sink->texts.empty(); });
+        co_return co_await waitUntil([&] {
+            return !fx->sink->texts.empty();
+        });
     }));
     bool delivered = false;
     for (const auto& item : fx->sink->texts) {
@@ -394,23 +393,23 @@ asio::awaitable<void> test_async_tool_args_normalize() {
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
     agentxx::tools::AsyncRunTool tool{fx->ctx()};
-    std::string                     text;
-    std::string                     asyncId;
+    std::string                  text;
+    std::string                  asyncId;
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         text = co_await execTool(
             tool,
             Json{
-                {"tool", "at_test_sleep"},
-                // 模型常见的宽松写法: 整数写字符串、字符串写数字、布尔写 "no"
+                {"tool",      "at_test_sleep"},
+ // 模型常见的宽松写法: 整数写字符串、字符串写数字、布尔写 "no"
                 {"args",
                  Json{
                      {"sleepMs", "5"},
                      {"marker", 123},
                      {"fail", "no"},
-                 }},
-                {"sessionId", fx->sessionId},
-            }
+                 }                           },
+                {"sessionId", fx->sessionId  },
+        }
         );
         asyncId = parseAsyncId(text);
         co_return co_await waitUntil([&] {
@@ -426,10 +425,7 @@ asio::awaitable<void> test_async_tool_args_normalize() {
     XX_TEST_EXPECT_TRUE(fx->sleepTool->lastArgs["sleepMs"].is_number_integer());
     XX_TEST_EXPECT_EQ(fx->sleepTool->lastArgs["sleepMs"].get<long long>(), 5LL);
     XX_TEST_EXPECT_TRUE(fx->sleepTool->lastArgs["marker"].is_string());
-    XX_TEST_EXPECT_EQ(
-        fx->sleepTool->lastArgs["marker"].get<std::string>(),
-        std::string{"123"}
-    );
+    XX_TEST_EXPECT_EQ(fx->sleepTool->lastArgs["marker"].get<std::string>(), std::string{"123"});
     XX_TEST_EXPECT_TRUE(fx->sleepTool->lastArgs["fail"].is_boolean());
     XX_TEST_EXPECT_EQ(fx->sleepTool->lastArgs["fail"].get<bool>(), false);
     co_return;
@@ -441,25 +437,25 @@ asio::awaitable<void> test_start_notify_off() {
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
     agentxx::tools::AsyncRunTool tool{fx->ctx()};
-    std::string                     text;
-    std::string                     asyncId;
+    std::string                  text;
+    std::string                  asyncId;
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         text = co_await execTool(
             tool,
             Json{
-                {"tool",      "at_test_sleep"        },
-                {"args",      Json{{"sleepMs", 10}}  },
-                {"notify",    false                  },
-                {"sessionId", fx->sessionId          },
-            }
+                {"tool",      "at_test_sleep"      },
+                {"args",      Json{{"sleepMs", 10}}},
+                {"notify",    false                },
+                {"sessionId", fx->sessionId        },
+        }
         );
         asyncId = parseAsyncId(text);
         co_return co_await waitUntil([&] {
             return fx->host->asyncWorkJson(asyncId).value("state", std::string{}) == "done";
         });
     }));
-    XX_TEST_EXPECT_TRUE(text.starts_with("[Async started] id="));
+    XX_TEST_EXPECT_TRUE(text.starts_with("Async started, id="));
     XX_TEST_EXPECT_TRUE(contains(text, "No automatic notification"));
     // 给中枢一点时间: 若误登记了等待, 会在这里投递
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
@@ -480,37 +476,37 @@ asio::awaitable<void> test_start_subagent_target() {
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
     agentxx::tools::AsyncRunTool tool{fx->ctx()};
-    std::string                     text;
-    std::string                     asyncId;
+    std::string                  text;
+    std::string                  asyncId;
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         text = co_await execTool(
             tool,
             Json{
-                {"tool",      "agentxx_subagent"                              },
-                {"args",
-                 Json{{"subagent", "subagent_task"}, {"message", "do it"}}},
-                {"label",     "my worker"                                  },
-                {"sessionId", fx->sessionId                                },
-            }
+                {"tool",      "agentxx_subagent"                                       },
+                {"args",      Json{{"subagent", "subagent_task"}, {"message", "do it"}}},
+                {"label",     "my worker"                                              },
+                {"sessionId", fx->sessionId                                            },
+        }
         );
         asyncId = parseAsyncId(text);
-        co_return co_await waitUntil([&] {
-            const auto entry = fx->host->asyncWorkJson(asyncId);
-            const auto state = entry.value("state", std::string{});
-            return state == "done" || state == "failed";
-        }, 30000);
+        co_return co_await waitUntil(
+            [&] {
+                const auto entry = fx->host->asyncWorkJson(asyncId);
+                const auto state = entry.value("state", std::string{});
+                return state == "done" || state == "failed";
+            },
+            30000
+        );
     }));
 
-    XX_TEST_EXPECT_TRUE(text.starts_with("[Async started] id="));
+    XX_TEST_EXPECT_TRUE(text.starts_with("Async started, id="));
     XX_TEST_EXPECT_TRUE(contains(text, "subagent=subagent_task"));
     const auto entry = fx->host->asyncWorkJson(asyncId);
     XX_TEST_EXPECT_EQ(entry.value("kind", std::string{}), std::string{"agent"});
     XX_TEST_EXPECT_EQ(entry.value("name", std::string{}), std::string{"my worker"});
     XX_TEST_EXPECT_EQ(entry.value("state", std::string{}), std::string{"done"});
-    XX_TEST_EXPECT_TRUE(
-        contains(entry.value("result", std::string{}), "async subagent result")
-    );
+    XX_TEST_EXPECT_TRUE(contains(entry.value("result", std::string{}), "async subagent result"));
     co_return;
 }
 
@@ -520,32 +516,55 @@ asio::awaitable<void> test_start_errors() {
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
     agentxx::tools::AsyncRunTool tool{fx->ctx()};
-    std::vector<std::string>        texts;
+    std::vector<std::string>     texts;
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
-        texts.push_back(co_await execTool(tool, Json{{"sessionId", fx->sessionId}}));
         texts.push_back(co_await execTool(
             tool,
-            Json{{"tool", "at_test_sleep"}, {"args", "nope"}, {"sessionId", fx->sessionId}}
+            Json{
+                {"sessionId", fx->sessionId}
+        }
+        ));
+        texts.push_back(co_await execTool(
+            tool,
+            Json{
+                {"tool",      "at_test_sleep"},
+                {"args",      "nope"         },
+                {"sessionId", fx->sessionId  }
+        }
         ));
         // 只能拦"把本工具自己套进去"
         texts.push_back(co_await execTool(
             tool,
-            Json{{"tool", "agentxx_async_run"}, {"sessionId", fx->sessionId}}
+            Json{
+                {"tool",      "agentxx_async_run"},
+                {"sessionId", fx->sessionId      }
+        }
         ));
         // 不存在的工具名 (既不是内置, 也不在动态注册表里)
         texts.push_back(co_await execTool(
             tool,
-            Json{{"tool", "agentxx_no_such_tool"}, {"sessionId", fx->sessionId}}
+            Json{
+                {"tool",      "agentxx_no_such_tool"},
+                {"sessionId", fx->sessionId         }
+        }
         ));
         // 子代理缺 subagent / 缺 message
         texts.push_back(co_await execTool(
             tool,
-            Json{{"tool", "agentxx_subagent"}, {"args", Json{{"message", "x"}}}, {"sessionId", fx->sessionId}}
+            Json{
+                {"tool",      "agentxx_subagent"    },
+                {"args",      Json{{"message", "x"}}},
+                {"sessionId", fx->sessionId         }
+        }
         ));
         texts.push_back(co_await execTool(
             tool,
-            Json{{"tool", "agentxx_subagent"}, {"args", Json{{"subagent", "subagent_task"}}}, {"sessionId", fx->sessionId}}
+            Json{
+                {"tool",      "agentxx_subagent"                 },
+                {"args",      Json{{"subagent", "subagent_task"}}},
+                {"sessionId", fx->sessionId                      }
+        }
         ));
         co_return true;
     }));
@@ -574,21 +593,21 @@ asio::awaitable<void> test_start_builtin_and_async_tools() {
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
     agentxx::tools::AsyncRunTool start{fx->ctx()};
-    std::string                     shareText;
-    std::string                     shareId;
-    std::string                     queryText;
-    std::string                     queryId;
+    std::string                  shareText;
+    std::string                  shareId;
+    std::string                  queryText;
+    std::string                  queryId;
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         // 内置工具: share_store 在后台写一条
         shareText = co_await execTool(
             start,
             Json{
-                {"tool",      "agentxx_share_store"                     },
+                {"tool",      "agentxx_share_store"                       },
                 {"args",      Json{{"opt", "new"}, {"text", "bg builtin"}}},
-                {"notify",    false                                     },
-                {"sessionId", fx->sessionId                             },
-            }
+                {"notify",    false                                       },
+                {"sessionId", fx->sessionId                               },
+        }
         );
         shareId = parseAsyncId(shareText);
         if (shareId.empty()) {
@@ -603,11 +622,11 @@ asio::awaitable<void> test_start_builtin_and_async_tools() {
         queryText = co_await execTool(
             start,
             Json{
-                {"tool",      "agentxx_async_query"        },
-                {"args",      Json{{"group", "all"}}       },
-                {"notify",    false                        },
-                {"sessionId", fx->sessionId                },
-            }
+                {"tool",      "agentxx_async_query" },
+                {"args",      Json{{"group", "all"}}},
+                {"notify",    false                 },
+                {"sessionId", fx->sessionId         },
+        }
         );
         queryId = parseAsyncId(queryText);
         if (queryId.empty()) {
@@ -637,68 +656,71 @@ asio::awaitable<void> test_delay() {
     auto fx = std::make_shared<AtFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
-    agentxx::tools::AsyncRunTool start{fx->ctx()};
+    agentxx::tools::AsyncRunTool   start{fx->ctx()};
     agentxx::tools::AsyncQueryTool query{fx->ctx()};
-    std::string                     delayedText;
-    std::string                     delayedId;
-    std::string                     fastId;
-    std::string                     stateWhenFastDone;
-    std::string                     detailWhileDelayed;
-    int64_t                         delayMsOnEntry = 0;
-    int64_t                         remainingWhileDelayed = 0;
-    int                             callsWhileDelayed = 0;
+    std::string                    delayedText;
+    std::string                    delayedId;
+    std::string                    fastId;
+    std::string                    stateWhenFastDone;
+    std::string                    detailWhileDelayed;
+    int64_t                        delayMsOnEntry        = 0;
+    int64_t                        remainingWhileDelayed = 0;
+    int                            callsWhileDelayed     = 0;
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         // 延时 400ms 的任务
         delayedText = co_await execTool(
             start,
             Json{
-                {"tool",      "at_test_sleep"           },
-                {"args",      Json{{"sleepMs", 5}}      },
-                {"delayMs",   400                        },
-                {"notify",    false                      },
-                {"sessionId", fx->sessionId              },
-            }
+                {"tool",      "at_test_sleep"     },
+                {"args",      Json{{"sleepMs", 5}}},
+                {"delayMs",   400                 },
+                {"notify",    false               },
+                {"sessionId", fx->sessionId       },
+        }
         );
         delayedId = parseAsyncId(delayedText);
         // 同队列的普通任务: 不该被延时项挡住
         fastId = parseAsyncId(co_await execTool(
             start,
             Json{
-                {"tool",      "at_test_sleep"      },
-                {"args",      Json{{"sleepMs", 5}} },
-                {"notify",    false                },
-                {"sessionId", fx->sessionId        },
-            }
+                {"tool",      "at_test_sleep"     },
+                {"args",      Json{{"sleepMs", 5}}},
+                {"notify",    false               },
+                {"sessionId", fx->sessionId       },
+        }
         ));
         if (delayedId.empty() || fastId.empty()) {
             co_return false;
         }
         if (!co_await waitUntil([&] {
-                return fx->host->asyncWorkJson(fastId).value("state", std::string{})
-                       == "done";
+                return fx->host->asyncWorkJson(fastId).value("state", std::string{}) == "done";
             })) {
             co_return false;
         }
         // fast 已完成, 延时项应还在排队中
-        stateWhenFastDone
-            = fx->host->asyncWorkJson(delayedId).value("state", std::string{});
-        const auto entry = fx->host->asyncWorkJson(delayedId);
-        delayMsOnEntry   = entry.value("delayMs", int64_t{0});
+        stateWhenFastDone     = fx->host->asyncWorkJson(delayedId).value("state", std::string{});
+        const auto entry      = fx->host->asyncWorkJson(delayedId);
+        delayMsOnEntry        = entry.value("delayMs", int64_t{0});
         remainingWhileDelayed = entry.value("delayRemainingMs", int64_t{0});
         callsWhileDelayed     = fx->sleepTool->callCount();
         detailWhileDelayed    = co_await execTool(
             query,
-            Json{{"id", delayedId}, {"sessionId", fx->sessionId}}
+            Json{
+                   {"id",        delayedId    },
+                   {"sessionId", fx->sessionId}
+        }
         );
         // 到期后自动起跑
-        co_return co_await waitUntil([&] {
-            return fx->host->asyncWorkJson(delayedId).value("state", std::string{})
-                   == "done";
-        }, 8000);
+        co_return co_await waitUntil(
+            [&] {
+                return fx->host->asyncWorkJson(delayedId).value("state", std::string{}) == "done";
+            },
+            8000
+        );
     }));
 
-    XX_TEST_EXPECT_TRUE(delayedText.starts_with("[Async started] id="));
+    XX_TEST_EXPECT_TRUE(delayedText.starts_with("Async started, id="));
     XX_TEST_EXPECT_TRUE(contains(delayedText, "Starts in"));
     XX_TEST_EXPECT_EQ(stateWhenFastDone, std::string{"queued"});
     XX_TEST_EXPECT_EQ(delayMsOnEntry, int64_t{400});
@@ -731,12 +753,12 @@ asio::awaitable<void> test_await_delayed_task() {
         asyncId = parseAsyncId(co_await execTool(
             start,
             Json{
-                {"tool",      "at_test_sleep"                    },
-                {"args",      Json{{"sleepMs", 5}}               },
-                {"delayMs",   30000                              },
-                {"notify",    false                              },
-                {"sessionId", fx->sessionId                       },
-            }
+                {"tool",      "at_test_sleep"     },
+                {"args",      Json{{"sleepMs", 5}}},
+                {"delayMs",   30000               },
+                {"notify",    false               },
+                {"sessionId", fx->sessionId       },
+        }
         ));
         if (asyncId.empty()) {
             co_return false;
@@ -745,7 +767,11 @@ asio::awaitable<void> test_await_delayed_task() {
         const auto startedAt = std::chrono::steady_clock::now();
         earlyText            = co_await execTool(
             awaitTool,
-            Json{{"id", asyncId}, {"timeoutMs", 100}, {"sessionId", fx->sessionId}}
+            Json{
+                           {"id",        asyncId      },
+                           {"timeoutMs", 100          },
+                           {"sessionId", fx->sessionId}
+        }
         );
         earlyElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - startedAt
@@ -755,19 +781,19 @@ asio::awaitable<void> test_await_delayed_task() {
         (void)co_await execTool(
             manager,
             Json{
-                {"opt",       "delay"                 },
-                {"id",        Json::array({asyncId}) },
-                {"delayMs",   0                       },
-                {"sessionId", fx->sessionId           },
-            }
+                {"opt",       "delay"               },
+                {"id",        Json::array({asyncId})},
+                {"delayMs",   0                     },
+                {"sessionId", fx->sessionId         },
+        }
         );
         doneText = co_await execTool(
             awaitTool,
             Json{
-                {"id",         asyncId         },
-                {"timeoutMs",  8000            },
-                {"sessionId",  fx->sessionId   },
-            }
+                {"id",        asyncId      },
+                {"timeoutMs", 8000         },
+                {"sessionId", fx->sessionId},
+        }
         );
         co_return true;
     }));
@@ -791,44 +817,46 @@ asio::awaitable<void> test_query() {
     auto fx = std::make_shared<AtFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
-    agentxx::tools::AsyncRunTool  start{fx->ctx()};
-    agentxx::tools::AsyncQueryTool  query{fx->ctx()};
-    std::string                     fastId;
-    std::string                     slowId;
-    std::string                     otherId;
-    std::string                     listAll;
-    std::string                     listRunning;
-    std::string                     listDone;
-    std::string                     detail;
-    std::string                     notFound = "[threw] ";
-    std::string                     foreign;
+    agentxx::tools::AsyncRunTool   start{fx->ctx()};
+    agentxx::tools::AsyncQueryTool query{fx->ctx()};
+    std::string                    fastId;
+    std::string                    slowId;
+    std::string                    otherId;
+    std::string                    listAll;
+    std::string                    listRunning;
+    std::string                    listDone;
+    std::string                    detail;
+    std::string                    notFound = "[threw] ";
+    std::string                    foreign;
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         auto fast = co_await execTool(
             start,
             Json{
-                {"tool",        "at_test_sleep"    },
-                {"args",        Json{{"sleepMs", 5}}},
-                {"notify",      false              },
-                {"sessionId",   fx->sessionId      },
-            }
+                {"tool",      "at_test_sleep"     },
+                {"args",      Json{{"sleepMs", 5}}},
+                {"notify",    false               },
+                {"sessionId", fx->sessionId       },
+        }
         );
-        fastId = parseAsyncId(fast);
+        fastId    = parseAsyncId(fast);
         auto slow = co_await execTool(
             start,
             Json{
-                {"tool",        "at_test_sleep"      },
-                {"args",        Json{{"sleepMs", 900}}},
-                {"notify",      false                },
-                {"sessionId",   fx->sessionId        },
-            }
+                {"tool",      "at_test_sleep"       },
+                {"args",      Json{{"sleepMs", 900}}},
+                {"notify",    false                 },
+                {"sessionId", fx->sessionId         },
+        }
         );
         slowId = parseAsyncId(slow);
         // 别的会话启动的任务 (直接走容器, 验证归属隔离)
         agentxx::agent::AsyncWorkSpec spec;
-        spec.kind             = agentxx::agent::AsyncWorkKind::Tool;
-        spec.toolName         = "at_test_sleep";
-        spec.toolArgs         = Json{{"sleepMs", 5}};
+        spec.kind     = agentxx::agent::AsyncWorkKind::Tool;
+        spec.toolName = "at_test_sleep";
+        spec.toolArgs = Json{
+            {"sleepMs", 5}
+        };
         spec.creatorSessionId = "other-session";
         spec.baseConfig       = fx->cfg;
         otherId               = fx->host->submitAsyncWork(std::move(spec), fx->ctx()).asyncId;
@@ -840,22 +868,48 @@ asio::awaitable<void> test_query() {
     }));
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
-        listAll = co_await execTool(query, Json{{"sessionId", fx->sessionId}});
-        listRunning
-            = co_await execTool(query, Json{{"group", "running"}, {"sessionId", fx->sessionId}});
-        listDone = co_await execTool(query, Json{{"group", "done"}, {"sessionId", fx->sessionId}});
-        detail   = co_await execTool(
+        listAll = co_await execTool(
             query,
-            Json{{"id", slowId}, {"sessionId", fx->sessionId}}
+            Json{
+                {"sessionId", fx->sessionId}
+        }
+        );
+        listRunning = co_await execTool(
+            query,
+            Json{
+                {"group",     "running"    },
+                {"sessionId", fx->sessionId}
+        }
+        );
+        listDone = co_await execTool(
+            query,
+            Json{
+                {"group",     "done"       },
+                {"sessionId", fx->sessionId}
+        }
+        );
+        detail = co_await execTool(
+            query,
+            Json{
+                {"id",        slowId       },
+                {"sessionId", fx->sessionId}
+        }
         );
         try {
-            (void)co_await query.execute_async(
-                Json{{"group", "bogus"}, {"sessionId", fx->sessionId}}
-            );
+            (void)co_await query.execute_async(Json{
+                {"group",     "bogus"      },
+                {"sessionId", fx->sessionId}
+            });
         } catch (const std::exception& e) {
             notFound = fmt::format("[threw] {}", e.what());
         }
-        foreign = co_await execTool(query, Json{{"id", otherId}, {"sessionId", fx->sessionId}});
+        foreign = co_await execTool(
+            query,
+            Json{
+                {"id",        otherId      },
+                {"sessionId", fx->sessionId}
+        }
+        );
         co_return true;
     }));
 
@@ -884,8 +938,13 @@ asio::awaitable<void> test_query() {
     }));
     std::string listNone;
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
-        listNone
-            = co_await execTool(query, Json{{"group", "canceled"}, {"sessionId", fx->sessionId}});
+        listNone = co_await execTool(
+            query,
+            Json{
+                {"group",     "canceled"   },
+                {"sessionId", fx->sessionId}
+        }
+        );
         co_return true;
     }));
     XX_TEST_EXPECT_TRUE(contains(listNone, "matched=0"));
@@ -897,23 +956,33 @@ asio::awaitable<void> test_await() {
     auto fx = std::make_shared<AtFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
-    agentxx::tools::AsyncRunTool start{fx->ctx()};
+    agentxx::tools::AsyncRunTool   start{fx->ctx()};
     agentxx::tools::AsyncAwaitTool awaitTool{fx->ctx()};
-    std::string                     finishedId;
-    std::string                     runningId;
-    std::string                     doneText;
-    std::string                     runningText;
-    std::string                     timeoutText;
+    std::string                    finishedId;
+    std::string                    runningId;
+    std::string                    doneText;
+    std::string                    runningText;
+    std::string                    timeoutText;
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         auto a = co_await execTool(
             start,
-            Json{{"tool", "at_test_sleep"}, {"args", Json{{"sleepMs", 5}}}, {"notify", false}, {"sessionId", fx->sessionId}}
+            Json{
+                {"tool",      "at_test_sleep"     },
+                {"args",      Json{{"sleepMs", 5}}},
+                {"notify",    false               },
+                {"sessionId", fx->sessionId       }
+        }
         );
         finishedId = parseAsyncId(a);
-        auto b = co_await execTool(
+        auto b     = co_await execTool(
             start,
-            Json{{"tool", "at_test_sleep"}, {"args", Json{{"sleepMs", 200}}}, {"notify", false}, {"sessionId", fx->sessionId}}
+            Json{
+                    {"tool",      "at_test_sleep"       },
+                    {"args",      Json{{"sleepMs", 200}}},
+                    {"notify",    false                 },
+                    {"sessionId", fx->sessionId         }
+        }
         );
         runningId = parseAsyncId(b);
         co_return co_await waitUntil([&] {
@@ -925,12 +994,19 @@ asio::awaitable<void> test_await() {
         // 已结束: 直接给任务表结果, 不再挂等待
         doneText = co_await execTool(
             awaitTool,
-            Json{{"id", finishedId}, {"sessionId", fx->sessionId}}
+            Json{
+                {"id",        finishedId   },
+                {"sessionId", fx->sessionId}
+        }
         );
         // 运行中: 等到结果 (200ms)
         runningText = co_await execTool(
             awaitTool,
-            Json{{"id", runningId}, {"timeout_ms", 5000}, {"sessionId", fx->sessionId}}
+            Json{
+                {"id",         runningId    },
+                {"timeout_ms", 5000         },
+                {"sessionId",  fx->sessionId}
+        }
         );
         co_return true;
     }));
@@ -947,12 +1023,21 @@ asio::awaitable<void> test_await() {
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         auto c = co_await execTool(
             start,
-            Json{{"tool", "at_test_sleep"}, {"args", Json{{"sleepMs", 1500}}}, {"notify", false}, {"sessionId", fx->sessionId}}
+            Json{
+                {"tool",      "at_test_sleep"        },
+                {"args",      Json{{"sleepMs", 1500}}},
+                {"notify",    false                  },
+                {"sessionId", fx->sessionId          }
+        }
         );
         const auto slowId = parseAsyncId(c);
         timeoutText       = co_await execTool(
             awaitTool,
-            Json{{"id", slowId}, {"timeout_ms", 100}, {"sessionId", fx->sessionId}}
+            Json{
+                      {"id",         slowId       },
+                      {"timeout_ms", 100          },
+                      {"sessionId",  fx->sessionId}
+        }
         );
         fx->host->cancelAsyncWork(slowId);
         co_return true;
@@ -981,16 +1066,21 @@ asio::awaitable<void> test_manager_cancel() {
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         auto a = co_await execTool(
             start,
-            Json{{"tool", "at_test_sleep"}, {"args", Json{{"sleepMs", 3000}}}, {"notify", false}, {"sessionId", fx->sessionId}}
+            Json{
+                {"tool",      "at_test_sleep"        },
+                {"args",      Json{{"sleepMs", 3000}}},
+                {"notify",    false                  },
+                {"sessionId", fx->sessionId          }
+        }
         );
         const auto slowId = parseAsyncId(a);
         idText            = co_await execTool(
             manager,
             Json{
-                {"opt",       "cancel"               },
-                {"id",        Json::array({slowId}) },
-                {"sessionId", fx->sessionId         },
-            }
+                           {"opt",       "cancel"             },
+                           {"id",        Json::array({slowId})},
+                           {"sessionId", fx->sessionId        },
+        }
         );
         auto ok = co_await waitUntil([&] {
             return fx->host->asyncWorkJson(slowId).value("state", std::string{}) == "canceled";
@@ -1004,32 +1094,46 @@ asio::awaitable<void> test_manager_cancel() {
         for (int i = 0; i < 2; ++i) {
             auto r = co_await execTool(
                 start,
-                Json{{"tool", "at_test_sleep"}, {"args", Json{{"sleepMs", 3000}}}, {"notify", false}, {"sessionId", fx->sessionId}}
+                Json{
+                    {"tool",      "at_test_sleep"        },
+                    {"args",      Json{{"sleepMs", 3000}}},
+                    {"notify",    false                  },
+                    {"sessionId", fx->sessionId          }
+            }
             );
             ids.push_back(parseAsyncId(r));
         }
-        co_await waitUntil([&] { return fx->host->runningAsyncWork() >= 2; });
+        co_await waitUntil([&] {
+            return fx->host->runningAsyncWork() >= 2;
+        });
         batchText = co_await execTool(
             manager,
             Json{
-                {"opt",       "cancel"                            },
+                {"opt",       "cancel"                             },
                 {"id",        Json::array({ids[0], ids[1], ids[0]})},
-                {"sessionId", fx->sessionId                       },
-            }
+                {"sessionId", fx->sessionId                        },
+        }
         );
-        co_return co_await waitUntil([&] { return fx->host->runningAsyncWork() == 0; });
+        co_return co_await waitUntil([&] {
+            return fx->host->runningAsyncWork() == 0;
+        });
     }));
 
-    XX_TEST_EXPECT_TRUE(idText.starts_with("[Async manager] opt=cancel ok=1/1"));
+    XX_TEST_EXPECT_TRUE(idText.starts_with("opt=cancel ok=1/1"));
     XX_TEST_EXPECT_TRUE(contains(idText, "canceled"));
     // 重复 id 去重 → ok=2/2
-    XX_TEST_EXPECT_TRUE(batchText.starts_with("[Async manager] opt=cancel ok=2/2"));
+    XX_TEST_EXPECT_TRUE(batchText.starts_with("opt=cancel ok=2/2"));
 
     // 已终态不能取消 (逐条报, 全失败 → 工具失败); 参数错与别会话任务
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         auto a = co_await execTool(
             start,
-            Json{{"tool", "at_test_sleep"}, {"args", Json{{"sleepMs", 5}}}, {"notify", false}, {"sessionId", fx->sessionId}}
+            Json{
+                {"tool",      "at_test_sleep"     },
+                {"args",      Json{{"sleepMs", 5}}},
+                {"notify",    false               },
+                {"sessionId", fx->sessionId       }
+        }
         );
         const auto fastId = parseAsyncId(a);
         co_await waitUntil([&] {
@@ -1037,37 +1141,58 @@ asio::awaitable<void> test_manager_cancel() {
         });
         finished = co_await execTool(
             manager,
-            Json{{"opt", "cancel"}, {"id", Json::array({fastId})}, {"sessionId", fx->sessionId}}
+            Json{
+                {"opt",       "cancel"             },
+                {"id",        Json::array({fastId})},
+                {"sessionId", fx->sessionId        }
+        }
         );
         notFound = co_await execTool(
             manager,
-            Json{{"opt", "cancel"}, {"id", Json::array({"async-9999"})}, {"sessionId", fx->sessionId}}
+            Json{
+                {"opt",       "cancel"                   },
+                {"id",        Json::array({"async-9999"})},
+                {"sessionId", fx->sessionId              }
+        }
         );
         badOpt = co_await execTool(
             manager,
-            Json{{"opt", "bogus"}, {"id", Json::array({fastId})}, {"sessionId", fx->sessionId}}
+            Json{
+                {"opt",       "bogus"              },
+                {"id",        Json::array({fastId})},
+                {"sessionId", fx->sessionId        }
+        }
         );
         missingId = co_await execTool(
             manager,
-            Json{{"opt", "cancel"}, {"sessionId", fx->sessionId}}
+            Json{
+                {"opt",       "cancel"     },
+                {"sessionId", fx->sessionId}
+        }
         );
         // 别的会话的任务不能管
         agentxx::agent::AsyncWorkSpec spec;
-        spec.kind             = agentxx::agent::AsyncWorkKind::Tool;
-        spec.toolName         = "at_test_sleep";
-        spec.toolArgs         = Json{{"sleepMs", 2000}};
+        spec.kind     = agentxx::agent::AsyncWorkKind::Tool;
+        spec.toolName = "at_test_sleep";
+        spec.toolArgs = Json{
+            {"sleepMs", 2000}
+        };
         spec.creatorSessionId = "other-session";
         spec.baseConfig       = fx->cfg;
         otherId               = fx->host->submitAsyncWork(std::move(spec), fx->ctx()).asyncId;
-        foreign = co_await execTool(
+        foreign               = co_await execTool(
             manager,
-            Json{{"opt", "cancel"}, {"id", Json::array({otherId})}, {"sessionId", fx->sessionId}}
+            Json{
+                              {"opt",       "cancel"              },
+                              {"id",        Json::array({otherId})},
+                              {"sessionId", fx->sessionId         }
+        }
         );
         fx->host->cancelAsyncWork(otherId);
         co_return true;
     }));
 
-    XX_TEST_EXPECT_TRUE(finished.starts_with("[Async manager] opt=cancel ok=0/1"));
+    XX_TEST_EXPECT_TRUE(finished.starts_with("opt=cancel ok=0/1"));
     XX_TEST_EXPECT_TRUE(contains(finished, "already finished"));
     XX_TEST_EXPECT_TRUE(contains(notFound, "not found"));
     XX_TEST_EXPECT_TRUE(contains(badOpt, "opt"));
@@ -1092,37 +1217,61 @@ asio::awaitable<void> test_manager_delay() {
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         auto r = co_await execTool(
             start,
-            Json{{"tool", "at_test_sleep"}, {"args", Json{{"sleepMs", 5}}}, {"delayMs", 30000}, {"notify", false}, {"sessionId", fx->sessionId}}
+            Json{
+                {"tool",      "at_test_sleep"     },
+                {"args",      Json{{"sleepMs", 5}}},
+                {"delayMs",   30000               },
+                {"notify",    false               },
+                {"sessionId", fx->sessionId       }
+        }
         );
         asyncId = parseAsyncId(r);
         if (asyncId.empty()) {
             co_return false;
         }
         // 调大到 40s
-        setText       = co_await execTool(
+        setText = co_await execTool(
             manager,
-            Json{{"opt", "delay"}, {"id", Json::array({asyncId})}, {"delayMs", 40000}, {"sessionId", fx->sessionId}}
+            Json{
+                {"opt",       "delay"               },
+                {"id",        Json::array({asyncId})},
+                {"delayMs",   40000                 },
+                {"sessionId", fx->sessionId         }
+        }
         );
         remainingWhileSet = fx->host->asyncWorkJson(asyncId).value("delayRemainingMs", int64_t{0});
         // 归零 → 立即起跑并跑完
         clearedText = co_await execTool(
             manager,
-            Json{{"opt", "delay"}, {"id", Json::array({asyncId})}, {"delayMs", 0}, {"sessionId", fx->sessionId}}
+            Json{
+                {"opt",       "delay"               },
+                {"id",        Json::array({asyncId})},
+                {"delayMs",   0                     },
+                {"sessionId", fx->sessionId         }
+        }
         );
-        if (!co_await waitUntil([&] {
-                return fx->host->asyncWorkJson(asyncId).value("state", std::string{}) == "done";
-            }, 8000)) {
+        if (!co_await waitUntil(
+                [&] {
+                    return fx->host->asyncWorkJson(asyncId).value("state", std::string{}) == "done";
+                },
+                8000
+            )) {
             co_return false;
         }
         // 已终态: 不能再改延时
         doneText = co_await execTool(
             manager,
-            Json{{"opt", "delay"}, {"id", Json::array({asyncId})}, {"delayMs", 100}, {"sessionId", fx->sessionId}}
+            Json{
+                {"opt",       "delay"               },
+                {"id",        Json::array({asyncId})},
+                {"delayMs",   100                   },
+                {"sessionId", fx->sessionId         }
+        }
         );
         co_return true;
     }));
 
-    XX_TEST_EXPECT_TRUE(setText.starts_with("[Async manager] opt=delay ok=1/1 delayMs=40000"));
+    XX_TEST_EXPECT_TRUE(setText.starts_with("opt=delay ok=1/1 delayMs=40000"));
     XX_TEST_EXPECT_TRUE(remainingWhileSet > 35000);
     XX_TEST_EXPECT_TRUE(contains(clearedText, "delay removed"));
     XX_TEST_EXPECT_TRUE(contains(doneText, "already finished"));
@@ -1147,24 +1296,31 @@ asio::awaitable<void> test_task_timeouts_and_marker() {
         // 占满额度 1: 一个长任务占着名额, 后面的任务只能排队
         auto blocker = co_await execTool(
             start,
-            Json{{"tool", "at_test_sleep"}, {"args", Json{{"sleepMs", 1200}}}, {"notify", false}, {"sessionId", fx->sessionId}}
+            Json{
+                {"tool",      "at_test_sleep"        },
+                {"args",      Json{{"sleepMs", 1200}}},
+                {"notify",    false                  },
+                {"sessionId", fx->sessionId          }
+        }
         );
         if (parseAsyncId(blocker).empty()) {
             co_return false;
         }
-        if (!co_await waitUntil([&] { return fx->host->runningAsyncWork() == 1; })) {
+        if (!co_await waitUntil([&] {
+                return fx->host->runningAsyncWork() == 1;
+            })) {
             co_return false;
         }
         // 名额被占: 排队超时 200ms → 按 failed 收尾
         queueTimeoutId = parseAsyncId(co_await execTool(
             start,
             Json{
-                {"tool",           "at_test_sleep"          },
-                {"args",           Json{{"sleepMs", 5}}     },
-                {"queueTimeoutMs", 200                      },
-                {"notify",         false                    },
-                {"sessionId",      fx->sessionId             },
-            }
+                {"tool",           "at_test_sleep"     },
+                {"args",           Json{{"sleepMs", 5}}},
+                {"queueTimeoutMs", 200                 },
+                {"notify",         false               },
+                {"sessionId",      fx->sessionId       },
+        }
         ));
         {
             const auto snap = fx->host->asyncWorkJson(queueTimeoutId);
@@ -1172,27 +1328,33 @@ asio::awaitable<void> test_task_timeouts_and_marker() {
             XX_TEST_EXPECT_EQ(snap.value("state", std::string{}), std::string{"queued"});
         }
         // 名额被占: 这条只能在队列里等, 200ms 排队时限到点 → failed
-        if (!co_await waitUntil([&] {
-                return fx->host->asyncWorkJson(queueTimeoutId).value("state", std::string{})
-                       == "failed";
-            }, 8000)) {
+        if (!co_await waitUntil(
+                [&] {
+                    return fx->host->asyncWorkJson(queueTimeoutId).value("state", std::string{})
+                           == "failed";
+                },
+                8000
+            )) {
             co_return false;
         }
         // 运行超时: 工具睡 1500ms, runTimeoutMs = 200ms → failed
         runTimeoutId = parseAsyncId(co_await execTool(
             start,
             Json{
-                {"tool",         "at_test_sleep"      },
+                {"tool",         "at_test_sleep"        },
                 {"args",         Json{{"sleepMs", 1500}}},
-                {"runTimeoutMs", 200                  },
-                {"notify",       false                },
-                {"sessionId",    fx->sessionId         },
-            }
+                {"runTimeoutMs", 200                    },
+                {"notify",       false                  },
+                {"sessionId",    fx->sessionId          },
+        }
         ));
-        if (!co_await waitUntil([&] {
-                return fx->host->asyncWorkJson(runTimeoutId).value("state", std::string{})
-                       == "failed";
-            }, 8000)) {
+        if (!co_await waitUntil(
+                [&] {
+                    return fx->host->asyncWorkJson(runTimeoutId).value("state", std::string{})
+                           == "failed";
+                },
+                8000
+            )) {
             co_return false;
         }
         // 延时不计入排队时限: 延时 600ms + 排队时限 200ms, 名额空闲 → 到点正常跑完
@@ -1200,34 +1362,45 @@ asio::awaitable<void> test_task_timeouts_and_marker() {
         delayExcludedId = parseAsyncId(co_await execTool(
             start,
             Json{
-                {"tool",           "at_test_sleep"        },
-                {"args",           Json{{"sleepMs", 30}}  },
-                {"delayMs",        600                   },
-                {"queueTimeoutMs", 200                   },
-                {"notify",         false                 },
-                {"sessionId",      fx->sessionId         },
-            }
+                {"tool",           "at_test_sleep"      },
+                {"args",           Json{{"sleepMs", 30}}},
+                {"delayMs",        600                  },
+                {"queueTimeoutMs", 200                  },
+                {"notify",         false                },
+                {"sessionId",      fx->sessionId        },
+        }
         ));
-        if (!co_await waitUntil([&] {
-                return fx->host->asyncWorkJson(delayExcludedId).value("state", std::string{})
-                       == "done";
-            }, 8000)) {
+        if (!co_await waitUntil(
+                [&] {
+                    return fx->host->asyncWorkJson(delayExcludedId).value("state", std::string{})
+                           == "done";
+                },
+                8000
+            )) {
             co_return false;
         }
         // `*` 标记: 延时中的排队项
         (void)co_await execTool(
             start,
             Json{
-                {"tool",      "at_test_sleep"      },
-                {"args",      Json{{"sleepMs", 5}} },
-                {"delayMs",   600000               },
-                {"label",     "delayed-marker"     },
-                {"notify",    false                },
-                {"sessionId", fx->sessionId         },
-            }
+                {"tool",      "at_test_sleep"     },
+                {"args",      Json{{"sleepMs", 5}}},
+                {"delayMs",   600000              },
+                {"label",     "delayed-marker"    },
+                {"notify",    false               },
+                {"sessionId", fx->sessionId       },
+        }
         );
-        co_await waitUntil([&] { return fx->host->runningAsyncWork() == 0; });
-        listText = co_await execTool(query, Json{{"group", "queued"}, {"sessionId", fx->sessionId}});
+        co_await waitUntil([&] {
+            return fx->host->runningAsyncWork() == 0;
+        });
+        listText = co_await execTool(
+            query,
+            Json{
+                {"group",     "queued"     },
+                {"sessionId", fx->sessionId}
+        }
+        );
         co_return true;
     }));
 
@@ -1259,8 +1432,8 @@ asio::awaitable<void> test_tool_closure_lifetime() {
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
     agentxx::tools::AsyncRunTool start{fx->ctx()};
-    const std::string             marker = "marker-" + std::string(512, 'x');
-    std::string                   asyncId;
+    const std::string            marker = "marker-" + std::string(512, 'x');
+    std::string                  asyncId;
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         auto text = co_await execTool(
@@ -1268,9 +1441,9 @@ asio::awaitable<void> test_tool_closure_lifetime() {
             Json{
                 {"tool",      "at_test_sleep"                           },
                 {"args",      Json{{"sleepMs", 400}, {"marker", marker}}},
-                {"notify",    false                                    },
+                {"notify",    false                                     },
                 {"sessionId", fx->sessionId                             },
-            }
+        }
         );
         asyncId = parseAsyncId(text);
         if (asyncId.empty()) {
@@ -1278,11 +1451,15 @@ asio::awaitable<void> test_tool_closure_lifetime() {
         }
         // 等工具进入执行体 (此时它停在睡眠里) 再取消: 发起方 runToolWork 随即返回,
         // 工具协程稍后才会恢复
-        if (!co_await waitUntil([&] { return fx->sleepTool->callCount() >= 1; })) {
+        if (!co_await waitUntil([&] {
+                return fx->sleepTool->callCount() >= 1;
+            })) {
             co_return false;
         }
         fx->host->cancelAsyncWork(asyncId);
-        co_return co_await waitUntil([&] { return fx->sleepTool->finishedOk(); });
+        co_return co_await waitUntil([&] {
+            return fx->sleepTool->finishedOk();
+        });
     }));
 
     XX_TEST_EXPECT_TRUE(fx->sleepTool->finishedOk());
@@ -1300,16 +1477,17 @@ asio::awaitable<void> test_tool_result_offloaded_once() {
     // 两个大输出工具: 一个声明自动压缩, 一个不声明
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         auto ctx = fx->ctx();
-        auto big = std::make_shared<AtBigOutputTool>("at_test_big_summary", ctx, /*autoSummary=*/true);
+        auto big
+            = std::make_shared<AtBigOutputTool>("at_test_big_summary", ctx, /*autoSummary=*/true);
         auto raw = std::make_shared<AtBigOutputTool>("at_test_big_raw", ctx, /*autoSummary=*/false);
         co_return ctx->toolRegistry->registerTool(big->get_name(), big)
-                  && ctx->toolRegistry->registerTool(raw->get_name(), raw);
+            && ctx->toolRegistry->registerTool(raw->get_name(), raw);
     }));
 
     const auto countOf = [](std::string_view hay, std::string_view needle) {
         size_t count = 0;
         for (size_t pos = hay.find(needle); pos != std::string_view::npos;
-             pos = hay.find(needle, pos + needle.size())) {
+             pos        = hay.find(needle, pos + needle.size())) {
             ++count;
         }
         return count;
@@ -1323,10 +1501,10 @@ asio::awaitable<void> test_tool_result_offloaded_once() {
         auto text = co_await execTool(
             tool,
             Json{
-                {"tool",      "at_test_big_summary"      },
-                {"args",      Json::object()             },
-                {"sessionId", fx->sessionId              },
-            }
+                {"tool",      "at_test_big_summary"},
+                {"args",      Json::object()       },
+                {"sessionId", fx->sessionId        },
+        }
         );
         asyncId = parseAsyncId(text);
         if (asyncId.empty()) {
@@ -1338,7 +1516,9 @@ asio::awaitable<void> test_tool_result_offloaded_once() {
     }));
     XX_TEST_EXPECT_FALSE(asyncId.empty());
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
-        co_return co_await waitUntil([&] { return !fx->sink->texts.empty(); });
+        co_return co_await waitUntil([&] {
+            return !fx->sink->texts.empty();
+        });
     }));
     {
         std::string delivered;
@@ -1349,10 +1529,7 @@ asio::awaitable<void> test_tool_result_offloaded_once() {
         }
         XX_TEST_EXPECT_FALSE(delivered.empty());
         // 恰好一个卸载提示 (工具层留下的), 编辑后的正文原样在 `content:` 段里
-        XX_TEST_EXPECT_EQ(
-            countOf(delivered, agentxx::util::kOffloadHintPrefix),
-            size_t{1}
-        );
+        XX_TEST_EXPECT_EQ(countOf(delivered, agentxx::util::kOffloadHintPrefix), size_t{1});
         XX_TEST_EXPECT_TRUE(contains(delivered, "`agentxx_share_store`"));
         XX_TEST_EXPECT_TRUE(contains(delivered, "big-output-line-0001"));
     }
@@ -1364,10 +1541,10 @@ asio::awaitable<void> test_tool_result_offloaded_once() {
         auto text = co_await execTool(
             tool,
             Json{
-                {"tool",      "at_test_big_raw"          },
-                {"args",      Json::object()             },
-                {"sessionId", fx->sessionId              },
-            }
+                {"tool",      "at_test_big_raw"},
+                {"args",      Json::object()   },
+                {"sessionId", fx->sessionId    },
+        }
         );
         asyncId = parseAsyncId(text);
         if (asyncId.empty()) {
@@ -1378,7 +1555,9 @@ asio::awaitable<void> test_tool_result_offloaded_once() {
         });
     }));
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
-        co_return co_await waitUntil([&] { return !fx->sink->texts.empty(); });
+        co_return co_await waitUntil([&] {
+            return !fx->sink->texts.empty();
+        });
     }));
     {
         std::string delivered;
@@ -1409,10 +1588,10 @@ asio::awaitable<void> test_await_single_delivery() {
         auto started = co_await execTool(
             run,
             Json{
-                {"tool",      "at_test_sleep"            },
-                {"args",      Json{{"sleepMs", 60}}      },
-                {"sessionId", fx->sessionId              },
-            }
+                {"tool",      "at_test_sleep"      },
+                {"args",      Json{{"sleepMs", 60}}},
+                {"sessionId", fx->sessionId        },
+        }
         );
         asyncId = parseAsyncId(started);
         if (asyncId.empty()) {
@@ -1421,7 +1600,10 @@ asio::awaitable<void> test_await_single_delivery() {
         // 还在跑的时候等它: 正文交给这次等待, 自动通知不再插一份
         awaitText = co_await execTool(
             awaitTool,
-            Json{{"id", asyncId}, {"sessionId", fx->sessionId}}
+            Json{
+                {"id",        asyncId      },
+                {"sessionId", fx->sessionId}
+        }
         );
         co_return true;
     }));
@@ -1442,7 +1624,10 @@ asio::awaitable<void> test_await_single_delivery() {
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         again = co_await execTool(
             awaitTool,
-            Json{{"id", asyncId}, {"sessionId", fx->sessionId}}
+            Json{
+                {"id",        asyncId      },
+                {"sessionId", fx->sessionId}
+        }
         );
         co_return true;
     }));
@@ -1465,10 +1650,10 @@ asio::awaitable<void> test_await_after_notify_returns_body() {
         auto started = co_await execTool(
             run,
             Json{
-                {"tool",      "at_test_sleep"            },
-                {"args",      Json{{"sleepMs", 20}}      },
-                {"sessionId", fx->sessionId              },
-            }
+                {"tool",      "at_test_sleep"      },
+                {"args",      Json{{"sleepMs", 20}}},
+                {"sessionId", fx->sessionId        },
+        }
         );
         asyncId = parseAsyncId(started);
         if (asyncId.empty()) {
@@ -1487,7 +1672,10 @@ asio::awaitable<void> test_await_after_notify_returns_body() {
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         awaitText = co_await execTool(
             awaitTool,
-            Json{{"id", asyncId}, {"sessionId", fx->sessionId}}
+            Json{
+                {"id",        asyncId      },
+                {"sessionId", fx->sessionId}
+        }
         );
         co_return true;
     }));
@@ -1501,25 +1689,27 @@ asio::awaitable<void> test_await_after_notify_returns_body() {
         auto started = co_await execTool(
             run,
             Json{
-                {"tool",      "at_test_sleep"            },
-                {"args",      Json{{"sleepMs", 10}}      },
-                {"notify",    false                      },
-                {"sessionId", fx->sessionId              },
-            }
+                {"tool",      "at_test_sleep"      },
+                {"args",      Json{{"sleepMs", 10}}},
+                {"notify",    false                },
+                {"sessionId", fx->sessionId        },
+        }
         );
         noNotifyId = parseAsyncId(started);
         if (noNotifyId.empty()) {
             co_return false;
         }
         if (!co_await waitUntil([&] {
-                return fx->host->asyncWorkJson(noNotifyId).value("state", std::string{})
-                       == "done";
+                return fx->host->asyncWorkJson(noNotifyId).value("state", std::string{}) == "done";
             })) {
             co_return false;
         }
         noNotifyText = co_await execTool(
             awaitTool,
-            Json{{"id", noNotifyId}, {"sessionId", fx->sessionId}}
+            Json{
+                {"id",        noNotifyId   },
+                {"sessionId", fx->sessionId}
+        }
         );
         co_return true;
     }));

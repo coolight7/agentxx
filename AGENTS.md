@@ -735,7 +735,7 @@ path/to/agentxx_test --log-level warn string_util regex
   同一个 `finishEntry` (发结果事件 + 界面通知 + 释放会话存储占用 + 队列补位)。**子代理回归同步**: `agentxx_subagent` 不再隐式异步 (删掉了
   `async_work.enable` 决定形态的老行为), 要后台跑就 `agentxx_async_run
   {tool:"agentxx_subagent", args:{subagent, message, ...}}` —— 参数与直接调用完全一致,
-  内部按 `kind=agent` 提交; 受理返回 `{started:true, asyncId}`、正文 `[Async started] id=...`。
+  内部按 `kind=agent` 提交; 受理返回 `{started:true, asyncId}`、正文 `Async started, id=...`。
   **notify 默认开**: 任务收尾时由 `AsyncWorkManager::finishEntry` 直接交给会话 (不经
   事件等待; 轮次在跑 → 下一次模型调用前插入; 轮次已结束 → 入队开新一轮;
   `notify:false` 只落任务表)。**有人等着就不重复投**: `agentxx_async_await` 在任务未结束

@@ -1218,7 +1218,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     XX_TEST_EXPECT_EQ(adapter->lastDataTopic(), "agentxx.client.plugin.example_plugin.rebuild");
 
     // ---- 6. disable / enable ----
-    mgr->disable("example_plugin");
+    co_await mgr->disable("example_plugin");
     {
         auto reg = mgr->uiRegistrySnapshot();
         XX_TEST_EXPECT_TRUE(reg != nullptr);
@@ -1253,7 +1253,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     mgr->invokeCommand("example", R"({"text":"x"})");
     XX_TEST_EXPECT_EQ(adapter->sendCount(), 1); // 未增加
 
-    mgr->enable("example_plugin");
+    co_await mgr->enable("example_plugin");
     // 启用走 client start 事务 (client io 线程异步执行): 等待 UI 注册恢复
     for (int i = 0; i < 200 && !mgr->hasCommand("example"); ++i) {
         co_await sleepMs(5);
@@ -2621,7 +2621,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 co_await drainPlugin(mgr, "example_plugin");
                 XX_TEST_EXPECT_EQ(hitsFallback.load(), 2);
                 // disable 保留 / enable 恢复
-                mgr->disable("example_plugin");
+                co_await mgr->disable("example_plugin");
                 {
                     auto reg = mgr->uiRegistrySnapshot();
                     bool any = false;
@@ -2634,7 +2634,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     }
                     XX_TEST_EXPECT_FALSE(any);
                 }
-                mgr->enable("example_plugin");
+                co_await mgr->enable("example_plugin");
                 // 启用走 client start 事务 (client io 线程异步执行): 等插件自身注册恢复;
                 // 测试手动绑定的处理器不属于插件 start 事务, 需要重新绑定
                 for (int i = 0; i < 200 && !mgr->hasCommand("example"); ++i) {
@@ -3434,13 +3434,33 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         inst->lifecycleStop      = &probeClientStopHook;
         inst->pluginCtx          = &probe;
         inst->lifecycleStarted   = true;
+        // disable/enable 是协程: 完成包落在管理器自己的 io 上, 外层测试协程直接
+        // co_await 会互相等 (没有别人推进这个局部 io), 所以投到它上面再推动它
+        auto runLocal = [&]<typename Fn>(Fn fn) {
+            bool finished = false;
+            asio::co_spawn(
+                io,
+                keepAliveRun([fn = std::move(fn), &finished]() -> asio::awaitable<void> {
+                    co_await fn();
+                    finished = true;
+                }),
+                asio::detached
+            );
+            for (int round = 0; round < 2000 && !finished; ++round) {
+                io.restart();
+                io.poll();
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            io.restart();
+            io.poll();
+        };
 
-        // 禁用: 主程序侧同步摘除, stop 事务投递到 client io 线程
-        mgr2->disable("fake_lifecycle");
+        // 禁用: 主程序侧摘除 + stop 事务已走完 (disable 返回即已落定)
+        runLocal([&]() -> asio::awaitable<void> {
+            co_await mgr2->disable("fake_lifecycle");
+        });
         XX_TEST_EXPECT_FALSE(inst->enabled);
         XX_TEST_EXPECT_TRUE(inst->userDisabled);
-        XX_TEST_EXPECT_EQ(probe.stops, 0);
-        drainIo(io, *mgr2);
         XX_TEST_EXPECT_EQ(probe.stops, 1);
         XX_TEST_EXPECT_TRUE(inst->lifecycleStopped);
         XX_TEST_EXPECT_EQ(
@@ -3448,11 +3468,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             static_cast<int>(pluginxx::PluginInstanceState::Disabled)
         );
 
-        // 启用: start 事务重新声明注册, 成功后回到 Ready
-        mgr2->enable("fake_lifecycle");
+        // 启用: create 事务重新声明注册, 成功后回到 Ready
+        runLocal([&]() -> asio::awaitable<void> {
+            co_await mgr2->enable("fake_lifecycle");
+        });
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_FALSE(inst->userDisabled);
-        drainIo(io, *mgr2);
         XX_TEST_EXPECT_EQ(probe.starts, 1);
         XX_TEST_EXPECT_FALSE(inst->lifecycleStopped);
         XX_TEST_EXPECT_EQ(
@@ -3462,7 +3483,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         // 关闭流程中拒绝启用状态变化
         inst->lifetime->requestClose();
-        mgr2->disable("fake_lifecycle");
+        runLocal([&]() -> asio::awaitable<void> {
+            co_await mgr2->disable("fake_lifecycle");
+        });
         XX_TEST_EXPECT_TRUE(inst->enabled);
 
         // 收尾: 卸载路径补齐欠着的 stop, 之后才能 destroy/dlclose
@@ -3510,7 +3533,30 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         side->depends = {"leaf"};
         top->depends  = {"mid", "side"}; // 菱形: top 经 mid/side 两级依赖 leaf
 
-        mgr2->disable("leaf");
+        // disable/enable 是协程: 完成包落在管理器自己的 io 上, 外层测试协程直接
+        // co_await 会互相等 (没有别人推进这个局部 io), 所以投到它上面再推动它
+        auto runLocal = [&]<typename Fn>(Fn fn) {
+            bool finished = false;
+            asio::co_spawn(
+                io,
+                keepAliveRun([fn = std::move(fn), &finished]() -> asio::awaitable<void> {
+                    co_await fn();
+                    finished = true;
+                }),
+                asio::detached
+            );
+            for (int round = 0; round < 2000 && !finished; ++round) {
+                io.restart();
+                io.poll();
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            io.restart();
+            io.poll();
+        };
+
+        runLocal([&]() -> asio::awaitable<void> {
+            co_await mgr2->disable("leaf");
+        });
         XX_TEST_EXPECT_FALSE(leaf->enabled);
         XX_TEST_EXPECT_FALSE(mid->enabled);
         XX_TEST_EXPECT_TRUE(mid->blockedByDependencies);
@@ -3518,22 +3564,32 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_FALSE(top->enabled); // 三级依赖同样被级联
         XX_TEST_EXPECT_TRUE(top->blockedByDependencies);
 
-        mgr2->enable("leaf");
+        runLocal([&]() -> asio::awaitable<void> {
+            co_await mgr2->enable("leaf");
+        });
         XX_TEST_EXPECT_TRUE(leaf->enabled);
         XX_TEST_EXPECT_TRUE(mid->enabled);
         XX_TEST_EXPECT_TRUE(side->enabled);
         XX_TEST_EXPECT_TRUE(top->enabled);
 
         // 用户显式禁用的插件不被级联恢复
-        mgr2->disable("top");
+        runLocal([&]() -> asio::awaitable<void> {
+            co_await mgr2->disable("top");
+        });
         XX_TEST_EXPECT_TRUE(top->userDisabled);
-        mgr2->disable("leaf");
+        runLocal([&]() -> asio::awaitable<void> {
+            co_await mgr2->disable("leaf");
+        });
         XX_TEST_EXPECT_FALSE(mid->enabled);
-        mgr2->enable("leaf");
+        runLocal([&]() -> asio::awaitable<void> {
+            co_await mgr2->enable("leaf");
+        });
         XX_TEST_EXPECT_TRUE(mid->enabled);
         XX_TEST_EXPECT_FALSE(top->enabled);
         XX_TEST_EXPECT_TRUE(top->userDisabled);
-        mgr2->enable("top");
+        runLocal([&]() -> asio::awaitable<void> {
+            co_await mgr2->enable("top");
+        });
         XX_TEST_EXPECT_TRUE(top->enabled);
         XX_TEST_EXPECT_FALSE(top->userDisabled);
     }
@@ -5002,7 +5058,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
 
                 // 禁用 → 注册项与缓存一齐摘除; 启用 → start 重跑脚本重新注册
-                mgrJs->disable("example_js");
+                co_await mgrJs->disable("example_js");
                 {
                     auto reg    = mgrJs->uiRegistrySnapshot();
                     bool exists = false;
@@ -5013,7 +5069,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     }
                     XX_TEST_EXPECT_TRUE(!exists);
                 }
-                mgrJs->enable("example_js");
+                co_await mgrJs->enable("example_js");
                 bool restored = false;
                 for (int i = 0; i < 200 && !restored; ++i) {
                     co_await sleepMs(5);

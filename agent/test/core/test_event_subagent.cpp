@@ -127,7 +127,7 @@ void pumpIoUntil(const std::shared_ptr<asio::io_context>& io, const std::atomic<
 
 /// 建夹具 + 挂根 (在 io 上完成, 内部自己泵 io)
 bool buildFixture(const std::shared_ptr<SubagentFixture>& fx) {
-    fx->sim = startDaSimServer();
+    fx->sim                       = startDaSimServer();
     g_da_sim_response_content     = "async child result";
     g_da_sim_tool_calls           = Json::array();
     g_da_sim_tool_calls_remaining = -1;
@@ -135,7 +135,7 @@ bool buildFixture(const std::shared_ptr<SubagentFixture>& fx) {
     g_da_sim_fail_count           = 0;
     g_da_sim_request_count        = 0;
 
-    fx->io = std::make_shared<asio::io_context>();
+    fx->io                   = std::make_shared<asio::io_context>();
     auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
     cfg->model.baseUrl       = "http://127.0.0.1:" + std::to_string(fx->sim.port);
     cfg->model.apiKey        = "EMPTY";
@@ -144,7 +144,7 @@ bool buildFixture(const std::shared_ptr<SubagentFixture>& fx) {
     cfg->permissionMode      = agentxx::agent::PermissionMode::Pass;
     cfg->llmMaxRetry         = 1;
 
-    auto        io = fx->io;
+    auto              io = fx->io;
     std::atomic<bool> done{false};
     std::atomic<bool> ok{false};
     asio::co_spawn(
@@ -157,8 +157,8 @@ bool buildFixture(const std::shared_ptr<SubagentFixture>& fx) {
             co_await fx->agent->init();
             fx->host->attachRoot(fx->agent);
             // 父会话 (事件投递与子代理继承总线都要用到)
-            auto session   = fx->agent->getContext()->getSession(fx->sessionId);
-            fx->sink       = std::make_shared<FakeSink>();
+            auto session       = fx->agent->getContext()->getSession(fx->sessionId);
+            fx->sink           = std::make_shared<FakeSink>();
             session->inputSink = fx->sink;
             ok                 = true;
             done               = true;
@@ -177,7 +177,7 @@ bool runOnIo(const std::shared_ptr<asio::io_context>& io, Fn fn) {
     asio::co_spawn(
         *io,
         keepAliveRun([fn, &done, &ok]() mutable -> asio::awaitable<void> {
-            ok = co_await fn();
+            ok   = co_await fn();
             done = true;
         }),
         asio::detached
@@ -235,12 +235,12 @@ asio::awaitable<void> test_async_dispatch_returns_immediately() {
     // 子代理慢一点: 受理响应必须先回来, 结果后到
     g_da_sim_delay_ms = 300;
 
-    bool                accepted = false;
-    Json                acceptedValue;
-    int64_t             acceptCostMs = 0;
-    std::string         acceptedEvent;
-    std::atomic<bool>   valueArrived{false};
-    Json                value;
+    bool              accepted = false;
+    Json              acceptedValue;
+    int64_t           acceptCostMs = 0;
+    std::string       acceptedEvent;
+    std::atomic<bool> valueArrived{false};
+    Json              value;
 
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         agentxx::events::ReqSubagentBatch req{
@@ -251,14 +251,14 @@ asio::awaitable<void> test_async_dispatch_returns_immediately() {
         req.tasks.push_back(asyncTask("job1"));
 
         const auto begin = std::chrono::steady_clock::now();
-        auto       resp  = co_await fx->agent->getContext()
-                         ->bus->request<
-                             agentxx::events::ReqSubagentBatch,
-                             agentxx::events::RespSubagentBatch>(
-                             agentxx::events::Topic::Subagent,
-                             std::move(req),
-                             std::chrono::seconds(30)
-                         );
+        auto       resp
+            = co_await fx->agent->getContext()
+                  ->bus
+                  ->request<agentxx::events::ReqSubagentBatch, agentxx::events::RespSubagentBatch>(
+                      agentxx::events::Topic::Subagent,
+                      std::move(req),
+                      std::chrono::seconds(30)
+                  );
         acceptCostMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::steady_clock::now() - begin
         )
@@ -269,7 +269,7 @@ asio::awaitable<void> test_async_dispatch_returns_immediately() {
         accepted      = true;
         acceptedEvent = resp->results[0].eventName;
         acceptedValue = Json{
-            {"started", resp->results[0].started},
+            {"started",  resp->results[0].started },
             {"hasError", resp->results[0].hasError},
         };
         // 结果此时还没到 (子代理仍在跑)
@@ -343,14 +343,14 @@ asio::awaitable<void> test_async_result_wakes_session() {
             .cancelToken     = nullptr,
         };
         req.tasks.push_back(asyncTask("job2"));
-        auto resp = co_await fx->agent->getContext()
-                        ->bus->request<
-                            agentxx::events::ReqSubagentBatch,
-                            agentxx::events::RespSubagentBatch>(
-                            agentxx::events::Topic::Subagent,
-                            std::move(req),
-                            std::chrono::seconds(30)
-                        );
+        auto resp
+            = co_await fx->agent->getContext()
+                  ->bus
+                  ->request<agentxx::events::ReqSubagentBatch, agentxx::events::RespSubagentBatch>(
+                      agentxx::events::Topic::Subagent,
+                      std::move(req),
+                      std::chrono::seconds(30)
+                  );
         if (!resp.has_value() || resp->results.empty()) {
             co_return false;
         }
@@ -368,15 +368,15 @@ asio::awaitable<void> test_async_result_wakes_session() {
     const auto text = fx->sink->lastText();
     XX_TEST_EXPECT_TRUE(contains(text, "[Event] " + std::string{kAsyncDone}));
     XX_TEST_EXPECT_TRUE(contains(text, "async child result"));
+    XX_TEST_EXPECT_EQ(fx->sink->lastSource(), std::string{"event:"} + std::string{kAsyncDone});
     XX_TEST_EXPECT_EQ(
-        fx->sink->lastSource(),
-        std::string{"event:"} + std::string{kAsyncDone}
+        hub->queryWait(watched->waitId)->state,
+        agentxx::events::WaitState::Satisfied
     );
-    XX_TEST_EXPECT_EQ(hub->queryWait(watched->waitId)->state, agentxx::events::WaitState::Satisfied);
     co_return;
 }
 
-/// 3. 工具层: 父轮次拿到 `[Async started]` 文本, 结果经事件随之回到会话
+/// 3. 工具层: 父轮次拿到 `Async started,` 文本, 结果经事件随之回到会话
 /// - 子代理本身已回到同步语义, 后台执行只能经 `agentxx_async_run` (参数与直接调用一致)
 asio::awaitable<void> test_async_tool_result_text() {
     auto fx = std::make_shared<SubagentFixture>();
@@ -401,12 +401,13 @@ asio::awaitable<void> test_async_tool_result_text() {
              {"id", "call_async_1"},
              {"type", "function"},
              {"function",
-              Json{
-                  {"name", "agentxx_async_run"},
-                  {"arguments",
-                   R"({"tool":"agentxx_subagent","args":{"subagent":"subagent_task","message":"work"}})"},
-              }},
-         },
+                       Json{
+                           {"name", "agentxx_async_run"},
+                           {"arguments",
+                            R"({"tool":"agentxx_subagent","args":{"subagent":"subagent_task","message":"work"}})"
+                 },
+             }},
+             },
     });
 
     agentxx::agent::BaseAgent::TurnResult turnResult;
@@ -420,7 +421,7 @@ asio::awaitable<void> test_async_tool_result_text() {
     // 工具的返回文本 (模型看到的) 是受理提示, 不是子代理结果
     bool sawStarted = false;
     for (const auto& req : g_da_sim_requests.get()) {
-        if (contains(req.dump(), "[Async started]")) {
+        if (contains(req.dump(), "Async started,")) {
             sawStarted = true;
         }
     }
@@ -447,8 +448,7 @@ asio::awaitable<void> test_async_tool_result_text() {
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         co_return co_await waitUntil([&] {
             auto session = fx->agent->getContext()->getSession(fx->sessionId);
-            return fx->sink->count() >= 1
-                   || (session && session->pendingInputCount("event:") >= 1);
+            return fx->sink->count() >= 1 || (session && session->pendingInputCount("event:") >= 1);
         });
     }));
     const auto pending = [&]() -> size_t {
@@ -457,9 +457,7 @@ asio::awaitable<void> test_async_tool_result_text() {
     };
     XX_TEST_EXPECT_TRUE(fx->sink->count() >= 1 || pending() >= 1);
     if (fx->sink->count() >= 1) {
-        XX_TEST_EXPECT_TRUE(
-            contains(fx->sink->lastText(), "[Event] " + std::string{kAsyncDone})
-        );
+        XX_TEST_EXPECT_TRUE(contains(fx->sink->lastText(), "[Event] " + std::string{kAsyncDone}));
     }
 
     g_da_sim_tool_calls_remaining = -1;
@@ -481,14 +479,14 @@ asio::awaitable<void> test_async_event_name_errors() {
         };
         req.tasks.push_back(asyncTask("dup1"));
         req.tasks.push_back(asyncTask("dup2"));
-        auto r = co_await fx->agent->getContext()
-                     ->bus->request<
-                         agentxx::events::ReqSubagentBatch,
-                         agentxx::events::RespSubagentBatch>(
-                         agentxx::events::Topic::Subagent,
-                         std::move(req),
-                         std::chrono::seconds(30)
-                     );
+        auto r
+            = co_await fx->agent->getContext()
+                  ->bus
+                  ->request<agentxx::events::ReqSubagentBatch, agentxx::events::RespSubagentBatch>(
+                      agentxx::events::Topic::Subagent,
+                      std::move(req),
+                      std::chrono::seconds(30)
+                  );
         if (r.has_value()) {
             resp = std::move(*r);
         }
@@ -512,14 +510,14 @@ asio::awaitable<void> test_async_event_name_errors() {
             .cancelToken     = nullptr,
         };
         req.tasks.push_back(asyncTask("bad1", "agent.reserved"));
-        auto r = co_await fx->agent->getContext()
-                     ->bus->request<
-                         agentxx::events::ReqSubagentBatch,
-                         agentxx::events::RespSubagentBatch>(
-                         agentxx::events::Topic::Subagent,
-                         std::move(req),
-                         std::chrono::seconds(30)
-                     );
+        auto r
+            = co_await fx->agent->getContext()
+                  ->bus
+                  ->request<agentxx::events::ReqSubagentBatch, agentxx::events::RespSubagentBatch>(
+                      agentxx::events::Topic::Subagent,
+                      std::move(req),
+                      std::chrono::seconds(30)
+                  );
         if (r.has_value()) {
             badName = std::move(*r);
         }
@@ -551,14 +549,14 @@ asio::awaitable<void> test_async_cancel() {
             .cancelToken     = nullptr,
         };
         req.tasks.push_back(asyncTask("job6"));
-        auto resp = co_await fx->agent->getContext()
-                        ->bus->request<
-                            agentxx::events::ReqSubagentBatch,
-                            agentxx::events::RespSubagentBatch>(
-                            agentxx::events::Topic::Subagent,
-                            std::move(req),
-                            std::chrono::seconds(30)
-                        );
+        auto resp
+            = co_await fx->agent->getContext()
+                  ->bus
+                  ->request<agentxx::events::ReqSubagentBatch, agentxx::events::RespSubagentBatch>(
+                      agentxx::events::Topic::Subagent,
+                      std::move(req),
+                      std::chrono::seconds(30)
+                  );
         started = resp.has_value() && !resp->results.empty() && resp->results[0].started;
         co_return started;
     });

@@ -684,14 +684,14 @@ asio::awaitable<void> test_lifecycle_reversible() {
     XX_TEST_EXPECT_GE(before, size_t{1});
 
     // 禁用: 频道与订阅由框架按属主回收 (同步入口, 事务投递到 io 线程执行)
-    f.mgr->disable("example_event");
+    co_await f.mgr->disable("example_event");
     XX_TEST_EXPECT_TRUE(
         co_await waitFor([&] { return !registry->declares("plugin.example_event.build"); })
     );
     XX_TEST_EXPECT_EQ(f.mgr->registrationInventory(*inst).total(), size_t{0});
 
     // 启用: 插件在自己的 mount 里重新声明
-    f.mgr->enable("example_event");
+    co_await f.mgr->enable("example_event");
     XX_TEST_EXPECT_TRUE(
         co_await waitFor([&] { return registry->declares("plugin.example_event.build"); })
     );

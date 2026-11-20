@@ -242,13 +242,13 @@ asio::awaitable<void> test_state_reversible() {
     );
 
     // ---- 禁用: 贡献摘除 (回到"没有这一段") ----
-    f.mgr->disable(kPluginName);
+    co_await f.mgr->disable(kPluginName);
     XX_TEST_EXPECT_FALSE(inst->enabled);
     XX_TEST_EXPECT_EQ(sectionText(f.ctx->agentConfig->prompt, kDefaultKey), std::string{});
     XX_TEST_EXPECT_EQ(f.mgr->registrationInventory(*inst).promptKeys, size_t{0});
 
     // ---- 启用: start 事务重新注入 (投递到 io 线程, 轮询等待) ----
-    f.mgr->enable(kPluginName);
+    co_await f.mgr->enable(kPluginName);
     const bool injectedAgain = co_await waitFor([&] {
         return sectionText(f.ctx->agentConfig->prompt, kDefaultKey) == kDefaultText;
     });
@@ -293,7 +293,7 @@ asio::awaitable<void> test_keeps_foreign_sections() {
     );
 
     // 禁用插件: 只摘自己的段, 用户那段原样保留
-    f.mgr->disable(kPluginName);
+    co_await f.mgr->disable(kPluginName);
     XX_TEST_EXPECT_EQ(sectionText(f.ctx->agentConfig->prompt, kDefaultKey), std::string{});
     XX_TEST_EXPECT_EQ(
         sectionText(f.ctx->agentConfig->prompt, "user_note"),

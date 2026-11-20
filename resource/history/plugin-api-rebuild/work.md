@@ -13,7 +13,7 @@
 | 6 | 线程池统一（管理器持一个池，默认 3 条，`plugin.thread_pool_workers`，两端同值；删其余四个池） | 完成（同上） |
 | 7 | 4 个同步受理入口改提交（含 `OpCore` 操作编号原子化与登记线程安全化） | 完成（见下节“步 7”：全量 passed=43828 failed=0） |
 | 8 | `is_canceled` 改快照 + JS 引擎轮询 | 完成（全量 passed=43837 failed=0） |
-| 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 9a 完成（全量 passed=43837 failed=0）；9b（`disable`/`enable`）待做 |
+| 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 完成（9a / 9b 均已落地，见下节） |
 | 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 待开始 |
 | 10b | 工具体收成一个：`tool`（`pluginxx::Task` 体）+ 删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync`（53 处） | 待开始 |
 | 10c | `offload` / `sleep` 改“提交即返回 ticket” + `whenAll` 泛化/变参 | 待开始 |
@@ -315,6 +315,67 @@ JS 引擎实例收尾都要等一次 io。现在改成**不等**：置 `alive=fa
 
 验证：`plugin_runtime` 755 / `plugin_broadcast` 96 / `plugin_sdk` 141 全绿；
 全量 `passed=43837 failed=0`（与本步之前完全一致，说明行为未变）。
+
+### 步 9b（`disable` / `enable` 改协程）
+
+`PluginHostLifecycle::disable` / `enable` 原来是“摘注册 + 把 stop/create 事务投出去就返回”，
+调用方要看结果只能轮询。现在改成**原名返回 `asio::awaitable<bool>`**，返回时状态已落定：
+
+- `disableImpl` / `enableImpl` / `resumeDependents` 全部改成协程，级联递归 `co_await`；
+- 删掉 `requestStopForDisable` / `requestStartForEnable`（它们的 `co_spawn` + 错误回调用不上了）；
+- 返回值语义：`true` = 已处于目标态（含“本来就在目标态”），`false` = 实例不存在 /
+  已在关闭 / 事务报错。级联里某个子项失败不会中断其余项，最终按“全部成功且状态已落定”返回；
+- `disable` 现在还会等 `onInstanceDisabledAsync`（拆挂载）走完，`enable` 等
+  `onInstanceEnabledAsync`（重新挂载）；
+- 顺带修一处语义漏洞：`enableImpl` 里“用户显式禁用 → 级联恢复跳过”现在返回 `true`
+  （跳过不是失败），否则级联会把父项的返回值拖成 `false`。
+
+**测试侧**：新增 `agent/test/include/agentxx-test/plugin/coroutine_runner.h` 的
+`runPluginCoroutine(ex, awaitable<T>)` —— 用 `asio::query(ex, execution::context)` 取到
+`io_context`，`co_spawn` + `use_future` 后 `restart/poll` 并让出 CPU 直到结果就绪。
+12 个测试文件里的 65 处 `disable`/`enable` 调用因此分两类：
+
+- 测试函数本身是普通函数（`test_plugin_runtime.cpp`）→ 用 `runPluginCoroutine` 包一层；
+- 测试函数是协程（其余 11 个文件）→ 直接 `co_await`。
+
+**踩到的两个坑**：
+
+1. `#include` **不能放在 PCH 之前**：第一次把助手头插在文件第一行，MSVC 丢掉 PCH 之前的全部
+   内容，报 `asio 不是类或命名空间名称`；助手头必须放在第一个 `namespace` 之前。
+2. 局部 `asio::io_context` 的管理器上**不能直接 `co_await`**：`test_client_plugins` 有两段用
+   自建 `asio::io_context io` 造 `ClientPluginManager`，完成包落在这个局部 io 上，而外层测试
+   协程等它时没有别人推进它 → 直接死锁（实测挂住 30 分钟）。改成把事务投到该局部 io 上再
+   `poll` 推进（`runLocal` helper）。
+
+**被本步暴露的一个框架缺陷（已修）**：改完之后 `plugin_cleanup` 在卸载 `agentxx_math` 时崩在
+`<Unloaded_libagentxx_math.dll>+偏移`。原因是同步析构路径的 `destroyInstanceNoWait`：
+它在插件的 `notify->done` 里就 `dlclose`，而那一刻还在插件的 `destroy` 入口内部
+（`destroyInstanceEntry` 交完完成通知还要返回），库已卸载 → 返回到已卸载的地址。
+修法：`DestroyOnce` 改成双条件收尾（`doneCalled` + `entryReturned`，一把锁保护），
+**两个都到齐**才 `finishDestroy` + `closeLibraryHandle`，且由最后到场的调用方执行一次。
+`onDone` 里重复 done 直接忽略。
+（异步卸载路径 `unloadAsync` 本来就等着 destroy 走完再关库，没有这个问题。）
+
+验证：`plugin_cleanup` 90 / `plugin_runtime` 755 / `plugin_dispatch` 112 / `plugin_feature` 34 /
+`plugin_broadcast` 96 / `plugin_host_mount` 147 / `plugin_multi_mount` 47 /
+`plugin_multi_instance` 80 / `plugin_executor` 684 / `plugins` 704 / `client_plugins` 842 全绿；
+`boundaries` 曾因新注释里写了“钩子”被判违规（规则 15），已改成“stop 事务报错”。
+
+### 全量回归时的两处修改
+
+跳了一轮全量后共 9 条失败（`passed=43827 failed=9`），两边都已处理：
+
+1. **`plugin_runtime` 第 2493 行是抢时序断言**：它想确认“驱动票未执行时实例 lease 还在”，
+   但 `calls` 与 `activeDriverCount()` 的变化不是原子的，满负载下会出现 `calls==0`
+   而票已完结的瞬间（─单独跑这个模块总是绿的）。守卫改成
+   `calls==0 && activeDriverCount()>0` 才断言 lease。
+2. **`async_tools` 的 6 条是长期存在的测试与实现脱节**（与 9b 无关，单独跑也失败）：
+   测试断言 `agentxx_async_run` 的受理正文里有 `tool=<工具名>` / `subagent=<名字>`，
+   而实现从来没输出过这一行。由于它对模型确实有用（一眼看出后台跑的是哪个工具），
+   选择**改实现而不是删断言**：受理正文第二行现在是 `tool=<工具名>`
+   或 `subagent=<子代理名>`；`docs/zh-cn/design/events.md` 的时序例同步。
+   其余两条 `starts_with` 失败是同一批失败里的抖动（首行本来就是对的），
+   本次回归未复现。
 
 ## 设计过程
 

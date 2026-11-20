@@ -624,7 +624,7 @@ mcp:
 
         // ---- disable: 拆挂载 → 资源与所有权记录一并摘除 ----
         // (v2: 资源是挂载级实体; 重新启用时由插件 mount 过程按清单/回调重新声明)
-        ctx->pluginManager->disable(ownerName);
+        co_await ctx->pluginManager->disable(ownerName);
         for (int i = 0; i < 200 && !applier->ownedBy(ownerName).skillDirs.empty(); ++i) {
             co_await sleepMs(5); ///< 拆挂载投递到 IO 线程执行 (记录随之摘除)
         }
@@ -634,7 +634,7 @@ mcp:
         XX_TEST_EXPECT_TRUE(snap.skillDirs.empty());
 
         // ---- enable: 重新挂载 → 资源按清单重新生效 ----
-        ctx->pluginManager->enable(ownerName);
+        co_await ctx->pluginManager->enable(ownerName);
         for (int i = 0; i < 200 && !contains(skillMw->skillDirPathList(), absSkill); ++i) {
             co_await sleepMs(5);
         }

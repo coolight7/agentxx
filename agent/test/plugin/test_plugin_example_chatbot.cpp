@@ -1950,7 +1950,7 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_TRUE(co_await drain());
 
         // ---- 禁用: 工具、人设根、通道全部撤掉 ----
-        mgr->disable(kOwner);
+        co_await mgr->disable(kOwner);
         XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
             return rootOf(host, kOwner) == nullptr && host->rootCount() == size_t{0};
         }));
@@ -1958,7 +1958,7 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_TRUE(channelOfPrefix(mgr, "chatbot_assistant_") == nullptr);
 
         // ---- 启用: 人设根与工具回来 ----
-        mgr->enable(kOwner);
+        co_await mgr->enable(kOwner);
         XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
             auto root = rootOf(host, kOwner);
             if (!root) {
@@ -2026,8 +2026,8 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_TRUE(co_await drain());
 
         for (int round = 1; round <= 2; ++round) {
-            mgr->disable(kOwner);
-            mgr->enable(kOwner);
+            co_await mgr->disable(kOwner);
+            co_await mgr->enable(kOwner);
             XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
                 auto root = rootOf(host, kOwner);
                 if (!root) {
