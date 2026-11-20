@@ -16,7 +16,7 @@
 | 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 完成（9a / 9b 均已落地，见下节） |
 | 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 待开始 |
 | 10b | 工具体收成一个：`tool`（`pluginxx::Task` 体）+ 删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync`（53 处） | 待开始 |
-| 10c | `offload` / `sleep` 改“提交即返回 ticket” + `whenAll` 泛化/变参 | 待开始 |
+| 10c | `offload` / `sleep` 改“提交即返回 ticket” + `whenAll` 泛化/变参 | 完成（`plugin_bridge` 302；全量 passed=43867 failed=0） |
 | 11 | `create`/`start` 合并（返回 void、可重入）+ `destroy` 改异步 + 插件迁移 | 完成（全量回归 passed=43825 failed=0） |
 | 12 | 测试夹具统一带插件线程与池 | 待开始 |
 | 13 | 修静默降级（§2.6 六处 + 两处订阅）+ 文档/代次 + 全量回归 | 待开始 |
@@ -384,13 +384,17 @@ JS 引擎实例收尾都要等一次 io。现在改成**不等**：置 `alive=fa
 
 ### 步 10b（先做，它是 10 的前置）
 
-为什么必须先做：`blocking_tool` 的 `execute_start` 里有两处阻塞读
-（`plugin_kit.h:4735` 附近的 `ctx->workDir(...)` / `ctx->argsJson()`，即 §3.5 第 14 条），
-而文件系统 `dst` 复核（`agentxx_filesystem.cpp:252` 的 `checkPathDecisions`）就在
-`blocking_tool` 体里 —— 不改工具体就没法把它改成 `co_await`。
+为什么必须先做：`blocking_tool` 的 `execute_start` 里有两处阻塞读（`plugin_kit.h:4735` 附近的
+`ctx->workDir(...)` / `ctx->argsJson()`，即 §3.5 第 14 条），而文件系统 `dst` 复核
+（`agentxx_filesystem.cpp:252` 的 `checkPathDecisions`）就在 `blocking_tool` 体里 —— 不改工具体
+就没法把它改成 `co_await`。
 
 现状（本次实测数）：`blocking_tool` 49 处、`fast_tool` 14 处、`polled_tool` 14 处
 （含 kit 头里的说明文字，实际调用点约 53 处）；`registerToolSync` 在插件里已是 0 处。
+另外 `blocking_tool` 现在支持两种体形状（`(Ctx&, args, tid, OpCtl&) -> std::string` 与
+`(Ctx&, args) -> ToolResult`，后者见 `agentxx_text_selection_monitor.cpp:417`），
+`tool` 只有前者 —— 迁移时要先把两种形状合成一种（建议统一 `(Ctx&, args, OpCtl&)`，
+会话 id 从 `OpCtl` 取，见下一条）。
 
 `tool` 现在已经是 `TaskFn` + `startBridgedRoot`（`plugin_kit.h:4610`），要做的不是改签名，
 而是把“推进根”从 `PollOneBridge` 的 poll-one 换成:
@@ -414,27 +418,28 @@ kit 拆三个头：`plugin_kit.h` 现在 7265 行，`kit::` 段从 6132 行起�
 `example_resources` 的 `ownInfoStringAsync`、`codegraph` / `planning` 的 `get_config`、
 `example_runtime` 的 `argsJson`（都已走协程并在 create 里 `co_await`）。
 
-### 步 13 里两处仍在“降级”的订阅（真 bug，建议优先于 10c）
+### 步 13 剩下的两处同步订阅
 
 1. `agentxx_chatbot/platform/qq/qq_gateway.cpp:62` 的 `subscribeNetEvents()` 在
    `QqGateway::start()`（普通函数、插件线程）里调**阻塞** `ChatbotNet::subscribeEvents`
    （`chatbot_net.cpp:258`）→ 插件线程上被拒 → 返回 `nullptr` → 网关收不到网络事件
-   （日志有“订阅网络事件失败”）。修法：把 `QqPlatform::start` / `QqGateway::start` 链改成协程
-   （`platform.h:53` 的 `virtual bool start` 要一起改，`fake_platform.h:49` 同步），
-   或把订阅提到插件 `create`（那里已是协程，可 `co_await subscribePluginBroadcast`）
-   并把句柄交给网关；**不要**用 `subscribePluginBroadcastNoWait` 绕过：拿不到句柄，
-   `stop()` 就退订不了，反复 start 会叠加多份订阅。
-2. `agentxx_text_selection_monitor.cpp:245` 同一模式（`subscribePluginBroadcast` 阻塞版），
-   影响该工具拿不到 CDP 事件 → 工具返回空。修法同上（该函数已是协程上下文之外的普通函数，
-   建议改成 `pluginxx::Task` 体后用 `co_await`）。
+   （日志有“订阅网络事件失败”）。这是本轮唯一一个**功能级**缺陷。修法：把
+   `QqPlatform::start` / `QqGateway::start` 链改成协程（`platform.h:53` 的 `virtual bool start`
+   要一起改，`fake_platform.h:49` 同步），或把订阅提到插件 `create`（那里已是协程，
+   可 `co_await subscribePluginBroadcast`）并把句柄交给网关；**不要**用
+   `subscribePluginBroadcastNoWait` 绕过：拿不到句柄，`stop()` 就退订不了，
+   反复 start 会叠加多份订阅。
+2. `agentxx_text_selection_monitor.cpp:245` 同一模式（阻塞版 `subscribePluginBroadcast`）。
+   本轮核实：它的调用链（`makeCdpNetFns` → `CdpNetFns::wsRoundTrip`）跑在**插件自管线程**上，
+   不在插件执行线程，所以今天不会返回 `nullptr`（功能正常），只是“插件自有线程上
+   同步等 io” —— 拆桥时改即可。
 
 ### 步 10c / 12
 
-10c 的 API 形状、内部结构、完成回调用“直接 resume”、`whenAll` 泛化 + 变参、
-6 条验证用例都在 [plan.md](plan.md) §3.10，实现落点在 `kit.h` 的
-`SleepAwaiter`（3580~3650）/ `OffloadAwaiter`（3690~3820）/ `whenAll`（4317），
-状态机照 `TableOpTicket`（4023~4150）那套抄即可。注意 `await` 时仍要
-`p.set_outstanding(...)` 把取消接上（ticket 可以先提交后等待）。
+10c **已完成**（见下节“步 10c”）：`sleep` / `offload` 现在是提交即返回凭据，
+`whenAll` 支持任意凭据与混合变参；落点从 `SleepAwaiter`/`OffloadAwaiter` 换成了
+`SleepTicket`/`OffloadTicket<R>`（kit.h 里的行号已变，以 `struct SleepState` / `class
+[[nodiscard]] OffloadTicket` / `template<typename TicketT> whenAll` 搜）。
 12（夹具统一带插件线程与池）建议并为 10b 的一部分：改工具体后本来就要跑一遍插件全组，
 两边一起改只能验证一次。
 
