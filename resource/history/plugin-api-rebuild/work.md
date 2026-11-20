@@ -438,6 +438,39 @@ kit 拆三个头：`plugin_kit.h` 现在 7265 行，`kit::` 段从 6132 行起�
 12（夹具统一带插件线程与池）建议并为 10b 的一部分：改工具体后本来就要跑一遍插件全组，
 两边一起改只能验证一次。
 
+## 实施记录：步 10c（`offload` / `sleep` 改凭据 + `whenAll` 泛化）
+
+### 已改内容
+
+- `sleep` / `offload` 的返回值从"awaiter"换成**凭据**（`SleepTicket` / `OffloadTicket<R>`）：
+  构造即向主程序提交（`scheduler.sleep` / `scheduler.offload` 在构造时调用），`co_await` 写法不变，
+  也可以先提交几条再用 `whenAll` 一次等齐（总耗时 = 最慢那条，不再是相加）；
+- 内部结构与 `TableOpState` 同一套：共享状态 + `INIT/CALLING/SUSPENDED/COMPLETED` 四态 CAS，
+  完成回调只在"已挂起"时恢复协程（否则只记结果）；取消经 `cancel.op_cancel`，
+  `await` 时抛 `CanceledException`；以前那条"先完成后 await"的路径现在直接不挂起；
+- `offload` 的工作体用类型擦除基类 `OffloadWorkBase<R>` 持有，因此只可移动的 lambda 也能用；
+  工作体跑完才释放自己；
+- **踩到的坑**：主程序给 `work` 与 `done` 的是**同一个** `user_data`。第一版给两个回调各发一份
+  `shared_ptr` 持有者，伪主程序（把同一个 ud 传给两个回调，与真主程序一致）立刻触发 ASan
+  heap-use-after-free —— 现在堆上只留一份，由 `done` 回调释放，`work` 只借用；
+- `result_type`：`TableOpTicket → TableOpResult`、`OffloadTicket<R> → R`（`void` 用 `monostate` 占位）、
+  `SleepTicket → monostate`，供泛化入口统一取结果；
+- `whenAll` 改模板（`std::vector<TicketT>` 支持任意凭据）并新增变参版（表调用 / offload / sleep 混用，
+  返回 `tuple`）；某条抛异常时其余条目仍会被等到，之后重抛第一个；
+- 删掉 `SleepAwaiter` / `OffloadAwaiter`；agentxx 侧 `plugin_kit.h` 的 `using` 换成新类型；
+  新增 `detail::takeTicket` / `takeAllInto` 两个内部入口（把 `void` 结果用 `monostate` 抹平、
+  并保证按传入顺序取结果）。
+
+### 验证
+
+新增用例（`plugin_bridge` 21~23，断言 271 → 302）：
+
+- sleep 提交即开始：工具体里造两条凭据后还没 `await`，`harness.sleeps` 里已经有两项；
+- 后提交的那条先到期：它还没有协程在等，`runPending()` 为 0（不白白申请驱动）；
+- 第一条到期后一次恢复就收齐两条，主程序只收到一个终态；
+- offload：返回值可取（`"A7"`）、工作体抛的异常到 `await` 处才抛（`"boom"`）；
+- 变参 `whenAll(tableOp, offload, sleep)`：三类混用按传入顺序取结果，前面未完成时不会提前完成。
+
 ## 设计过程
 
 - 第一轮（原任务名 `plugin-async-api-unify`）：只处理"插件线程上还剩同步等 io"与"同一件事两种写法

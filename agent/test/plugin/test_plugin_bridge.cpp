@@ -1727,6 +1727,165 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_TRUE(dropped.payload.find("did not complete") != std::string::npos);
     }
 
+    /// 21. sleep 凭据: 提交即开始计时 (不 await 也在跑), `whenAll` 一次等齐。
+    {
+        harness.clear();
+        NotifyProbe probe;
+        BridgeCtx   ctx;
+        ctx.init(&host);
+        g_capturedTool = CapturedTool{};
+
+        int resumed = 0;
+        agentxx::plugin::tool(
+            ctx,
+            g_agentRef,
+            "sleep_ticket",
+            "depict",
+            "{}",
+            [&resumed](BridgeCtx& c, std::string_view, OpCtl&) -> Task<std::string> {
+                // 两条计时在构造处就已向主程序提交 (还没人 await)
+                auto t1 = pluginxx::sleep(c, 30);
+                auto t2 = pluginxx::sleep(c, 60);
+                co_await pluginxx::whenAll(std::move(t1), std::move(t2));
+                resumed = 2;
+                co_return "slept";
+            }
+        );
+
+        auto  spec = g_capturedTool.spec;
+        void* op   = startTool(spec, probe);
+        XX_TEST_EXPECT_TRUE(op != nullptr);
+
+        XX_TEST_EXPECT_TRUE(harness.runOne()); // 首步: 两条一起提交, 挂起在第一条
+        XX_TEST_EXPECT_EQ(harness.sleeps.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(harness.sleeps[0].ms, int64_t{30});
+        XX_TEST_EXPECT_EQ(harness.sleeps[1].ms, int64_t{60});
+        XX_TEST_EXPECT_EQ(resumed, 0);
+        XX_TEST_EXPECT_EQ(probe.calls, 0);
+
+        // 后提交的那条先到期: 还没协程在等它, 因此不申请驱动
+        auto s2 = harness.sleeps[1];
+        s2.cb(s2.ud, PLUGINXX_OPERATOR_OK, nullptr);
+        XX_TEST_EXPECT_EQ(harness.runPending(), 0);
+        XX_TEST_EXPECT_EQ(resumed, 0);
+
+        // 第一条到期: 恢复一次就把两条都收齐 (第二条早就有结果了)
+        auto s1 = harness.sleeps[0];
+        s1.cb(s1.ud, PLUGINXX_OPERATOR_OK, nullptr);
+        XX_TEST_EXPECT_EQ(harness.runPending(), 1);
+        XX_TEST_EXPECT_EQ(resumed, 2);
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"slept"});
+    }
+
+    /// 22. offload 凭据: 工作体返回值可取, 抛出的异常原样重抛给 await 处。
+    {
+        harness.clear();
+        NotifyProbe probe;
+        BridgeCtx   ctx;
+        ctx.init(&host);
+        g_capturedTool = CapturedTool{};
+
+        agentxx::plugin::tool(
+            ctx,
+            g_agentRef,
+            "offload_ticket",
+            "depict",
+            "{}",
+            [](BridgeCtx& c, std::string_view, OpCtl&) -> Task<std::string> {
+                auto a = pluginxx::offload(c, [](const PluginxxCancelToken*) {
+                    return std::string{"A"};
+                });
+                auto b = pluginxx::offload(c, [](const PluginxxCancelToken*) { return 7; });
+                // 具名变量接结果 (不用结构化绑定: GCC 优化构建会把协程里的结构化绑定误报未初始化)
+                auto both = co_await pluginxx::whenAll(std::move(a), std::move(b));
+                const auto ra = std::get<0>(both);
+                const auto rb = std::get<1>(both);
+
+                // 工作体抛异常: 到 await 处才抛, 不丢信息
+                auto boom = pluginxx::offload(c, [](const PluginxxCancelToken*) -> int {
+                    throw std::runtime_error{"boom"};
+                });
+                std::string caught;
+                try {
+                    co_await std::move(boom);
+                } catch (const std::runtime_error& e) {
+                    caught = e.what();
+                }
+                co_return ra + std::to_string(rb) + "/" + caught;
+            }
+        );
+
+        auto  spec = g_capturedTool.spec;
+        void* op   = startTool(spec, probe);
+        XX_TEST_EXPECT_TRUE(op != nullptr);
+        XX_TEST_EXPECT_TRUE(harness.runOne());
+        XX_TEST_EXPECT_EQ(harness.runPending(), 0);
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"A7/boom"});
+        XX_TEST_EXPECT_GE(harness.offloadCalls, 3);
+    }
+
+    /// 23. 变参 `whenAll`: 表调用 / offload / sleep 三类混用, 结果按传入顺序。
+    {
+        harness.clear();
+        NotifyProbe probe;
+        BridgeCtx   ctx;
+        ctx.init(&host);
+        g_capturedTool = CapturedTool{};
+
+        PendingTableCalls calls;
+        agentxx::plugin::tool(
+            ctx,
+            g_agentRef,
+            "mixed_when_all",
+            "depict",
+            "{}",
+            [&calls, &harness](BridgeCtx& c, std::string_view, OpCtl&) -> Task<std::string> {
+                auto table = pluginxx::tableOp(
+                    c,
+                    [&calls, &harness](PluginxxOperatorCallback cb, void* ud, PluginxxString*) {
+                        return calls.accept(harness, cb, ud);
+                    }
+                );
+                auto off = pluginxx::offload(c, [](const PluginxxCancelToken*) { return 5; });
+                auto nap = pluginxx::sleep(c, 10);
+
+                auto vals = co_await pluginxx::whenAll(
+                    std::move(table),
+                    std::move(off),
+                    std::move(nap)
+                );
+                const auto& r   = std::get<0>(vals);
+                const auto  num = std::get<1>(vals);
+                co_return std::string{r.text()} + ":" + std::to_string(num);
+            }
+        );
+
+        auto  spec = g_capturedTool.spec;
+        void* op   = startTool(spec, probe);
+        XX_TEST_EXPECT_TRUE(op != nullptr);
+
+        XX_TEST_EXPECT_TRUE(harness.runOne()); // 首步: 三类都提交, 挂起在表调用
+        XX_TEST_EXPECT_EQ(calls.count(), size_t{1});
+        XX_TEST_EXPECT_EQ(harness.sleeps.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(probe.calls, 0);
+
+        // 后两张已完成/已到期, 但前面的表调用还没回来 -> 仍不完成
+        auto nap = harness.sleeps[0];
+        nap.cb(nap.ud, PLUGINXX_OPERATOR_OK, nullptr);
+        harness.runPending();
+        XX_TEST_EXPECT_EQ(probe.calls, 0);
+
+        calls.complete(0, PLUGINXX_OPERATOR_OK, "T");
+        XX_TEST_EXPECT_EQ(harness.runPending(), 1);
+        XX_TEST_EXPECT_EQ(probe.calls, 1);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
+        XX_TEST_EXPECT_EQ(probe.result, std::string{"T:5"});
+    }
+
     harness.clear();
     return result;
 }
