@@ -17,6 +17,7 @@
 #include "utilxx_base/json.h"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -99,11 +100,20 @@ struct ChatbotNet {
         int32_t            timeoutMs
     ) const;
 
-    /// 订阅本插件的网络事件 (先声明频道再订阅; 返回退订句柄, 空 = 失败)
+    /// 订阅完成回调: 句柄 (`nullptr` = 订阅失败)
+    using NetSubCallback = std::function<void(PluginxxSubscription*)>;
+
+    /// 订阅本插件的网络事件 (先声明频道再订阅; **不在调用线程上等表调用**)
     ///
     /// - `handler` 在主程序 io 线程被调用, 里面只应做"拷贝 + post 回插件 io 线程";
-    /// - 退订用 [unsubscribeEvents] (主程序在实例卸载时也会一并回收)。
-    PluginxxSubscription* subscribeEvents(ChatbotNetEventHandler handler, void* ud) const;
+    /// - 句柄经 `onReady` 在主程序 io 线程交回 (`nullptr` = 失败);
+    /// - 退订用 [unsubscribeEvents] (主程序在实例卸载时也会一并回收);
+    /// - 返回 false = 连提交都没受理 (缺表/无频道名), 此时不会调用 `onReady`。
+    bool subscribeEvents(
+        ChatbotNetEventHandler handler,
+        void*                 ud,
+        NetSubCallback        onReady
+    ) const;
 
     /// 退订 [subscribeEvents] 拿到的句柄 (幂等; 空句柄什么也不做)
     bool unsubscribeEvents(PluginxxSubscription* sub) const;

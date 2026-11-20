@@ -85,7 +85,9 @@ agentxx::util::ToolResult mapPluginOpResult(pluginxx::PluginOpResult result) {
 PluginTool::PluginTool(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext,
     std::shared_ptr<PluginInstance>             instance,
-    AgentxxPluginToolSpec                       spec
+    AgentxxPluginToolSpec                       spec,
+    std::string                                 agentId,
+    uint64_t                                    mountSeq
 ) :
     XXToolBase(
         std::string{spec.name.data ? spec.name.data : "", spec.name.size},
@@ -103,7 +105,9 @@ PluginTool::PluginTool(
         spec.parameters_json.size
     },
     parameters_(utilxx_base::Json::object()),
-    instance_(std::move(instance)) {
+    instance_(std::move(instance)),
+    agentId_(std::move(agentId)),
+    mountSeq_(mountSeq) {
     spec_      = spec;
     spec_.name = agentxx::plugin::PluginStringView::from(name_.data(), name_.size());
     spec_.description
@@ -131,6 +135,34 @@ neograph::ChatTool PluginTool::get_definition() const {
     return def;
 }
 
+std::string PluginTool::workDirForSession(std::string_view sessionId) const {
+    auto inst = instance_.lock();
+    if (!inst) {
+        return {};
+    }
+    auto mgr = inst->manager.lock();
+    if (!mgr) {
+        return {};
+    }
+    PluginxxScopeRef scopeRaw{};
+    scopeRaw.struct_size = static_cast<uint32_t>(sizeof(PluginxxScopeRef));
+    scopeRaw.id          = PluginxxStringView{agentId_.data(), agentId_.size()};
+    scopeRaw.seq         = mountSeq_;
+    return mgr->sessionWorkDir(&scopeRaw, sessionId);
+}
+
+std::string PluginTool::pluginArgsJson() const {
+    auto inst = instance_.lock();
+    if (!inst) {
+        return "{}";
+    }
+    auto mgr = inst->manager.lock();
+    if (!mgr) {
+        return "{}";
+    }
+    return mgr->getPluginArgsJson(inst.get());
+}
+
 asio::awaitable<agentxx::util::ToolResult> PluginTool::execute_async(const utilxx_base::Json& arguments) {
     auto inst = instance_.lock();
     if (!inst) {
@@ -139,7 +171,7 @@ asio::awaitable<agentxx::util::ToolResult> PluginTool::execute_async(const utilx
     if (!inst->enabled) {
         throw std::runtime_error("plugin disabled");
     }
-    if (!spec_.execute_start) {
+    if (!spec_.execute_start && !spec_.execute_start_invoke) {
         throw std::runtime_error("plugin tool has null execute_start callback");
     }
 
@@ -148,6 +180,10 @@ asio::awaitable<agentxx::util::ToolResult> PluginTool::execute_async(const utilx
     std::string toolCallId = arguments.value("tool_call_id", std::string{});
 
     auto agentCtx = agentContext.lock();
+    // 会话工作目录与插件参数随调用带入 (见 `AgentxxPluginToolInvoke`): 插件不必
+    // 再为它们各做一次表调用 —— 那会占住插件执行线程
+    const std::string workDir    = workDirForSession(sessionId);
+    const std::string pluginArgs = pluginArgsJson();
     // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象), 供 pluginxx 运行时使用
     utilxx::CancelTokenPtr cancelToken;
     if (agentCtx) {
@@ -161,7 +197,7 @@ asio::awaitable<agentxx::util::ToolResult> PluginTool::execute_async(const utilx
     auto       instKeep = inst;
 
     plugin::OpDrive drive;
-    drive.start = [spec, instKeep, argsJson, sessionId, toolCallId](
+    drive.start = [spec, instKeep, argsJson, sessionId, toolCallId, workDir, pluginArgs](
                       const PluginxxOperatorNotify* notify,
                       PluginxxString*               err
                   ) -> void* {
@@ -171,6 +207,22 @@ asio::awaitable<agentxx::util::ToolResult> PluginTool::execute_async(const utilx
         auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
         auto sidSv  = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
         auto tcidSv = agentxx::plugin::PluginStringView::from(toolCallId.data(), toolCallId.size());
+        if (spec.execute_start_invoke) {
+            auto wdSv = agentxx::plugin::PluginStringView::from(workDir.data(), workDir.size());
+            auto paSv = agentxx::plugin::PluginStringView::from(
+                pluginArgs.data(),
+                pluginArgs.size()
+            );
+            AgentxxPluginToolInvoke invoke{};
+            invoke.struct_size   = sizeof(AgentxxPluginToolInvoke);
+            invoke.args_json     = &argsSv;
+            invoke.session_id    = &sidSv;
+            invoke.tool_call_id  = &tcidSv;
+            invoke.work_dir      = &wdSv;
+            invoke.plugin_args   = &paSv;
+            invoke.notify        = &toolNotify;
+            return spec.execute_start_invoke(spec.user_data, &invoke, err);
+        }
         return spec.execute_start(spec.user_data, &argsSv, &sidSv, &tcidSv, &toolNotify, err);
     };
     drive.cancel = [spec, instKeep](void* op) {
@@ -240,7 +292,7 @@ int PluginMount::registerTool(PluginInstance* inst, const AgentxxPluginToolSpec*
     if (!shared) {
         return AGENTXX_RESULT_ERR_STATE;
     }
-    auto tool = std::make_shared<PluginTool>(agent_, shared, *spec);
+    auto tool = std::make_shared<PluginTool>(agent_, shared, *spec, agentId(), mountSeq());
     if (!toolRegistry()->registerTool(toolName, tool)) {
         return AGENTXX_RESULT_ERR_CONFLICT;
     }

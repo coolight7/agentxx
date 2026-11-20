@@ -5511,7 +5511,8 @@ JSValue JsEngine::bridgeCall(
             JS_FreeValue(ctx, hiV);
             subPtr = (static_cast<uint64_t>(hi) << 32) | lo;
             if (subPtr) {
-                agentxx::plugin::unsubscribePluginBroadcast(
+                // 退订只要副作用: 提交即返回 (JS 线程上不得等表调用)
+                agentxx::plugin::unsubscribePluginBroadcastNoWait(
                     host,
                     iface.broadcasts,
                     reinterpret_cast<PluginxxSubscription*>(subPtr)
@@ -5968,7 +5969,13 @@ JSValue JsEngine::bridgeCall(
             }
             auto topicSv = agentxx::plugin::PluginStringView::from(topic.data(), topic.size());
             auto paySv   = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-            agentxx::plugin::publishPluginBroadcast(host, iface.broadcasts, topicSv, paySv);
+            // 发一条状态: 只要副作用, 不等结果 (JS 线程上不得等表调用)
+            agentxx::plugin::publishPluginBroadcastNoWait(
+                host,
+                iface.broadcasts,
+                topicSv,
+                paySv
+            );
             return JS_UNDEFINED;
         }
 

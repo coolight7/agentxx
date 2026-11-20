@@ -543,7 +543,10 @@ struct BridgeGate {
     }
 };
 
-/// 启动一个工具根操作并返回 provider 句柄 (用例统一入口)。
+/// 启动一个工具根操作并返回 provider 句柄 (用例统一入口)
+///
+/// 与主程序一样两种启动形态都支持: 有 `execute_start_invoke` 时优先用它
+/// (带调用期上下文), 否则回落到旧签名。
 void* startTool(
     const AgentxxPluginToolSpec& spec,
     NotifyProbe&                 probe,
@@ -553,6 +556,20 @@ void* startTool(
     auto args   = PluginStringView::fromCstr(argsJson);
     auto sid    = PluginStringView::fromCstr("session-1");
     auto cid    = PluginStringView::fromCstr("call-1");
+    if (spec.execute_start_invoke) {
+        // 测试夹具没有会话工作目录与插件参数: 按"未提供"传空视图 / 空 JSON
+        auto workDir = PluginStringView::from(nullptr, 0);
+        auto pluginArgs = PluginStringView::fromCstr("{}");
+        AgentxxPluginToolInvoke invoke{};
+        invoke.struct_size  = sizeof(AgentxxPluginToolInvoke);
+        invoke.args_json    = &args;
+        invoke.session_id   = &sid;
+        invoke.tool_call_id = &cid;
+        invoke.work_dir     = &workDir;
+        invoke.plugin_args  = &pluginArgs;
+        invoke.notify       = &notify;
+        return spec.execute_start_invoke(spec.user_data, &invoke, nullptr);
+    }
     return spec.execute_start(spec.user_data, &args, &sid, &cid, &notify, nullptr);
 }
 

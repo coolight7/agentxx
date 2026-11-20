@@ -14,12 +14,12 @@
 | 7 | 4 个同步受理入口改提交（含 `OpCore` 操作编号原子化与登记线程安全化） | 完成（见下节“步 7”：全量 passed=43828 failed=0） |
 | 8 | `is_canceled` 改快照 + JS 引擎轮询 | 完成（全量 passed=43837 failed=0） |
 | 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 完成（9a / 9b 均已落地，见下节） |
-| 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 待开始 |
+| 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 部分完成（框架侧阻塞读已清零 + JS 引擎改 NoWait；`tableOpSyncWait` 删除与 kit 拆头待做，见下节偏差） |
 | 10b | 工具体收成一个：`tool`（按体形态分派 Task / 同步 / asio 协程）+ 删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync`（65 处） | 完成（入口合并；`polled_tool` 降为内部实现，poll-one 退场留到下一步，见下节；全量 passed=43867 failed=0） |
 | 10c | `offload` / `sleep` 改“提交即返回 ticket” + `whenAll` 泛化/变参 | 完成（`plugin_bridge` 302；全量 passed=43867 failed=0） |
 | 11 | `create`/`start` 合并（返回 void、可重入）+ `destroy` 改异步 + 插件迁移 | 完成（全量回归 passed=43825 failed=0） |
 | 12 | 测试夹具统一带插件线程与池 | 待开始 |
-| 13 | 修静默降级（§2.6 六处 + 两处订阅）+ 文档/代次 + 全量回归 | 待开始 |
+| 13 | 修静默降级（§2.6 六处 + 两处订阅）+ 文档/代次 + 全量回归 | 部分完成（文档 66 处已改；两处同步订阅与代次/生成物待做） |
 
 ## 实施记录：ABI 换代（步 2 + 3 + 4 + 11 合并为一次）
 
@@ -533,6 +533,44 @@ poll-one 整块退场留到“第二步”，届时这 6 处体不用再改代�
   “承载”）；改为“保存”后单跑 `boundaries` = `passed=20 failed=0`。
 - 遗留（步 13）：`docs/{zh-cn,en}/design/plugins.md`、`docs/{zh-cn,en}/develop.md`、
   `docs/{zh-cn,en}/design/index.md` 仍有 66 处旧入口名要改。
+
+## 实施记录：步 10a（工具体带上调用期上下文）+ 步 13 文档
+
+### 已改内容
+
+- `plugin_api.h`：新增 `AgentxxPluginToolInvoke`（`args_json` / `session_id` / `tool_call_id` /
+  `work_dir` / `plugin_args` / `notify`，带 `struct_size`），`AgentxxPluginToolSpec` 尾部追加
+  `execute_start_invoke`，基线改为 `offsetof(AgentxxPluginToolSpec, execute_start_invoke)`
+  （老的 `execute_start` 保留：主程序两个都支持、优先新形态）。
+- 主程序 `PluginTool`（`plugin_manager_adapters.cpp`）：注册时记住本挂载的作用域
+  (`agentId_` + `mountSeq_`)，`execute_async` 里用 `PluginManager::sessionWorkDir` /
+  `getPluginArgsJson` 取值填进 invoke。
+- kit：同步体与 asio 协程体的 `execute_start` 换成 `execute_start_invoke`，`workDir` 直接取调用期
+  上下文；**删掉 `ctx.workDir(...)` / `ctx.argsJson()` 两次阻塞表读**（原来在插件执行线程上真等
+  io，即 plan.md §3.5 第 14 条）。同步体 Job 里那个从没被读过的 `argsJson` 字段一并删除。
+- JS 引擎：广播 `publish` / 取消订阅改用 `*NoWait` 形态（JS 线程上不得等表调用）。
+- 文档：`docs/{zh-cn,en}/design/plugins.md`、`docs/{zh-cn,en}/develop.md`、
+  `docs/{zh-cn,en}/design/index.md` 里的旧入口名全部改成新模型（共 66 处）；
+  `zh-cn/design/plugins.md` 的“写一个工具”示例整段重写为同一个 `tool` 的三种体形态
+  （原来的骨架还停在 `AGENTXX_AGENT_PLUGIN_EXPORT` 时代，早已不可编译）。
+
+### 与 plan.md 的偏差（`tableOpSyncWait` 本轮不删）
+
+step 10 的另一半（删同步桥 + `tableOpSyncWait` / `ioCallSync*` / kit 阻塞助手 + kit 拆三个头）
+本轮**没有做**，原因与现状：
+
+- 框架自己发起的阻塞读已经清零（上一条）；插件侧只剩两处**设计上就是同步**的路径：
+  `chatbot_net.cpp` 的 `subscribeEvents`（QQ 网关按网络事件订阅）与
+  `agentxx_text_selection_monitor.cpp:245`（CDP 往返助手），两者都在**插件自有线程**上跑，
+  且整段逻辑本身就是“等一次往返”，要改成异步得把这两个同步助手一起重写成协程 + 句柄迟到处理；
+- 其余 `tableOpSyncWait` 使用者是测试（24 处）与 kit 里那些阻塞 helper 的定义本身；
+- 这套删除与 kit 拆三个头（31 个包含点）是纯结构性改动，没有用户可见收益，且需要单独一轮
+  全量回归窗口。留给后续：先删插件侧两处同步订阅，再删 kit helper，最后删框架同步桥。
+
+### 验证
+
+- 构建：`cmake --build agent/build/windows-debug --config Debug` 通过（详见下一节结论）。
+- 全量回归：见下一节。
 
 ## 设计过程
 

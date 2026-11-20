@@ -4824,7 +4824,6 @@ inline pluginxx::TableOpTicket registerToolWithSyncBody(
         std::string                tid;
         std::string                tcid;
         std::string                workDir;
-        std::string                argsJson;
         /// 实现体返回的正文
         std::string                resultText;
         /// 实现体返回的元数据 JSON (无元数据为空)
@@ -4849,29 +4848,29 @@ inline pluginxx::TableOpTicket registerToolWithSyncBody(
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
 
-    spec.execute_start = [](void*                          user_data,
-                            const PluginxxStringView*      args_json,
-                            const PluginxxStringView*      thread_id,
-                            const PluginxxStringView*      tool_call_id,
-                            const AgentxxPluginToolNotify* notify,
-                            PluginxxString*                error_out) -> void* {
+    spec.execute_start_invoke = [](void*                          user_data,
+                                    const AgentxxPluginToolInvoke* invoke,
+                                    PluginxxString*                error_out) -> void* {
         auto* shim = static_cast<BlockShim*>(user_data);
         (void)error_out;
+        const auto* args_json    = invoke ? invoke->args_json : nullptr;
+        const auto* thread_id    = invoke ? invoke->session_id : nullptr;
+        const auto* tool_call_id = invoke ? invoke->tool_call_id : nullptr;
+        const auto* work_dir     = invoke ? invoke->work_dir : nullptr;
+        const auto* notify       = invoke ? invoke->notify : nullptr;
         std::string tidStr(
             thread_id && thread_id->data ? thread_id->data : "",
             thread_id ? static_cast<size_t>(thread_id->size) : 0
         );
-        std::string workDirCache;
-        std::string argsJsonCache;
-        if (shim && shim->ctx) {
-            auto agentRaw = shim->agent.raw();
-            workDirCache  = shim->ctx->workDir(&agentRaw, tidStr);
-            argsJsonCache = shim->ctx->argsJson();
+        // 会话工作目录由主程序随调用带入 (不再为它查表: 那会占住插件执行线程)
+        std::string workDirCache(
+            work_dir && work_dir->data ? work_dir->data : "",
+            work_dir ? static_cast<size_t>(work_dir->size) : 0
+        );
+        if (shim && shim->ctx && !tidStr.empty()) {
             // 新操作开始先清掉上一次会话取消留下的标记: 该标记只对取消发生时正在跑
             // 的操作有效, 残留会让该会话之后的所有调用都被当成已取消
-            if (!tidStr.empty()) {
-                shim->ctx->cancelRegistry.clearCanceled(tidStr);
-            }
+            shim->ctx->cancelRegistry.clearCanceled(tidStr);
         }
         auto* job = new Job{
             .shim   = shim,
@@ -4886,7 +4885,6 @@ inline pluginxx::TableOpTicket registerToolWithSyncBody(
                 tool_call_id ? static_cast<size_t>(tool_call_id->size) : 0
             ),
             .workDir       = std::move(workDirCache),
-            .argsJson      = std::move(argsJsonCache),
             .errorPayload  = {},
             .isCanceled    = false
         };
@@ -5319,13 +5317,15 @@ inline pluginxx::TableOpTicket registerToolWithAwaitableBody(
     spec.default_timeout_ms = default_timeout_ms;
     spec.flags              = flags;
 
-    spec.execute_start = [](void*                          user_data,
-                            const PluginxxStringView*      args_json,
-                            const PluginxxStringView*      thread_id,
-                            const PluginxxStringView*      tool_call_id,
-                            const AgentxxPluginToolNotify* notify,
-                            PluginxxString*                error_out) -> void* {
+    spec.execute_start_invoke = [](void*                          user_data,
+                                    const AgentxxPluginToolInvoke* invoke,
+                                    PluginxxString*                error_out) -> void* {
         auto* s = static_cast<PolledShim*>(user_data);
+        const auto* args_json    = invoke ? invoke->args_json : nullptr;
+        const auto* thread_id    = invoke ? invoke->session_id : nullptr;
+        const auto* tool_call_id = invoke ? invoke->tool_call_id : nullptr;
+        const auto* work_dir     = invoke ? invoke->work_dir : nullptr;
+        const auto* notify       = invoke ? invoke->notify : nullptr;
         if (!s || !s->ctx) {
             if (error_out) {
                 *error_out = PluginString::fromCstr(nullptr, "polled tool: context released");
@@ -5351,8 +5351,11 @@ inline pluginxx::TableOpTicket registerToolWithAwaitableBody(
         job->request     = std::move(request);
         job->tid         = job->request.scopeKey;
         job->args        = job->request.argsJson;
-        auto agentRaw = s->agent.raw();
-        job->workDir  = c.workDir(&agentRaw, job->tid);
+        // 会话工作目录由主程序随调用带入 (不再为它查表)
+        job->workDir.assign(
+            work_dir && work_dir->data ? work_dir->data : "",
+            work_dir ? static_cast<size_t>(work_dir->size) : 0
+        );
         job->cancelFlag = cancelFlag;
         job->root       = std::make_shared<detail::PolledRoot>(detail::frameNotify(job->notify));
         job->token      = PluginxxCancelToken{kTokenIsRequested, job};

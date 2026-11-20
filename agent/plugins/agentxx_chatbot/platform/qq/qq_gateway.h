@@ -26,6 +26,7 @@
 #include "pluginxx/api/abi.h"
 #include "utilxx_base/json.h"
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -134,7 +135,9 @@ private:
     /// 握手完成 (`ws.open` 之后才能发帧)
     bool                                connected_ = false;
     /// 网络事件订阅句柄 (`stop` 里退订)
-    PluginxxSubscription*               netSub_ = nullptr;
+    /// 网络事件订阅句柄 (`stop` 里退订)
+    /// - 句柄在主程序 io 线程经订阅回调写入, 插件 io 线程读, 所以用原子量
+    std::atomic<PluginxxSubscription*>  netSub_{nullptr};
     std::string                    sessionId_;
     int64_t                        sequence_      = 0;
     int64_t                        heartbeatMs_   = 30000;
@@ -142,7 +145,8 @@ private:
     int64_t                        lastHeartbeatMs_ = 0;
     int32_t                        reconnectCount_ = 0;
     bool                           online_        = false;
-    bool                           stopped_       = false;
+    /// 已停 (订阅回调可能在其它线程上读它, 因此用原子量)
+    std::atomic<bool>              stopped_{false};
     bool                           identifying_   = false;
     std::string                    lastError_;
     uint64_t                       generation_    = 0; ///< 每次连接递增, 旧流程据此退出

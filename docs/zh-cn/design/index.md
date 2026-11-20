@@ -2110,7 +2110,7 @@ agent/
 │   │   │   │   │                     #   (tools/permission/session/model/prompt/resources/graph)
 │   │   │   │   ├── client_plugin_api.h # 仅含 pluginxx/api/{abi,tables}.h + client 业务表 (UI 无关语义层)
 │   │   │   │   ├── plugin_kit.h      # agentxx 业务 SDK header-only: 接口表聚合 AgentIfaces/ClientIfaces、
-│   │   │   │   │                     #   tool/fast_tool/blocking_tool/polled_tool、ToolSchemaBuilder、providePoint、
+│   │   │   │   │                     #   tool (kit 协程体/同步体/asio 协程体)、ToolSchemaBuilder、providePoint、
 │   │   │   │   │                     #   图节点、工具权限声明、call_tool、client 渲染/ClientPluginBase;
 │   │   │   │   │                     #   含 pluginxx/kit/kit.h 并以 using 把通用名引入 agentxx::plugin
 │   │   │   │   │                     #   (PluginStringView/PluginString/Task/sleep/offload/spawn/PluginBaseT/...)
@@ -2600,7 +2600,7 @@ EventBus (事件总线)
   - `ArgReader` 强类型参数读取: 字符串转整数/浮点要求**整个**字符串都是数值 (不接受 `"100 lines"` 这种前缀匹配, 整数还要求落在目标类型范围内), JSON 浮点值转整数按“相近整数”取整 (与向上取整相差不超过 1e-6 时向上, 否则向下), 字符串转布尔忽略大小写认 `true`/`yes`/`y`/`on`/`enable`/`enabled`/`1` 与 `false`/`no`/`n`/`off`/`disable`/`disabled`/`0`, 读不到时交回默认值或报参数错误
   - `CancelRegistry` 框架级事件驱动取消注册表，提供会话取消即时回调与 `ScopedRegistration` 防悬挂互斥保护
   - `PluginBase` 状态基类 + `Task<T>` 锚定协程 + `sleep/yield/offload/call_tool/invoke_cap` awaiter
-  - `tool/fast_tool/blocking_tool/capability/providePoint/spawn` 便捷注册族
+  - `tool/capability/providePoint/spawn` 便捷注册族
 - 多实例三铁律: 禁止可变全局 static / 状态经 user_data 闭包恢复 / 接口表缓存入实例上下文
 - 导出控制: -fvisibility=hidden + version script 白名单 (PLUGINXX_EXPORT), 单端插件兼容 Android lld
 - 平台矩阵: 各插件 CMakeLists 开头经 plugin_platform_support.cmake 判定 (screen_capture/computer_use/text_selection_monitor 仅 Windows, system_monitor 覆盖 Windows/Linux/Android/macOS 等)

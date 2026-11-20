@@ -236,6 +236,30 @@ typedef void(PLUGINXX_CALL* AgentxxPluginToolCallback)(
 /// - 未置位 = 关闭 (默认): 只给"模型可能以同一参数反复调用"的工具置位
 #define AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK (1 << 2)
 
+/// 工具调用上下文 (一次工具调用的入参侧; 供 `execute_start_invoke` 使用)
+///
+/// 与 `execute_start` 的区别: 除参数/会话/调用 id 以外, 还带入**调用期上下文**
+/// (会话工作目录 / 插件参数), 插件不必再为拿运行上下文去查表 —— 那是一次表调用,
+/// 会占住插件执行线程。
+///
+/// - 所有视图只在本次调用期间有效 (主程序的下一次调用可能重用同一块缓冲)
+/// - `struct_size` 由主程序填写; 以后追加字段时读取方先用
+///   `agentxx::plugin::specSizeOk<AgentxxPluginToolInvoke>` 判定
+typedef struct AgentxxPluginToolInvoke {
+    uint32_t struct_size;
+    uint32_t _reserved; ///< 8 字节补齐
+
+    const PluginxxStringView* args_json;    ///< 工具参数 JSON
+    const PluginxxStringView* session_id;   ///< 会话 id (可为空视图)
+    const PluginxxStringView* tool_call_id; ///< 工具调用 id
+    /// 会话生效的工作目录 (空视图 = 未提供: 主程序未配置工作目录或解析失败)
+    const PluginxxStringView* work_dir;
+    /// 插件参数 JSON (实例级; 无参数时为 `{}`)
+    const PluginxxStringView* plugin_args;
+    /// 完成通知器 (恰好回调一次)
+    const AgentxxPluginToolNotify* notify;
+} AgentxxPluginToolInvoke;
+
 typedef struct AgentxxPluginToolSpec {
     /// 本结构体字节数 (`sizeof(AgentxxPluginToolSpec)`); `0` = 基线布局
     /// - 以后往尾部追加可选字段时, 主程序读该字段前先用
@@ -267,10 +291,20 @@ typedef struct AgentxxPluginToolSpec {
     void*   user_data;
     int64_t default_timeout_ms; ///< 0 = 不限制 (定长 64 位整型)
     int32_t flags;              ///< AGENTXX_PLUGIN_TOOL_FLAG_*
+
+    /// 启动执行 (带调用期上下文)
+    /// - 与 `execute_start` 二选一即可; 两个都填时主程序**优先用本项**
+    /// - 入参 [AgentxxPluginToolInvoke] 已含参数/会话/调用 id, 因此不必再用旧签名
+    /// - 完成协议与 `execute_start` 完全一致 (返回 op 句柄或 NULL + error_out)
+    void*(PLUGINXX_CALL* execute_start_invoke)(
+        void*                          user_data,
+        const AgentxxPluginToolInvoke* invoke,
+        PluginxxString*                error_out
+    );
 } AgentxxPluginToolSpec;
 
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
-#define AGENTXX_PLUGIN_TOOL_SPEC_BASELINE_SIZE sizeof(AgentxxPluginToolSpec)
+#define AGENTXX_PLUGIN_TOOL_SPEC_BASELINE_SIZE offsetof(AgentxxPluginToolSpec, execute_start_invoke)
 
 /* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
 

@@ -1501,7 +1501,7 @@ TestResult testPluginRuntime() {
 
         // 绝对值只在 64 位环境断言 (32 位下指针宽度不同)
         if (kPtr == 8) {
-            XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginToolSpec), size_t{96});
+            XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginToolSpec), size_t{104});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginGraphNodeTypeSpec), size_t{64});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxOverlaySpec), size_t{64});
             // 显示名 + 折叠/展开内容两个回调: 8 字节头 + 两个字符串视图 (32) +

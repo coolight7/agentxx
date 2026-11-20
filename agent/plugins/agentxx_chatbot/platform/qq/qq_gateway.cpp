@@ -60,11 +60,32 @@ void QqGateway::setState(PlatformState state, std::string reason) {
 }
 
 void QqGateway::subscribeNetEvents() {
-    if (netSub_ != nullptr || net_ == nullptr) {
+    if (netSub_.load() != nullptr || net_ == nullptr) {
         return;
     }
-    netSub_ = net_->subscribeEvents(&QqGateway::onNetEvent, this);
-    if (netSub_ == nullptr) {
+    // 订阅不在本线程等表调用: 句柄在主程序 io 线程经回调交回
+    const bool submitted = net_->subscribeEvents(
+        &QqGateway::onNetEvent,
+        this,
+        [this](PluginxxSubscription* sub) {
+            if (sub == nullptr) {
+                XX_LOGW(
+                    "[{}] 订阅网络事件失败 (网关收不到连接/消息事件; 检查主程序是否提供广播表)",
+                    kLogTag
+                );
+                return;
+            }
+            netSub_.store(sub);
+            // 句柄到得太晚 (网关已停): 立刻退订, 不留下收不到回收的订阅
+            if (stopped_.load()) {
+                netSub_.store(nullptr);
+                if (net_ != nullptr) {
+                    net_->unsubscribeEvents(sub);
+                }
+            }
+        }
+    );
+    if (!submitted) {
         XX_LOGW(
             "[{}] 订阅网络事件失败 (网关收不到连接/消息事件; 检查主程序是否提供广播表)",
             kLogTag
@@ -152,10 +173,9 @@ void QqGateway::start(const AccountConfig& cfg, QqGatewayHooks hooks) {
 }
 
 void QqGateway::stop() {
-    if (stopped_) {
+    if (stopped_.exchange(true)) {
         return;
     }
-    stopped_ = true;
     ++generation_;
     stopHeartbeat();
     if (reconnectTimer_) {
@@ -164,12 +184,10 @@ void QqGateway::stop() {
         reconnectTimer_.reset();
     }
     // 先退订: 之后不会再有网络事件进到本对象 (已经在路上的由 stopped_ 挡掉)
-    if (netSub_ != nullptr) {
+    if (auto* sub = netSub_.exchange(nullptr); sub != nullptr) {
         if (net_ != nullptr) {
-            // 阻塞形态退订 (插件 io 线程不是主程序 io 线程)
-            net_->unsubscribeEvents(netSub_);
+            net_->unsubscribeEvents(sub);
         }
-        netSub_ = nullptr;
     }
     closeSocket();
     online_ = false;

@@ -115,7 +115,9 @@ public:
     PluginTool(
         std::weak_ptr<agentxx::agent::AgentContext> agentContext,
         std::shared_ptr<PluginInstance>             instance,
-        AgentxxPluginToolSpec                       spec
+        AgentxxPluginToolSpec                       spec,
+        std::string                                 agentId  = {},
+        uint64_t                                    mountSeq = 0
     );
 
     neograph::ChatTool get_definition() const override;
@@ -130,6 +132,12 @@ public:
         return spec_;
     }
 
+    /// 本挂载作用域下的会话工作目录 (工具调用上下文用; 空串 = 未知 / 未配置)
+    std::string workDirForSession(std::string_view sessionId) const;
+
+    /// 插件参数 JSON (`{}` = 无参数)
+    std::string pluginArgsJson() const;
+
 private:
 
     std::string                   name_;
@@ -138,6 +146,9 @@ private:
     AgentxxPluginToolSpec         spec_;
     utilxx_base::Json             parameters_;
     std::weak_ptr<PluginInstance> instance_;
+    /// 注册时所在挂载的作用域 (拿会话工作目录用)
+    std::string agentId_;
+    uint64_t    mountSeq_ = 0;
 };
 
 /// 插件管理器 (agent 侧主程序, 进程一份)

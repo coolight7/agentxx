@@ -1688,7 +1688,7 @@ EventBus (Event Bus)
   - `ToolSchemaBuilder` fluent schema generator auto-merged with host `toolPrompt`.
   - `ArgReader` typed parameter reader (whole-string numeric parsing with range checks, floating-point to integer rounding toward the nearest integer, case-insensitive booleans: `true`/`yes`/`y`/`on`/`enable`/`enabled`/`1` and `false`/`no`/`n`/`off`/`disable`/`disabled`/`0`).
   - `CancelRegistry` centralized event-driven cancellation manager with `ScopedRegistration` RAII protection.
-  - `PluginBase` state base + `Task<T>` coroutines + awaiters (`sleep`/`yield`/`offload`/`call_tool`/`invoke_cap`) + registration family (`tool`/`fast_tool`/`blocking_tool`/`hook`/`capability`/`spawn`).
+  - `PluginBase` state base + `Task<T>` coroutines + awaiters (`sleep`/`yield`/`offload`/`call_tool`/`invoke_cap`) + registration family (`tool`/`hook`/`capability`/`spawn`).
 - Three Iron Rules of Multi-Instance Safety: No mutable global statics / State recovered via `user_data` closures / Cache interface tables in instance contexts.
 - Export control: `-fvisibility=hidden` + version script whitelist (`PLUGINXX_EXPORT`).
 - Platform matrix: Evaluated at the start of each plugin's `CMakeLists.txt` via `plugin_platform_support.cmake`.

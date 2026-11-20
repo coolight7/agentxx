@@ -87,7 +87,7 @@ PluginxxOperatorHandle* PluginMount::callToolAsync(
             throw std::runtime_error("call_tool: plugin tool not available: " + toolName);
         }
         const auto spec = tool->spec();
-        if (!spec.execute_start) {
+        if (!spec.execute_start && !spec.execute_start_invoke) {
             throw std::runtime_error("call_tool: tool has no start callback");
         }
         auto parsed = PluginStringView::empty(args_json)
@@ -97,6 +97,9 @@ PluginxxOperatorHandle* PluginMount::callToolAsync(
             throw std::runtime_error("call_tool: arguments must be a JSON object");
         }
         const auto session     = svToStr(thread_id);
+        // 互调也是工具调用: 工作目录/插件参数随调用带入, 与前台调用同一套上下文
+        const auto workDir     = tool->workDirForSession(session);
+        const auto pluginArgs  = tool->pluginArgsJson();
         core                   = OpCore::create(host->runtime(), provider, owner, toolName);
         const auto callId      = fmt::format("plugin_call_{}", core->id());
         parsed["sessionId"]    = session;
@@ -105,12 +108,28 @@ PluginxxOperatorHandle* PluginMount::callToolAsync(
         drive.start = [spec,
                        args = parsed.dump(),
                        session,
-                       callId](const PluginxxOperatorNotify* notify, auto* error) -> void* {
+                       callId,
+                       workDir,
+                       pluginArgs](const PluginxxOperatorNotify* notify,
+                                   auto*                        error) -> void* {
             // 互调也走两段协议: 主程序把框架的单段通知器换成工具的两段通知器
             auto toolNotify
                 = makeToolNotify(notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr});
             const auto a = PluginStringView::from(args), s = PluginStringView::from(session),
                        id = PluginStringView::from(callId);
+            if (spec.execute_start_invoke) {
+                const auto wd = PluginStringView::from(workDir);
+                const auto pa = PluginStringView::from(pluginArgs);
+                AgentxxPluginToolInvoke invoke{};
+                invoke.struct_size  = sizeof(AgentxxPluginToolInvoke);
+                invoke.args_json    = &a;
+                invoke.session_id   = &s;
+                invoke.tool_call_id = &id;
+                invoke.work_dir     = &wd;
+                invoke.plugin_args  = &pa;
+                invoke.notify       = &toolNotify;
+                return spec.execute_start_invoke(spec.user_data, &invoke, error);
+            }
             return spec.execute_start(spec.user_data, &a, &s, &id, &toolNotify, error);
         };
         drive.cancel = [spec](void* op) {

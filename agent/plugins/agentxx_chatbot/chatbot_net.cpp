@@ -240,12 +240,13 @@ std::string ChatbotNet::download(
     return {};
 }
 
-PluginxxSubscription* ChatbotNet::subscribeEvents(
+bool ChatbotNet::subscribeEvents(
     ChatbotNetEventHandler handler,
-    void*                  ud
+    void*                  ud,
+    NetSubCallback         onReady
 ) const {
     if (!host || !broadcasts || !broadcasts->subscribe_broadcast || eventTopic.empty() || !handler) {
-        return nullptr;
+        return false;
     }
     // 频道要先声明才能订阅; 网络事件的频道归本插件 (主程序代发时按属主身份发布)
     agentxx::plugin::declarePluginBroadcastNoWait(
@@ -255,14 +256,48 @@ PluginxxSubscription* ChatbotNet::subscribeEvents(
         /*anyonePublish=*/false,
         /*cacheLatest=*/false
     );
-    return agentxx::plugin::subscribePluginBroadcast(
-        host,
-        broadcasts,
-        nullptr,
-        eventTopic,
-        handler,
-        ud
+    const auto idSv = agentxx::plugin::PluginStringView::from(
+        eventTopic.data(),
+        eventTopic.size()
     );
+    /// 完成回调上下文: 第一个字段放"不是同步桥"的标记 (主程序会按指针读 8 字节)
+    struct Pending {
+        uint64_t       magic = 0;
+        NetSubCallback done;
+    };
+    auto*          pending = new Pending{0, std::move(onReady)};
+    PluginxxString err{nullptr, 0};
+    auto*          op = broadcasts->subscribe_broadcast(
+        host,
+        nullptr,
+        &idSv,
+        handler,
+        ud,
+        nullptr,
+        [](void* cbUd, int32_t status, const PluginxxStringView* payload) {
+            std::unique_ptr<Pending> keep(static_cast<Pending*>(cbUd));
+            PluginxxSubscription*    sub = nullptr;
+            if (status == PLUGINXX_OPERATOR_OK && payload && payload->data && payload->size > 0) {
+                sub = pluginxx::pluginxxSubscriptionFromText(
+                    std::string_view{payload->data, static_cast<size_t>(payload->size)}
+                );
+            }
+            if (keep->done) {
+                keep->done(sub);
+            }
+        },
+        pending,
+        &err
+    );
+    if (!op) {
+        std::unique_ptr<Pending> keep(pending);
+        if (err.data) {
+            XX_LOGW("[{}] 订阅网络事件被拒: {}", kLogTag, std::string_view{err.data, err.size});
+            agentxx::plugin::PluginString::free(host, &err);
+        }
+        return false;
+    }
+    return true;
 }
 
 bool ChatbotNet::unsubscribeEvents(PluginxxSubscription* sub) const {
