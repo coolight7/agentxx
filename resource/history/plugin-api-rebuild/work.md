@@ -572,6 +572,47 @@ step 10 的另一半（删同步桥 + `tableOpSyncWait` / `ioCallSync*` / kit �
 - 构建：`cmake --build agent/build/windows-debug --config Debug` 通过（详见下一节结论）。
 - 全量回归：见下一节。
 
+### 验证（步 10a）
+
+- 构建：第一轮 1 处运行期崩（`plugin_bridge` 里 pc=0）—— 同步体不再填 `execute_start`，而该测试的
+  `startTool()` 只会调旧形态；夹具改成“有 `execute_start_invoke` 就先走它”后通过。
+- 全量：`Total: passed=43867 failed=0`（含 `plugin_bridge` 302、`plugin_runtime` 755、`plugins` 704、
+  `plugin_example_chatbot` 265、`client_plugins` 842）。
+
+## 剩余工作（做完 10b / 10a 之后的具体清单）
+
+1. **步 10 的另一半：删同步桥**。现在插件侧只剩一处阻塞订阅
+   （`agentxx_text_selection_monitor.cpp:245`，CDP 往返助手，跑在插件自有线程上）；
+   kit 里那批阻塞 helper 只剩“定义 + kit 内部互相调用”，没有插件使用者：
+   `declarePluginBroadcast(host,…)` / `publishPluginBroadcast(host,…)` /
+   `subscribePluginBroadcast(host,…)` / `unsubscribePluginBroadcast(host,…)` /
+   `workDir(...)` / `argsJson()` / `configPath()`（`plugin_kit.h`）。
+   要做的：
+   - `text_selection_monitor` 的订阅改成“提交 + 回调拿句柄”（照 `chatbot_net.cpp` 的写法；
+     句柄迟到且 `alive=false` 时在回调里 `unsubscribePluginBroadcastNoWait`）；
+   - 删 kit 那批阻塞 helper 与 `using pluginxx::tableOpSyncWait` 一行；
+   - 测试迁移（`tableOpSyncWait` 约 20 处、阻塞广播 helper 约 8 处）：
+     `test_plugins.cpp`（154/164/215/268/1648-1664/2046-2047/3257/3451/3483/3550/4082）、
+     `test_plugin_resources.cpp`（409/440/514）、`test_plugin_runtime.cpp`（462/486/518/1574/1923/2328）、
+     `test_plugin_host_mount.cpp`（335/358/479/489）、`test_plugin_agent_runtime.cpp:139`、
+     `test_plugin_broadcast.cpp:155`、`test_plugin_executor.cpp:853`、
+     `test_client_plugins.cpp`（1372-1425/1663-1679）—— 大部分所在函数已是协程，改 `co_await` 即可；
+   - 最后删框架侧：`pluginxx/api/sync_bridge.h`、`tableOpSyncWait` / `tableOpText` / `tableOpOk`、
+     `SyncWaitThreadPolicy`、`isSyncBridgeCallback` 与 `OpCore::commit` 里的同步桥分支、
+     `abi_util.h` 的 `ioCallSync*`、`tables_impl.h` 的 `onInstanceIo` / `queryStringIo`
+     （两处是死代码）。删完 `boundaries` 的第 16 条规则（禁止阻塞形态）才有意义。
+2. **kit 拆三个头**（`plugin_kit.h` / `agent_plugin_kit.h` / `client_plugin_kit.h`）+ 31 个包含点。
+   难点是现状**不是按端分块**：client 的两段在 734/834 行（`client 表便捷调用` / `client 展示面
+   便捷入口`），而两边共用的 `PluginBase` 在 2537、`ClientPluginBase` 在 6250；拆之前要先把
+   client 那两段搬到文件尾部（或直接搬进新头并调好包含顺序），否则只能得到“共用一个头”的假拆分。
+3. **步 12（夹具统一带插件线程与池）**：现在只有 `test_plugin_executor` / `test_plugin_runtime`
+   装了 `PluginExecutorThread`，其余插件用例都在测试自己的 io 线程上直接跑插件代码 ——
+   这正是“插件线程上被拒绝”的降级一直看不见的原因。建议新增
+   `agent/test/plugin/plugin_thread_fixture.h`，先接 `plugin_host_mount` / `plugins` 两个模块验证。
+4. **步 13 收尾**：`AGENTXX_PLUGIN_API_VERSION` 7→8、`AGENTXX_CLIENT_PLUGIN_API_VERSION` 8→9、
+   表编号/`_VERSION` 同步；`docs/zh-cn/design/config-keys.md` 与 `config_keys` 归属列；
+   生成物重跑（`AGENTXX_UPDATE_WIRE_SCHEMA=1`、client schema gen）。
+
 ## 设计过程
 
 - 第一轮（原任务名 `plugin-async-api-unify`）：只处理"插件线程上还剩同步等 io"与"同一件事两种写法
