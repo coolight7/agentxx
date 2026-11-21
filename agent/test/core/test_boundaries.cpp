@@ -1449,11 +1449,16 @@ void checkPluginTableCallShape(const fs::path& root, Violations& v) {
     /// `*Sync` 的现有使用点 (都要在非插件执行线程上):
     /// - chatbot 的 engine / 任务运行时注入跑在自己的 io 线程上 —— 要等结果, 而那里不是插件执行线程;
     ///   等它的工具体与命令回调也改完协程后整个名单可以清空
-    /// - 两个示例插件的 `stop` 入口 (卸载期间主程序不再推进新的协程根, 清理只能同步做);
-    ///   新增用法要复核是否真的不在插件执行线程上
+    ///
+    /// 生命周期入口 (`create` / `stop` / `destroy`) 已不再需要同步形态: 关闭中的实例仍受理
+    /// `register_task` / `sleep` / `offload`, 它们的 lease 计入 inflight, 卸载会等清理协程
+    /// 跑完, 因此 stop 里直接写 `finishLater` + `ctx.spawn(...)` + `co_await` 即可
+    /// (示例: `plugins/example_runtime`)。chatbot 的 stop 之所以还在名单里, 是因为它的
+    /// 清理主体要驱动自有 io 线程上的平台层 (`runOnIoBlocking` / `stopIo`), 阻塞点换不换
+    /// 协程都一样, 唯一可换的 `unmountRootSync` 在关闭中只会拿到 `not_found`。
+    /// 新增用法要复核是否真的不在插件执行线程上。
     static constexpr std::string_view kRuntimeSyncAllowed[] = {
         "plugins/agentxx_chatbot/",
-        "plugins/example_runtime/",
     };
 
     std::vector<fs::path> files;

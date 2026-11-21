@@ -959,6 +959,154 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
     }
 
+    /// 关闭期 (Closing) 的后台清理仍要被受理: `register_task` / `sleep` / `offload`
+    /// 是 stop 里“入口返回、任务继续跑”的基础 (`ctx.spawn` + `finishLater`);
+    /// 这些 lease 计入 inflight, 卸载等待因此能覆盖到它们; 进入 Closed 后仍拒绝。
+    {
+        RuntimeFixture         f;
+        PluginxxOperatorNotify notify{};
+        PluginxxString         error{};
+        f.provider->lifetime->requestClose();
+
+        // 1) 关闭中的后台任务: 受理 + 记 lease (改动前这里会抛 "provider is closing")
+        auto* handle = f.manager->registerTask(
+            f.provider.get(),
+            +[](void*, void*) {},
+            nullptr,
+            &notify,
+            &error
+        );
+        XX_TEST_EXPECT_TRUE(handle != nullptr && notify.done != nullptr);
+        XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1});
+
+        // 2) 关闭中的完成回调照常投递一次, lease 归零 (卸载得以继续)
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return f.provider->lifetime->leaseCount() == 0; }));
+
+        // 3) 关闭中的 sleep: 受理且回调到达 (清理里的延时重试)
+        int   calls = 0;
+        auto* timer = f.manager->sleep(
+            f.provider.get(),
+            0,
+            +[](void* ud, int32_t, const PluginxxStringView*) {
+                ++*static_cast<int*>(ud);
+            },
+            &calls,
+            &error
+        );
+        XX_TEST_EXPECT_TRUE(timer != nullptr);
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return calls == 1; }));
+        hostMemoryFree(error.data);
+        error = {};
+
+        // 4) 关闭中的 offload: 受理且工作体与完成回调都执行 (阻塞收尾)
+        struct OffloadState {
+            std::atomic<int> work{0};
+            std::atomic<int> done{0};
+        } offState;
+        f.manager->offload(
+            f.provider.get(),
+            +[](void* ud, const PluginxxCancelToken*, PluginxxString*) -> void* {
+                ++static_cast<OffloadState*>(ud)->work;
+                return nullptr;
+            },
+            +[](void* ud, int32_t, void*, const PluginxxStringView*) {
+                ++static_cast<OffloadState*>(ud)->done;
+            },
+            &offState,
+            &error
+        );
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
+            return offState.work.load() == 1 && offState.done.load() == 1;
+        }));
+        hostMemoryFree(error.data);
+        error = {};
+
+        // 5) 真实的 C ABI 入口也要放行关闭中: 插件侧的 `ctx.spawn` / `sleep` / `offload`
+        //    经 tasks/scheduler 表进主程序, 入口处的状态门比管理器方法更靠前
+        //    (曾因入口用严格判定而让 stop 里的清理协程根本起不来)。
+        const PluginxxHost* hostView = f.provider->hostControl->host();
+        auto                ifaceOf  = [](const PluginxxHost* h, const char* iid) -> const void* {
+            if (!h || !h->vtable || !h->vtable->query_interface) {
+                return nullptr;
+            }
+            auto sv = PluginStringView::fromCstr(iid);
+            return h->vtable->query_interface(h, &sv);
+        };
+        const auto* tasks
+            = static_cast<const PluginxxTasksIface*>(ifaceOf(hostView, PLUGINXX_IFACE_TASKS));
+        const auto* scheduler = static_cast<const PluginxxSchedulerIface*>(
+            ifaceOf(hostView, PLUGINXX_IFACE_SCHEDULER)
+        );
+        XX_TEST_EXPECT_TRUE(tasks != nullptr && tasks->register_task != nullptr);
+        XX_TEST_EXPECT_TRUE(scheduler != nullptr && scheduler->sleep != nullptr);
+        if (tasks && tasks->register_task && scheduler && scheduler->sleep) {
+            PluginxxOperatorNotify entryNotify{};
+            PluginxxString         entryError{};
+            auto*                  entryHandle = tasks->register_task(
+                hostView,
+                +[](void*, void*) {},
+                nullptr,
+                &entryNotify,
+                &entryError
+            );
+            XX_TEST_EXPECT_TRUE(entryHandle != nullptr && entryNotify.done != nullptr);
+            hostMemoryFree(entryError.data);
+            if (entryHandle) {
+                entryNotify.done(entryNotify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+            }
+            int   entryCalls = 0;
+            auto* entryTimer = scheduler->sleep(
+                hostView,
+                0,
+                +[](void* ud, int32_t, const PluginxxStringView*) {
+                    ++*static_cast<int*>(ud);
+                },
+                &entryCalls,
+                &entryError
+            );
+            XX_TEST_EXPECT_TRUE(entryTimer != nullptr);
+            hostMemoryFree(entryError.data);
+            entryError = {};
+            XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return entryCalls == 1; }));
+            XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
+                return f.provider->lifetime->leaseCount() == 0;
+            }));
+        }
+
+        // 6) 进入 Closed 之后一律拒绝: dlclose 之后不能再进插件代码
+        // (用单独的探针实例并先从管理器表里摘掉: 已 Closed 的实例不能再走收尾请求)
+        auto probe = f.instance("closed_probe", 3);
+        f.manager->plugins_.erase("closed_probe");
+        probe->lifetime->setState(pluginxx::PluginInstanceState::Closed);
+        PluginxxOperatorNotify closedNotify{};
+        PluginxxString         closedError{};
+        auto*                  rejected = f.manager->registerTask(
+            probe.get(),
+            +[](void*, void*) {},
+            nullptr,
+            &closedNotify,
+            &closedError
+        );
+        XX_TEST_EXPECT_TRUE(rejected == nullptr);
+        hostMemoryFree(closedError.data);
+        // 入口路径同样拒: dlclose 之后的真插件回调也会走这条表
+        if (tasks && tasks->register_task) {
+            PluginxxOperatorNotify closedEntryNotify{};
+            PluginxxString         closedEntryError{};
+            auto*                  closedHandle = tasks->register_task(
+                probe->hostControl->host(),
+                +[](void*, void*) {},
+                nullptr,
+                &closedEntryNotify,
+                &closedEntryError
+            );
+            XX_TEST_EXPECT_TRUE(closedHandle == nullptr);
+            hostMemoryFree(closedEntryError.data);
+        }
+        probe.reset();
+    }
+
     /// sleep 接受即计入 lease；取消和正常完成都回收记录，并且只回调一次。
     {
         RuntimeFixture f;

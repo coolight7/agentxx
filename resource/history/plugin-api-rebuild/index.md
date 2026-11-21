@@ -56,7 +56,7 @@
 | 决策 | 偏差 | 原因 |
 |---|---|---|
 | D10 / D13 删同步桥与全部阻塞助手 | 保留 `pluginxx::tableOpSyncWait` + `SyncWaitThreadPolicy`（默认 `refuseOnPluginThread`，runtime 表与 client 表显式 `allowOnPluginThread`）作为唯一同步等待原语；`tableOpText` / `tableOpOk` / `ioCallSync*` 已删，kit 里只剩 4 处使用 | 生命周期入口（`stop` / `destroy`）与 `create` 期的实例级查询确实需要当场拿结果，同步桥就地唤醒不会自己等自己 |
-| D13 插件源码零同步调用 | 两处 `*Sync` 白名单：`agentxx_chatbot`（engine / 任务运行时注入点跑在自己的线程上）、`example_runtime`（`stop` 入口） | 卸载期间主程序不再推进新的协程根，`spawn` 的清理任务不会启动；`boundaries` 规则 16 静态拦截并写明理由 |
+| D13 插件源码零同步调用 | 只剩一处 `*Sync` 白名单：`agentxx_chatbot`（engine / 任务运行时注入点跑在自己的线程上，`stop` 要驱动自有 io 线程上的平台层）。**`example_runtime` 已从名单移除**: 关闭期的 `register_task` / `sleep` / `offload` 改受理后, `stop` 里可以直接 `finishLater` + `ctx.spawn` + `co_await` | 早期“stop 里 spawn 的清理任务不会启动”的限制已拿掉（见 work.md “实施记录：关闭期仍可清理”）；chatbot 的阻塞点在自有 io 线程上，协程化没有收益 |
 | plan §3.7 用 `AgentPluginBase` | 保留 `PluginBase` 原名字，放进 agent 头 | 它本就是 `PluginBaseT<AgentIfaces>`，改名要动 20 个插件源码且无功能收益 |
 
 ### 附带产出
@@ -65,6 +65,10 @@
   14 个插件模块接入（插件用例第一次在"生产同款线程模型"下跑）；
 - SDK 按端拆三个头：`plugin_kit.h`（两端共用，782 行）/ `agent_plugin_kit.h`（agent，4989 行）/
   `client_plugin_kit.h`（client，1683 行），55 处包含点同时切换，不保留转发头。
+- 关闭期仍可继续清理（`cxx_pluginxx` 子模块提交 `4e800d3`）：`tasks.register_task` /
+  `scheduler.sleep` / `scheduler.offload` 的入口改用 `allowClosing` 租约 + `OpCore` 的
+  `callerMayStop`，于是 `stop` / `destroy` 可以写成 `finishLater` + `ctx.spawn` + `co_await`；
+  `example_runtime` 的 `runtimeStop` 已迁移。
 
 ## 关键决策
 
@@ -98,4 +102,5 @@
 "create 不能读表/起线程"这类无法执行的规定；线程模型收敛成"每端一个管理器（启动即建）+ 一条
 插件线程 + 一个池（默认 3 条，两端同值）"，其余子系统一律借用这个池。**
 已知事项与有意保留的取舍见 [work.md](work.md) 文末"剩余工作"：kit 内部 4 处同步入口、
-两处插件侧 `*Sync` 白名单（都是有意保留）；`plugin_runtime` 的并发压测抖动已按"有界等待"修掉。
+chatbot 的 `*Sync` 白名单（有意保留）；`plugin_runtime` 的并发压测抖动已按"有界等待"修掉；
+`stop` / `destroy` 已可写成协程（关闭期仍受理 `register_task` / `sleep` / `offload`）。

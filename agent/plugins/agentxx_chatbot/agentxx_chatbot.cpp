@@ -1709,8 +1709,11 @@ void chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
 
 /// 进程级停止: 停平台 → 关通道 → 卸根 (逆序、幂等)
 ///
-/// 这里是**同步**形态: `stop` 期间主程序不再推进新的协程根, 交给 `spawn` 的清理任务
-/// 不会启动; 同步形态靠同步桥在插件执行线程上就地唤醒, 不会自己等自己。
+/// 这里保持**同步**形态 (与 `example_runtime` 的 `runtimeStop` 不同): 清理主体要驱动
+/// 自有 io 线程上的平台层 (`runOnIoBlocking` 停连接/关通道、`stopIo` 停线程), 这些调用
+/// 必须在本函数返回前全部跑完才安全, 写不写协程都不改变阻塞点; 唯一能换成 `co_await`
+/// 的只有 `unmountRootSync`, 而关闭中的根早被主程序按 owner 摘掉, 同步形态拿到的
+/// `not_found` 与异步形态等价。所以 `boundaries` 的白名单里保留本文件。
 void chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (ctx.started.exchange(false, std::memory_order_acq_rel)) {
         // 1. 停平台连接 (不再收新消息)

@@ -464,34 +464,46 @@ static void runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, 
     return;
 }
 
-/// 进程级停止: 撤销自管资源 (通道 → 触发器/定时器 → 根)
+/// 进程级停止的协程体: 撤销自管资源 (定时器 → 触发器 → 通道 → 根)
 ///
 /// 主程序在禁用/卸载时也会按归属整批回收, 所以这里的清理是"自己先收干净";
 /// 全部入口都是幂等的, 重复清理不会出错。
-///
-/// 这里是**同步**形态: `stop` 期间主程序不再推进新的协程根 (取消/关闭已在走),
-/// 交给 `spawn` 的清理任务不会启动; 同步形态靠同步桥在插件执行线程上就地唤醒,
-/// 不会自己等自己 (与 `start` 的协程形态不同)。
-static void runtimeStop(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static pluginxx::Task<void> runtimeStopTask(RuntimeCtx& ctx, agentxx::plugin::LifecycleFinisher later) {
     if (ctx.timerId != 0) {
-        agentxx::plugin::removeRuntimeTimerSync(ctx, ctx.timerId);
+        co_await agentxx::plugin::removeRuntimeTimer(ctx, ctx.timerId);
         ctx.timerId = 0;
     }
     if (ctx.triggerId != 0) {
-        agentxx::plugin::removeTriggerSync(ctx, ctx.triggerId);
+        co_await agentxx::plugin::removeTrigger(ctx, ctx.triggerId);
         ctx.triggerId = 0;
     }
     if (ctx.channelId != 0) {
-        agentxx::plugin::closeChannelSync(ctx, ctx.channelId);
+        co_await agentxx::plugin::closeChannel(ctx, ctx.channelId);
         ctx.channelId = 0;
     }
     if (!ctx.rootId.empty()) {
-        agentxx::plugin::unmountRootSync(ctx, ctx.rootId);
+        co_await agentxx::plugin::unmountRoot(ctx, ctx.rootId);
         ctx.rootId.clear();
     }
-    if (notify && notify->done) {
-        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    later.ok();
+    co_return;
+}
+
+/// 进程级停止: 入口立刻返回, 清理协程在插件执行线程上继续跑
+///
+/// stop 事务里登记的后台任务与它们的表调用都算清理的一部分 —— 框架在实例处于
+/// Closing 时仍受理 `register_task` / 表调用, 并把它们的 lease 计入 inflight,
+/// 所以卸载会等这条协程跑完才 destroy/docload。
+static void runtimeStop(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+    if (!notify || !notify->done) {
+        agentxx::plugin::PluginString::set(ctx.host, error, "stop: notify required");
+        return;
     }
+    auto later = agentxx::plugin::finishLater(notify);
+    ctx.spawn([later](RuntimeCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        co_await runtimeStopTask(c, later);
+        co_return;
+    });
     return;
 }
 

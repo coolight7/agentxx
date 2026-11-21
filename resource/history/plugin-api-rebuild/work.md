@@ -766,11 +766,12 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 
 ### 踩到的两个坑（已修）
 
-- **`stop` 不能用 `ctx.spawn`**：卸载流程里主程序已经不再推进新的协程根（取消/关闭已在走），
-  交给 `spawn` 的清理任务不会启动，`LifecycleFinisher` 析构时自动交 FAILED，`unloadAsync`
-  立刻返回 false（测试表现为 `plugin_example_runtime` 394/404/409 三处失败）。
-  所以 `runtimeStop` / `chatbotStop` 保持**同步**形态（`*Sync`，同步桥在插件执行线程上就地
-  唤醒）—— 这条限制要写进插件文档，等同步桥真的删掉时一并处理。
+- **`stop` 当时不能用 `ctx.spawn`**：卸载流程里主程序已经不再推进新的协程根，交给 `spawn`
+  的清理任务不会启动，`LifecycleFinisher` 析构时自动交 FAILED，`unloadAsync` 立刻返回
+  false（测试表现为 `plugin_example_runtime` 394/404/409 三处失败）。当时 `runtimeStop` /
+  `chatbotStop` 因此保持**同步**形态。**这条限制已经解除**：三道入口（`register_task` /
+  `sleep` / `offload`）在 `Closing` 下改为受理，`example_runtime` 的 `stop` 已写成协程，
+  详见后面“实施记录：关闭期仍可清理”。
 - **`chatbotStartBody` 改协程后 chatbot 全流程变慢到 10 分钟以上**：最终定位不是协程本身，而是
   用脚本改 `chatbotStop` 时把末尾的 `notify->done(...)` 一起删掉了，stop 永不通知 → 卸载
   每处超时。改协程那版已经回退（见下条），但这次“卡住”排查走了弯路，记在这里：
@@ -786,12 +787,13 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 ### `boundaries` 规则 16 跟进
 
 规则 16 增加一条静态检查：插件源码里不得出现运行时便捷层的 `*Sync` 形态
-（21 个名字，`mountRootSync(` 到 `listAsyncWorkJsonSync(`）。白名单两项，都在注释里写明理由：
+（21 个名字，`mountRootSync(` 到 `listAsyncWorkJsonSync(`）。名单现在只剩一项：
 
-- `plugins/agentxx_chatbot/`：engine / 任务运行时的注入点跑在插件自有 io 线程上；
-- `plugins/example_runtime/`：`stop` 入口（卸载期间不再推进新的协程根）。
+- `plugins/agentxx_chatbot/`：engine / 任务运行时的注入点跑在插件自有 io 线程上；它的 `stop`
+  要驱动自有 io 线程上的平台层（`runOnIoBlocking` / `stopIo`），协程化没有收益。
 
-新增用法要复核"是否真的不在插件执行线程上"，两个名单等相应异步化完成后清空。
+`plugins/example_runtime/` 已从名单移除（关闭期可写协程，见后面“实施记录：关闭期仍可
+清理”）。新增用法要复核“是否真的不在插件执行线程上”。
 
 ### 验证
 
@@ -934,11 +936,73 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 - 顶层构建 `exit=0`（头文件改动导致全树重编，本次 42 分 42 秒）；
 - 插件相关 19 个模块 + `boundaries`：**passed=4566 failed=0**；
 - 全量回归：**passed=43904 failed=0**。
+
+## 实施记录：关闭期仍可清理（stop / destroy 可写协程）
+
+上一轮把 `stop` 保持同步的理由是“卸载期间主程序不再推进新的协程根，`ctx.spawn` 的清理
+任务不会启动”。本轮把这条限制拿掉了：`stop` / `destroy` 入口可以写
+`finishLater(notify)` + `ctx.spawn(...)` + `co_await`，框架会把它们跑完再收尾。
+
+### 框架侧（`cxx_pluginxx`，子模块提交 `4e800d3`）
+
+两个状态门都要放，漏一个就静默降级：
+
+- **表入口**（`tables_impl.h`）：`tasks.register_task` / `scheduler.sleep` /
+  `scheduler.offload` 的 `enterHost(host)` 改成 `enterHost(host, /*allowClosing=*/true)`。
+  这是本次真正卡住的地方：入口用严格判定时，`ctx.spawn` 在 stop 里直接失败
+  （日志 `spawn: register_task failed`，不带原因），清理协程根本没建起来，
+  `unloadAsync` 只能等到 stop 超时。
+- **OpCore 租约**（`host_core.h`）：三处 `OpCore::create` 带 `callerMayStop=true`。
+  发包方就是插件自己（`caller` 为空）时按“调用方可能在自己的 stop 里”放宽到 Closing；
+  进入 `Closed` 后仍拒绝（dlclose 之后不能再进插件代码）。
+
+放宽到 Closing（以及停用期间的 `Disabled`）后，这类操作照旧记 lease 并计入 inflight，
+所以 `unloadAsync` 的“等 inflight 归零”必然覆盖到清理协程，跑完才 destroy / dlclose。
+消息：`feat(lifecycle): 关闭期仍受理 register_task / sleep / offload`。
+
+### 插件侧
+
+- `agent/plugins/example_runtime/example_runtime.cpp`：`runtimeStop` 改成
+  `finishLater` + `ctx.spawn` + `runtimeStopTask`（依次 `co_await`
+  `removeRuntimeTimer` / `removeTrigger` / `closeChannel` / `unmountRoot`），删掉全部 `*Sync`。
+  清理期间这些写类表调用会被入口拒（主程序调到 stop 之前已按 owner 摘掉运行时资源），
+  结果按 `not_found` 计，不影响 stop 收尾为成功。
+- `agent/plugins/agentxx_chatbot/agentxx_chatbot.cpp`：`stop` **保持同步**，注释改成真实理由
+  （清理主体要驱动自有 io 线程上的平台层：`runOnIoBlocking` 停连接、`stopIo` 停线程，
+  阻塞点换不换协程都一样；唯一能换的 `unmountRootSync` 在关闭中只会拿到 `not_found`）。
+- `agent/test/core/test_boundaries.cpp`：`kRuntimeSyncAllowed` 删 `plugins/example_runtime/`，
+  只剩 chatbot，注释说明两类理由。
+
+### 测试
+
+- `plugin_runtime` 新增用例“关闭期 (Closing) 的后台清理仍要被受理”：
+  `requestClose()` 之后 `register_task` / `sleep` / `offload` 逐个受理 + 完成回调到达 +
+  lease 归零；`Closed` 探针实例仍拒。**只测管理器方法会漏掉入口门**（那次就是这么漏的），
+  所以每个断言都再走一遍真实 C ABI 表入口（`tasks->register_task` / `scheduler->sleep`）。
+- `plugin_example_runtime` 的卸载与收尾断言（400 / 410 / 415）现在全绿 —— 它就是本轮
+  定位入口门的现场。
+
+### 验证
+
+- 构建：顶层 `cmake --build agent/build/windows-debug --config Debug --parallel 16` `exit=0`
+  （框架头改了，插件相关 TU 全重编）。
+- `plugin_example_runtime` + `plugin_runtime`：**passed=826 failed=0**。
+- 插件全组（20 个模块，含 `boundaries` / `config_keys`）连跑两次：**passed=5031 failed=0**。
+- 全量回归两次：**passed=43925 failed=0**；另一次 `43923 failed=2`，两处都在
+  `input_delivery`（1184 / 1203），单跑该模块 139/0 三次 —— 与 Round A 里出现过的同一
+  计时抖动（本节上方的“验证”里已记过一次），不是本次改动引起。
+
+### 文档
+
+`AGENTS.md`（生命周期段）与 `docs/zh-cn/design/plugins.md`（表调用形态）改成同一口径：
+关闭期受理的是**调度原语** `register_task` / `sleep` / `offload`；业务表里只读查询、取消、
+订阅撤销这类收缩型入口按各自的 `allowClosing` 放行，写入/新注册类照旧拒。
+
 ## 剩余工作（做完 10b / 10a / 运行时层协程化之后的具体清单）
 
 1. **步 10 已全部落地**（含 kit 拆三个头，见上文"实施记录：步 10 收尾"）。同步面现状：
-   - 插件源码：`tableOpSyncWait` 零处；运行时层 `*Sync` 只剩 chatbot（engine/任务运行时注入）
-     与 example_runtime（stop 入口），两者都在 `boundaries` 规则 16 的白名单里；
+   - 插件源码：`tableOpSyncWait` 零处；运行时层 `*Sync` 只剩 chatbot（engine/任务运行时注入
+     与停平台层），名单里也只剩它一个；
    - kit 内部还剩四处：广播阻塞入口、`addShareStore`（同步工具体）、`checkPathDecisions`、
      `clientTableOp`；
    - 测试里仍有约 20 处（都在 io 线程上，靠 `startTableOp` 的当场回调拿到结果）。

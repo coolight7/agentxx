@@ -380,6 +380,17 @@ path/to/agentxx_test --log-level warn string_util regex
   SDK 侧用 `AGENTXX_PLUGIN_AGENT_EXPORT(Ctx, Name, Ver, Desc, StartFn, StopFn)`
   (client 侧同名参数) 一次生成五个入口; 手写 create/destroy 的插件用
   `AGENTXX_PLUGIN_{AGENT,CLIENT}_LIFECYCLE_EXPORT(Ctx, StartFn, StopFn)` 只生成 start/stop。
+  【关闭期仍可继续清理】`stop` / `destroy` 入口是"调用 → 恰好一次 notify"协议，可以在里面
+  写 `finishLater(notify)` + `ctx.spawn(...)` + `co_await`（不必再用 `*Sync`）：实例进入
+  `Closing`（以及停用期间的 `Disabled`）后调度原语 `register_task` / `sleep` / `offload`
+  **仍然受理**，这些 lease 计入 inflight，`unloadAsync` 会等它们跑完才 destroy / dlclose；
+  进入 `Closed` 后一律拒绝。业务表里只读查询、取消、广播订阅撤销这类"收尾"入口本就
+  按 `allowClosing` 放行；写入/新注册类在关闭中照旧拒绝 —— 主程序在调到 `stop` 之前
+  已按 owner 摘掉运行时资源（根/通道/定时器/触发器/工具/订阅），插件侧再收一遍只会
+  拿到 `not_found`。`create` / `stop` / `destroy` 因此都不阻塞框架（安装卸载本身是
+  协程 + 工作池 `dlopen`/`dlclose`）。示例见 `agent/plugins/example_runtime` 的
+  `runtimeStop`；`agentxx_chatbot` 的 `stop` 保持同步是因为它要驱动自有 io 线程的
+  平台层（`runOnIoBlocking` / `stopIo`），协程化没有收益。
   【多实例契约】同一动态库可被同进程内不同 agent 主程序各自创建多个并存实例:
   ① 禁止可变全局/函数级 static 缓存; ② 实例状态只能放 `*plugin_ctx` 堆块,
   回调经 `spec.user_data` 恢复; ③ 接口表查询结果存实例上下文。

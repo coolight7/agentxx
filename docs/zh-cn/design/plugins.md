@@ -471,11 +471,20 @@ C++ 侧只有两种消费形态在插件 SDK (`agent_plugin_kit.h` / `client_plu
 - 一条 ticket 可以之后才 `co_await`; 多条并发提交用 `pluginxx::whenAll(tickets)` 一次收齐;
   `.forget()` = 提交完不管结果
 - **注册类调用仍要 `co_await` 完再继续** —— 登记本身提交就生效, 但失败原因只有结果里有
-- 生命周期入口 (`start` / `mount`) 里的注册事务因此写成协程: 入口用
-  `auto later = pluginxx::finishLater(notify)` 拿到凭据, `ctx.spawn(...)` 跑
-  `co_await xxxSetupAsync(...)`, 成功 `later.ok()` / 失败 `later.failed(why)`,
-  入口 `return later.provider()` (非空句柄 = 已受理)。挂载里有挂载级状态时, 入口返回
-  自己的状态对象 (unmount 收到的就是它), 完成通知仍走 `later`
+- 生命周期入口 (`create` / `mount` / `stop` / `destroy`) 里的注册与清理事务因此都可以写成协程:
+  入口用 `auto later = pluginxx::finishLater(notify)` 拿到凭据, `ctx.spawn(...)` 跑
+  `co_await xxxSetupAsync(...)` / `co_await xxxCleanupAsync(...)`, 成功 `later.ok()` /
+  失败 `later.failed(why)`, 入口 `return later.provider()` (非空句柄 = 已受理)。挂载里有
+  挂载级状态时, 入口返回自己的状态对象 (unmount 收到的就是它), 完成通知仍走 `later`
+- **关闭期同样受理**: 实例进入 `Closing` (以及停用期间的 `Disabled`) 后调度原语
+  `register_task` / `sleep` / `offload` 仍然受理 —— 关闭期的清理协程正需要它们; 这些操作的
+  lease 计入 inflight, `unloadAsync` 的"等 inflight 归零"因此必然覆盖到清理协程, 跑完才
+  destroy / dlclose。进入 `Closed` 之后一律拒绝 (dlclose 之后不能再进插件代码)。
+  业务表里只读查询、取消、广播订阅撤销这类收缩型入口本就按 `allowClosing` 放行;
+  写入/新注册类在关闭中照旧拒绝 —— 主程序调到 `stop` 之前已按 owner 摘掉运行时资源
+  (根/通道/定时器/触发器/工具/订阅), 插件侧再收一遍只会拿到 `not_found`。
+  因此 `stop` / `destroy` 不需要再用 `*Sync` 形态 (示例: `agent/plugins/example_runtime`
+  的 `runtimeStop`)
 - 主程序的 `pluginxx.tasks` 表缺失时无法驱动注册协程, 入口直接报错而不是退回同步注册
 
 > **唯一的同步等待原语**: `pluginxx::tableOpSyncWait(host, cancel, scheduler, start, timeoutMs)`
