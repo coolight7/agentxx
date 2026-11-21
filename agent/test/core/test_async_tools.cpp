@@ -645,9 +645,7 @@ asio::awaitable<void> test_start_builtin_and_async_tools() {
     XX_TEST_EXPECT_TRUE(contains(shareEntry.value("result", std::string{}), "\"id\""));
     const auto queryEntry = fx->host->asyncWorkJson(queryId);
     XX_TEST_EXPECT_EQ(queryEntry.value("state", std::string{}), std::string{"done"});
-    XX_TEST_EXPECT_TRUE(
-        contains(queryEntry.value("result", std::string{}), "[Async tasks] group=all")
-    );
+    XX_TEST_EXPECT_TRUE(contains(queryEntry.value("result", std::string{}), "group=all"));
     co_return;
 }
 
@@ -913,18 +911,18 @@ asio::awaitable<void> test_query() {
         co_return true;
     }));
 
-    XX_TEST_EXPECT_TRUE(listAll.starts_with("[Async tasks] group=all"));
+    XX_TEST_EXPECT_TRUE(listAll.starts_with("group=all"));
     XX_TEST_EXPECT_TRUE(contains(listAll, fastId));
     XX_TEST_EXPECT_TRUE(contains(listAll, slowId));
     // 别的会话的任务不出现在本会话清单里
     XX_TEST_EXPECT_FALSE(contains(listAll, otherId));
-    XX_TEST_EXPECT_TRUE(listRunning.starts_with("[Async tasks] group=running"));
+    XX_TEST_EXPECT_TRUE(listRunning.starts_with("group=running"));
     XX_TEST_EXPECT_TRUE(contains(listRunning, slowId));
     XX_TEST_EXPECT_FALSE(contains(listRunning, fastId));
-    XX_TEST_EXPECT_TRUE(listDone.starts_with("[Async tasks] group=done"));
+    XX_TEST_EXPECT_TRUE(listDone.starts_with("group=done"));
     XX_TEST_EXPECT_TRUE(contains(listDone, fastId));
     XX_TEST_EXPECT_FALSE(contains(listDone, slowId));
-    XX_TEST_EXPECT_TRUE(detail.starts_with("[Async task] id=" + slowId));
+    XX_TEST_EXPECT_TRUE(detail.starts_with("id=" + slowId));
     XX_TEST_EXPECT_TRUE(contains(detail, "state=running"));
     XX_TEST_EXPECT_TRUE(contains(notFound, "group"));
     XX_TEST_EXPECT_TRUE(foreign.starts_with("[threw] "));
@@ -1011,11 +1009,11 @@ asio::awaitable<void> test_await() {
         co_return true;
     }));
 
-    XX_TEST_EXPECT_TRUE(doneText.starts_with("[Async task] id=" + finishedId));
+    XX_TEST_EXPECT_TRUE(doneText.starts_with("id=" + finishedId));
     XX_TEST_EXPECT_TRUE(contains(doneText, "state=done"));
     XX_TEST_EXPECT_TRUE(contains(doneText, "tool says hi"));
     // 运行中等到结果: 与终态同一份渲染 (任务表条目), 不再是 `[Event]` 文本
-    XX_TEST_EXPECT_TRUE(runningText.starts_with("[Async task] id=" + runningId));
+    XX_TEST_EXPECT_TRUE(runningText.starts_with("id=" + runningId));
     XX_TEST_EXPECT_TRUE(contains(runningText, "state=done"));
     XX_TEST_EXPECT_TRUE(contains(runningText, "tool says hi"));
 
@@ -1042,7 +1040,7 @@ asio::awaitable<void> test_await() {
         fx->host->cancelAsyncWork(slowId);
         co_return true;
     }));
-    XX_TEST_EXPECT_TRUE(contains(timeoutText, "[Event await timeout]"));
+    XX_TEST_EXPECT_TRUE(contains(timeoutText, "[Event] await timeout"));
     XX_TEST_EXPECT_TRUE(contains(timeoutText, "waited=0s"));
     co_return;
 }

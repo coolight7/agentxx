@@ -14,11 +14,7 @@ namespace {
 constexpr std::string_view kAsyncResultTextField = "content";
 
 /// 拼一段 "键:\n原文" (键名就是值里那个字段名, 原文多行就是多行)
-void appendTextField(
-    std::string&     out,
-    std::string_view fieldName,
-    std::string_view body
-) {
+void appendTextField(std::string& out, std::string_view fieldName, std::string_view body) {
     out += fieldName;
     out += ":\n";
     out += body;
@@ -64,7 +60,8 @@ std::string_view eventTextPayloadField(std::string_view eventName) {
     return {};
 }
 
-std::string renderEventValuesText(const std::vector<Json>& values, std::string_view textPayloadField) {
+std::string
+    renderEventValuesText(const std::vector<Json>& values, std::string_view textPayloadField) {
     if (values.empty()) {
         return {};
     }
@@ -116,9 +113,8 @@ std::string renderEventText(
 std::string renderAwaitTimeout(const EventWaitSpec& spec, int64_t waitedMs) {
     const auto seconds = waitedMs / 1000;
     return fmt::format(
-        "[Event await timeout] event={} waited={}s (no value arrived; the wait was removed, "
-        "query the task again with agentxx_async_query, or keep working and let the automatic notification deliver it)",
-        spec.event,
+        "[Event] await timeout."
+        "waited={}s (no value arrived)",
         seconds
     );
 }

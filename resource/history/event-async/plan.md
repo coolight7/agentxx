@@ -666,7 +666,7 @@ hub 的归属与共享规则 (必须明确, 否则主↔子协作会找不到事
 | opt | 作用 | 关键参数 | 返回 |
 |---|---|---|---|
 | `watch` | **挂起一个等待并立即返回** (核心) | `event`(必填), `mode`, `delivery`, `timeout_ms`, `max_items`, `coalesce_ms`, `replay`, `label`, `ref`, `notify_on_timeout`, `unpause`, `after_ms`/`every_ms` (仅 `event` 为 `timer.*` 时有效: 顺手建/重设该定时源) | 已满足时直接给值; 否则 `[Event wait armed] wait=w-3 ...` |
-| `await` | **有上限的阻塞等待** (会让本轮停在这里, 谨慎使用) | `event`, `mode`, `timeout_ms` (默认 30000, 上限 300000) | 值文本 / `[Event await timeout]` |
+| `await` | **有上限的阻塞等待** (会让本轮停在这里, 谨慎使用) | `event`, `mode`, `timeout_ms` (默认 30000, 上限 300000) | 值文本 / `[Event] await timeout` |
 | `status` | 查一个等待或一个事件 | `wait` 或 `event` (二选一) | 状态、已有值条数、最后更新时间 |
 | `list` | 列当前 agent 的事件 / 本会话的等待 | `scope` = `events`\|`waits`\|`all` (默认 all), `prefix`, `limit` | 紧凑列表 (名字/状态/条数/等待数) |
 | `cancel` | 取消等待 | `wait` (id) 或 `all` (本会话全部) | 取消条数 |
@@ -695,7 +695,7 @@ value: {"ok":true,"artifact":"dist/app.exe"}
 
 - `event` 为空 / 事件名非法 (长度、字符集、保留前缀 `agent.`/`io.`/`service.`/`hub.`) → 参数错误;
 - 超预算 (事件/等待/单会话等待数) → 运行期错误, 文本里写清上限与当前值;
-- `await` 超时不算错误, 返回 `[Event await timeout] event=... waited=30s` 让模型自己决定下一步;
+- `await` 超时不算错误, 返回 `[Event] await timeout. waited=30s` 让模型自己决定下一步;
 - 取消 (`CancelledException`) 照现有语义向外抛。
 
 提示词 (`depict` + `args`) 要点 (按 `toolPrompt` 的写法逐条给, 这里只列内容要求):

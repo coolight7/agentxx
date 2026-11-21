@@ -54,7 +54,8 @@ public:
 
     neograph::ChatTool get_definition() const override;
 
-    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json& arguments) override;
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json& arguments
+    ) override;
 
     ~SubAgentManagerTool() override;
 
@@ -102,23 +103,20 @@ inline std::string
 }
 
 /// 后台任务的受理提示 (工具结果文本)
-/// - 以 `[Async work started]` 开头 (不命中工具失败前缀)
+/// - 以 `Async work started` 开头 (不命中工具失败前缀)
 /// - 说清"结果落成事件值，并以事件投递回会话"，以及查询/等待/取消各自用哪个工具
 inline std::string renderSubagentStartedText(const events::RespSubagentBatchItem& item) {
     const auto name = item.subagent.empty() ? std::string{"-"} : item.subagent;
     const auto id   = item.asyncId.empty() ? item.resultId : item.asyncId;
     return fmt::format(
-        "[Async work started] id={} subagent={} event={}\n"
+        "Async work started, id={} subagent={} event={}\n"
         "The result is published as the value of event `{}` (field `asyncId` = {}) and is "
         "delivered to this conversation when it finishes; `agentxx_async_query` reads the "
-        "task table, `agentxx_async_await` {{id:\"{}\"}} blocks for it now, "
-        "`agentxx_async_manager` {{opt:\"cancel\", id:\"{}\"}} cancels it.",
+        "task table, `agentxx_async_await` blocks for it now, `agentxx_async_manager` cancels it.",
         id,
         name,
         item.eventName,
         item.eventName,
-        id,
-        id,
         id
     );
 }
@@ -141,7 +139,9 @@ inline void buildSubagentResumeValues(
         if (r.started) {
             resumeValues[key] = renderSubagentStartedText(r);
         } else if (r.hasError) {
-            resumeValues[key] = utilxx_base::Json{{"error", std::string{r.errorMessage}}};
+            resumeValues[key] = utilxx_base::Json{
+                {"error", std::string{r.errorMessage}}
+            };
         } else {
             resumeValues[key] = utilxx_base::Json(r.content);
         }

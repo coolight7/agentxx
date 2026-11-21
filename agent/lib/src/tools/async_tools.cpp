@@ -136,7 +136,7 @@ std::string renderEntryDetail(const Json& entry, bool withResult = true) {
     const auto  start  = entry.value("startedAtMs", int64_t{0});
     const auto  finish = entry.value("finishedAtMs", int64_t{0});
     std::string out    = fmt::format(
-        "[Async task] id={} kind={} name={} state={}",
+        "id={} kind={} name={} state={}",
         entry.value("asyncId", std::string{}),
         entry.value("kind", std::string{}),
         entry.value("name", std::string{}),
@@ -260,7 +260,7 @@ std::string renderTaskList(std::string_view group, const Json& items) {
     }
 
     std::string out = fmt::format(
-        "[Async tasks] group={} matched={} (running={} queued={} done={} failed={} canceled={})\n",
+        "group={} matched={} (running={} queued={} done={} failed={} canceled={})\n",
         group,
         matched,
         running,
@@ -486,7 +486,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
 
     agentxx::agent::AsyncWorkSpec spec;
     /// 任务目标行: 让模型一眼看出这次后台跑的是哪个工具/哪个子代理
-    std::string               targetLine;
+    std::string targetLine;
     spec.creatorAgentId   = state.ctx->agentId;
     spec.creatorSessionId = sessionId;
     spec.resultId         = callId;
@@ -553,8 +553,8 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
         throw std::runtime_error{fmt::format("background task rejected: {}", submitted.error)};
     }
 
-    std::string out = fmt::format("Async started, id={}\n", submitted.asyncId);
-    out += targetLine;
+    std::string out  = fmt::format("Async started, id={}\n", submitted.asyncId);
+    out             += targetLine;
     if (submitted.delayMs > 0) {
         out += fmt::format(
             "Starts in {} (delayMs={}): the task stays queued until then. "
