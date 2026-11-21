@@ -1,4 +1,5 @@
 #include "agentxx-test/plugin/test_plugins.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx-test/test_coro_util.h"
 
@@ -113,6 +114,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // 加载 io executor (与 BaseAgent::init 一致): 跨线程 (JS 线程/线程池) 的
     // vtable 调用经真实 post 到 io 线程执行, 而非测试默认的"伪 io 线程"直连
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+    // 生产同款线程模型: 插件代码跑在插件执行线程上, 阻塞工具与 dlopen 走工作池
+    agentxx::test::PluginThreadFixture threads;
+    XX_TEST_EXPECT_TRUE(threads.start("agentxx-test-plugins"));
+    threads.attach(*ctx->pluginManager);
     // 执行图注册表: 插件注册自定义节点类型需要 (与 BaseAgent::init 一致)
     ctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
@@ -4106,6 +4111,9 @@ throw new Error("top-level rollback probe");
     }
 
     ctx->pluginManager->shutdownAll();
+    // 管理器先析构, 再停插件线程与工作池 (必须按这个顺序)
+    ctx->pluginManager.reset();
+    threads.stop();
 
     co_return TestResult{g_plugin_passed, g_plugin_failed};
 }

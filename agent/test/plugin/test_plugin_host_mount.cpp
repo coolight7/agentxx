@@ -10,6 +10,7 @@
 /// 9 无引用的注册被拒 / 10 重复挂载幂等 / 11 工具名冲突 / 12 第三个 agent /
 /// 13 版本门槛 / 14 引用校验 (空 / 未知 id / 过期序号) / 15 20 张表与挂载表查询
 #include "agentxx-test/plugin/test_plugin_host_mount.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/assembly_snapshot.h"
@@ -215,10 +216,15 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
 
     auto ex = co_await asio::this_coro::executor;
 
+    // 生产同款线程模型: 插件代码跑在插件执行线程上, 阻塞工具与 dlopen 走工作池
+    agentxx::test::PluginThreadFixture threads;
+    XX_TEST_EXPECT_TRUE(threads.start("agentxx-test-host-mount"));
+
     // 先建 A, 再用它当主程序的主 agent (插件在 `start` 里的进程级订阅取它的总线)
     auto agentA = makeAgent(ex, nullptr, "agent_a");
     auto host   = std::make_shared<TestHost>(agentA);
     host->setIoExecutor(ex);
+    threads.attach(*host);
     agentA->pluginManager = host;
 
     auto agentB = makeAgent(ex, host, "agent_b");
@@ -637,6 +643,11 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
     agentA->pluginMount.reset();
     agentB->pluginMount.reset();
     agentC->pluginMount.reset();
+
+    // 管理器先析构, 再停插件线程与工作池 (必须按这个顺序)
+    agentA->pluginManager.reset();
+    host.reset();
+    threads.stop();
 
     std::cout << "[INFO] host mount done: passed=" << g_phm_passed << " failed=" << g_phm_failed
               << std::endl;

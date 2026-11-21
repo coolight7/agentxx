@@ -14,6 +14,7 @@
 /// 5. `ping` 连发三条 → COALESCE 触发器合并成**一轮** (只发起一次模型请求);
 /// 6. 卸载插件 → 通道关闭、根被回收、运行时清单清零。
 #include "agentxx-test/plugin/test_plugin_example_runtime.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx-test/core/test_agent.h"
 
@@ -209,6 +210,10 @@ asio::awaitable<void> runBody(
     // ---- 插件管理器: 在容器 io 线程上创建 (记录的就是这条线程) ----
     auto mgr = std::make_shared<plugin::PluginManager>(primaryCtx);
     mgr->setIoExecutor(ex);
+    // 生产同款线程模型: 插件代码跑在插件执行线程上, 阻塞工具与 dlopen 走工作池
+    agentxx::test::PluginThreadFixture threads;
+    XX_TEST_EXPECT_TRUE(threads.start("agentxx-test-example-runtime"));
+    threads.attach(*mgr);
     primaryCtx->pluginManager      = mgr;
     primaryCtx->pluginManagerOwned = false;
 
@@ -408,6 +413,10 @@ asio::awaitable<void> runBody(
     co_await mgr->unmountAgentAsync(primaryCtx->agentId);
     XX_TEST_EXPECT_TRUE(co_await mgr->shutdownAsync(10s));
     primaryCtx->pluginMount.reset();
+    // 管理器先析构, 再停插件线程与工作池 (必须按这个顺序)
+    primaryCtx->pluginManager.reset();
+    mgr.reset();
+    threads.stop();
 }
 
 } // namespace

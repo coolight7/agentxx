@@ -9,6 +9,7 @@
 /// 5. 重新挂载 A: 计数从 1 开始 (状态随挂载重建), 挂载序号变大;
 /// 6. 旧引用的 `seq` 不再匹配 → 主程序拒绝 (`mountOf` 返回空)。
 #include "agentxx-test/plugin/test_plugin_multi_mount.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
@@ -170,6 +171,10 @@ asio::awaitable<TestResult> run_plugin_multi_mount_tests() {
     );
     auto host = std::make_shared<plugin::PluginManager>(ctxA);
     host->setIoExecutor(ex);
+    // 生产同款线程模型: 插件代码跑在插件执行线程上, 阻塞工具与 dlopen 走工作池
+    agentxx::test::PluginThreadFixture threads;
+    XX_TEST_EXPECT_TRUE(threads.start("agentxx-test-multi-mount"));
+    threads.attach(*host);
     ctxA->pluginManager = host;
     auto ctxB           = makeAgent(
         ex,
@@ -284,6 +289,10 @@ asio::awaitable<TestResult> run_plugin_multi_mount_tests() {
     // 上下文里的挂载句柄要随 agent 一起放掉 (真实路径是 AgentContext::shutdownPluginsAsync)
     ctxA->pluginMount.reset();
     ctxB->pluginMount.reset();
+    // 管理器先析构, 再停插件线程与工作池 (必须按这个顺序)
+    ctxA->pluginManager.reset();
+    host.reset();
+    threads.stop();
 
     std::cout << "[INFO] multi mount done: passed=" << g_pmm_passed << " failed=" << g_pmm_failed
               << std::endl;
