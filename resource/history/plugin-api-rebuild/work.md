@@ -18,7 +18,7 @@
 | 10b | 工具体收成一个：`tool`（按体形态分派 Task / 同步 / asio 协程）+ 删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync`（65 处） | 完成（入口合并；`polled_tool` 降为内部实现，poll-one 退场留到下一步，见下节；全量 passed=43867 failed=0） |
 | 10c | `offload` / `sleep` 改“提交即返回 ticket” + `whenAll` 泛化/变参 | 完成（`plugin_bridge` 302；全量 passed=43867 failed=0） |
 | 11 | `create`/`start` 合并（返回 void、可重入）+ `destroy` 改异步 + 插件迁移 | 完成（全量回归 passed=43825 failed=0） |
-| 12 | 测试夹具统一带插件线程与池 | 待开始（前置：先在夹具里装 `PluginExecutorThread`，先接 `plugin_host_mount` / `plugins` 两个模块；`boundaries` 规则 16 已把 `*Sync` 限制在白名单内） |
+| 12 | 测试夹具统一带插件线程与池 | 部分完成（夹具有了 `plugin_thread_fixture.h`；已接 `plugins` / `plugin_host_mount` / `plugin_multi_mount` / `plugin_example_runtime` 四个模块且全绿；工厂模式的模块按 work.md 的模板继续推广） |
 | 13 | 修静默降级（§2.6 六处 + 两处订阅）+ 文档/代次 + 全量回归 | 完成（文档 66 处已改；`AGENTXX_PLUGIN_API_VERSION`=8 / `AGENTXX_CLIENT_PLUGIN_API_VERSION`=9；`boundaries` 20 / `config_keys` 217 / `wire_schema` 1325 全绿，生成物无需重跑） |
 
 ## 实施记录：ABI 换代（步 2 + 3 + 4 + 11 合并为一次）
@@ -800,6 +800,41 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 - 全量回归：`Total: passed=43865 failed=2`，两处都在 `input_delivery`（1184 / 1203），
   单跑该模块 **passed=139 failed=0** —— 与 Round A 全量里出现过的同一现象（计时抖动），
   不是本次改动引起。
+
+## 实施记录：步 12（插件线程夹具，第一批）
+
+### 做了什么
+
+新增 `agent/test/include/agentxx-test/plugin/plugin_thread_fixture.h`：一条插件执行线程
+（`pluginxx::PluginExecutorThread`）+ 一个工作池（`asio::thread_pool`），两个入口
+`start(name, workers)` / `attach(mgr)` / `stop()`，并在析构里兜底 `stop()`。
+管理器侧只调 `setPluginExecutor` / `setWorkerThreadPool`，两端管理器通用（模板）。
+
+接入顺序固定：先 `setIoExecutor` → `attach` → 挂载/加载插件 → 用例 → 管理器析构 →
+`threads.stop()`。`start` 失败返回 false，用例可以按"没有插件线程"的降级分支走。
+
+### 已接入（都在真实插件线程 + 工作池下全绿）
+
+| 模块 | 断言数 | 备注 |
+|---|---|---|
+| `plugins` | 705 | 加载 example_plugin / execute_command / JS 引擎等真实动态库 |
+| `plugin_host_mount` | 148 | 一管理器两 agent，插件只在 start 里注册 |
+| `plugin_multi_mount` | 48 | 一个实例两处挂载 |
+| `plugin_example_runtime` | 50 | mountRoot / openChannel / 触发器 / 定时器 |
+
+结论：**没有暴露新的同步调用** —— 现有插件代码（协程体 + 提交即返回）在插件线程上已经干净，
+这也从侧面验证了步 10 那轮迁移是完整的。
+
+### 还没接入的（模板已定，按需推广）
+
+- **工厂模式**的模块（`plugin_cleanup` / `plugin_dispatch` / `plugin_multi_instance` /
+  `plugin_point` / `plugin_feature` / `plugin_broadcast` / `plugin_net` / `plugin_sdk`）：
+  它们每个用例自己 `makeCtx()` / `makeFixture()` 造管理器，夹具要作为 fixture 的成员加入，
+  并在 fixture 析构里**先 `mgr.reset()` 再 `threads.stop()`**（成员顺序反了就会先停线程）；
+- `plugin_resources`：单管理器，但 `makeCtx()` 在协程里建管理器 —— 需要把夹具提到用例函数里，
+  改 `makeCtx` 接一个夹具引用；
+- `plugin_agent_runtime`：外层非协程函数起 io 线程再跑 body 协程，夹具要跟着 io 线程起停；
+- `client_plugins`：client 侧管理器同样支持 `setPluginExecutor`，接入方式一致。
 
 ## 剩余工作（做完 10b / 10a / 运行时层协程化之后的具体清单）
 
