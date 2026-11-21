@@ -13,6 +13,7 @@
 /// 5. 没有实现行 / 点未声明: `emitPoint` 按"没人实现 = 没意见"返回空;
 ///    核心实现不进能力调用链 (只由点自己调用)。
 #include "agentxx-test/plugin/test_plugin_feature.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
@@ -82,8 +83,10 @@ std::string findPluginDir(const char* pluginName) {
 /// 点注册表与上下文核心点在这里先加载 (与 BaseAgent::init 同一顺序:
 /// 核心点先声明, 插件加载时才有地方登记实现), 插件层入口也按同一接线装上。
 struct Fixture {
-    std::shared_ptr<agentxx::agent::AgentContext>   ctx;
-    std::shared_ptr<agentxx::plugin::PluginManager> mgr;
+    /// 生产同款线程模型: 声明在最前面 —— 成员逆序析构, 管理器先拆、线程池后停
+    std::shared_ptr<agentxx::test::PluginThreadFixture> threads;
+    std::shared_ptr<agentxx::agent::AgentContext>      ctx;
+    std::shared_ptr<agentxx::plugin::PluginManager>    mgr;
     /// 上下文核心点 (`agentxx.agent.context.countTokens` / `summarize`)
     agentxx::feature::ContextPoints points;
 };
@@ -119,6 +122,9 @@ asio::awaitable<Fixture> makeFixture() {
     f.ctx->pluginManager = f.mgr;
     // 加载 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
+    f.threads = std::make_shared<agentxx::test::PluginThreadFixture>();
+    XX_TEST_EXPECT_TRUE(f.threads->start("agentxx-test-feature"));
+    f.threads->attach(*f.mgr);
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
     f.ctx->pluginMount = co_await f.mgr->mountAgentAsync(f.ctx);
     co_return f;

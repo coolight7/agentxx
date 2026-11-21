@@ -11,6 +11,7 @@
 /// 4. 取值型频道保留当前值 (`readBroadcast` 拿得到最后一次载荷)
 /// 5. 应用能力 (非功能埋点): 主程序构造时已声明, 形状同样是 many + first
 #include "agentxx-test/plugin/test_plugin_point.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
@@ -48,8 +49,10 @@ namespace points = agentxx::plugin::points;
 namespace appcaps = agentxx::plugin::capabilities;
 
 struct Fixture {
-    std::shared_ptr<agentxx::agent::AgentContext>   ctx;
-    std::shared_ptr<agentxx::plugin::PluginManager> mgr;
+    /// 生产同款线程模型: 声明在最前面 —— 成员逆序析构, 管理器先拆、线程池后停
+    std::shared_ptr<agentxx::test::PluginThreadFixture> threads;
+    std::shared_ptr<agentxx::agent::AgentContext>      ctx;
+    std::shared_ptr<agentxx::plugin::PluginManager>    mgr;
 };
 
 asio::awaitable<Fixture> makeFixture() {
@@ -62,6 +65,9 @@ asio::awaitable<Fixture> makeFixture() {
     f.mgr               = std::make_shared<agentxx::plugin::PluginManager>(f.ctx);
     f.ctx->pluginManager = f.mgr;
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
+    f.threads = std::make_shared<agentxx::test::PluginThreadFixture>();
+    XX_TEST_EXPECT_TRUE(f.threads->start("agentxx-test-point"));
+    f.threads->attach(*f.mgr);
     f.ctx->pluginMount = co_await f.mgr->mountAgentAsync(f.ctx);
     co_return f;
 }

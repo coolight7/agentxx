@@ -10,6 +10,7 @@
 /// 3. 事件: 事件落到广播频道 `plugin.<属主>.net` (带 `kind`)
 /// 4. 属主卸载: `shutdownOwner` 之后该属主的服务消失、未完成请求按 "已取消" 结算
 #include "agentxx-test/plugin/test_plugin_net.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
@@ -45,8 +46,10 @@ namespace {
 
 /// 最小夹具: AgentContext + 插件管理器 (与其它插件模块同一套)
 struct Fixture {
-    std::shared_ptr<agentxx::agent::AgentContext>   ctx;
-    std::shared_ptr<agentxx::plugin::PluginManager> mgr;
+    /// 生产同款线程模型: 声明在最前面 —— 成员逆序析构, 管理器先拆、线程池后停
+    std::shared_ptr<agentxx::test::PluginThreadFixture> threads;
+    std::shared_ptr<agentxx::agent::AgentContext>      ctx;
+    std::shared_ptr<agentxx::plugin::PluginManager>    mgr;
 };
 
 asio::awaitable<Fixture> makeFixture() {
@@ -61,6 +64,9 @@ asio::awaitable<Fixture> makeFixture() {
     f.mgr               = std::make_shared<agentxx::plugin::PluginManager>(f.ctx);
     f.ctx->pluginManager = f.mgr;
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
+    f.threads = std::make_shared<agentxx::test::PluginThreadFixture>();
+    XX_TEST_EXPECT_TRUE(f.threads->start("agentxx-test-net"));
+    f.threads->attach(*f.mgr);
     f.ctx->pluginMount = co_await f.mgr->mountAgentAsync(f.ctx);
     co_return f;
 }
