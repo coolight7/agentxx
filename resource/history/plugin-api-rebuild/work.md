@@ -14,12 +14,12 @@
 | 7 | 4 个同步受理入口改提交（含 `OpCore` 操作编号原子化与登记线程安全化） | 完成（见下节“步 7”：全量 passed=43828 failed=0） |
 | 8 | `is_canceled` 改快照 + JS 引擎轮询 | 完成（全量 passed=43837 failed=0） |
 | 9 | 其余同步面收口（退订去等待 + `disable`/`enable` 返 `Task<bool>`） | 完成（9a / 9b 均已落地，见下节） |
-| 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 部分完成（插件侧阻塞订阅与 16 个无调用点 helper 已清；框架侧删同步桥已尝试但**回退**，原因与后续见“收尾之二”；kit 拆头待做） |
+| 10 | 删同步桥与阻塞助手（同名改协程）+ kit 拆三个头 + 插件侧阻塞点迁移 | 部分完成（插件侧阻塞订阅与 16 个无调用点 helper 已清；**运行时便捷层已拆协程/同步两种形态**；框架侧删同步桥已尝试但**回退**，原因与后续见“尝试过但已回退”；kit 拆三个头是步 10 剩下的唯一一项） |
 | 10b | 工具体收成一个：`tool`（按体形态分派 Task / 同步 / asio 协程）+ 删 `fast_tool` / `blocking_tool` / `polled_tool` / `registerToolSync`（65 处） | 完成（入口合并；`polled_tool` 降为内部实现，poll-one 退场留到下一步，见下节；全量 passed=43867 failed=0） |
 | 10c | `offload` / `sleep` 改“提交即返回 ticket” + `whenAll` 泛化/变参 | 完成（`plugin_bridge` 302；全量 passed=43867 failed=0） |
 | 11 | `create`/`start` 合并（返回 void、可重入）+ `destroy` 改异步 + 插件迁移 | 完成（全量回归 passed=43825 failed=0） |
-| 12 | 测试夹具统一带插件线程与池 | 待开始 |
-| 13 | 修静默降级（§2.6 六处 + 两处订阅）+ 文档/代次 + 全量回归 | 部分完成（文档 66 处已改；两处同步订阅与代次/生成物待做） |
+| 12 | 测试夹具统一带插件线程与池 | 待开始（前置：先在夹具里装 `PluginExecutorThread`，先接 `plugin_host_mount` / `plugins` 两个模块；`boundaries` 规则 16 已把 `*Sync` 限制在白名单内） |
+| 13 | 修静默降级（§2.6 六处 + 两处订阅）+ 文档/代次 + 全量回归 | 完成（文档 66 处已改；`AGENTXX_PLUGIN_API_VERSION`=8 / `AGENTXX_CLIENT_PLUGIN_API_VERSION`=9；`boundaries` 20 / `config_keys` 217 / `wire_schema` 1325 全绿，生成物无需重跑） |
 
 ## 实施记录：ABI 换代（步 2 + 3 + 4 + 11 合并为一次）
 
@@ -801,24 +801,28 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
   单跑该模块 **passed=139 failed=0** —— 与 Round A 全量里出现过的同一现象（计时抖动），
   不是本次改动引起。
 
-## 剩余工作（做完 10b / 10a 之后的具体清单）
+## 剩余工作（做完 10b / 10a / 运行时层协程化之后的具体清单）
 
-1. **步 10 剩下的只有 kit 拆头**（已在两轮里做完的部分见上文两个“实施记录”节）。
-   阻塞面现状：插件源码里 `tableOpSyncWait` 零处（`boundaries` 规则 16 扫描 `plugins/` 与
-  `lib/`）；kit 内部还剩四处：广播阻塞入口、`addShareStore`（同步工具体）、
-  `checkPathDecisions`、`clientTableOp`；测试里仍有约 20 处（都在 io 线程上，靠
-  `startTableOp` 的当场回调拿到结果）。
+1. **步 10 剩下的只有 kit 拆头**（其余已落地，见上文三个"实施记录"节）。同步面现状：
+   - 插件源码：`tableOpSyncWait` 零处；运行时层 `*Sync` 只剩 chatbot（engine/任务运行时注入）
+     与 example_runtime（stop 入口），两者都在 `boundaries` 规则 16 的白名单里；
+   - kit 内部还剩四处：广播阻塞入口、`addShareStore`（同步工具体）、`checkPathDecisions`、
+     `clientTableOp`；
+   - 测试里仍有约 20 处（都在 io 线程上，靠 `startTableOp` 的当场回调拿到结果）。
 2. **kit 拆三个头**（`plugin_kit.h` / `agent_plugin_kit.h` / `client_plugin_kit.h`）+ 31 个包含点。
    难点是现状**不是按端分块**：client 的两段在 734/834 行（`client 表便捷调用` / `client 展示面
    便捷入口`），而两边共用的 `PluginBase` 在 2537、`ClientPluginBase` 在 6250；拆之前要先把
-   client 那两段搬到文件尾部（或直接搬进新头并调好包含顺序），否则只能得到“共用一个头”的假拆分。
+   client 那两段搬到文件尾部（或直接搬进新头并调好包含顺序），否则只能得到"共用一个头"的假拆分。
+   **动这块要单独安排一轮**：头文件改动会让全树重编（约 40 分钟构建 + 18 分钟全量回归），
+   不适合和其它步骤混在一次验证里。
 3. **步 12（夹具统一带插件线程与池）**：现在只有 `test_plugin_executor` / `test_plugin_runtime`
    装了 `PluginExecutorThread`，其余插件用例都在测试自己的 io 线程上直接跑插件代码 ——
-   这正是“插件线程上被拒绝”的降级一直看不见的原因。建议新增
+   这正是"插件线程上被拒绝"的降级一直看不见的原因。建议新增
    `agent/test/plugin/plugin_thread_fixture.h`，先接 `plugin_host_mount` / `plugins` 两个模块验证。
-4. **步 13 收尾**：`AGENTXX_PLUGIN_API_VERSION` 7→8、`AGENTXX_CLIENT_PLUGIN_API_VERSION` 8→9、
-   表编号/`_VERSION` 同步；`docs/zh-cn/design/config-keys.md` 与 `config_keys` 归属列；
-   生成物重跑（`AGENTXX_UPDATE_WIRE_SCHEMA=1`、client schema gen）。
+   预期会暴露"工具体/命令回调里的同步表调用"，逐个改成 `co_await`（chatbot 的 TaskRuntime 首当其冲）。
+4. ~~步 13 收尾~~ 已完成：`AGENTXX_PLUGIN_API_VERSION`=8、`AGENTXX_CLIENT_PLUGIN_API_VERSION`=9、
+   表编号与 `_VERSION` 已同步；`boundaries`(20) / `config_keys`(217) / `wire_schema`(1325) 全绿，
+   生成物无需重跑。
 
 ## 设计过程
 
