@@ -801,7 +801,7 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
   单跑该模块 **passed=139 failed=0** —— 与 Round A 全量里出现过的同一现象（计时抖动），
   不是本次改动引起。
 
-## 实施记录：步 12（插件线程夹具，第一批）
+## 实施记录：步 12（插件线程夹具，全模块推广）
 
 ### 做了什么
 
@@ -820,21 +820,46 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 | `plugins` | 705 | 加载 example_plugin / execute_command / JS 引擎等真实动态库 |
 | `plugin_host_mount` | 148 | 一管理器两 agent，插件只在 start 里注册 |
 | `plugin_multi_mount` | 48 | 一个实例两处挂载 |
-| `plugin_example_runtime` | 50 | mountRoot / openChannel / 触发器 / 定时器 |
+| `plugin_example_runtime` | 51 | mountRoot / openChannel / 触发器 / 定时器 |
+| `plugin_dispatch` | 119 | 通知型功能埋点派发 |
+| `plugin_cleanup` | 97 | 注册可逆与独占 slot |
+| `plugin_multi_instance` | 80 | 同库多实例，用例间共用一条线程 |
+| `plugin_point` / `plugin_feature` / `plugin_net` | 148（三模块合计） | 功能埋点 / 插件面全流程 / 网络表 |
+| `plugin_broadcast` / `plugin_resources` | 204（两模块合计） | 广播频道 / 清单资源 |
+| `plugin_agent_runtime` | 222 | 会话运行时（根 / 通道 / 触发器 / 定时器） |
+
+### 三种接法（按模块结构选）
+
+- **fixture 成员**：用例各自 `makeFixture()` 造管理器时，夹具作为成员 `threads`
+  **声明在最前面**（成员逆序析构：管理器先拆、线程池后停）—— `plugin_broadcast` /
+  `plugin_cleanup` / `plugin_dispatch` / `plugin_feature` / `plugin_net` / `plugin_point`；
+- **用例函数里的局部对象**（收尾显式 `threads.stop()`，管理器要先释放）—— `plugins` /
+  `plugin_host_mount` / `plugin_multi_mount` / `plugin_example_runtime` / `plugin_resources` /
+  `plugin_agent_runtime`；
+- **模块级共享**：`plugin_multi_instance` 每个用例建一个管理器、但共用模块级 `g_threads`
+  里的线程，末尾 `g_threads.clear()`。
 
 结论：**没有暴露新的同步调用** —— 现有插件代码（协程体 + 提交即返回）在插件线程上已经干净，
-这也从侧面验证了步 10 那轮迁移是完整的。
+这也从侧面验证了步 10 那轮迁移是完整的。两处保留的同步形态也在夹具下走通了：
+`plugin_example_runtime` 的 `stop` 用 `unmountRootSync`，靠 runtime 表同步入口显式声明的
+`allowOnPluginThread`（表成员的工作体在主程序 io 上，同步桥就地唤醒，不会自己等自己）。
 
-### 还没接入的（模板已定，按需推广）
+### 还没接入的
 
-- **工厂模式**的模块（`plugin_cleanup` / `plugin_dispatch` / `plugin_multi_instance` /
-  `plugin_point` / `plugin_feature` / `plugin_broadcast` / `plugin_net` / `plugin_sdk`）：
-  它们每个用例自己 `makeCtx()` / `makeFixture()` 造管理器，夹具要作为 fixture 的成员加入，
-  并在 fixture 析构里**先 `mgr.reset()` 再 `threads.stop()`**（成员顺序反了就会先停线程）；
-- `plugin_resources`：单管理器，但 `makeCtx()` 在协程里建管理器 —— 需要把夹具提到用例函数里，
-  改 `makeCtx` 接一个夹具引用；
-- `plugin_agent_runtime`：外层非协程函数起 io 线程再跑 body 协程，夹具要跟着 io 线程起停；
-- `client_plugins`：client 侧管理器同样支持 `setPluginExecutor`，接入方式一致。
+- `plugin_example_chatbot`：自带 engine / 平台 io 线程与 `TaskRuntime`，接入要连同那两处注入点
+  一起设计（见上文 chatbot 那节的结论）；
+- `client_plugins` / `plugin_sdk` / `plugin_bridge` **不需要**夹具：client 侧管理器自己就有
+  （`ClientPluginManager` 构造即起 `pluginxx::PluginExecutorThread("agentxx-client-plugin")`
+  与工作池），后两个用伪主程序接口表、不经过真实管理器。
+
+### 验证
+
+- 顶层构建反复 `exit=0`（插件 DLL 会随顶层构建重新链接）；
+- 分组与单模块结果见上表，每个模块都在自己的夹具下全绿；
+- 全量回归：`Total: passed=43901 failed=3` —— `event_subagent` 284（`acceptCostMs < 250`，
+  受理往返超过 250 ms）与 `input_delivery` 1184 / 1203（前几轮出现在同一处的计时断言）；
+  单跑 `event_subagent` + `input_delivery` 为 `passed=191 failed=0`，全过 —— 判定为全量负载下的
+  抖动，不是本次改动引起。
 
 ## 剩余工作（做完 10b / 10a / 运行时层协程化之后的具体清单）
 
@@ -850,11 +875,10 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
    client 那两段搬到文件尾部（或直接搬进新头并调好包含顺序），否则只能得到"共用一个头"的假拆分。
    **动这块要单独安排一轮**：头文件改动会让全树重编（约 40 分钟构建 + 18 分钟全量回归），
    不适合和其它步骤混在一次验证里。
-3. **步 12（夹具统一带插件线程与池）**：现在只有 `test_plugin_executor` / `test_plugin_runtime`
-   装了 `PluginExecutorThread`，其余插件用例都在测试自己的 io 线程上直接跑插件代码 ——
-   这正是"插件线程上被拒绝"的降级一直看不见的原因。建议新增
-   `agent/test/plugin/plugin_thread_fixture.h`，先接 `plugin_host_mount` / `plugins` 两个模块验证。
-   预期会暴露"工具体/命令回调里的同步表调用"，逐个改成 `co_await`（chatbot 的 TaskRuntime 首当其冲）。
+3. ~~步 12（夹具统一带插件线程与池）~~：已落地 `agent/test/include/agentxx-test/plugin/`
+   `plugin_thread_fixture.h`，13 个插件模块已接入（见上文"实施记录：步 12"）；剩
+   `client_plugins`（client 侧管理器同样支持 `setPluginExecutor`，接法一致）与
+   `plugin_example_chatbot`（自带 io 线程与 `TaskRuntime`，要连两处注入点一起改）。
 4. ~~步 13 收尾~~ 已完成：`AGENTXX_PLUGIN_API_VERSION`=8、`AGENTXX_CLIENT_PLUGIN_API_VERSION`=9、
    表编号与 `_VERSION` 已同步；`boundaries`(20) / `config_keys`(217) / `wire_schema`(1325) 全绿，
    生成物无需重跑。
