@@ -827,6 +827,7 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 | `plugin_point` / `plugin_feature` / `plugin_net` | 148（三模块合计） | 功能埋点 / 插件面全流程 / 网络表 |
 | `plugin_broadcast` / `plugin_resources` | 204（两模块合计） | 广播频道 / 清单资源 |
 | `plugin_agent_runtime` | 222 | 会话运行时（根 / 通道 / 触发器 / 定时器） |
+| `plugin_example_chatbot` | 266 | 自带 engine / 平台 io 线程；挂载与通道操作走 runtime 表的同步入口（显式 `allowOnPluginThread`） |
 
 ### 三种接法（按模块结构选）
 
@@ -841,25 +842,37 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 
 结论：**没有暴露新的同步调用** —— 现有插件代码（协程体 + 提交即返回）在插件线程上已经干净，
 这也从侧面验证了步 10 那轮迁移是完整的。两处保留的同步形态也在夹具下走通了：
-`plugin_example_runtime` 的 `stop` 用 `unmountRootSync`，靠 runtime 表同步入口显式声明的
-`allowOnPluginThread`（表成员的工作体在主程序 io 上，同步桥就地唤醒，不会自己等自己）。
+`plugin_example_runtime` 的 `stop` 用 `unmountRootSync`、`plugin_example_chatbot` 的挂载与通道
+操作用 runtime 表的一组 `*Sync`，都靠 runtime 表同步入口显式声明的 `allowOnPluginThread`
+（表成员的工作体在主程序 io 上，同步桥就地唤醒，不会自己等自己）。
 
-### 还没接入的
+### 不需要夹具的
 
-- `plugin_example_chatbot`：自带 engine / 平台 io 线程与 `TaskRuntime`，接入要连同那两处注入点
-  一起设计（见上文 chatbot 那节的结论）；
 - `client_plugins` / `plugin_sdk` / `plugin_bridge` **不需要**夹具：client 侧管理器自己就有
   （`ClientPluginManager` 构造即起 `pluginxx::PluginExecutorThread("agentxx-client-plugin")`
   与工作池），后两个用伪主程序接口表、不经过真实管理器。
+
+### 顺手修掉的一处夹具暴露的时序假设
+
+`plugins` 用例 31.7（异常守卫）原先在 `publishBroadcastValue(...)` 之后**立刻**断言处理器跑过，
+处理器标志还是 `static bool`；装上夹具后派发可能经插件执行线程完成，这句就成了竞态
+（一次全组连跑里失败）。改成 `std::atomic<bool>` + 最多 1 秒轮询等待，同步与异步派发都稳。
+
+### 已知抖动（与本次改动无关，未处理）
+
+`plugin_runtime`（未接夹具，未改动）在全组连跑里偶发 1~5 条失败，落在它自己的并发压测断言上
+（`test_plugin_runtime.cpp` 852「128 个 worker 完成各一次」、971~973「requestClose 后 drain 一次」
+1320「伪实例同步关闭 destroy 计一次」），同一二进制单独跑 1460 条全过，失败行每次不同 ——
+判为压测对时序/负载敏感；如果后续频繁出现，需要按"有界等待"或 OpCore 取消/完成竞态审计来处理。
 
 ### 验证
 
 - 顶层构建反复 `exit=0`（插件 DLL 会随顶层构建重新链接）；
 - 分组与单模块结果见上表，每个模块都在自己的夹具下全绿；
-- 全量回归：`Total: passed=43901 failed=3` —— `event_subagent` 284（`acceptCostMs < 250`，
-  受理往返超过 250 ms）与 `input_delivery` 1184 / 1203（前几轮出现在同一处的计时断言）；
-  单跑 `event_subagent` + `input_delivery` 为 `passed=191 failed=0`，全过 —— 判定为全量负载下的
-  抖动，不是本次改动引起。
+- `plugin_example_chatbot` 接入夹具后 **passed=266 failed=0**（多出的 1 条是夹具 `start()` 的成功断言）；
+- 接入 chatbot 前后各一次全量回归：`passed=43901 failed=3`（`event_subagent` 284 的
+  `acceptCostMs < 250` 与 `input_delivery` 1184 / 1203，都是计时断言；单跑两模块 191 条全过）
+  → 最终 `passed=43905 failed=0`；插件全组连跑两次都是 `passed=4832 failed=0`。
 
 ## 实施记录：步 10 收尾（kit 拆三个头）
 
@@ -914,9 +927,8 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 2. ~~kit 拆三个头~~ 已完成：`plugin_kit.h`（两端共用）/ `agent_plugin_kit.h` /
    `client_plugin_kit.h` 三个头 + 55 处包含点同时切换，不保留转发头；详见上文该节与偏差说明。
 3. ~~步 12（夹具统一带插件线程与池）~~：已落地 `agent/test/include/agentxx-test/plugin/`
-   `plugin_thread_fixture.h`，13 个插件模块已接入（见上文"实施记录：步 12"）；剩
-   `client_plugins`（client 侧管理器同样支持 `setPluginExecutor`，接法一致）与
-   `plugin_example_chatbot`（自带 io 线程与 `TaskRuntime`，要连两处注入点一起改）。
+   `plugin_thread_fixture.h`，14 个插件模块已接入（含 `plugin_example_chatbot`）；
+   `client_plugins` 自己就有执行线程，`plugin_sdk` / `plugin_bridge` 用伪主程序接口表，不需要夹具。
 4. ~~步 13 收尾~~ 已完成：`AGENTXX_PLUGIN_API_VERSION`=8、`AGENTXX_CLIENT_PLUGIN_API_VERSION`=9、
    表编号与 `_VERSION` 已同步；`boundaries`(20) / `config_keys`(217) / `wire_schema`(1325) 全绿，
    生成物无需重跑。

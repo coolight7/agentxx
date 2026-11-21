@@ -2022,8 +2022,7 @@ throw new Error("top-level rollback probe");
         // 31.7 异常守卫: handler 违约抛异常 → 主程序在派发时统一保护,
         //      同一频道其他订阅者仍正常收到
         {
-            static bool s_goodHandlerRan = false;
-            s_goodHandlerRan             = false;
+            std::atomic<bool> goodHandlerRan{false};
             // 频道由主程序声明 (应用频道): 这一用例只验证派发保护, 与插件归属无关
             ctx->pluginManager->ensureBroadcast("plugin.example_plugin.guard_throw");
             auto* subBad                 = ctx->pluginManager->subscribeBroadcast(
@@ -2040,15 +2039,19 @@ throw new Error("top-level rollback probe");
                 nullptr, ///< 主程序总线（进程级事件）
                 "plugin.example_plugin.guard_throw",
                 +[](const PluginxxStringView*, void* ud) {
-                    *static_cast<bool*>(ud) = true;
+                    static_cast<std::atomic<bool>*>(ud)->store(true, std::memory_order_release);
                 },
-                &s_goodHandlerRan
+                &goodHandlerRan
             );
             XX_TEST_EXPECT_TRUE(subBad != nullptr);
             XX_TEST_EXPECT_TRUE(subGood != nullptr);
             ctx->pluginManager->publishBroadcastValue("plugin.example_plugin.guard_throw", "{}");
             // 广播同步派发: 违约异常被逐个订阅者的保护代码吞掉, 不影响其他订阅者
-            XX_TEST_EXPECT_TRUE(s_goodHandlerRan);
+            // (处理器可能经插件执行线程派发, 这里等一小段再断言)
+            for (int i = 0; i < 200 && !goodHandlerRan.load(std::memory_order_acquire); ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{5});
+            }
+            XX_TEST_EXPECT_TRUE(goodHandlerRan.load(std::memory_order_acquire));
             pluginxx::unsubscribePluginBroadcast(subBad);
             pluginxx::unsubscribePluginBroadcast(subGood);
         }

@@ -15,6 +15,7 @@
 /// 7. 被动回复过期 → 自动改发 @ 的主动消息, 工具返回里带警告;
 /// 8. 卸载插件 → 通道关闭、根回收、工具撤销。
 #include "agentxx-test/plugin/test_plugin_example_chatbot.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx-test/core/test_agent.h"
 
@@ -370,8 +371,13 @@ asio::awaitable<void> runBody(
     primaryCtx->toolRegistry            = std::make_shared<plugin::ToolRegistry>();
 
     // ---- 插件管理器 (在容器 io 线程上创建) ----
+    // 生产同款线程模型: 插件代码跑在插件执行线程上
+    // (夹具声明在 mgr / host 之前 → 逆序析构时它们先拆、线程与池后停)
+    agentxx::test::PluginThreadFixture threads;
+    XX_TEST_EXPECT_TRUE(threads.start("agentxx-test-example-chatbot"));
     auto mgr = std::make_shared<plugin::PluginManager>(primaryCtx);
     mgr->setIoExecutor(ex);
+    threads.attach(*mgr);
     primaryCtx->pluginManager      = mgr;
     primaryCtx->pluginManagerOwned = false;
 
