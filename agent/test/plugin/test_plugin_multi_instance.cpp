@@ -6,6 +6,9 @@
 // - 状态隔离: 卸载 A 后 B 的工具仍可用; B 重新加载亦正常
 // - 反复 load/unload 循环不泄漏 (LeakSanitizer 检测)
 #include "agentxx-test/plugin/test_plugin_multi_instance.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
+
+#include <vector>
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
@@ -75,6 +78,9 @@ static asio::awaitable<void> sleepMsMI(int64_t ms) {
     co_return;
 }
 
+/// 本模块的插件线程夹具 (每个管理器一份; 测试末尾统一停, 必须晚于 ctx 析构)
+static std::vector<std::shared_ptr<agentxx::test::PluginThreadFixture>> g_threads;
+
 /// 构造最小 AgentContext (与 run_plugin_tests 相同加载)
 static asio::awaitable<std::shared_ptr<agent::AgentContext>>
     makeAgentCtx(asio::any_io_executor ex) {
@@ -85,6 +91,11 @@ static asio::awaitable<std::shared_ptr<agent::AgentContext>>
     ctx->toolRegistry            = std::make_shared<plugin::ToolRegistry>();
     ctx->pluginManager           = std::make_shared<plugin::PluginManager>(ctx);
     ctx->pluginManager->setIoExecutor(ex);
+    // 生产同款线程模型: 每个管理器一份夹具, 由本模块末尾统一停 (晚于 ctx 析构)
+    auto threads = std::make_shared<agentxx::test::PluginThreadFixture>();
+    XX_TEST_EXPECT_TRUE(threads->start("agentxx-test-multi-instance"));
+    threads->attach(*ctx->pluginManager);
+    g_threads.push_back(std::move(threads));
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
     ctx->pluginMount = co_await ctx->pluginManager->mountAgentAsync(ctx);
     co_return ctx;
@@ -451,6 +462,10 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
     // ---- 清理 (shutdownAll 为同步接口) ----
     ctxA->pluginManager->shutdownAll();
     ctxB->pluginManager->shutdownAll();
+    // 先放上下文与管理器, 再停插件线程与工作池 (顺序反了会让回调落在已停的线程上)
+    ctxA.reset();
+    ctxB.reset();
+    g_threads.clear();
 
     std::cout << "[INFO] multi-instance done: passed=" << g_mi_passed << " failed=" << g_mi_failed
               << std::endl;

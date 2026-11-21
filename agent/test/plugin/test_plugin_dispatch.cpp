@@ -13,6 +13,7 @@
 /// 5. 开发者模式: 派发次数与上次耗时被记录
 /// 6. 多挂载: 清单按挂载分开 (`hooksJson` 变成数组, 每个挂载一份)
 #include "agentxx-test/plugin/test_plugin_dispatch.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/context.h"
@@ -92,8 +93,11 @@ std::string findPluginDir(const char* pluginName) {
 /// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 功能埋点注册表
 /// + 插件管理器 + 一份挂载
 struct Fixture {
-    std::shared_ptr<agentxx::agent::AgentContext>   ctx;
-    std::shared_ptr<agentxx::plugin::PluginManager> mgr;
+    /// 生产同款线程模型: **声明在管理器和上下文之前** —— 成员逆序析构, 这样管理器
+    /// 先拆、插件线程与工作池最后停 (顺序反了会让插件回调落在已停的线程上)
+    std::shared_ptr<agentxx::test::PluginThreadFixture> threads;
+    std::shared_ptr<agentxx::agent::AgentContext>      ctx;
+    std::shared_ptr<agentxx::plugin::PluginManager>    mgr;
 };
 
 asio::awaitable<Fixture> makeFixture() {
@@ -112,6 +116,9 @@ asio::awaitable<Fixture> makeFixture() {
     f.mgr                = std::make_shared<agentxx::plugin::PluginManager>(f.ctx);
     f.ctx->pluginManager = f.mgr;
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
+    f.threads = std::make_shared<agentxx::test::PluginThreadFixture>();
+    XX_TEST_EXPECT_TRUE(f.threads->start("agentxx-test-dispatch"));
+    f.threads->attach(*f.mgr);
     f.ctx->pluginMount = co_await f.mgr->mountAgentAsync(f.ctx);
     co_return f;
 }

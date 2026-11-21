@@ -18,6 +18,7 @@
 /// 4. 加载失败建议: 空路径 / 路径不存在 / 无清单 / 清单非法 / entry 库缺失 /
 ///    库缺入口符号 / 内置名不存在
 #include "agentxx-test/plugin/test_plugin_cleanup.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
@@ -119,8 +120,10 @@ void writeTextFile(const fs::path& path, std::string_view text) {
 
 /// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 插件管理器
 struct Fixture {
-    std::shared_ptr<agentxx::agent::AgentContext>   ctx;
-    std::shared_ptr<agentxx::plugin::PluginManager> mgr;
+    /// 生产同款线程模型: **声明在最前面** —— 成员逆序析构, 管理器先拆、线程池后停
+    std::shared_ptr<agentxx::test::PluginThreadFixture> threads;
+    std::shared_ptr<agentxx::agent::AgentContext>      ctx;
+    std::shared_ptr<agentxx::plugin::PluginManager>    mgr;
 };
 
 asio::awaitable<Fixture> makeFixture() {
@@ -136,6 +139,9 @@ asio::awaitable<Fixture> makeFixture() {
     f.ctx->pluginManager = f.mgr;
     // 加载 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
+    f.threads = std::make_shared<agentxx::test::PluginThreadFixture>();
+    XX_TEST_EXPECT_TRUE(f.threads->start("agentxx-test-cleanup"));
+    f.threads->attach(*f.mgr);
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
     f.ctx->pluginMount = co_await f.mgr->mountAgentAsync(f.ctx);
     co_return f;
