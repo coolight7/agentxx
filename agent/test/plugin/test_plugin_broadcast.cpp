@@ -13,6 +13,7 @@
 /// 5. 结束流: 发布与读被拒、`on_end` 恰好一次、重复结束幂等、再次声明开新流
 /// 6. 生命周期: 禁用/卸载后频道与订阅回到基线
 #include "agentxx-test/plugin/test_plugin_broadcast.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
@@ -89,8 +90,10 @@ std::string findPluginDir(const char* pluginName) {
 
 /// 测试夹具: 一个 agent 的上下文 (含事件中枢) + 插件管理器
 struct BroadcastFixture {
-    std::shared_ptr<agentxx::agent::AgentContext> ctx;
-    std::shared_ptr<PluginManager>                mgr;
+    /// 生产同款线程模型: 声明在最前面 —— 成员逆序析构, 管理器先拆、线程池后停
+    std::shared_ptr<agentxx::test::PluginThreadFixture> threads;
+    std::shared_ptr<agentxx::agent::AgentContext>      ctx;
+    std::shared_ptr<PluginManager>                     mgr;
     /// 挂载的 agentId (要活到测试结束: 接口表的引用指向它内部的字符)
     std::string                                   agentId;
     uint64_t                                      mountSeq = 0;
@@ -113,6 +116,9 @@ asio::awaitable<BroadcastFixture> makeFixture() {
     f.ctx->pluginManager = f.mgr;
     // 与 BaseAgent::init 一致: 跨线程 vtable 调用经真实 post 回到本线程
     f.mgr->setIoExecutor(ex);
+    f.threads = std::make_shared<agentxx::test::PluginThreadFixture>();
+    XX_TEST_EXPECT_TRUE(f.threads->start("agentxx-test-broadcast"));
+    f.threads->attach(*f.mgr);
     f.ctx->pluginMount = co_await f.mgr->mountAgentAsync(f.ctx);
     f.agentId          = f.ctx->pluginMount->agentId();
     f.mountSeq         = f.ctx->pluginMount->mountSeq();

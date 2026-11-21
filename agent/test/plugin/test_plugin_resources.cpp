@@ -9,6 +9,7 @@
 ///   disable 摘生效留记录 → enable 恢复; 卸载全部清除
 /// - T5 加载失败 → 声明资源不生效 ("失败不生效"语义)
 #include "agentxx-test/plugin/test_plugin_resources.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx/agent/prompt_sources.h"
 #include "agentxx/agent/resource_applier.h"
@@ -142,6 +143,10 @@ asio::awaitable<TestResult> run_plugin_resource_tests() {
     ctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
     ctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(ctx);
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+    // 生产同款线程模型: 插件代码跑在插件执行线程上, 阻塞工具与 dlopen 走工作池
+    agentxx::test::PluginThreadFixture threads;
+    XX_TEST_EXPECT_TRUE(threads.start("agentxx-test-resources"));
+    threads.attach(*ctx->pluginManager);
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
     ctx->pluginMount = co_await ctx->pluginManager->mountAgentAsync(ctx);
 
@@ -730,6 +735,8 @@ mcp:
     // 清理临时目录并等待后台协程收尾
     ctx->resourceApplier.reset();
     ctx->pluginManager.reset();
+    ctx.reset();
+    threads.stop();
     fs::remove_all(tmpRoot, ec);
     co_await sleepMs(100);
 

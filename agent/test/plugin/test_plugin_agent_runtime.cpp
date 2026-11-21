@@ -19,6 +19,7 @@
 /// 8 清单与状态查询 / 9 两根两通道互不串话 / 10 根数预算 / 11 触发器三策略 /
 /// 12 定时器 / 13 关通道与连带注销 / 14 禁用回收 / 15 卸载根
 #include "agentxx-test/plugin/test_plugin_agent_runtime.h"
+#include "agentxx-test/plugin/plugin_thread_fixture.h"
 
 #include "agentxx-test/core/test_agent.h"
 
@@ -410,8 +411,12 @@ asio::awaitable<void> runBody(
     primaryCtx->bus             = std::make_shared<agentxx::events::EventBus>(ex);
 
     // ---- 管理器 (在容器 io 线程上创建: setIoExecutor 记录的线程即这一条) ----
+    // 生产同款线程模型: 插件代码跑在插件执行线程上 (声明在 mgr/host 之前 → 逆序析构时最后停)
+    agentxx::test::PluginThreadFixture threads;
+    XX_TEST_EXPECT_TRUE(threads.start("agentxx-test-agent-runtime"));
     auto mgr = std::make_shared<TestHost>(primaryCtx);
     mgr->setIoExecutor(ex);
+    threads.attach(*mgr);
     primaryCtx->pluginManager      = mgr;
     primaryCtx->pluginManagerOwned = false;
 
