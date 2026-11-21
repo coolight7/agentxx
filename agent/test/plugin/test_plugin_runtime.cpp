@@ -18,6 +18,7 @@
 #include "pluginxx/runtime/op_driver.h"
 #include "utilxx_base/asio_error.h"
 
+#include <algorithm>
 #include <atomic>
 #include <barrier>
 #include <cstddef>
@@ -143,16 +144,29 @@ struct RuntimeFixture {
     }
 
     void drain() {
-        // 插件线程与 io 线程来回投递 (完成包 → 回调 → 再投回 io), 一次轮询不够:
-        // 交替推进几轮, 直到两边都不再有就绪的活。
-        for (int round = 0; round < 6; ++round) {
+        // 插件线程与 io 线程来回投递 (完成包 → 回调 → 再投回 io), 一轮 poll 不够;
+        // 而且 worker / 独立定时器线程投的完成包在高负载下会晚到 —— 固定轮数会把
+        // “还没入队”当成“已经跑完”。这里推进到连续几轮都没有就绪处理为止,
+        // 总预算 500ms: 超预算只会让后面的断言失败, 不会挂住。
+        const auto deadline = std::chrono::steady_clock::now() + 500ms;
+        int        idle     = 0;
+        for (;;) {
             drainPluginThread();
             io.restart();
             const auto ran = io.poll();
             // io_context becomes stopped after an empty poll. Keep the fixture's
             // normal state distinct from an explicit stop used by fault tests.
             io.restart();
-            if (ran == 0 && round > 0) {
+            if (ran != 0) {
+                idle = 0;
+            } else if (++idle >= 5) {
+                break;
+            } else {
+                // 让 worker / 定时器线程 / 插件线程有机会把完成包投进来;
+                // 退避到 1~5ms, 总共约 15ms 的静默窗口足够盖住投递抖动
+                std::this_thread::sleep_for(std::chrono::milliseconds{std::min(idle, 5)});
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
                 break;
             }
         }
@@ -800,7 +814,15 @@ TestResult testPluginRuntime() {
         for (auto& worker : workers) {
             worker.join();
         }
-        f.drain();
+        // 完成包由 4 条 worker 线程投递, 高负载下会晚到: 先有界等到全部回调到齐再判定
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
+            for (const auto& cb : callbacks) {
+                if (cb.calls != 1) {
+                    return false;
+                }
+            }
+            return true;
+        }));
         bool correct = true;
         for (size_t i = 0; i < callbacks.size(); ++i) {
             correct = correct && callbacks[i].calls == 1
@@ -845,9 +867,30 @@ TestResult testPluginRuntime() {
         }
         f.io.run();
         worker.join();
+        // 取消与完成并发: 每个已受理的操作必须恰好提交一次终态。完成包可能还没
+        // 入队, 先有界等到全部完成再判定 (超时只让断言失败, 不会挂住)。
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
+            for (size_t i = 0; i < count; ++i) {
+                if (callbacks[i].calls != 1 || !ops[i]->completed()) {
+                    return false;
+                }
+            }
+            return true;
+        }));
         bool correct = true;
         for (size_t i = 0; i < count; ++i) {
-            correct = correct && callbacks[i].calls == 1 && cancels[i] <= 1 && ops[i]->completed();
+            const bool ok = callbacks[i].calls == 1 && cancels[i] <= 1 && ops[i]->completed();
+            if (!ok) {
+                XX_LOGW(
+                    "runtime regression: op {} calls={} cancels={} state={} operations={}",
+                    i,
+                    callbacks[i].calls,
+                    cancels[i],
+                    static_cast<int>(ops[i]->state()),
+                    f.manager->runtime()->operations.size()
+                );
+            }
+            correct = correct && ok;
         }
         XX_TEST_EXPECT_TRUE(correct);
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
@@ -935,7 +978,8 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(allAccepted);
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1000});
         XX_TEST_EXPECT_EQ(calls, 0);
-        f.drain();
+        // 1000 个 0ms 定时器由独立定时器线程到期投递: 高负载下会晚到, 有界等到全到齐
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return calls == 1000; }));
         XX_TEST_EXPECT_EQ(calls, 1000);
         XX_TEST_EXPECT_TRUE(f.provider->sleepTimers.empty());
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
@@ -943,7 +987,8 @@ TestResult testPluginRuntime() {
         cancelPluginOperation(timer);
         cancelPluginOperation(timer);
         f.provider->lifetime->requestClose();
-        f.drain();
+        // 取消后的完成包同经定时器线程, 有界等
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return calls == 1001; }));
         XX_TEST_EXPECT_EQ(calls, 1001);
         XX_TEST_EXPECT_TRUE(f.provider->sleepTimers.empty());
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
@@ -967,7 +1012,8 @@ TestResult testPluginRuntime() {
         f.manager->plugins_.clear();
         f.manager.reset();
         f.provider->lifetime->requestClose();
-        f.drain();
+        // 管理器已释放, 完成包仍会执行: 有界等它到达
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return calls == 1; }));
         XX_TEST_EXPECT_EQ(calls, 1);
         XX_TEST_EXPECT_TRUE(f.provider->sleepTimers.empty());
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
@@ -1317,6 +1363,8 @@ TestResult testPluginRuntime() {
         f.provider->pluginCtx     = &gLifecycleDestroys;
 
         f.manager->shutdownAll();
+        // destroy 在插件执行线程 / 工作池上跑: 有界等待, 不假设当步完成
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return gLifecycleDestroys == 1; }));
         XX_TEST_EXPECT_EQ(gLifecycleDestroys, 1);
         XX_TEST_EXPECT_TRUE(f.manager->find("provider") == nullptr);
         XX_TEST_EXPECT_FALSE(f.manager->hasPendingClose());

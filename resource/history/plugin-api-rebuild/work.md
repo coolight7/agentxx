@@ -861,12 +861,27 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 处理器标志还是 `static bool`；装上夹具后派发可能经插件执行线程完成，这句就成了竞态
 （一次全组连跑里失败）。改成 `std::atomic<bool>` + 最多 1 秒轮询等待，同步与异步派发都稳。
 
-### 已知抖动（与本次改动无关，未处理）
+### `plugin_runtime` 偶发失败（已修）
 
-`plugin_runtime`（未接夹具，未改动）在全组连跑里偶发 1~5 条失败，落在它自己的并发压测断言上
-（`test_plugin_runtime.cpp` 852「128 个 worker 完成各一次」、971~973「requestClose 后 drain 一次」
-1320「伪实例同步关闭 destroy 计一次」），同一二进制单独跑 1460 条全过，失败行每次不同 ——
-判为压测对时序/负载敏感；如果后续频繁出现，需要按"有界等待"或 OpCore 取消/完成竞态审计来处理。
+现象：全组连跑里偶发 1~5 条失败，落在它自己的并发压测断言上（852「128 个 worker + 取消，
+每个各完成一次」、971~973「requestClose 后 drain 一次」、1320「伪实例同步关闭 destroy 计一次」），
+同一二进制单独跑全过、失败行每次不同；6 次单独运行 755 条全绿、10 次单独运行也全绿 —— 只在
+机器忙（多模块连跑）时出现。
+
+原因与改法（都在 `agent/test/plugin/test_plugin_runtime.cpp`）：
+
+- `drain()` 原来是"固定 6 轮 poll"，把"完成包还没入队"当成"已经跑完"；worker 线程、
+  独立定时器线程、插件线程的投递在高负载下会晚到。改成**推进到连续 5 轮无就绪处理**
+  （1~5 ms 退避，静默窗口约 15 ms，总预算 500 ms）—— 这一处覆盖了文件里 27 个 `drain()` 调用点；
+- 四处"计数到齐"的断言改成 `drainUntil(谓词，10 s)` 有界等待：1000 个跨线程完成、
+  128 个 worker+取消、1000 个 0ms sleep 定时器、`requestClose` 后 1001 次回调；
+- 「伪实例同步关闭 destroy 计一次」改为 `drainUntil(destroy == 1)`：destroy 在插件执行线程 /
+  工作池上跑，不能假设 `shutdownAll()` 返回时已完成；
+- 聚合断言失败时打一条 `XX_LOGW`（index / calls / cancels / state / operations 数），
+  下次真出问题能直接看出是哪一类不变量没满足。
+
+验证：单独跑 6 次、全组连跑 3 次、**9 个并发实例**（3 轮 × 3 并发跑
+`plugin_runtime` + `plugins`）全部 0 失败；最终全量回归 `passed=43911 failed=0`。
 
 ### 验证
 
