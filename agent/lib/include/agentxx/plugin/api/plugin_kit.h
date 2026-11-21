@@ -3067,12 +3067,45 @@ inline void PLUGINXX_CALL
 
 } // namespace detail
 
-/// 挂载一个根 (带自己的配置); 返回根 id, 失败返回空串
+/// 挂载一个根 (**协程形态**; `co_await` 后 `.ok()` 判成败, `.text()` = 根 id)
 ///
 /// - **只能在 `start` 里调用**: 在 `mount` 回调里调用会被拒 (否则每个 agent 再建一根)
 /// - 返回 id 时 init 尚未完成; 就绪前开的通道会排队, 就绪后自动继续
+/// - 插件执行线程上用这个; 自有线程/工作池线程上才用 [mountRootSync]
 template<typename Ctx>
-inline std::string mountRoot(Ctx& ctx, const MountRootOptions& opt) {
+inline pluginxx::TableOpTicket mountRoot(Ctx& ctx, const MountRootOptions& opt) {
+    if (!hasRuntime(ctx)) {
+        return {};
+    }
+    auto       name       = std::string{opt.name};
+    auto       mountList  = std::string{opt.mountPlugins};
+    auto       configJson = opt.config.is_null() ? std::string{"{}"} : opt.config.dump();
+    const bool include    = opt.includeCreator;
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx,
+         name        = std::move(name),
+         mountList   = std::move(mountList),
+         configJson  = std::move(configJson),
+         include](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            AgentxxPluginMountRootSpec spec{};
+            spec.struct_size     = sizeof(AgentxxPluginMountRootSpec);
+            spec.name            = PluginStringView::from(name);
+            spec.config_json     = PluginStringView::from(configJson);
+            spec.mount_plugins   = PluginStringView::from(mountList);
+            spec.include_creator = include ? 1 : 0;
+            return ctx.iface.runtime->mount_root(ctx.host, &spec, cb, ud, err);
+        }
+    );
+}
+
+/// 挂载一个根 (同步形态; 返回根 id, 失败返回空串)
+///
+/// 只给**不在插件执行线程**上的代码用 (插件自有线程 / 工作池线程); 插件执行线程上真等
+/// 会自己等自己, 那种位置用 [mountRoot] + `co_await`。
+template<typename Ctx>
+inline std::string mountRootSync(Ctx& ctx, const MountRootOptions& opt) {
     if (!hasRuntime(ctx)) {
         return {};
     }
@@ -3094,9 +3127,26 @@ inline std::string mountRoot(Ctx& ctx, const MountRootOptions& opt) {
     return rc == AGENTXX_RESULT_OK ? rootId : std::string{};
 }
 
-/// 卸载一个根 (其下通道先全部关闭)
+/// 卸载一个根 (其下通道先全部关闭; **协程形态**)
 template<typename Ctx>
-inline int32_t unmountRoot(Ctx& ctx, std::string_view rootId) {
+inline pluginxx::TableOpTicket unmountRoot(Ctx& ctx, std::string_view rootId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->unmount_root || rootId.empty()) {
+        return {};
+    }
+    auto id = std::string{rootId};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, id = std::move(id)](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            auto idSv = PluginStringView::from(id);
+            return ctx.iface.runtime->unmount_root(ctx.host, &idSv, cb, ud, err);
+        }
+    );
+}
+
+/// 卸载一个根 (同步形态; 见 [mountRootSync] 的线程限制)
+template<typename Ctx>
+inline int32_t unmountRootSync(Ctx& ctx, std::string_view rootId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->unmount_root || rootId.empty()) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
@@ -3106,13 +3156,55 @@ inline int32_t unmountRoot(Ctx& ctx, std::string_view rootId) {
     });
 }
 
-/// 打开一个会话通道; 返回通道 id, 失败返回 0
+/// 打开一个会话通道 (**协程形态**: `co_await` 后是通道 id, 失败 0)
 ///
 /// - `onEvent` 在该根所属 io 线程上调用, **必须快速返回** (整个进程的会话都在这条线程);
 /// - 通道关闭时最后一条事件必为 `AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED`, 之后不再回调;
-/// - 同一个 (会话存储根, sessionId) 在同进程内只能有一个通道, 撞了返回 0 (日志给出原因)。
+/// - 同一个 (会话存储根, sessionId) 在同进程内只能有一个通道, 撞了返回 0 (日志给出原因);
+/// - 返回 `Task` 而不是 ticket: 事件回调的转接对象要由协程帧保活到受理成功。
 template<typename Ctx, typename Fn>
-inline int64_t openChannel(Ctx& ctx, const ChannelOptions& opt, Fn&& onEvent) {
+inline pluginxx::Task<int64_t> openChannel(Ctx& ctx, const ChannelOptions& opt, Fn&& onEvent) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->open_channel || opt.rootId.empty()) {
+        co_return 0;
+    }
+    auto shim = std::make_unique<detail::RuntimeChannelShim>();
+    shim->fn  = std::make_shared<const std::function<void(const ChannelEvent&)>>(
+        std::function<void(const ChannelEvent&)>(std::forward<Fn>(onEvent))
+    );
+    auto rootId    = std::string{opt.rootId};
+    auto sessionId = std::string{opt.sessionId};
+    auto title     = std::string{opt.title};
+    auto model     = std::string{opt.model};
+    AgentxxPluginChannelSpec spec{};
+    spec.struct_size          = sizeof(AgentxxPluginChannelSpec);
+    spec.root_id              = PluginStringView::from(rootId);
+    spec.session_id           = PluginStringView::from(sessionId);
+    spec.title                = PluginStringView::from(title);
+    spec.model                = PluginStringView::from(model);
+    spec.max_queue            = opt.maxQueue;
+    spec.interrupt_timeout_ms = static_cast<int64_t>(opt.interruptTimeout.count());
+    spec.on_event             = &detail::runtimeChannelEventThunk;
+    spec.user_data            = shim.get();
+    auto r = co_await pluginxx::tableOp(
+        ctx,
+        [&ctx, &spec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->open_channel(ctx.host, &spec, cb, ud, err);
+        }
+    );
+    const int64_t channelId = r.ok() ? r.integer(0) : 0;
+    if (channelId <= 0) {
+        co_return 0;
+    }
+    ctx.runtimeChannelShims[channelId] = std::move(shim);
+    co_return channelId;
+}
+
+/// 打开一个会话通道 (同步形态; 返回通道 id, 失败 0)
+///
+/// 只给**不在插件执行线程**上的代码用 (插件自有线程 / 工作池线程)。
+template<typename Ctx, typename Fn>
+inline int64_t openChannelSync(Ctx& ctx, const ChannelOptions& opt, Fn&& onEvent) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->open_channel || opt.rootId.empty()) {
         return 0;
     }
@@ -3145,9 +3237,29 @@ inline int64_t openChannel(Ctx& ctx, const ChannelOptions& opt, Fn&& onEvent) {
     return channelId;
 }
 
-/// 关闭一个通道 (不等待收尾; 结果经最后一条 `CLOSED` 事件体现)
+/// 关闭一个通道 (**协程形态**; 结果经最后一条 `CLOSED` 事件体现)
 template<typename Ctx>
-inline int32_t closeChannel(Ctx& ctx, int64_t channelId) {
+inline pluginxx::Task<void> closeChannel(Ctx& ctx, int64_t channelId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->close_channel || channelId <= 0) {
+        co_return;
+    }
+    auto r = co_await pluginxx::tableOp(
+        ctx,
+        [&ctx, channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->close_channel(ctx.host, channelId, cb, ud, err);
+        }
+    );
+    if (r.ok()) {
+        // 通道已废弃: 回调转接对象随之释放 (主程序保证此后不再回调)
+        ctx.runtimeChannelShims.erase(channelId);
+    }
+    co_return;
+}
+
+/// 关闭一个通道 (同步形态)
+template<typename Ctx>
+inline int32_t closeChannelSync(Ctx& ctx, int64_t channelId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->close_channel || channelId <= 0) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
@@ -3160,9 +3272,29 @@ inline int32_t closeChannel(Ctx& ctx, int64_t channelId) {
     return rc;
 }
 
-/// 投递一条输入 (`{"text": ...}` / `{"attachments": [...]}` / `delivery`)
+/// 投递一条输入 (`{"text": ...}` / `{"attachments": [...]}` / `delivery`; **协程形态**)
 template<typename Ctx>
-inline int32_t sendInput(Ctx& ctx, int64_t channelId, std::string_view inputJson) {
+inline pluginxx::TableOpTicket sendInput(Ctx& ctx, int64_t channelId, std::string_view inputJson) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->send_input || channelId <= 0) {
+        return {};
+    }
+    auto input = std::string{inputJson};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, channelId, input = std::move(input)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            auto jsonSv = PluginStringView::from(input);
+            return ctx.iface.runtime->send_input(ctx.host, channelId, &jsonSv, cb, ud, err);
+        }
+    );
+}
+
+/// 投递一条输入 (同步形态; 见 [mountRootSync] 的线程限制)
+template<typename Ctx>
+inline int32_t sendInputSync(Ctx& ctx, int64_t channelId, std::string_view inputJson) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->send_input || channelId <= 0) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
@@ -3172,9 +3304,11 @@ inline int32_t sendInput(Ctx& ctx, int64_t channelId, std::string_view inputJson
     });
 }
 
-/// 投递一段文本 (`delivery` 空 = next-turn)
+/// 投递一段文本 (**协程形态**; `delivery` 空 = next-turn)
+///
+/// 构造输入 JSON 后直接提交, 因此本身不需要协程。
 template<typename Ctx>
-inline int32_t sendText(
+inline pluginxx::TableOpTicket sendText(
     Ctx&             ctx,
     int64_t          channelId,
     std::string_view text,
@@ -3188,9 +3322,40 @@ inline int32_t sendText(
     return sendInput(ctx, channelId, input.dump());
 }
 
-/// 取消通道当前轮次
+/// 投递一段文本 (同步形态)
 template<typename Ctx>
-inline int32_t cancelChannel(Ctx& ctx, int64_t channelId) {
+inline int32_t sendTextSync(
+    Ctx&             ctx,
+    int64_t          channelId,
+    std::string_view text,
+    std::string_view delivery = {}
+) {
+    utilxx_base::Json input = utilxx_base::Json::object();
+    input["text"]           = std::string{text};
+    if (!delivery.empty()) {
+        input["delivery"] = std::string{delivery};
+    }
+    return sendInputSync(ctx, channelId, input.dump());
+}
+
+/// 取消通道当前轮次 (**协程形态**)
+template<typename Ctx>
+inline pluginxx::TableOpTicket cancelChannel(Ctx& ctx, int64_t channelId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel || channelId <= 0) {
+        return {};
+    }
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->cancel(ctx.host, channelId, cb, ud, err);
+        }
+    );
+}
+
+/// 取消通道当前轮次 (同步形态)
+template<typename Ctx>
+inline int32_t cancelChannelSync(Ctx& ctx, int64_t channelId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel || channelId <= 0) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
@@ -3199,9 +3364,33 @@ inline int32_t cancelChannel(Ctx& ctx, int64_t channelId) {
     });
 }
 
-/// 切换通道的模型
+/// 切换通道的模型 (**协程形态**)
 template<typename Ctx>
-inline int32_t selectChannelModel(Ctx& ctx, int64_t channelId, std::string_view model) {
+inline pluginxx::TableOpTicket selectChannelModel(
+    Ctx&             ctx,
+    int64_t          channelId,
+    std::string_view model
+) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->select_model || channelId <= 0 || model.empty()) {
+        return {};
+    }
+    auto name = std::string{model};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, channelId, name = std::move(name)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            auto modelSv = PluginStringView::from(name);
+            return ctx.iface.runtime->select_model(ctx.host, channelId, &modelSv, cb, ud, err);
+        }
+    );
+}
+
+/// 切换通道的模型 (同步形态)
+template<typename Ctx>
+inline int32_t selectChannelModelSync(Ctx& ctx, int64_t channelId, std::string_view model) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->select_model || channelId <= 0 || model.empty()) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
@@ -3211,9 +3400,43 @@ inline int32_t selectChannelModel(Ctx& ctx, int64_t channelId, std::string_view 
     });
 }
 
-/// 应答一个中断询问 (值对象形态 `{"values":{...}}`; 空对象 = 取消)
+/// 应答一个中断询问 (**协程形态**; 值对象形态 `{"values":{...}}`, 空对象 = 取消)
 template<typename Ctx>
-inline int32_t respondInterrupt(
+inline pluginxx::TableOpTicket respondInterrupt(
+    Ctx&             ctx,
+    int64_t          channelId,
+    int64_t          interruptId,
+    std::string_view valuesJson
+) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->respond_interrupt || channelId <= 0
+        || interruptId <= 0) {
+        return {};
+    }
+    auto values = std::string{valuesJson};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, channelId, interruptId, values = std::move(values)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            auto valuesSv = PluginStringView::from(values);
+            return ctx.iface.runtime->respond_interrupt(
+                ctx.host,
+                channelId,
+                interruptId,
+                &valuesSv,
+                cb,
+                ud,
+                err
+            );
+        }
+    );
+}
+
+/// 应答一个中断询问 (同步形态)
+template<typename Ctx>
+inline int32_t respondInterruptSync(
     Ctx&             ctx,
     int64_t          channelId,
     int64_t          interruptId,
@@ -3237,9 +3460,24 @@ inline int32_t respondInterrupt(
     });
 }
 
-/// 通道状态 JSON (不含消息正文; 失败返回空串)
+/// 通道状态 JSON (不含消息正文; **协程形态**: `co_await` 后 `.text()` 是 JSON)
 template<typename Ctx>
-inline std::string channelStateJson(Ctx& ctx, int64_t channelId) {
+inline pluginxx::TableOpTicket channelStateJson(Ctx& ctx, int64_t channelId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->get_channel_state || channelId <= 0) {
+        return {};
+    }
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->get_channel_state(ctx.host, channelId, cb, ud, err);
+        }
+    );
+}
+
+/// 通道状态 JSON (同步形态; 失败返回空串)
+template<typename Ctx>
+inline std::string channelStateJsonSync(Ctx& ctx, int64_t channelId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->get_channel_state || channelId <= 0) {
         return {};
     }
@@ -3257,9 +3495,24 @@ inline std::string channelStateJson(Ctx& ctx, int64_t channelId) {
     return text;
 }
 
-/// 通道会话的 LLM 上下文 (JSON 数组文本; 失败返回空串)
+/// 通道会话的 LLM 上下文 (JSON 数组文本; **协程形态**)
 template<typename Ctx>
-inline std::string channelContextMessages(Ctx& ctx, int64_t channelId) {
+inline pluginxx::TableOpTicket channelContextMessages(Ctx& ctx, int64_t channelId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->get_context_messages || channelId <= 0) {
+        return {};
+    }
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->get_context_messages(ctx.host, channelId, cb, ud, err);
+        }
+    );
+}
+
+/// 通道会话的 LLM 上下文 (同步形态; 失败返回空串)
+template<typename Ctx>
+inline std::string channelContextMessagesSync(Ctx& ctx, int64_t channelId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->get_context_messages || channelId <= 0) {
         return {};
     }
@@ -3283,9 +3536,24 @@ inline std::string channelContextMessages(Ctx& ctx, int64_t channelId) {
     return text;
 }
 
-/// 运行时清单 JSON: `{roots:[{rootId,name,ready,configSummary,channels}],triggers,timers}`
+/// 运行时清单 JSON (**协程形态**: `{roots:[{rootId,name,ready,configSummary,channels}],triggers,timers}`)
 template<typename Ctx>
-inline std::string listRuntimeJson(Ctx& ctx) {
+inline pluginxx::TableOpTicket listRuntimeJson(Ctx& ctx) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->list_runtime) {
+        return {};
+    }
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->list_runtime(ctx.host, cb, ud, err);
+        }
+    );
+}
+
+/// 运行时清单 JSON (同步形态; 失败返回 `{}`)
+template<typename Ctx>
+inline std::string listRuntimeJsonSync(Ctx& ctx) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->list_runtime) {
         return "{}";
     }
@@ -3303,9 +3571,41 @@ inline std::string listRuntimeJson(Ctx& ctx) {
     return text;
 }
 
-/// 登记触发器 (订阅主题 → 按策略投递到通道); 返回触发器 id, 失败返回 0
+/// 登记触发器 (**协程形态**: `co_await` 后 `.integer()` 是触发器 id, 失败 0)
 template<typename Ctx>
-inline int64_t addTrigger(Ctx& ctx, const TriggerOptions& opt) {
+inline pluginxx::TableOpTicket addTrigger(Ctx& ctx, const TriggerOptions& opt) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->register_trigger || opt.topic.empty()
+        || opt.channelId <= 0) {
+        return {};
+    }
+    auto topic    = std::string{opt.topic};
+    auto delivery = std::string{opt.delivery};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx,
+         topic    = std::move(topic),
+         delivery = std::move(delivery),
+         policy   = opt.policy,
+         debounce = opt.debounceMs,
+         maxQueue = opt.maxQueue,
+         channel  = opt.channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            AgentxxPluginTriggerSpec spec{};
+            spec.struct_size = sizeof(AgentxxPluginTriggerSpec);
+            spec.policy      = policy;
+            spec.debounce_ms = debounce;
+            spec.max_queue   = maxQueue;
+            spec.topic       = PluginStringView::from(topic);
+            spec.channel_id  = channel;
+            spec.delivery    = PluginStringView::from(delivery);
+            return ctx.iface.runtime->register_trigger(ctx.host, &spec, cb, ud, err);
+        }
+    );
+}
+
+/// 登记触发器 (同步形态; 返回触发器 id, 失败 0)
+template<typename Ctx>
+inline int64_t addTriggerSync(Ctx& ctx, const TriggerOptions& opt) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->register_trigger || opt.topic.empty()
         || opt.channelId <= 0) {
         return 0;
@@ -3332,9 +3632,24 @@ inline int64_t addTrigger(Ctx& ctx, const TriggerOptions& opt) {
     return id;
 }
 
-/// 注销触发器
+/// 注销触发器 (**协程形态**)
 template<typename Ctx>
-inline int32_t removeTrigger(Ctx& ctx, int64_t triggerId) {
+inline pluginxx::TableOpTicket removeTrigger(Ctx& ctx, int64_t triggerId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_trigger || triggerId <= 0) {
+        return {};
+    }
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, triggerId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->unregister_trigger(ctx.host, triggerId, cb, ud, err);
+        }
+    );
+}
+
+/// 注销触发器 (同步形态)
+template<typename Ctx>
+inline int32_t removeTriggerSync(Ctx& ctx, int64_t triggerId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_trigger || triggerId <= 0) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
@@ -3343,11 +3658,37 @@ inline int32_t removeTrigger(Ctx& ctx, int64_t triggerId) {
     });
 }
 
-/// 发一条事件 (任意线程, 立即返回)
+/// 发一条事件 (**协程形态**; 写侧只能落在插件族 `plugin.<名字>.*` 下)
 /// - 主题必须写全名并落在插件族里: `plugin.<名字>.<事件>` (不限定插件名, 建议用自己的)
 /// - 写侧不允许跨族: 内置主题 (`agentxx.*`) 只由主程序发布
 template<typename Ctx>
-inline int32_t emitEvent(Ctx& ctx, std::string_view topic, std::string_view payloadJson = {}) {
+inline pluginxx::TableOpTicket emitEvent(
+    Ctx&             ctx,
+    std::string_view topic,
+    std::string_view payloadJson = {}
+) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->emit_event || topic.empty()) {
+        return {};
+    }
+    auto topicText   = std::string{topic};
+    auto payloadText = std::string{payloadJson};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, topicText = std::move(topicText), payloadText = std::move(payloadText)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            auto topicSv = PluginStringView::from(topicText);
+            auto paySv   = PluginStringView::from(payloadText);
+            return ctx.iface.runtime->emit_event(ctx.host, &topicSv, &paySv, cb, ud, err);
+        }
+    );
+}
+
+/// 发一条事件 (同步形态)
+template<typename Ctx>
+inline int32_t emitEventSync(Ctx& ctx, std::string_view topic, std::string_view payloadJson = {}) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->emit_event || topic.empty()) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
@@ -3358,9 +3699,38 @@ inline int32_t emitEvent(Ctx& ctx, std::string_view topic, std::string_view payl
     });
 }
 
-/// 登记定时器 (一次性或周期); 返回定时器 id, 失败返回 0
+/// 登记定时器 (**协程形态**: `.integer()` 是定时器 id, 失败 0)
 template<typename Ctx>
-inline int64_t addRuntimeTimer(Ctx& ctx, const RuntimeTimerOptions& opt) {
+inline pluginxx::TableOpTicket addRuntimeTimer(Ctx& ctx, const RuntimeTimerOptions& opt) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->register_timer || opt.channelId <= 0
+        || opt.inputJson.empty() || opt.firstDelayMs < 0 || opt.intervalMs < 0) {
+        return {};
+    }
+    auto input = std::string{opt.inputJson};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx,
+         input    = std::move(input),
+         policy   = opt.policy,
+         channel  = opt.channelId,
+         first    = opt.firstDelayMs,
+         interval = opt.intervalMs](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            AgentxxPluginTimerSpec spec{};
+            spec.struct_size    = sizeof(AgentxxPluginTimerSpec);
+            spec.policy         = policy;
+            spec.channel_id     = channel;
+            spec.first_delay_ms = first;
+            spec.interval_ms    = interval;
+            spec.input_json     = PluginStringView::from(input);
+            return ctx.iface.runtime->register_timer(ctx.host, &spec, cb, ud, err);
+        }
+    );
+}
+
+/// 登记定时器 (同步形态; 返回定时器 id, 失败 0)
+template<typename Ctx>
+inline int64_t addRuntimeTimerSync(Ctx& ctx, const RuntimeTimerOptions& opt) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->register_timer || opt.channelId <= 0
         || opt.inputJson.empty() || opt.firstDelayMs < 0 || opt.intervalMs < 0) {
         return 0;
@@ -3386,9 +3756,24 @@ inline int64_t addRuntimeTimer(Ctx& ctx, const RuntimeTimerOptions& opt) {
     return id;
 }
 
-/// 注销定时器
+/// 注销定时器 (**协程形态**)
 template<typename Ctx>
-inline int32_t removeRuntimeTimer(Ctx& ctx, int64_t timerId) {
+inline pluginxx::TableOpTicket removeRuntimeTimer(Ctx& ctx, int64_t timerId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_timer || timerId <= 0) {
+        return {};
+    }
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, timerId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->unregister_timer(ctx.host, timerId, cb, ud, err);
+        }
+    );
+}
+
+/// 注销定时器 (同步形态)
+template<typename Ctx>
+inline int32_t removeRuntimeTimerSync(Ctx& ctx, int64_t timerId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_timer || timerId <= 0) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
@@ -3459,66 +3844,151 @@ struct AsyncWorkOptions {
     void*                          userData = nullptr;
 };
 
-/// 提交一个后台任务; 返回 `asyncId` (失败返回空串)
+namespace detail {
+
+/// 后台任务提交的全部入参 (协程形态要按值带到提交那一刻)
+struct AsyncWorkSpecKeep {
+    std::string name;
+    std::string systemPrompt;
+    std::string message;
+    std::string model;
+    std::string sessionId;
+    std::string queueKey;
+    std::string workDir;
+    std::string language;
+    std::string notifyDelivery;
+    std::string tools;
+    std::string plugins;
+    std::string mcpServers;
+    std::string skills;
+    std::string memoryFiles;
+    std::string ragDocs;
+    std::string allow;
+    std::string deny;
+    std::string toolName;
+    std::string toolArgs;
+    int32_t     kind               = 0;
+    int32_t     interruptPolicy    = -1;
+    int32_t     sessionStore       = -1;
+    int64_t     interruptTimeoutMs = 0;
+    int64_t     runTimeoutMs       = 0;
+    int64_t     delayMs            = 0;
+    int64_t     queueTimeoutMs     = 0;
+    AgentxxPluginAsyncWorkEventFn onEvent  = nullptr;
+    void*                         userData = nullptr;
+};
+
+/// 从选项拷出全部入参 (JSON 在提交前就序列化好)
+inline AsyncWorkSpecKeep keepAsyncWorkOptions(const AsyncWorkOptions& opt) {
+    auto jsonText = [](const utilxx_base::Json& value) {
+        return value.is_null() ? std::string{} : value.dump();
+    };
+    AsyncWorkSpecKeep k;
+    k.name               = opt.name;
+    k.systemPrompt       = opt.systemPrompt;
+    k.message            = opt.message;
+    k.model              = opt.model;
+    k.sessionId          = opt.sessionId;
+    k.queueKey           = opt.queueKey;
+    k.workDir            = opt.workDir;
+    k.language           = opt.language;
+    k.notifyDelivery     = opt.notifyDelivery;
+    k.tools              = jsonText(opt.tools);
+    k.plugins            = jsonText(opt.plugins);
+    k.mcpServers         = jsonText(opt.mcpServers);
+    k.skills             = jsonText(opt.skills);
+    k.memoryFiles        = jsonText(opt.memoryFiles);
+    k.ragDocs            = jsonText(opt.ragDocs);
+    k.allow              = jsonText(opt.permissionAllow);
+    k.deny               = jsonText(opt.permissionDeny);
+    k.toolName           = opt.toolName;
+    k.toolArgs           = jsonText(opt.toolArgs);
+    k.kind               = opt.toolName.empty() ? 0 : 1;
+    k.interruptPolicy    = opt.interruptPolicy;
+    k.sessionStore       = opt.sessionStore;
+    k.interruptTimeoutMs = opt.interruptTimeoutMs;
+    k.runTimeoutMs       = opt.runTimeoutMs;
+    k.delayMs            = opt.delayMs;
+    k.queueTimeoutMs     = opt.queueTimeoutMs;
+    k.onEvent            = opt.onEvent;
+    k.userData           = opt.userData;
+    return k;
+}
+
+/// 沿用入参填出跨边界 spec (字符串视图指向 `keep` 里的字符串)
+inline void fillAsyncWorkSpec(const AsyncWorkSpecKeep& keep, AgentxxPluginAsyncWorkSpec& spec) {
+    spec.struct_size           = sizeof(AgentxxPluginAsyncWorkSpec);
+    spec.kind                  = keep.kind;
+    spec.interrupt_policy      = keep.interruptPolicy;
+    spec.session_store         = keep.sessionStore;
+    spec.interrupt_timeout_ms  = keep.interruptTimeoutMs;
+    spec.run_timeout_ms        = keep.runTimeoutMs;
+    spec.session_id            = PluginStringView::from(keep.sessionId);
+    spec.queue_key             = PluginStringView::from(keep.queueKey);
+    spec.name                  = PluginStringView::from(keep.name);
+    spec.system_prompt         = PluginStringView::from(keep.systemPrompt);
+    spec.message               = PluginStringView::from(keep.message);
+    spec.model                 = PluginStringView::from(keep.model);
+    spec.tools_json            = PluginStringView::from(keep.tools);
+    spec.plugins_json          = PluginStringView::from(keep.plugins);
+    spec.mcp_servers_json      = PluginStringView::from(keep.mcpServers);
+    spec.skills_json           = PluginStringView::from(keep.skills);
+    spec.memory_files_json     = PluginStringView::from(keep.memoryFiles);
+    spec.rag_docs_json         = PluginStringView::from(keep.ragDocs);
+    spec.work_dir              = PluginStringView::from(keep.workDir);
+    spec.language              = PluginStringView::from(keep.language);
+    spec.permission_allow_json = PluginStringView::from(keep.allow);
+    spec.permission_deny_json  = PluginStringView::from(keep.deny);
+    spec.notify_delivery       = PluginStringView::from(keep.notifyDelivery);
+    spec.tool_name             = PluginStringView::from(keep.toolName);
+    spec.tool_args_json        = PluginStringView::from(keep.toolArgs);
+    spec.delay_ms              = keep.delayMs;
+    spec.queue_timeout_ms      = keep.queueTimeoutMs;
+    spec.on_event              = keep.onEvent;
+    spec.user_data             = keep.userData;
+}
+
+} // namespace detail
+
+/// 提交一个后台任务 (**协程形态**: `co_await` 后 `.ok()`, `.text()` = `asyncId`)
 ///
 /// - 只校验参数, 不因额度/排队被拒 (额度只影响何时起跑)
+/// - 受理不代表任务成功: 结果发到 `agentxx.agent.async.done` (或 `onEvent`)
+template<typename Ctx>
+inline pluginxx::TableOpTicket submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->submit_async_work) {
+        return {};
+    }
+    auto keep = detail::keepAsyncWorkOptions(opt);
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, keep = std::move(keep)](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            AgentxxPluginAsyncWorkSpec spec{};
+            detail::fillAsyncWorkSpec(keep, spec);
+            return ctx.iface.runtime->submit_async_work(ctx.host, &spec, cb, ud, err);
+        }
+    );
+}
+
+/// 提交一个后台任务 (同步形态); 返回 `asyncId` (失败返回空串)
+///
 /// - `outCode` 非空时写入返回码 (`agentxx_result.h` 的 `AGENTXX_RESULT_*`), 便于区分"不支持"与"参数错"
 template<typename Ctx>
-inline std::string submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt, int32_t* outCode = nullptr) {
+inline std::string submitAsyncWorkSync(Ctx& ctx, const AsyncWorkOptions& opt, int32_t* outCode = nullptr) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->submit_async_work) {
         if (outCode != nullptr) {
             *outCode = AGENTXX_RESULT_ERR_UNSUPPORTED;
         }
         return {};
     }
-    auto jsonText = [](const utilxx_base::Json& value) {
-        return value.is_null() ? std::string{} : value.dump();
-    };
-    const auto tools       = jsonText(opt.tools);
-    const auto plugins     = jsonText(opt.plugins);
-    const auto mcpServers  = jsonText(opt.mcpServers);
-    const auto skills      = jsonText(opt.skills);
-    const auto memoryFiles = jsonText(opt.memoryFiles);
-    const auto ragDocs     = jsonText(opt.ragDocs);
-    const auto allow       = jsonText(opt.permissionAllow);
-    const auto deny        = jsonText(opt.permissionDeny);
-    const auto toolArgs    = jsonText(opt.toolArgs);
-
-    AgentxxPluginAsyncWorkSpec spec{};
-    spec.struct_size          = sizeof(AgentxxPluginAsyncWorkSpec);
-    spec.kind                 = opt.toolName.empty() ? 0 : 1;
-    spec.interrupt_policy     = opt.interruptPolicy;
-    spec.session_store        = opt.sessionStore;
-    spec.interrupt_timeout_ms = opt.interruptTimeoutMs;
-    spec.run_timeout_ms        = opt.runTimeoutMs;
-    spec.session_id           = PluginStringView::from(opt.sessionId);
-    spec.queue_key            = PluginStringView::from(opt.queueKey);
-    spec.name                 = PluginStringView::from(opt.name);
-    spec.system_prompt        = PluginStringView::from(opt.systemPrompt);
-    spec.message              = PluginStringView::from(opt.message);
-    spec.model                = PluginStringView::from(opt.model);
-    spec.tools_json           = PluginStringView::from(tools);
-    spec.plugins_json         = PluginStringView::from(plugins);
-    spec.mcp_servers_json     = PluginStringView::from(mcpServers);
-    spec.skills_json          = PluginStringView::from(skills);
-    spec.memory_files_json    = PluginStringView::from(memoryFiles);
-    spec.rag_docs_json        = PluginStringView::from(ragDocs);
-    spec.work_dir             = PluginStringView::from(opt.workDir);
-    spec.language             = PluginStringView::from(opt.language);
-    spec.permission_allow_json = PluginStringView::from(allow);
-    spec.permission_deny_json  = PluginStringView::from(deny);
-    spec.notify_delivery       = PluginStringView::from(opt.notifyDelivery);
-    spec.tool_name             = PluginStringView::from(opt.toolName);
-    spec.tool_args_json        = PluginStringView::from(toolArgs);
-    spec.delay_ms              = opt.delayMs;
-    spec.queue_timeout_ms      = opt.queueTimeoutMs;
-    spec.on_event              = opt.onEvent;
-    spec.user_data             = opt.userData;
-
+    const auto  keep = detail::keepAsyncWorkOptions(opt);
     std::string payload;
     const auto  rc = detail::runtimeCallText(
         ctx,
         [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            AgentxxPluginAsyncWorkSpec spec{};
+            detail::fillAsyncWorkSpec(keep, spec);
             return ctx.iface.runtime->submit_async_work(ctx.host, &spec, cb, ud, err);
         },
         payload
@@ -3529,9 +3999,26 @@ inline std::string submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt, int32_
     return payload;
 }
 
-/// 取消一条后台任务 (只能取消本实例提交的)
+/// 取消一条后台任务 (**协程形态**; 只能取消本实例提交的)
 template<typename Ctx>
-inline int32_t cancelAsyncWork(Ctx& ctx, std::string_view asyncId) {
+inline pluginxx::TableOpTicket cancelAsyncWork(Ctx& ctx, std::string_view asyncId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel_async_work || asyncId.empty()) {
+        return {};
+    }
+    auto id = std::string{asyncId};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, id = std::move(id)](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            auto idSv = PluginStringView::from(id);
+            return ctx.iface.runtime->cancel_async_work(ctx.host, &idSv, cb, ud, err);
+        }
+    );
+}
+
+/// 取消一条后台任务 (同步形态)
+template<typename Ctx>
+inline int32_t cancelAsyncWorkSync(Ctx& ctx, std::string_view asyncId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel_async_work || asyncId.empty()) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
@@ -3541,9 +4028,26 @@ inline int32_t cancelAsyncWork(Ctx& ctx, std::string_view asyncId) {
     });
 }
 
-/// 单条任务 JSON (不存在或不是本实例提交的返回空串)
+/// 单条任务 JSON (**协程形态**: `.text()` 是 JSON)
 template<typename Ctx>
-inline std::string getAsyncWorkJson(Ctx& ctx, std::string_view asyncId) {
+inline pluginxx::TableOpTicket getAsyncWorkJson(Ctx& ctx, std::string_view asyncId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->get_async_work || asyncId.empty()) {
+        return {};
+    }
+    auto id = std::string{asyncId};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, id = std::move(id)](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            auto idSv = PluginStringView::from(id);
+            return ctx.iface.runtime->get_async_work(ctx.host, &idSv, cb, ud, err);
+        }
+    );
+}
+
+/// 单条任务 JSON (同步形态; 不存在或不是本实例提交的返回空串)
+template<typename Ctx>
+inline std::string getAsyncWorkJsonSync(Ctx& ctx, std::string_view asyncId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->get_async_work || asyncId.empty()) {
         return {};
     }
@@ -3557,9 +4061,29 @@ inline std::string getAsyncWorkJson(Ctx& ctx, std::string_view asyncId) {
     });
 }
 
-/// 任务清单 JSON (数组; `sessionId` 空 = 本实例提交的全部)
+/// 任务清单 JSON (**协程形态**: 数组文本)
 template<typename Ctx>
-inline std::string listAsyncWorkJson(Ctx& ctx, std::string_view sessionId = {}) {
+inline pluginxx::TableOpTicket listAsyncWorkJson(Ctx& ctx, std::string_view sessionId = {}) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->list_async_work) {
+        return {};
+    }
+    auto session = std::string{sessionId};
+    return pluginxx::tableOp(
+        ctx,
+        [&ctx, session = std::move(session)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            auto idSv = PluginStringView::from(session);
+            return ctx.iface.runtime->list_async_work(ctx.host, &idSv, cb, ud, err);
+        }
+    );
+}
+
+/// 任务清单 JSON (同步形态; `sessionId` 空 = 本实例提交的全部)
+template<typename Ctx>
+inline std::string listAsyncWorkJsonSync(Ctx& ctx, std::string_view sessionId = {}) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->list_async_work) {
         return {};
     }

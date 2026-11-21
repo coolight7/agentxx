@@ -1263,7 +1263,7 @@ ac::TaskRuntime makeTaskRuntime(ChatbotCtx& ctx) {
         opt.userData        = &ctx;
 
         int32_t    code = 0;
-        const auto asyncId = agentxx::plugin::submitAsyncWork(ctx, opt, &code);
+        const auto asyncId = agentxx::plugin::submitAsyncWorkSync(ctx, opt, &code);
         if (asyncId.empty()) {
             err = code == AGENTXX_RESULT_ERR_UNSUPPORTED
                       ? std::string{"当前主程序不支持后台任务 (运行时表没有 submit_async_work)"}
@@ -1272,10 +1272,10 @@ ac::TaskRuntime makeTaskRuntime(ChatbotCtx& ctx) {
         return asyncId;
     };
     runtime.cancel = [&ctx](std::string_view asyncId) {
-        return agentxx::plugin::cancelAsyncWork(ctx, asyncId);
+        return agentxx::plugin::cancelAsyncWorkSync(ctx, asyncId);
     };
     runtime.resultOf = [&ctx](std::string_view asyncId) {
-        return agentxx::plugin::getAsyncWorkJson(ctx, asyncId);
+        return agentxx::plugin::getAsyncWorkJsonSync(ctx, asyncId);
     };
     return runtime;
 }
@@ -1541,7 +1541,7 @@ bool chatbotStartBody(
         }
         rootOpt.includeCreator = true;
 
-        std::string rootId = agentxx::plugin::mountRoot(ctx, rootOpt);
+        std::string rootId  = agentxx::plugin::mountRootSync(ctx, rootOpt);
         if (rootId.empty()) {
             const auto message = fmt::format(
                 "start: 人设 '{}' 的根挂载失败 (见主程序日志: 配置非法或根预算用尽)",
@@ -1550,8 +1550,8 @@ bool chatbotStartBody(
             ctx.log.error(message);
             errorOut = message;
             // 回滚已挂的根与平台
-            for (auto& [name, id] : ctx.personaRoots) {
-                agentxx::plugin::unmountRoot(ctx, id);
+            for (auto& entry : ctx.personaRoots) {
+                agentxx::plugin::unmountRootSync(ctx, entry.second);
             }
             ctx.personaRoots.clear();
             ctx.runOnIoBlocking([&]() {
@@ -1585,20 +1585,20 @@ bool chatbotStartBody(
     ctx.runOnIoBlocking([&]() {
         ac::ChatbotEngine::Runtime runtime;
         runtime.sendInput = [&ctx](int64_t channelId, std::string_view inputJson) -> int32_t {
-            return agentxx::plugin::sendInput(ctx, channelId, inputJson);
+            return agentxx::plugin::sendInputSync(ctx, channelId, inputJson);
         };
         runtime.cancel = [&ctx](int64_t channelId) {
-            agentxx::plugin::cancelChannel(ctx, channelId);
+            agentxx::plugin::cancelChannelSync(ctx, channelId);
         };
         runtime.respondInterrupt
             = [&ctx](int64_t channelId, int64_t interruptId, std::string_view values) {
-                  agentxx::plugin::respondInterrupt(ctx, channelId, interruptId, values);
+                  agentxx::plugin::respondInterruptSync(ctx, channelId, interruptId, values);
               };
         runtime.channelState = [&ctx](int64_t channelId) {
-            return agentxx::plugin::channelStateJson(ctx, channelId);
+            return agentxx::plugin::channelStateJsonSync(ctx, channelId);
         };
         runtime.runtimeList = [&ctx]() {
-            return agentxx::plugin::listRuntimeJson(ctx);
+            return agentxx::plugin::listRuntimeJsonSync(ctx);
         };
         runtime.openChannel = [&ctx](
                                   std::string_view personaName,
@@ -1618,12 +1618,12 @@ bool chatbotStartBody(
             channelOpt.rootId    = rootId;
             channelOpt.sessionId = std::string{sessionId};
             channelOpt.title     = std::string{title};
-            return agentxx::plugin::openChannel(ctx, channelOpt, [&ctx](const ChannelEvent& ev) {
+            return agentxx::plugin::openChannelSync(ctx, channelOpt, [&ctx](const ChannelEvent& ev) {
                 onChannelEventImpl(ctx, ev);
             });
         };
         runtime.closeChannel = [&ctx](int64_t channelId) {
-            agentxx::plugin::closeChannel(ctx, channelId);
+            agentxx::plugin::closeChannelSync(ctx, channelId);
         };
         runtime.downloadAttachment = [&ctx](const std::string& accountId, ac::MediaRef& ref) {
             if (auto* platform = ctx.platformOf(accountId); platform != nullptr) {
@@ -1668,7 +1668,10 @@ bool chatbotStartBody(
 
 /// 进程级启动: 取实例参数与配置文件路径 (表调用) → 跑启动主体 → 订阅面板事件
 ///
-/// 三件事都靠协程串起来: `start` 跑在插件执行线程上, 不允许同步等主程序。
+/// 取参数与订阅面板事件靠协程串起来; 启动主体本身是**同步**的 —— 它要经由平台层与
+/// 调度层的自有 io 线程做大量 `runOnIoBlocking` 交互, 期间不能挂起, 其中的人设根
+/// 挂载/回滚用同步形态 (`mountRootSync` / `unmountRootSync`, 同步桥在插件执行线程上
+/// 就地唤醒)。
 void chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify || !notify->done) {
         PluginString::set(ctx.host, error, "start: notify required");
@@ -1704,6 +1707,9 @@ void chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
 }
 
 /// 进程级停止: 停平台 → 关通道 → 卸根 (逆序、幂等)
+///
+/// 这里是**同步**形态: `stop` 期间主程序不再推进新的协程根, 交给 `spawn` 的清理任务
+/// 不会启动; 同步形态靠同步桥在插件执行线程上就地唤醒, 不会自己等自己。
 void chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (ctx.started.exchange(false, std::memory_order_acq_rel)) {
         // 1. 停平台连接 (不再收新消息)
@@ -1736,7 +1742,7 @@ void chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginxx
             ctx.personaRoots.clear();
         }
         for (auto it = roots.rbegin(); it != roots.rend(); ++it) {
-            agentxx::plugin::unmountRoot(ctx, it->second);
+            agentxx::plugin::unmountRootSync(ctx, it->second);
         }
         // 4. 先停 io 线程: 停完就不会再有平台回调 / 挂起的协程恢复
         ctx.stopIo();

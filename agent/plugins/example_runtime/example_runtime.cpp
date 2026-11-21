@@ -54,10 +54,13 @@ struct RuntimeCtx : public agentxx::plugin::PluginBase {
     std::string lastAnswer;
     std::string lastError;
 
+    /// 插件参数缓存 (由 `runtimeStartTask` 用协程读一次; 之后 `args()` 不再访问主程序)
+    std::string argsJsonCache = "{}";
+
     /// 取构造时的参数 (yaml `plugin.list[].args`; 主程序原样转交)
     utilxx_base::Json args() const {
         try {
-            return utilxx_base::Json::parse(argsJson());
+            return utilxx_base::Json::parse(argsJsonCache);
         } catch (const std::exception&) {
             return utilxx_base::Json::object();
         }
@@ -178,7 +181,9 @@ void onChannelEventImpl(RuntimeCtx& ctx, const agentxx::plugin::ChannelEvent& ev
                 ev.channelId,
                 ev.interruptId
             ));
-            agentxx::plugin::respondInterrupt(ctx, ev.channelId, ev.interruptId, R"_({"values":{}})_");
+            // 提交即返回 (回调在根所属 io 线程上, 不能在这里等结果)
+            agentxx::plugin::respondInterrupt(ctx, ev.channelId, ev.interruptId, R"_({"values":{}})_")
+                .forget();
             break;
         }
         case AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED: {
@@ -211,7 +216,8 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
         "example_runtime_say",
         "把一句话投给 example_runtime 插件自己的会话通道, 返回通道 id 与受理结果",
         R"_({"type":"object","properties":{"text":{"type":"string","description":"要投递的消息正文"}},"required":["text"]})_",
-        [](RuntimeCtx& c, std::string_view argsJson) -> std::string {
+        [](RuntimeCtx& c, std::string_view argsJson, agentxx::plugin::OpCtl&)
+            -> pluginxx::Task<std::string> {
             const auto args = [&argsJson]() {
                 try {
                     return utilxx_base::Json::parse(std::string{argsJson});
@@ -227,12 +233,12 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
             if (channelId <= 0) {
                 throw std::runtime_error("会话通道尚未打开 (插件未启动或根挂载失败)");
             }
-            const int32_t rc = agentxx::plugin::sendText(c, channelId, text);
-            return fmt::format(
+            const auto sent = co_await agentxx::plugin::sendText(c, channelId, text);
+            co_return fmt::format(
                 R"_({{"channelId":{},"accepted":{},"rc":{}}})_",
                 channelId,
-                rc == AGENTXX_RESULT_OK ? "true" : "false",
-                rc
+                sent.ok() ? "true" : "false",
+                sent.ok() ? 0 : 1
             );
         }
     );
@@ -244,7 +250,8 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
         "example_runtime_ping",
         "发一条 example_runtime 事件, 触发器把窗口内的多条合并成一条投入通道",
         R"_({"type":"object","properties":{"text":{"type":"string","description":"事件正文, 缺省为 ping"}}})_",
-        [](RuntimeCtx& c, std::string_view argsJson) -> std::string {
+        [](RuntimeCtx& c, std::string_view argsJson, agentxx::plugin::OpCtl&)
+            -> pluginxx::Task<std::string> {
             std::string text = "ping";
             try {
                 auto args = utilxx_base::Json::parse(std::string{argsJson});
@@ -259,11 +266,12 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
             }
             utilxx_base::Json payload = utilxx_base::Json::object();
             payload["text"]           = text;
-            const int32_t rc = agentxx::plugin::emitEvent(c, c.triggerTopic, payload.dump());
-            return fmt::format(
+            const auto emitted
+                = co_await agentxx::plugin::emitEvent(c, c.triggerTopic, payload.dump());
+            co_return fmt::format(
                 R"_({{"topic":"{}","rc":{}}})_",
                 c.triggerTopic,
-                rc
+                emitted.ok() ? 0 : 1
             );
         }
     );
@@ -275,7 +283,8 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
         "example_runtime_status",
         "返回 example_runtime 插件的根、通道、触发器、定时器与最近一轮回答",
         R"_({"type":"object","properties":{}})_",
-        [](RuntimeCtx& c, std::string_view) -> std::string {
+        [](RuntimeCtx& c, std::string_view, agentxx::plugin::OpCtl&)
+            -> pluginxx::Task<std::string> {
             std::string rootId;
             std::string lastAnswer;
             int64_t     channelId = 0;
@@ -298,8 +307,11 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
             out["triggerId"]       = c.triggerId;
             out["timerId"]         = c.timerId;
             // 主程序侧的运行时清单: 插件排查"为什么没投递"的第一现场
-            out["runtime"]         = utilxx_base::Json::parse(agentxx::plugin::listRuntimeJson(c));
-            return out.dump();
+            const auto listed = co_await agentxx::plugin::listRuntimeJson(c);
+            out["runtime"]    = utilxx_base::Json::parse(
+                listed.ok() ? std::string{listed.text()} : std::string{"{}"}
+            );
+            co_return out.dump();
         }
     );
     co_return;
@@ -344,33 +356,35 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
 }
 
 
-/// 进程级启动: 挂根 → 开通道 → 配触发器/定时器。
+/// 进程级启动 (入口): 注册事务交给协程, 完成后经 `notify` 交回
+static void runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error);
+
+/// 启动任务体: 读参数 → 挂根 → 开通道 → 配触发器/定时器
 ///
 /// 这一步的顺序是有讲究的: 挂根之后根会异步 init, 通道可以先开 (就绪后自动启动);
 /// 触发器与定时器都要求通道 id 存在, 所以放在开通道之后。
-static void    runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
-    if (!notify || !notify->done) {
-        agentxx::plugin::PluginString::set(ctx.host, error, "start: notify required");
-        return;
-    }
-    const auto args = ctx.args();
+/// 每一步都是表调用, 因此整段写成协程: 插件执行线程上不阻塞。
+static pluginxx::Task<void>
+    runtimeStartTask(RuntimeCtx& ctx, agentxx::plugin::LifecycleFinisher later) {
+    // 参数只在这里读一次 (读配置是表调用): 之后 args() 只看缓存
+    ctx.argsJsonCache = co_await ctx.argsJsonAsync();
+    const auto args    = ctx.args();
 
     // ---- 1. 挂自己的根 ----
     agentxx::plugin::MountRootOptions rootOpt;
-    rootOpt.name = args.value("rootName", std::string{"example_runtime"});
+    rootOpt.name   = args.value("rootName", std::string{"example_runtime"});
     rootOpt.config = rootConfigOf(args);
     if (args.contains("mountPlugins") && args["mountPlugins"].is_object()) {
         rootOpt.mountPlugins = args["mountPlugins"].dump();
     }
-    ctx.rootId = agentxx::plugin::mountRoot(ctx, rootOpt);
-    if (ctx.rootId.empty()) {
-        agentxx::plugin::PluginString::set(
-            ctx.host,
-            error,
+    const auto mounted = co_await agentxx::plugin::mountRoot(ctx, rootOpt);
+    if (!mounted.ok() || mounted.text().empty()) {
+        later.failed(
             "start: mountRoot failed (see main program log: invalid config or root budget)"
         );
-        return;
+        co_return;
     }
+    ctx.rootId = std::string{mounted.text()};
     ctx.log.info(fmt::format("root mounted: {}", ctx.rootId));
 
     // ---- 2. 在根上开一个会话通道 ----
@@ -378,20 +392,16 @@ static void    runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notif
     chOpt.rootId    = ctx.rootId;
     chOpt.sessionId = args.value("sessionId", std::string{"example_runtime_demo"});
     chOpt.title     = "example_runtime 示例会话";
-    ctx.channelId   = agentxx::plugin::openChannel(
+    ctx.channelId   = co_await agentxx::plugin::openChannel(
         ctx,
         chOpt,
-        [&ctx](const agentxx::plugin::ChannelEvent& ev) {
-            onChannelEventImpl(ctx, ev);
-        }
+        [&ctx](const agentxx::plugin::ChannelEvent& ev) { onChannelEventImpl(ctx, ev); }
     );
     if (ctx.channelId == 0) {
-        agentxx::plugin::PluginString::set(
-            ctx.host,
-            error,
+        later.failed(
             "start: openChannel failed (see main program log: session occupied or budget)"
         );
-        return;
+        co_return;
     }
     ctx.log.info(fmt::format("channel opened: {}", ctx.channelId));
 
@@ -405,7 +415,8 @@ static void    runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notif
     if (args.contains("triggerMaxQueue") && args["triggerMaxQueue"].is_number_integer()) {
         trigger.maxQueue = args["triggerMaxQueue"].get<int32_t>();
     }
-    ctx.triggerId = agentxx::plugin::addTrigger(ctx, trigger);
+    const auto triggered = co_await agentxx::plugin::addTrigger(ctx, trigger);
+    ctx.triggerId        = triggered.ok() ? triggered.integer(0) : 0;
     if (ctx.triggerId == 0) {
         ctx.log.warn("trigger registration failed; event-driven demo is disabled");
     } else {
@@ -423,15 +434,33 @@ static void    runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notif
         timer.firstDelayMs = timerDelayMs;
         timer.intervalMs   = args.value("timerIntervalMs", int64_t{0});
         timer.policy       = AGENTXX_PLUGIN_TRIGGER_POLICY_DROP_IF_BUSY;
-        ctx.timerId        = agentxx::plugin::addRuntimeTimer(ctx, timer);
+        const auto added   = co_await agentxx::plugin::addRuntimeTimer(ctx, timer);
+        ctx.timerId        = added.ok() ? added.integer(0) : 0;
         if (ctx.timerId == 0) {
             ctx.log.warn("timer registration failed");
         } else {
-            ctx.log.info(fmt::format("timer registered: {} (first delay {} ms)", ctx.timerId, timerDelayMs));
+            ctx.log.info(fmt::format(
+                "timer registered: {} (first delay {} ms)",
+                ctx.timerId,
+                timerDelayMs
+            ));
         }
     }
 
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    later.ok();
+    co_return;
+}
+
+static void runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+    if (!notify || !notify->done) {
+        agentxx::plugin::PluginString::set(ctx.host, error, "start: notify required");
+        return;
+    }
+    auto later = agentxx::plugin::finishLater(notify);
+    ctx.spawn([later](RuntimeCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        co_await runtimeStartTask(c, later);
+        co_return;
+    });
     return;
 }
 
@@ -439,21 +468,25 @@ static void    runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notif
 ///
 /// 主程序在禁用/卸载时也会按归属整批回收, 所以这里的清理是"自己先收干净";
 /// 全部入口都是幂等的, 重复清理不会出错。
+///
+/// 这里是**同步**形态: `stop` 期间主程序不再推进新的协程根 (取消/关闭已在走),
+/// 交给 `spawn` 的清理任务不会启动; 同步形态靠同步桥在插件执行线程上就地唤醒,
+/// 不会自己等自己 (与 `start` 的协程形态不同)。
 static void runtimeStop(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     if (ctx.timerId != 0) {
-        agentxx::plugin::removeRuntimeTimer(ctx, ctx.timerId);
+        agentxx::plugin::removeRuntimeTimerSync(ctx, ctx.timerId);
         ctx.timerId = 0;
     }
     if (ctx.triggerId != 0) {
-        agentxx::plugin::removeTrigger(ctx, ctx.triggerId);
+        agentxx::plugin::removeTriggerSync(ctx, ctx.triggerId);
         ctx.triggerId = 0;
     }
     if (ctx.channelId != 0) {
-        agentxx::plugin::closeChannel(ctx, ctx.channelId);
+        agentxx::plugin::closeChannelSync(ctx, ctx.channelId);
         ctx.channelId = 0;
     }
     if (!ctx.rootId.empty()) {
-        agentxx::plugin::unmountRoot(ctx, ctx.rootId);
+        agentxx::plugin::unmountRootSync(ctx, ctx.rootId);
         ctx.rootId.clear();
     }
     if (notify && notify->done) {

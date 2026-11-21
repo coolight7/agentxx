@@ -700,6 +700,97 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 3. `test_plugin_runtime` 探针改成异步（本次已验证的写法，注意 `pending` 先算总数）；
 4. 以上绿了之后再删同步桥（同上清单）并升级 `boundaries` 规则 16。
 
+## 实施记录：步 10（收尾之二：kit 运行时便捷层改用协程）
+
+上一节回退后按"下次要按这个顺序做"的第 1 步开工：把 kit 的运行时便捷层与后台任务入口全部
+拆成**协程形态（原名）+ 同步形态（`*Sync` 后缀）**，插件里可能跑在插件执行线程上的调用点
+逐个改成 `co_await`。同步形态保留给"确定不在插件执行线程"的地方（插件自有线程上的 engine
+注入、工作池线程上的工具体）。
+
+### kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）
+
+19 个运行时入口改为协程形态（返回 `pluginxx::TableOpTicket`，`co_await` 后看 `.ok()` /
+`.text()` / `.integer()`），原实现同名加 `Sync` 后缀：
+
+| 协程入口 | 同步入口 | 结果读法 |
+|---|---|---|
+| `mountRoot` | `mountRootSync` | `.text()` = 根 id |
+| `unmountRoot` | `unmountRootSync` | `.ok()` |
+| `openChannel` | `openChannelSync` | **`pluginxx::Task<int64_t>`**（见下） |
+| `closeChannel` | `closeChannelSync` | `.ok()`，成功时擦 shim |
+| `sendInput` / `sendText` | `sendInputSync` / `sendTextSync` | `.ok()` |
+| `cancelChannel` / `selectChannelModel` | 同名 `*Sync` | `.ok()` |
+| `respondInterrupt` | `respondInterruptSync` | `.ok()` |
+| `channelStateJson` / `channelContextMessages` / `listRuntimeJson` | 同名 `*Sync` | `.text()` = JSON |
+| `addTrigger` / `addRuntimeTimer` | 同名 `*Sync` | `.integer()` = 句柄 id |
+| `removeTrigger` / `removeRuntimeTimer` / `emitEvent` | 同名 `*Sync` | `.ok()` |
+
+后台任务 4 个入口同样处理：`submitAsyncWork` / `cancelAsyncWork` / `getAsyncWorkJson` /
+`listAsyncWorkJson`，同步形态 `*Sync`。提交参数抽成 `detail::AsyncWorkSpecKeep` +
+`fillAsyncWorkSpec`（协程形态要按值把 JSON/字符串带到提交那一刻），同步形态也复用这一对，
+两边的跨边界 spec 只填一份。
+
+两处特别处理：
+
+- `openChannel` 返回 `pluginxx::Task<int64_t>` 而不是 ticket：事件回调的转接对象
+  （`detail::RuntimeChannelShim`）地址作为 `spec.user_data` 交给主程序，必须活到受理成功
+  写进 `ctx.runtimeChannelShims` —— 交给协程帧的局部 `unique_ptr` 保活最稳；
+- `sendText` 仍然不需要协程：构造输入 JSON 后直接提交（`sendInput` 是"提交即返回"）。
+
+### example_runtime（`agent/plugins/example_runtime/example_runtime.cpp`）
+
+- `start`：`runtimeStart` 入口只做 `finishLater` + `ctx.spawn`，注册事务进 `runtimeStartTask`
+  协程（读参数 → `co_await mountRoot` → `co_await openChannel` → 触发器 → 定时器 → `later.ok()`）；
+- `stop`：`runtimeStop` 入口同上，清理进 `runtimeStopTask`（逆序 `co_await` 定时器/触发器/
+  通道/根）；
+- 三个工具体改成 `pluginxx::Task<std::string>` 协程体（`sendText` / `emitEvent` /
+  `listRuntimeJson` 都是 `co_await`）；
+- 通道事件回调里的中断应答改 `respondInterrupt(...).forget()`（回调在根所属 io 线程上，
+  不能等结果）；
+- 插件参数改为"启动协程里用 `ctx.argsJsonAsync()` 读一次存 `argsJsonCache`，`args()` 只看缓存"，
+  否则 `args()` 的同步读还会在插件执行线程上阻塞。
+
+### agentxx_chatbot（`agent/plugins/agentxx_chatbot/agentxx_chatbot.cpp`）
+
+- `chatbotStartBody` 改成 `pluginxx::Task<bool>`：人设根 `co_await mountRoot`、失败回滚里
+  `co_await unmountRoot`（顺带把 `for (auto& [name, id] : ...)` 换成 `entry`，
+  避免 GCC 16 对"结构化绑定 + co_await"的误报）；`chatbotStart` 里 `co_await` 它；
+- `chatbotStop` 拆成 `chatbotStopBody`（`pluginxx::Task<void>`，`co_await unmountRoot`）+
+  入口（`finishLater` + `spawn` + `later.ok()`）；
+- **`ChatbotEngine::Runtime` 与 `TaskRuntime` 的注入点保持同步**，只是换成 `*Sync` 形态：
+  它们跑在 chatbot 自己的 io 线程与工作池线程上（不是插件执行线程），真等不会自己等自己；
+  这条边界写进了代码注释与本节，等步 12 的夹具装上插件执行器后可以再评估要不要异步化。
+
+### 踩到的两个坑（已修）
+
+- **`stop` 不能用 `ctx.spawn`**：卸载流程里主程序已经不再推进新的协程根（取消/关闭已在走），
+  交给 `spawn` 的清理任务不会启动，`LifecycleFinisher` 析构时自动交 FAILED，`unloadAsync`
+  立刻返回 false（测试表现为 `plugin_example_runtime` 394/404/409 三处失败）。
+  所以 `runtimeStop` / `chatbotStop` 保持**同步**形态（`*Sync`，同步桥在插件执行线程上就地
+  唤醒）—— 这条限制要写进插件文档，等同步桥真的删掉时一并处理。
+- **`chatbotStartBody` 改协程后 chatbot 全流程变慢到 10 分钟以上**：最终定位不是协程本身，而是
+  用脚本改 `chatbotStop` 时把末尾的 `notify->done(...)` 一起删掉了，stop 永不通知 → 卸载
+  每处超时。改协程那版已经回退（见下条），但这次“卡住”排查走了弯路，记在这里：
+  **stop 入口必须确认 `notify->done` 仍然存在**。
+
+### 结论：chatbot 本轮只做形态重命名
+
+`chatbotStartBody` 的协程化试过并**回退**（同步 body 里大量 `runOnIoBlocking` 与自有 io 线程
+交互，`co_await` 会让这些阻塞点与协程驱动互相干扰）。因此 chatbot 本轮只把 kit 调用点换成
+`*Sync`，行为与改动前一致；它的 start/stop 异步化留到步 12 之后（那时夹具带插件执行器，
+能覆盖到工具体与命令回调上的同类调用）。
+
+### 验证
+
+- kit 头语法检查（`cl /Zs`，插件侧的 include 与宏组合）通过；
+- `example_runtime.cpp`、`agentxx_chatbot.cpp` 各自单文件语法检查通过；
+- 顶层构建 `exit=0`；
+- 两个重点模块：`plugin_example_runtime` **passed=50 failed=0**、
+  `plugin_example_chatbot` **passed=265 failed=0**（304 s，与改动前的 253 s 同一量级）；
+- 全量回归：`Total: passed=43865 failed=2`，两处都在 `input_delivery`（1184 / 1203），
+  单跑该模块 **passed=139 failed=0** —— 与 Round A 全量里出现过的同一现象（计时抖动），
+  不是本次改动引起。
+
 ## 剩余工作（做完 10b / 10a 之后的具体清单）
 
 1. **步 10 剩下的只有 kit 拆头**（已在两轮里做完的部分见上文两个“实施记录”节）。
