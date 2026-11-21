@@ -5,7 +5,7 @@
 
 ## 引用边界
 
-- 主程序头只允许 SDK 公开面：`agentxx/plugin/api/*`（umbrella 是 `plugin_kit.h`）
+- 主程序头只允许 SDK 公开面：`agentxx/plugin/api/*`（两端共用 `plugin_kit.h`，按端 `agent_plugin_kit.h` / `client_plugin_kit.h`；双端插件两个端头都包含）
   与 `agentxx/util/exception.h`；其余 `agentxx/*`（`agent/`、`middlewares/`、
   `nodes/`、`tools/`、`event/`、`ui/`、`protocol/`、`plugin/` 下的主程序内部头）
   一律不得引用（边界检查见测试模块 `boundaries`）。

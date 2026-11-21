@@ -3,7 +3,7 @@
 
 #include "agentxx/agent/async_work.h"
 #include "agentxx/plugin/api/plugin_api.h"
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
 #include "agentxx/plugin/net_service.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"

@@ -10,7 +10,8 @@
 ///
 /// 线程: 本结构体不带线程。里面的方法都要在**插件 io 线程**上调用
 /// (`QqApi` / `QqGateway` 本来就在那条线程上跑), 完成回调则由主程序投递回来。
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
+#include "agentxx/plugin/api/client_plugin_kit.h"
 
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"

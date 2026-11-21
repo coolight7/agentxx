@@ -14,7 +14,8 @@
 /// - 工具跑在主程序工作线程池, 工作体同样 post 到插件 io 线程再取结果。
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
+#include "agentxx/plugin/api/client_plugin_kit.h"
 
 #include "chatbot_config.h"
 #include "chatbot_core.h"

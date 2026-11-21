@@ -1,7 +1,7 @@
 /// agentxx_rag_search 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
 /// - 从 libagentxx src/tools/rag_search 拆分: 同名工具同行为 (agentxx_rag_search)
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
-/// - 依赖: agentxx/plugin/api/plugin_kit.h (网络经主程序 `<应用名>.net` 表) +
+/// - 依赖: agentxx/plugin/api/agent_plugin_kit.h (网络经主程序 `<应用名>.net` 表) +
 ///   cxx_utilxx_base (Json / 字符串工具 / 日志) + agentxx/util/exception.h +
 ///   agentxx/util/tool_result.h + fmt
 /// - 与原实现的差异点:
@@ -13,7 +13,7 @@
 ///     注入同思路; 分块/相似度/检索逻辑为纯函数, 行为与原版一致
 #pragma once
 
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
 #include "agentxx/util/exception.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"

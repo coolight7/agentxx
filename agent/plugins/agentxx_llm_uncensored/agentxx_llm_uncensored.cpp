@@ -13,7 +13,7 @@
 /// - 不注册工具、不起线程、不做 IO; stop 无需撤销自管资源 (贡献随实例摘除);
 /// - 多实例契约: 状态只放在本文件定义的实例上下文里, 不使用可变全局。
 #include "agentxx/plugin/api/plugin_guard.h"
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
 #include "utilxx_base/json.h"
 
 #include <string>

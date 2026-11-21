@@ -5,7 +5,7 @@
 #include "agentxx/plugin/api/client_plugin_api.h"
 // 主程序侧 vtable/管理器实现使用 SDK 提供的跨边界字符串工具 (PluginStringView /
 // PluginString); 该头后续会拆为 pluginxx/kit/kit.h (通用部分) + 本头的业务 helper
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/client_plugin_kit.h"
 #include "agentxx/plugin/net_service.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"

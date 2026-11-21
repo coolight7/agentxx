@@ -23,7 +23,7 @@
 | 层 | 位置 | 职责 |
 |---|---|---|
 | 描述层（库） | `agent/third_party/cxx_pluginxx_ui`（submodule） | 模型 / 解析 / 适配 / 纯文本降级 / 构建器 / kit / 能力段 |
-| 插件 SDK | `agent/lib/include/agentxx/plugin/api/plugin_kit.h` | 业务 helper + `agentxx::ui`（描述层）+ `agentxx::ui::kit`（扩展 kit）+ 提交入口 |
+| 插件 SDK | `agent/lib/include/agentxx/plugin/api/plugin_kit.h` + `client_plugin_kit.h` | 业务 helper（通用 / agent 侧 / client 侧三个头）+ `agentxx::ui`（描述层）+ `agentxx::ui::kit`（扩展 kit）+ 提交入口 |
 | 扩展 kit（生成物） | `agent/lib/include/agentxx/plugin/api/agentxx_ui_kit.g.h`、`agent/js/agentxx_ui_kit.js` | agentxx 的留白规则与常用组合（定义在 `agent/schema/agentxx-ui-kit.def.json`） |
 | TUI 渲染 | `agent/client/{include,src}/agentxx-client/io/tui/ui_components.*` | 处理**适配后**的模型；`measureItem` 与渲染同源 |
 | 中断桥接 | `agent/lib/include/agentxx/middlewares/interrupt_ui.h` | 中断描述块 ↔ 组件项（域内词汇与描述层词汇的映射） |

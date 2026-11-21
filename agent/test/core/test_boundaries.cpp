@@ -177,7 +177,7 @@ void checkClientIncludes(const fs::path& root, Violations& v, size_t& scanned) {
 /// 规则 2: 插件依赖边界 —— 只引用 SDK 公开头与工具库公开头
 ///
 /// 允许的主程序公开头 (插件 SDK 边界):
-/// - `agentxx/plugin/api/*`: 插件 C ABI 头与主程序侧 kit (umbrella 为 plugin_kit.h)
+/// - `agentxx/plugin/api/*`: 插件 C ABI 头与主程序侧 kit (`plugin_kit.h` 两端共用, `agent_plugin_kit.h` / `client_plugin_kit.h` 按端)
 /// - `agentxx/util/exception.h`: 异常分类与统一捕获 (插件错误上报依赖)
 /// 其余 `agentxx/*` (agent / middlewares / nodes / tools / event / ui / protocol /
 /// plugin 下的主程序内部头) 都属于主程序内部实现, 插件不得引用。

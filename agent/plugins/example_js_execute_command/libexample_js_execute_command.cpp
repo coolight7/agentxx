@@ -11,7 +11,7 @@
 /// - destroy: 只释放本地状态, 不再调用主程序接口。
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
 
 #include "fmt/format.h"
 #include <filesystem>

@@ -218,8 +218,9 @@ path/to/agentxx_test --log-level warn string_util regex
       fmt + yaml-cpp (仅 Boost 头); 产物 `libcxx_pluginxx(.so|_static.a)`
         - SDK 分层: 通用 (跨边界字符串工具/通用表聚合 PluginIfaceCore/Task 锚定协程/锚定原语/
           CancelRegistry/OpCtl/ArgReader/PluginBaseT<IfacesT>/导出宏) 在插件框架,
-          主程序业务 helper 在主程序侧 `agentxx/plugin/api/plugin_kit.h` (umbrella: 包含插件框架的头 +
-          逐条 `using` 引入 agentxx::plugin, 插件源码零改动)
+          主程序业务 helper 在主程序侧三个头里按端分工: `plugin_kit.h` (两端共用 —— 框架名引入 +
+          广播 / 网络便捷入口 + 生命周期入口公共实现 + `agentxx::ui` 别名)、`agent_plugin_kit.h`
+          (agent 侧) 与 `client_plugin_kit.h` (client 侧); 双端插件两个端头都包含
         - 通用表实现 (十张表的**定义与实现**) 也在插件框架: `host/host_core.h`
           (`PluginHostCore<InstanceT>`: 广播/能力实现链/调度/任务/取消投递的通用实现 +
           功能埋点原语 `declarePoint`/`emitPointAsync`) +

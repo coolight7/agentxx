@@ -20,7 +20,7 @@
 /// unload 回调中的显式反注册仅为 SDK 惯例示范。
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
 
 #include "fmt/format.h"
 #include <memory>

@@ -861,20 +861,58 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
   单跑 `event_subagent` + `input_delivery` 为 `passed=191 failed=0`，全过 —— 判定为全量负载下的
   抖动，不是本次改动引起。
 
+## 实施记录：步 10 收尾（kit 拆三个头）
+
+### 结果
+
+`agent/lib/include/agentxx/plugin/api/` 下按端拆成三个头（**不保留转发头**）：
+
+| 头 | 行数 | 内容 |
+|---|---|---|
+| `plugin_kit.h` | 782 | 两端共用：`pluginxx::kit` 名字引入、广播便捷入口、网络便捷入口、`createCtxEntry` / `destroyCtxEntry`、`agentxx::ui` 描述层别名 |
+| `agent_plugin_kit.h` | 4989 | agent 侧：`ToolResult` 别名、`AgentIfaces`、`PluginBase`、工具注册与模式构建、图节点、功能埋点、会话运行时、后台任务、工具权限、`AGENTXX_AGENT_PLUGIN_*_EXPORT` |
+| `client_plugin_kit.h` | 1683 | client 侧：`ClientIfaces`、client 表调用、界面组件 / 定时器 / 快捷键、`ClientPluginBase`、`ActionController`、工具特化渲染适配器、`AGENTXX_CLIENT_PLUGIN_*_EXPORT` |
+
+包含点共 55 处同时改名：
+
+- 插件源码 31 个文件：按插件目录的实际用途选端头（扫描 `AGENTXX_AGENT_PLUGIN*` / `PluginBase` /
+  `providePoint` / `graph_node` 与 `AGENTXX_CLIENT_PLUGIN*` / `ClientPluginBase` 判定）；
+  双端插件（chatbot / codegraph / filesystem / execute_command / javascript_engine / planning /
+  system_monitor / websearch / example_js / example_plugin）两个端头都包含；
+- 测试 20 个文件：统一两个端头都包含（用例覆盖整个 SDK 面）；
+- 主程序头 4 个：`plugin_manager.h` / `plugin_mount.h` / `plugin_graph_node.h` → agent 头，
+  `client_plugin_manager.h` → client 头；`plugin_guard.h` 继续包含共用头；
+- `plugin_api.h` 只改注释里的指向。
+
+公共头保留全部公共依赖（asio / fmt / pluginxx / utilxx_base / std），两端头只补各自的 C API 头
+（`plugin_api.h` / `client_plugin_api.h`，client 头另加 `agentxx_ui_kit.g.h`）。这样 client-only
+插件不再看到 agent 业务表与 agent helper，反过来也一样。
+
+### 与 plan 的偏差
+
+- plan §3.7 把 `PluginBase` 列在通用头、agent 侧叫 `AgentPluginBase`；实际 `PluginBase` 就是
+  `PluginBaseT<AgentIfaces>`，改名要动 20 个插件源码且没有功能收益 —— 保留原名放进 agent 头，
+  没有新增 `AgentPluginBase`。
+- `fillAgentPluginInfo` / `fillClientPluginInfo` / `CallToolAwaiter` 与 `createCtxEntry` /
+  `destroyCtxEntry` 原本在同一个 `namespace detail` 块里；按行号切片时第一版漏了两端
+  `namespace detail` 的补全，编译报 `C1075` 并连带一串 `queryInterface 找不到`，现在两端各补一次开闭。
+
+### 验证
+
+- 三个头各自单文件 `cl /Zs`（插件侧 include 与宏组合）通过；
+- 顶层构建 `exit=0`（头文件改动导致全树重编，本次 42 分 42 秒）；
+- 插件相关 19 个模块 + `boundaries`：**passed=4566 failed=0**；
+- 全量回归：**passed=43904 failed=0**。
 ## 剩余工作（做完 10b / 10a / 运行时层协程化之后的具体清单）
 
-1. **步 10 剩下的只有 kit 拆头**（其余已落地，见上文三个"实施记录"节）。同步面现状：
+1. **步 10 已全部落地**（含 kit 拆三个头，见上文"实施记录：步 10 收尾"）。同步面现状：
    - 插件源码：`tableOpSyncWait` 零处；运行时层 `*Sync` 只剩 chatbot（engine/任务运行时注入）
      与 example_runtime（stop 入口），两者都在 `boundaries` 规则 16 的白名单里；
    - kit 内部还剩四处：广播阻塞入口、`addShareStore`（同步工具体）、`checkPathDecisions`、
      `clientTableOp`；
    - 测试里仍有约 20 处（都在 io 线程上，靠 `startTableOp` 的当场回调拿到结果）。
-2. **kit 拆三个头**（`plugin_kit.h` / `agent_plugin_kit.h` / `client_plugin_kit.h`）+ 31 个包含点。
-   难点是现状**不是按端分块**：client 的两段在 734/834 行（`client 表便捷调用` / `client 展示面
-   便捷入口`），而两边共用的 `PluginBase` 在 2537、`ClientPluginBase` 在 6250；拆之前要先把
-   client 那两段搬到文件尾部（或直接搬进新头并调好包含顺序），否则只能得到"共用一个头"的假拆分。
-   **动这块要单独安排一轮**：头文件改动会让全树重编（约 40 分钟构建 + 18 分钟全量回归），
-   不适合和其它步骤混在一次验证里。
+2. ~~kit 拆三个头~~ 已完成：`plugin_kit.h`（两端共用）/ `agent_plugin_kit.h` /
+   `client_plugin_kit.h` 三个头 + 55 处包含点同时切换，不保留转发头；详见上文该节与偏差说明。
 3. ~~步 12（夹具统一带插件线程与池）~~：已落地 `agent/test/include/agentxx-test/plugin/`
    `plugin_thread_fixture.h`，13 个插件模块已接入（见上文"实施记录：步 12"）；剩
    `client_plugins`（client 侧管理器同样支持 `setPluginExecutor`，接法一致）与

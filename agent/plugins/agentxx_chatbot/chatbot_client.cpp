@@ -18,7 +18,8 @@
 /// 连接就绪/重连时各发一次 refresh 请求补一份快照, 晚接入的客户端不会停在占位提示上。
 #include "agentxx/plugin/api/agentxx_broadcast_ids.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
+#include "agentxx/plugin/api/client_plugin_kit.h"
 
 #include "chatbot_panel.h"
 #include "chatbot_panel_ui.h"

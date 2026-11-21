@@ -181,12 +181,13 @@ auto b64 = utilxx_base::base64Encode(data);
 
 - 业务表 (tools/permission/session/model/prompt/resources/graph 与 client 侧全部表)
   由主程序定义与实现，见 `agentxx/plugin/api/plugin_api.h` / `client_plugin_api.h`
-- **SDK 分层**: 通用部分 (`pluginxx/kit/kit.h` / `guard.h`) 在 `cxx_pluginxx`，业务 helper
-  (工具注册 `tool`（按实现体形态分派: kit 协程体 / 同步体 / asio 协程体）、`ToolSchemaBuilder`、`providePoint`、
-  图节点、工具权限声明、client 侧渲染与 `ClientPluginBase`) 在
-  `agentxx/plugin/api/plugin_kit.h` / `plugin_guard.h`；后者是 **umbrella** 头 (包含
-  pluginxx 头 + 业务部分)，并把通用名以逐条 `using` 引入 `agentxx::plugin` —— 因此
-  插件源码的 `#include` 路径与 `agentxx::plugin::Xxx` 写法**零改动**；
+- **SDK 分层**: 通用部分 (`pluginxx/kit/kit.h` / `guard.h`) 在 `cxx_pluginxx`，业务 helper 按端
+  分成三个头 (`agentxx/plugin/api/`)：`plugin_kit.h` 两端共用 (框架名引入、广播 / 网络便捷入口、
+  生命周期入口公共实现 `createCtxEntry` / `destroyCtxEntry`、`agentxx::ui` 别名)、
+  `agent_plugin_kit.h` (工具注册 `tool`（按实现体形态分派: kit 协程体 / 同步体 / asio 协程体）、
+  `ToolSchemaBuilder`、`providePoint`、图节点、工具权限声明、会话运行时 / 后台任务、`PluginBase`) 与
+  `client_plugin_kit.h` (client 六张表调用、界面组件、`ClientPluginBase`)；三者都把通用名以逐条
+  `using` 引入 `agentxx::plugin`，双端插件两个端头都包含。`plugin_guard.h` 是边界异常守卫；
   通用基类 `pluginxx::PluginBaseT<IfacesT>` 以主程序接口表聚合为模板实参，agentxx 侧
   `PluginBase : PluginBaseT<AgentIfaces>` 只补业务 helper 并覆写 `onHostReady()` 挂钩业务事件
 - agentxx 侧配套头: `agentxx/plugin/plugin_framework.h` (把插件框架的类型以逐条 `using` 引入
@@ -227,26 +228,30 @@ auto b64 = utilxx_base::base64Encode(data);
 
 ---
 
-## 6. C++ 插件开发方式 (SDK `plugin_kit.h`)
+## 6. C++ 插件开发方式 (SDK `agent_plugin_kit.h` / `client_plugin_kit.h`)
 
-推荐使用官方 header-only SDK `plugin_kit.h` (位于 `agentxx/plugin/api/plugin_kit.h`)。
+推荐使用官方 header-only SDK (位于 `agentxx/plugin/api/`)：agent 侧插件包含 `agent_plugin_kit.h`，
+client 侧插件包含 `client_plugin_kit.h`，双端插件两个都包含 (两者都已包含两端共用的 `plugin_kit.h`)。
 最新框架提供了开箱即用的声明式导出宏、链式 Schema 构建器、宽容参数提取器与通用取消注册中心。
 其中 `Task<T>` 协程 (以及 `sleep`/`yield`/`offload`/`call_tool`/`invoke_cap` 原语) 的推进
 交由主程序的**协程驱动桥**调度：见 §16 与 §15 的生命周期契约。
 
-该 SDK 由两部分组成 (插件源码只需包含上面的 umbrella 头，写法不变)：
+该 SDK 由框架通用部分与主程序业务部分两段组成 (业务部分再按端拆开)：
 
 | 部分 | 位置 | 内容 |
 |---|---|---|
 | 通用 (与主程序业务无关) | `pluginxx/kit/kit.h`、`pluginxx/kit/guard.h` | `PluginStringView`/`PluginString`、通用接口表查询与聚合 `PluginIfaceCore`、`Logger`、`Task<T>` 与锚定原语 (`sleep`/`yield`/`offload`/`invoke_cap`)、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏、边界异常守卫 |
-| agentxx 业务 | `agentxx/plugin/api/plugin_kit.h`、`plugin_guard.h` | 接口表聚合 `AgentIfaces`/`ClientIfaces`、工具注册 `tool`（kit 协程体 / 同步体 / asio 协程体）、`ToolSchemaBuilder`、`providePoint`、图节点、工具权限声明、`call_tool`、client 侧渲染与 `ClientPluginBase` |
+| agentxx 业务 (两端共用) | `agentxx/plugin/api/plugin_kit.h` | 框架通用名引入、广播 / 网络便捷入口、生命周期入口公共实现 (`createCtxEntry` / `destroyCtxEntry`)、`agentxx::ui` 别名 |
+| agentxx 业务 (agent 侧) | `agentxx/plugin/api/agent_plugin_kit.h` | 接口表聚合 `AgentIfaces`、工具注册 `tool`（kit 协程体 / 同步体 / asio 协程体）、`ToolSchemaBuilder`、`providePoint`、图节点、工具权限声明、`call_tool`、会话运行时 / 后台任务、`PluginBase`、`AGENTXX_AGENT_PLUGIN_*_EXPORT` |
+| agentxx 业务 (client 侧) | `agentxx/plugin/api/client_plugin_kit.h` + `plugin_guard.h` | 接口表聚合 `ClientIfaces`、client 六张表调用、界面组件与 `ClientPluginBase`、`ActionController`、工具特化渲染适配器、`AGENTXX_CLIENT_PLUGIN_*_EXPORT` |
 
 `agentxx::plugin::PluginBase` 即 `pluginxx::PluginBaseT<AgentIfaces>` 的 agentxx 派生类
-(补业务 helper 并在 `onHostReady()` 中挂钩会话轮次开始事件)。插件源码继续写
-`agentxx::plugin::Xxx` 即可 —— umbrella 头已用逐条 `using` 把通用名引入该命名空间。
+(补业务 helper 并在 `onHostReady()` 中挂钩会话轮次开始事件), `ClientPluginBase` 同理以
+`ClientIfaces` 为模板实参。插件源码继续写 `agentxx::plugin::Xxx` 即可 —— 三个头都用
+逐条 `using` 把通用名引入该命名空间。
 
 ```cpp
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
 
 using namespace agentxx::plugin;
 
@@ -455,7 +460,7 @@ client 侧没有作用域引用 (`PluginxxScopeRef`), 不带 agent 挂载序号�
 当场回调** (注册类调用"登记后立刻可见"的语义与同步调用完全一致), 其它线程排队到 IO 线程。
 注册类调用必须 `co_await` (或等回调) 完成再继续。
 
-C++ 侧只有两种消费形态在 `agentxx/plugin/api/plugin_kit.h` (业务便捷层 `xxx(ctx, ...)`
+C++ 侧只有两种消费形态在插件 SDK (`agent_plugin_kit.h` / `client_plugin_kit.h`; 业务便捷层 `xxx(ctx, ...)`
 同样只给这两种形态):
 
 | 形态 | 入口 | 约束 |

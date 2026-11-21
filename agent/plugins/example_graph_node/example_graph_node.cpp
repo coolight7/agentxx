@@ -22,7 +22,7 @@
 ///   (其中 messages 通道的写入由主程序转成会话上下文写入)
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
 #include "fmt/format.h"
 #include "utilxx_base/json.h"
 

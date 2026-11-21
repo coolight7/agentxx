@@ -10,7 +10,8 @@
 /// 请求、wake 三个窗口不丢失、主程序回调不重入插件协程、取消只产生一个终态。
 #include "agentxx-test/plugin/test_plugin_bridge.h"
 
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
+#include "agentxx/plugin/api/client_plugin_kit.h"
 
 #include "asio/awaitable.hpp"
 #include "asio/post.hpp"

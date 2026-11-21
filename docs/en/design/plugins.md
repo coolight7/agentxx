@@ -133,18 +133,18 @@ The plugin framework itself is split into a third standalone project, `agent/thi
   - optional overrides: `detachDomainRegistrations`, `clearDomainRegistrations`, `detachDomainOwnedResources`, `applyDeclaredResources`, `releaseInstanceResources`, `onInstanceEnabledChanged`, `onInstanceLoaded`/`onInstanceUnloaded`, `cascadeUnloadEnabledOnly`, `logTag`.
   - Both agentxx managers derive from it (`PluginManager` and `ClientPluginManager`). The client keeps its own *loading* path (dlopen offloaded to an internal thread pool, interface negotiation, dual agent/client entry probing) but shares unload/start-stop/cascade/close-wait with the agent side.
   - `destroyPlugin()` (destroy entry lookup + call + host control block retirement) lives on `pluginxx::PluginInstanceBase`; both instance classes only provide their own `pluginDestroySymbol()`.
-- **SDK layering**: the generic part lives in the kernel, the domain helpers (tool registration / hooks / graph nodes / permission declarations / client rendering and `ClientPluginBase`) live in the host umbrella header `agentxx/plugin/api/plugin_kit.h`, which includes the kernel headers and re-exports the generic names into `agentxx::plugin` — plugin sources stay unchanged.
+- **SDK layering**: the generic part lives in the kernel; the host business helpers are split by side into three headers under `agentxx/plugin/api/`: `plugin_kit.h` (shared: kernel name re-exports, broadcast / net helpers, lifecycle entry helpers, `agentxx::ui` alias), `agent_plugin_kit.h` (tool registration / schema builder / graph nodes / permission declarations / runtime / async work / `PluginBase`) and `client_plugin_kit.h` (client tables / UI components / `ClientPluginBase`). Dual-side plugins include both side headers.
 - Cross-boundary C names / struct names / IID strings are frozen: plugins compiled before the split still load into the new host unchanged.
 
 ---
 
-## 6. C++ Plugin Development Workflow (SDK `plugin_kit.h`)
+## 6. C++ Plugin Development Workflow (SDK `agent_plugin_kit.h` / `client_plugin_kit.h`)
 
-We recommend using the official header-only SDK `plugin_kit.h` (`agentxx/plugin/api/plugin_kit.h`).
+We recommend the official header-only SDK under `agentxx/plugin/api/`: agent-side plugins include `agent_plugin_kit.h`, client-side ones include `client_plugin_kit.h`, and dual-side plugins include both (both already pull in the shared `plugin_kit.h`).
 The modern framework provides declarative export macros, a fluent schema builder, tolerant argument parsing, and centralized cancellation management:
 
 ```cpp
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
 
 using namespace agentxx::plugin;
 

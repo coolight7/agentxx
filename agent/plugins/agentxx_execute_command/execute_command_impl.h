@@ -33,7 +33,8 @@
 /// 可能导致 [StdErr] 全部被裁剪隐藏，LLM 需要额外读取全部才能判断是否存在 [StdErr] 内容
 #pragma once
 
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
+#include "agentxx/plugin/api/client_plugin_kit.h"
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"

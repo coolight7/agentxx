@@ -1,6 +1,7 @@
 /// SDK 反例编译检查的正向对照（必须编译成功）。
 /// 作用：确认检查脚本使用的编译环境有效，避免"全部片段都编译失败"的假阳性。
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
+#include "agentxx/plugin/api/client_plugin_kit.h"
 
 using namespace agentxx::plugin;
 

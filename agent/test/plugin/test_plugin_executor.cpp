@@ -18,7 +18,8 @@
 
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
+#include "agentxx/plugin/api/client_plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "asio/steady_timer.hpp"

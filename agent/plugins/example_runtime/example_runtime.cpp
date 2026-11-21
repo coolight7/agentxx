@@ -25,7 +25,7 @@
 /// 否则根又会有"往通道投消息"的工具, 容易形成自己给自己发消息。
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
 #include "fmt/format.h"
 #include "utilxx_base/json.h"
 

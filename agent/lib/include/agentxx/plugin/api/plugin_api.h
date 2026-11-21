@@ -58,7 +58,7 @@
 /// `pluginxx.scheduler.is_io_thread` (线程本地判定; 有独立插件线程时回答的是
 /// "当前线程是不是插件自己的执行线程")。
 ///
-/// C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
+/// C++ 侧消费形态在 `agentxx/plugin/api/agent_plugin_kit.h` (agent 侧) 与 `client_plugin_kit.h` (client 侧):
 /// `co_await tableOp(ctx, ...)` / `tableOpCallback(ctx, ..., done)` /
 /// `tableOpSyncWait(...)` (只给必须同步回答外部同步 API 的桥用; 在插件执行线程上
 /// 它会拒绝等待 —— 完成回调要投回那条线程, 而它正阻塞在那里)。

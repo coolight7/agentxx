@@ -20,7 +20,8 @@
 #include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
-#include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/api/agent_plugin_kit.h"
+#include "agentxx/plugin/api/client_plugin_kit.h"
 #include "fmt/format.h"
 #include "quickjs.h"
 

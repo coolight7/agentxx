@@ -2109,11 +2109,15 @@ agent/
 │   │   │   │   ├── plugin_api.h      # umbrella: 包含 pluginxx/api/{abi,tables}.h + agent 业务表
 │   │   │   │   │                     #   (tools/permission/session/model/prompt/resources/graph)
 │   │   │   │   ├── client_plugin_api.h # 仅含 pluginxx/api/{abi,tables}.h + client 业务表 (UI 无关语义层)
-│   │   │   │   ├── plugin_kit.h      # agentxx 业务 SDK header-only: 接口表聚合 AgentIfaces/ClientIfaces、
-│   │   │   │   │                     #   tool (kit 协程体/同步体/asio 协程体)、ToolSchemaBuilder、providePoint、
-│   │   │   │   │                     #   图节点、工具权限声明、call_tool、client 渲染/ClientPluginBase;
-│   │   │   │   │                     #   含 pluginxx/kit/kit.h 并以 using 把通用名引入 agentxx::plugin
-│   │   │   │   │                     #   (PluginStringView/PluginString/Task/sleep/offload/spawn/PluginBaseT/...)
+│   │   │   │   ├── plugin_kit.h      # SDK 两端共用部分 header-only: 含 pluginxx/kit/kit.h 并以 using 把通用名
+│   │   │   │   │                     #   引入 agentxx::plugin (PluginStringView/PluginString/Task/sleep/offload/
+│   │   │   │   │                     #   spawn/PluginBaseT/...), 另有广播 / 网络便捷入口、生命周期入口公共实现
+│   │   │   │   │                     #   (createCtxEntry / destroyCtxEntry) 与 agentxx::ui 别名
+│   │   │   │   ├── agent_plugin_kit.h # SDK agent 侧 header-only: AgentIfaces、tool (kit 协程体/同步体/asio
+│   │   │   │   │                     #   协程体)、ToolSchemaBuilder、providePoint、图节点、工具权限声明、
+│   │   │   │   │                     #   call_tool、会话运行时 / 后台任务、PluginBase、AGENTXX_AGENT_PLUGIN_*_EXPORT
+│   │   │   │   ├── client_plugin_kit.h # SDK client 侧 header-only: ClientIfaces、client 六张表调用、
+│   │   │   │   │                     #   界面组件、ClientPluginBase、ActionController、AGENTXX_CLIENT_PLUGIN_*_EXPORT
 │   │   │   │   ├── plugin_guard.h    # 边界异常守卫 (通用部分在 pluginxx/kit/guard.h + client 日志表重载)
 │   │   │   │   └── agentxx_ui_kit.g.h # agentxx 扩展 kit (生成物; 命名空间 agentxx::ui::kit,
 │   │   │   │   │                     #   自包含基础 kit; 定义见 agent/schema/agentxx-ui-kit.def.json)
