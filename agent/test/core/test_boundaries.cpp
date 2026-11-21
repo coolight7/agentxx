@@ -1397,6 +1397,11 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
 /// `clientTableText` / `clientTableHandle`): 它们只在 `create` 这类加载线程上用,
 /// 插件执行线程上会被拒绝。插件日常写法有对应替代 —— 要结果用 `clientTableOpAsync`,
 /// 不要结果用 `clientTableCall` / `*NoWait`, 所以插件源码里不应再出现三个阻塞入口。
+///
+/// 运行时便捷层 (会话运行时与后台任务) 已经拆成“协程原名 + `*Sync` 同步形态”两种;
+/// `*Sync` 只给**确定不在插件执行线程**的位置用 (插件自有 io 线程 / 工作池), 插件源码里
+/// 默认不得出现 —— 新写的代码一律 `co_await`。目前只有 chatbot 的 engine/任务运行时
+/// 注入仍需要同步形态 (它们跑在插件自有 io 线程上), 见下面的白名单。
 void checkPluginTableCallShape(const fs::path& root, Violations& v) {
     static constexpr std::string_view kForbidden[] = {
         "tableOpBlocking(",
@@ -1416,6 +1421,40 @@ void checkPluginTableCallShape(const fs::path& root, Violations& v) {
     // 互等; 要结果就写成协程 (`co_await tableOp`), 不要结果用 `clientTableCall`。
     // JS 引擎也不再享有豁免 (脚本侧表调用一律返回 Promise)。
     static constexpr std::array<std::string_view, 0> kSyncWaitAllowed{};
+
+    /// 运行时便捷层的同步形态 (`plugin_kit.h` 里原名 + `Sync` 后缀的那批)
+    static constexpr std::string_view kRuntimeSyncHelpers[] = {
+        "mountRootSync(",
+        "unmountRootSync(",
+        "openChannelSync(",
+        "closeChannelSync(",
+        "sendInputSync(",
+        "sendTextSync(",
+        "cancelChannelSync(",
+        "selectChannelModelSync(",
+        "respondInterruptSync(",
+        "channelStateJsonSync(",
+        "channelContextMessagesSync(",
+        "listRuntimeJsonSync(",
+        "addTriggerSync(",
+        "removeTriggerSync(",
+        "emitEventSync(",
+        "addRuntimeTimerSync(",
+        "removeRuntimeTimerSync(",
+        "submitAsyncWorkSync(",
+        "cancelAsyncWorkSync(",
+        "getAsyncWorkJsonSync(",
+        "listAsyncWorkJsonSync(",
+    };
+    /// `*Sync` 的现有使用点 (都要在非插件执行线程上):
+    /// - chatbot 的 engine / 任务运行时注入跑在自己的 io 线程上 —— 要等结果, 而那里不是插件执行线程;
+    ///   等它的工具体与命令回调也改完协程后整个名单可以清空
+    /// - 两个示例插件的 `stop` 入口 (卸载期间主程序不再推进新的协程根, 清理只能同步做);
+    ///   新增用法要复核是否真的不在插件执行线程上
+    static constexpr std::string_view kRuntimeSyncAllowed[] = {
+        "plugins/agentxx_chatbot/",
+        "plugins/example_runtime/",
+    };
 
     std::vector<fs::path> files;
     collectSources(root / "plugins", files);
@@ -1471,6 +1510,21 @@ void checkPluginTableCallShape(const fs::path& root, Violations& v) {
                             rel + ": 使用了阻塞式 client 表入口 `" + std::string{name}
                             + "` (要结果用 `clientTableOpAsync`, 不要结果用 `clientTableCall`)"
                         );
+                    }
+                }
+                const auto syncAllowed = std::any_of(
+                    std::begin(kRuntimeSyncAllowed),
+                    std::end(kRuntimeSyncAllowed),
+                    [&rel](std::string_view part) { return rel.find(part) != std::string::npos; }
+                );
+                if (!syncAllowed) {
+                    for (const auto& name : kRuntimeSyncHelpers) {
+                        if (text.find(name) != std::string::npos) {
+                            v.push_back(
+                                rel + ": 使用了运行时同步形态 `" + std::string{name}
+                                + "` (插件执行线程上会与结果派发互等; 写成 `co_await` 同名入口)"
+                            );
+                        }
                     }
                 }
             }

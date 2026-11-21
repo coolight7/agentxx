@@ -780,6 +780,16 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 `*Sync`，行为与改动前一致；它的 start/stop 异步化留到步 12 之后（那时夹具带插件执行器，
 能覆盖到工具体与命令回调上的同类调用）。
 
+### `boundaries` 规则 16 跟进
+
+规则 16 增加一条静态检查：插件源码里不得出现运行时便捷层的 `*Sync` 形态
+（21 个名字，`mountRootSync(` 到 `listAsyncWorkJsonSync(`）。白名单两项，都在注释里写明理由：
+
+- `plugins/agentxx_chatbot/`：engine / 任务运行时的注入点跑在插件自有 io 线程上；
+- `plugins/example_runtime/`：`stop` 入口（卸载期间不再推进新的协程根）。
+
+新增用法要复核"是否真的不在插件执行线程上"，两个名单等相应异步化完成后清空。
+
 ### 验证
 
 - kit 头语法检查（`cl /Zs`，插件侧的 include 与宏组合）通过；
