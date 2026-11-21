@@ -32,7 +32,39 @@
 
 ## 状态
 
-**规划完成（决策全部落定，含 D17），待开工**（2026-11-18）。尚未改动任何代码。
+**已完成**（13 步全部落地；两轮全量回归，最终 `passed=43905 failed=0`）。逐项记录见
+[work.md](work.md)，当前实现形态见 [plugins.md](../../../docs/zh-cn/design/plugins.md)。
+
+落地结果（与上面 6 条目标对应）：
+
+1. 调用面：C API 只"提交 + 回调"；kit 默认异步（原名即协程），只剩 `*NoWait` 提交形态；
+2. 框架通用化：`cxx_pluginxx` 只认"应用 + 作用域"，通用表挂在 `agentxx_plugin_*` 编号下，
+   两端复用代码各一份；
+3. 入口协议：`get_info` 填表、`create` 合并 start（可重入）、`destroy` 异步，同一套
+   "恰好一次 notify"；
+4. 命名：`agentxx_agent_plugin_*` / `agentxx_client_plugin_*`，表 IID 全下划线；
+5. 线程模型：两端管理器启动即构造，各一条插件执行线程 + 一个池
+   （`plugin.thread_pool_workers`，默认 3，两端同值），`AgentContext` / 工具 offload /
+   `dlopen` / 会话加载都借用它；
+6. 工具只剩 `tool`（`pluginxx::Task<ToolResult>` 体），`fast_tool` / `blocking_tool` /
+   `polled_tool` / `registerToolSync` 全删。
+
+代次：`AGENTXX_PLUGIN_API_VERSION` = 8、`AGENTXX_CLIENT_PLUGIN_API_VERSION` = 9。
+
+### 与决策的偏差（实现时定下来的）
+
+| 决策 | 偏差 | 原因 |
+|---|---|---|
+| D10 / D13 删同步桥与全部阻塞助手 | 保留 `pluginxx::tableOpSyncWait` + `SyncWaitThreadPolicy`（默认 `refuseOnPluginThread`，runtime 表与 client 表显式 `allowOnPluginThread`）作为唯一同步等待原语；`tableOpText` / `tableOpOk` / `ioCallSync*` 已删，kit 里只剩 4 处使用 | 生命周期入口（`stop` / `destroy`）与 `create` 期的实例级查询确实需要当场拿结果，同步桥就地唤醒不会自己等自己 |
+| D13 插件源码零同步调用 | 两处 `*Sync` 白名单：`agentxx_chatbot`（engine / 任务运行时注入点跑在自己的线程上）、`example_runtime`（`stop` 入口） | 卸载期间主程序不再推进新的协程根，`spawn` 的清理任务不会启动；`boundaries` 规则 16 静态拦截并写明理由 |
+| plan §3.7 用 `AgentPluginBase` | 保留 `PluginBase` 原名字，放进 agent 头 | 它本就是 `PluginBaseT<AgentIfaces>`，改名要动 20 个插件源码且无功能收益 |
+
+### 附带产出
+
+- `agent/test/include/agentxx-test/plugin/plugin_thread_fixture.h`：插件执行线程 + 工作池夹具，
+  14 个插件模块接入（插件用例第一次在"生产同款线程模型"下跑）；
+- SDK 按端拆三个头：`plugin_kit.h`（两端共用，782 行）/ `agent_plugin_kit.h`（agent，4989 行）/
+  `client_plugin_kit.h`（client，1683 行），55 处包含点同时切换，不保留转发头。
 
 ## 关键决策
 
@@ -65,3 +97,5 @@
 生命周期收敛成"异步 create（含注册）→ 挂载事务 → 异步 stop → 异步 destroy"，因此不再需要
 "create 不能读表/起线程"这类无法执行的规定；线程模型收敛成"每端一个管理器（启动即建）+ 一条
 插件线程 + 一个池（默认 3 条，两端同值）"，其余子系统一律借用这个池。**
+已实现但仍有遗留的事项写在 [work.md](work.md) 文末"剩余工作"：
+`plugin_runtime` 的并发压测断言偶发抖动（未处理）、kit 内部 4 处同步入口（有意保留）。
