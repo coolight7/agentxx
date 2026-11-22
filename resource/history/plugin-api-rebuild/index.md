@@ -65,10 +65,16 @@
   14 个插件模块接入（插件用例第一次在"生产同款线程模型"下跑）；
 - SDK 按端拆三个头：`plugin_kit.h`（两端共用，782 行）/ `agent_plugin_kit.h`（agent，4989 行）/
   `client_plugin_kit.h`（client，1683 行），55 处包含点同时切换，不保留转发头。
-- 关闭期仍可继续清理（`cxx_pluginxx` 子模块提交 `4e800d3`）：`tasks.register_task` /
-  `scheduler.sleep` / `scheduler.offload` 的入口改用 `allowClosing` 租约 + `OpCore` 的
-  `callerMayStop`，于是 `stop` / `destroy` 可以写成 `finishLater` + `ctx.spawn` + `co_await`；
-  `example_runtime` 的 `runtimeStop` 已迁移。
+- 关闭期仍可继续清理（`cxx_pluginxx` 子模块提交 `4e800d3` / 父仓库 `101be76e`）：
+  `tasks.register_task` / `scheduler.sleep` / `scheduler.offload` 的入口改用
+  `allowClosing` 租约 + `OpCore` 的 `callerMayStop`，于是 `stop` / `destroy` 可以写成
+  `finishLater` + `ctx.spawn` + `co_await`；`example_runtime` 的 `runtimeStop` 已迁移。
+- create 事务也协程化（`cxx_pluginxx` 子模块提交 `5a83f80` / 父仓库 `e9eb7247`）：
+  `PluginBaseT::init` 拆成 `attachHost`（同步绑定）+ `onHostReady`（协程业务初始化），
+  create 事务因此把业务初始化与注册事务一起放进 `ctx.spawn`；`PluginBase` 的 round.start
+  订阅改为 `co_await`，启动日志不再有 `subscribe ... failed`；受控轮询工具体里拿到
+  share-store id 改用显式 `allowOnPluginThread`（`asio::awaitable` 里不能 await
+  kit ticket）。
 
 ## 关键决策
 
