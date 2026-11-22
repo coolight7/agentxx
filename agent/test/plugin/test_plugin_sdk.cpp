@@ -510,7 +510,7 @@ TestResult testPluginSdk() {
         } box{&released, &handle, &seen, &seenSession};
 
         SdkCtx ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
 
         g_captured = CapturedRegistration{};
         agentxx::plugin::tool(
@@ -569,7 +569,7 @@ TestResult testPluginSdk() {
     /// (收上下文+载荷 / 只收载荷), 结果就是实现行给出的回答。
     {
         SdkCtx ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_captured = CapturedRegistration{};
         auto pt    = agentxx::plugin::providePoint(
             ctx,
@@ -625,7 +625,7 @@ TestResult testPluginSdk() {
     /// capability: 同步字符串能力 + 异步 Task<string> 能力 (统一 root adapter)。
     {
         SdkCtx ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_captured = CapturedRegistration{};
         XX_TEST_EXPECT_TRUE(
             agentxx::plugin::capability(
@@ -661,7 +661,7 @@ TestResult testPluginSdk() {
         } box{&released, &handle, &finished};
 
         SdkCtx ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_captured = CapturedRegistration{};
         XX_TEST_EXPECT_TRUE(
             agentxx::plugin::capability(
@@ -702,7 +702,7 @@ TestResult testPluginSdk() {
     /// graph_node: 快同步节点（返回节点输出 JSON）+ 输入拥有化 + 取消句柄。
     {
         SdkCtx ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_captured       = CapturedRegistration{};
         auto nodeTicket   = agentxx::plugin::graph_node(
             ctx,
@@ -745,7 +745,7 @@ TestResult testPluginSdk() {
     /// graph_node: 快同步节点异常 → FAILED（不越界、不悬垂）。
     {
         SdkCtx ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_captured       = CapturedRegistration{};
         auto nodeTicket   = agentxx::plugin::graph_node(
             ctx,
@@ -785,7 +785,7 @@ TestResult testPluginSdk() {
         } box{&released, &handle, &finished, &seenState};
 
         SdkCtx ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_captured       = CapturedRegistration{};
         auto nodeTicket   = agentxx::plugin::graph_node(
             ctx,

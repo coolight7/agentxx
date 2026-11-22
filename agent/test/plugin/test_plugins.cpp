@@ -1261,7 +1261,7 @@ throw new Error("top-level rollback probe");
             struct SlowCtx : public agentxx::plugin::PluginBase {};
 
             static SlowCtx slowCtx;
-            slowCtx.init(inst23->hostView());
+            slowCtx.attachHost(inst23->hostView());
             const auto slowRef = scopeRefOf(*ctx->pluginManager);
             agentxx::plugin::tool(
                 slowCtx,
@@ -1926,7 +1926,7 @@ throw new Error("top-level rollback probe");
             struct SlowCtx : public agentxx::plugin::PluginBase {};
 
             static SlowCtx slowCtx;
-            slowCtx.init(inst31->hostView());
+            slowCtx.attachHost(inst31->hostView());
             const auto slowRef = scopeRefOf(*ctx->pluginManager);
             agentxx::plugin::tool(
                 slowCtx,
@@ -1960,7 +1960,7 @@ throw new Error("top-level rollback probe");
             struct BoomCtx : public agentxx::plugin::PluginBase {};
 
             static BoomCtx boomCtx;
-            boomCtx.init(inst31->hostView());
+            boomCtx.attachHost(inst31->hostView());
             const auto boomRef = scopeRefOf(*ctx->pluginManager);
             agentxx::plugin::tool(
                 boomCtx,
@@ -1989,7 +1989,7 @@ throw new Error("top-level rollback probe");
             struct MsgCtx : public agentxx::plugin::PluginBase {};
 
             static MsgCtx msgCtx;
-            msgCtx.init(inst31->hostView());
+            msgCtx.attachHost(inst31->hostView());
             const auto msgRef = scopeRefOf(*ctx->pluginManager);
             agentxx::plugin::tool(
                 msgCtx,
@@ -2767,7 +2767,7 @@ throw new Error("top-level rollback probe");
         struct FakeCtx : public agentxx::plugin::PluginBase {};
 
         FakeCtx fctx;
-        fctx.init(fakeInst->hostView());
+        fctx.attachHost(fakeInst->hostView());
         const auto fakeRef = scopeRefOf(*rollbackCtx->pluginManager);
         agentxx::plugin::tool(
             fctx,
@@ -4076,7 +4076,7 @@ throw new Error("top-level rollback probe");
 
         struct RoundProbeCtx : public agentxx::plugin::PluginBase {};
         RoundProbeCtx probe;
-        probe.init(probeInst->hostView());
+        probe.attachHost(probeInst->hostView());
 
         // 1) 广播表可用
         auto* bcIface = agentxx::plugin::queryInterface<PluginxxBroadcastsIface>(
@@ -4101,6 +4101,16 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(sub != nullptr);
 
         // 3) PluginBase 订阅的清理回调生效: 已取消标记在轮次开始后被清掉
+        //    (create 事务里由 `onHostReady` 自动订阅; 这里直接订阅同一个处理器)
+        auto* roundSub = agentxx::plugin::subscribePluginBroadcast(
+            probeInst->hostView(),
+            bcIface,
+            nullptr,
+            "agentxx.agent.round.start",
+            &agentxx::plugin::PluginBase::onRoundStartEvent,
+            &probe
+        );
+        XX_TEST_EXPECT_TRUE(roundSub != nullptr);
         const std::string sid = "sess-round-start";
         probe.cancelRegistry.cancel(sid);
         XX_TEST_EXPECT_TRUE(probe.cancelRegistry.isCanceled(sid));

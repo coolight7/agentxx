@@ -1179,6 +1179,11 @@ asio::awaitable<void> test_oversized_injected_input_offload() {
     XX_TEST_EXPECT_TRUE(viewMessagesHasText(fx->agent, fx->sessionId, stepTail));
 
     // inject: 请求里是分页后的内容, 权威上下文里没有它 (inject 语义不变)
+    // 先等它真的落到某次请求上: 全量跑时机器忙, 这条注入可能晚于上面那个 turnResults
+    // 条件到达 (看到的会是上一轮的请求)
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return g_da_sim_last_request.dump().find("inject line 001") != std::string::npos;
+    }));
     const auto dumped = g_da_sim_last_request.dump();
     XX_TEST_EXPECT_TRUE(dumped.find("Content offloaded") != std::string::npos);
     XX_TEST_EXPECT_TRUE(dumped.find("inject line 001") != std::string::npos);

@@ -373,10 +373,15 @@ path/to/agentxx_test --log-level warn string_util regex
   `agentxx_plugin_agent_destroy` 实例对 (client 侧 `agentxx_plugin_client_create` / `_destroy`)。
   【API v1 规范】全局 API 版本及全部接口表版本均重置为 1；明确 8 字节结构体对齐与定长基础类型 (`int32_t/int64_t/uint64_t`)；跨边界函数统一 `PLUGINXX_CALL` 调用约定；结构体参数一律传递指针 (`const Struct*`)，结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码；核心 vtable 精简为 `alloc/free` 操作 (去除了 `strdup`，采用头文件内联 `pluginxx_strdup`)。
   【生命周期契约 (必备)】所有插件必须导出 `agentxx_plugin_{agent,client}_{start,stop}`:
-  `create` 只构造上下文 (`new Ctx + init(host)`, 不注册/不起线程), `start` 是注册事务
-  (在主程序 IO 线程执行, 失败返回 `NULL + error` 由主程序回滚), `stop` 撤销自管资源
+  `create` 只构造上下文 (`new Ctx + attachHost(host)`, 不注册/不起线程), `start` 是注册事务
+  (在插件执行线程执行, 失败返回 `NULL + error` 由主程序回滚), `stop` 撤销自管资源
   (线程/定时器/订阅, 可重复), `destroy` 只释放本地对象。缺失 start/stop 的插件
   主程序拒绝加载 (不再支持 create 期注册的旧形态)。
+  【create 事务是协程】`attachHost(host)` 是同步的 (只填 host / iface / log —— `spawn`
+  依赖它们), 紧接着的业务初始化是协程 `onHostReady()` (订阅广播、读配置这类要调表的
+  动作), 与注册事务一起由 `createCtxEntry` 进 `ctx.spawn(...)`；插件执行线程上不能
+  同步等表, 所以这里只能是协程。自定义上下文 (自带 `init(host)`、不派生 `PluginBaseT`)
+  仍走旧的同步路径。
   SDK 侧用 `AGENTXX_PLUGIN_AGENT_EXPORT(Ctx, Name, Ver, Desc, StartFn, StopFn)`
   (client 侧同名参数) 一次生成五个入口; 手写 create/destroy 的插件用
   `AGENTXX_PLUGIN_{AGENT,CLIENT}_LIFECYCLE_EXPORT(Ctx, StartFn, StopFn)` 只生成 start/stop。

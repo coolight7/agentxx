@@ -628,7 +628,7 @@ TestResult testPluginBridge() {
     {
         harness.clear();
         BridgeCtx ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         int steps = 0;
@@ -684,7 +684,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe; // 必须比 ctx 声明更早: ctx 析构时桥会终结残留根
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         bool                                        resumed = false;
@@ -732,7 +732,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         bool wokeDuringDriver = false;
@@ -776,7 +776,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         int steps = 0;
@@ -823,7 +823,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         bool resumed = false;
@@ -870,7 +870,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         agentxx::plugin::tool(
@@ -914,7 +914,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         bool bodyRan = false;
@@ -950,7 +950,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         bool sleepStarted = false;
@@ -1005,7 +1005,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         bool bodyRan = false;
@@ -1043,7 +1043,7 @@ TestResult testPluginBridge() {
         NotifyProbe probeA;
         NotifyProbe probeB;
         BridgeCtx   ctxA;
-        ctxA.init(&host);
+        ctxA.attachHost(&host);
         g_capturedTool = CapturedTool{};
         agentxx::plugin::tool(
             ctxA,
@@ -1058,7 +1058,7 @@ TestResult testPluginBridge() {
         auto specA = g_capturedTool.spec;
 
         BridgeCtx ctxB;
-        ctxB.init(&host);
+        ctxB.attachHost(&host);
         g_capturedTool = CapturedTool{};
         agentxx::plugin::tool(
             ctxB,
@@ -1106,7 +1106,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         int  bodyRuns   = 0;
@@ -1205,7 +1205,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         agentxx::plugin::tool(
@@ -1292,7 +1292,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         int bodyRuns = 0;
@@ -1348,7 +1348,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         constexpr int kSteps = agentxx::plugin::detail::PollOneBridge::kPollBurstMax + 40;
@@ -1404,7 +1404,7 @@ TestResult testPluginBridge() {
     {
         harness.clear();
         BridgeCtx         ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         PendingTableCalls calls;
 
         auto start = [&calls, &harness](PluginxxOperatorCallback cb, void* ud, PluginxxString*) {
@@ -1472,7 +1472,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         PendingTableCalls calls;
@@ -1538,7 +1538,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         PendingTableCalls        calls;
@@ -1608,7 +1608,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         PendingTableCalls calls;
@@ -1659,7 +1659,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         PendingTableCalls calls;
@@ -1709,7 +1709,7 @@ TestResult testPluginBridge() {
         harness.clear();
         OperatorNotifyProbe probe;
         BridgeCtx            ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
 
         auto notify = probe.notify();
         auto later  = pluginxx::finishLater(&notify);
@@ -1750,7 +1750,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         int resumed = 0;
@@ -1802,7 +1802,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         agentxx::plugin::tool(
@@ -1851,7 +1851,7 @@ TestResult testPluginBridge() {
         harness.clear();
         NotifyProbe probe;
         BridgeCtx   ctx;
-        ctx.init(&host);
+        ctx.attachHost(&host);
         g_capturedTool = CapturedTool{};
 
         PendingTableCalls calls;

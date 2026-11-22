@@ -1259,12 +1259,19 @@ public:
 
     /// 写入会话共享存储 (经主程序 agentxx.agent.session 接口表; 返回新条目 id, 失败 -1)
     ///
-    /// - **只给同步工具体** (它们不能写成协程, 且跑在工作线程池上, 不会卡住插件线程);
-    /// - 协程里请用下面的 `addShareStore(ctx, ...)` 形态。
+    /// - **只给必须当场拿到 id 又不能写成协程的调用点**; 协程里请用下面的
+    ///   `addShareStore(ctx, ...)` 形态;
+    /// - 同步工具体跑在工作线程池上, 默认就能等 (不占插件线程);
+    /// - `allowOnPluginThread = true` 允许在插件执行线程上等一次 io 往返 —— 只给
+    ///   受控轮询工具体 (`asio::awaitable`): kit 的 ticket awaiter 依赖自有 promise,
+    ///   那里无法 `co_await` 表调用, 而输出超限时要拿 id 才能写提示。安全性靠
+    ///   “工作体只在主程序 io 上执行” (`add_share_store` 就是), 代价是该端插件
+    ///   线程被占住一个往返。
     int64_t addShareStore(
         const ScopeRef&    agent,
         PluginxxStringView tid,
-        std::string_view   content
+        std::string_view   content,
+        bool               allowOnPluginThread = false
     ) const {
         if (!host || !iface.session || !iface.session->add_share_store) {
             return -1;
@@ -1276,7 +1283,10 @@ public:
             [this, &ref, &tid, &text](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 auto contentSv = PluginStringView::from(text.data(), text.size());
                 return iface.session->add_share_store(host, &ref, &tid, &contentSv, cb, ud, err);
-            }
+            },
+            /*timeoutMs=*/0,
+            allowOnPluginThread ? pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
+                                : pluginxx::SyncWaitThreadPolicy::refuseOnPluginThread
         );
         return out.ok() ? out.integer(-1) : int64_t{-1};
     }
@@ -1304,9 +1314,15 @@ public:
     int64_t addShareStore(
         const ScopeRef&  agent,
         std::string_view tid,
-        std::string_view content
+        std::string_view content,
+        bool             allowOnPluginThread = false
     ) const {
-        return addShareStore(agent, PluginStringView::from(tid.data(), tid.size()), content);
+        return addShareStore(
+            agent,
+            PluginStringView::from(tid.data(), tid.size()),
+            content,
+            allowOnPluginThread
+        );
     }
 
     /// 会话生效的工作目录 (**协程形态**)
@@ -1380,38 +1396,46 @@ public:
         });
     }
 
-protected:
+public:
 
-    /// 业务挂钩: 基类 [init] 末尾调用 —— 订阅会话轮次开始广播, 自动为当前会话重置
-    /// 实例级取消登记 (主程序下发 cancel 时已通过 execute_cancel 写入 CancelRegistry)
-    void onHostReady() override {
-        if (!iface.broadcasts || !iface.broadcasts->subscribe_broadcast) {
+    /// 轮次开始广播处理器: 清掉该会话的取消标记
+    ///
+    /// create 事务在 `onHostReady` 里自动订阅本处理器; 公开出来是为了让测试能直接
+    /// 订阅同一个处理器 (不起 create 事务也能验行为)。
+    static void PLUGINXX_CALL onRoundStartEvent(const PluginxxStringView* ev, void* ud) {
+        auto* self = static_cast<PluginBase*>(ud);
+        if (!self || !ev || !ev->data) {
             return;
         }
-        // 订阅主程序总线 (基类不知道 agent 引用, 会话事件一并到达)
-        roundStartSub_ = subscribePluginBroadcast(
-            host,
-            iface.broadcasts,
+        try {
+            auto j = utilxx_base::Json::parse(
+                std::string_view{ev->data, static_cast<size_t>(ev->size)}
+            );
+            std::string sid = j.value("sessionId", "");
+            if (!sid.empty()) {
+                self->cancelRegistry.clearCanceled(sid);
+            }
+        } catch (...) {
+        }
+    }
+
+    /// 业务初始化 (**协程**; create 事务在 `attachHost` 之后 await 它): 订阅会话轮次
+    /// 开始广播, 自动为当前会话重置实例级取消登记
+    /// (主程序下发 cancel 时已通过 execute_cancel 写入 CancelRegistry)
+    pluginxx::Task<void> onHostReady() override {
+        if (!iface.broadcasts || !iface.broadcasts->subscribe_broadcast) {
+            co_return;
+        }
+        // 订阅主程序总线 (基类不知道 agent 引用, 会话事件一并到达);
+        // 协程形态拿到句柄: 插件执行线程上不能同步等表
+        auto result = co_await subscribePluginBroadcast(
+            *this,
             nullptr,
             "agentxx.agent.round.start",
-            [](const PluginxxStringView* ev, void* ud) {
-                auto* self = static_cast<PluginBase*>(ud);
-                if (!self || !ev || !ev->data) {
-                    return;
-                }
-                try {
-                    auto j = utilxx_base::Json::parse(
-                        std::string_view{ev->data, static_cast<size_t>(ev->size)}
-                    );
-                    std::string sid = j.value("sessionId", "");
-                    if (!sid.empty()) {
-                        self->cancelRegistry.clearCanceled(sid);
-                    }
-                } catch (...) {
-                }
-            },
+            &PluginBase::onRoundStartEvent,
             this
         );
+        roundStartSub_ = subscriptionOf(result);
         if (!roundStartSub_) {
             // 订阅失败时取消标记只能靠每个工具根开始时自清 (见 detail::registerToolWith*Body),
             // 这里明确提示一次, 避免以后排查只能靠现象
@@ -1420,6 +1444,7 @@ protected:
                 "marks will only be cleared when the next tool root starts"
             );
         }
+        co_return;
     }
 
 private:

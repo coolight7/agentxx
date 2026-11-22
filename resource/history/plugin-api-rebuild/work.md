@@ -998,6 +998,68 @@ kit（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）删掉 16 个**已�
 关闭期受理的是**调度原语** `register_task` / `sleep` / `offload`；业务表里只读查询、取消、
 订阅撤销这类收缩型入口按各自的 `allowClosing` 放行，写入/新注册类照旧拒。
 
+## 实施记录：create 事务协程化（`attachHost` + `onHostReady`）
+
+目标：`stop` / `destroy` 能写协程之后，剩下的最后一个同步点 —— create 里的业务初始化
+（`PluginBase` 订阅 round.start）。它在插件执行线程上跑，那里的同步等表会被策略拒掉，
+于是启动日志一直有 `plugin kit: subscribe ... failed`，取消标记只能靠工具根自清。
+
+### 框架侧（`cxx_pluginxx`，子模块提交 `5a83f80`）
+
+`PluginBaseT::init(host)` 拆成两步：
+
+- `attachHost(host)`：同步，只填 `host` / `iface` / `log` —— `spawn` 本身就依赖它们，
+  所以绑定必须在起协程之前完成；
+- `onHostReady()`：**协程**（`virtual Task<void>`），业务初始化写这里。
+
+`createInstanceEntry` 因此变成：同步阶段只“构造 + `attachHost` + 写 `*plugin_ctx`”，
+之后 `ctx.spawn(...)` 里 `co_await onHostReady()` 再跑注册事务，完成后经 `notify` 交回。
+细节：
+
+- `notify` 是借用指针，进协程前按值拷一份 `PluginxxOperatorNotify`；失败路径用
+  `notifyLifecycleFailure(host, &done, nullptr, why)`（异步时 `err` 可能已失效，
+  原因走 notify payload）；
+- 新增概念 `pluginxx::detail::KitInstanceCtx`（要求 `attachHost` + `onHostReady`）：
+  不满足的自定义上下文（`example_js_execute_command` 的 `ShellCtx`、自带 `init(host)`）
+  仍走旧的同步路径，行为不变；
+- 主机没有 `pluginxx.tasks` 表时 `spawn` 不可用，退回同步路径（跳过 `onHostReady`）
+  并记一条警告。
+
+`ctx.spawn` 不阻塞也不自建循环：登记任务（lease）+ 首步投到插件私有 reactor +
+申请**一张**驱动票；每张票只 `poll_one()` 一步，跑完就回，和别的插件的回调交错。
+
+### 插件与测试
+
+- `agent_plugin_kit.h`：`PluginBase::onHostReady()` 改协程，`co_await subscribePluginBroadcast(...)`
+  + `subscriptionOf()` 拿句柄（不再用同步形态）；处理器提成公开静态
+  `PluginBase::onRoundStartEvent`，测试可以直接订阅同一个处理器。
+- `agent_plugin_kit.h` 的同步 `addShareStore` 加 `allowOnPluginThread` 参数：受控轮询
+  工具体（`asio::awaitable`）里 ticket awaiter 不能 `co_await`（依赖 kit 自有 promise），
+  而输出超限时要拿 id 才能写提示，只能真等一次 io 往返；`add_share_store` 的工作体只在
+  主程序 io 上跑，所以不会自锁死。`agentxx_execute_command` 的两个 async 体传 `true`，
+  两个同步体（工作池线程）保持默认，顺带修了 POSIX 分支三处缺失 `ref` 的两参调用。
+- 测试：`init(&host)` 全部改 `attachHost(&host)`（`test_plugin_bridge` 24 处、
+  `test_plugin_sdk` 7 处、`test_plugins` 6 处）；`plugins` 的 round.start 用例改成显式
+  订阅 `onRoundStartEvent`；`plugin_runtime` 的驱动票断言改成只读一次 `activeDriverCount()`
+  （原来两次读取之间票可能已完结）；`input_delivery` 在断言前先等 inject 真的落到请求上
+  （全量跑时的计时抖动，与本次改动无关，但已按前面同样的方式收敛）。
+
+### 验证
+
+- 构建：顶层 Debug `exit=0`；25 个插件 DLL 重编通过（`build_plugins.ps1`，~74 s）。
+- 插件全组 19 模块（不含 chatbot）：**4765 / 0**；`plugin_example_chatbot` +
+  `plugin_example_runtime`：**317 / 0**（chatbot 的 211 s 与改动前同量级，且启动日志不再有
+  subscribe 失败告警）；`command` + `plugins`：**778 / 0**。
+- 全量回归：**passed=43926 failed=0**（比上一轮多 1 条：`input_delivery` 新增的等待断言）。
+
+### 未做（已知限制）
+
+- 受控轮询工具体里仍然不能 `co_await` 表调用 —— 那是 `asio::awaitable` 与 kit `Task`
+  两种协程的 promise 差异，要彻底解决只能把子进程管道那类等待搬到 kit 原语上，
+  属于另一项改造。
+- `agentxx_chatbot` 的 `stop` 仍是同步（理由见上一节）；它的 create 现在也走协程初始化
+  （`PluginBase` 自动受益）。
+
 ## 剩余工作（做完 10b / 10a / 运行时层协程化之后的具体清单）
 
 1. **步 10 已全部落地**（含 kit 拆三个头，见上文"实施记录：步 10 收尾"）。同步面现状：

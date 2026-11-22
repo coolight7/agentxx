@@ -476,6 +476,11 @@ C++ 侧只有两种消费形态在插件 SDK (`agent_plugin_kit.h` / `client_plu
   `co_await xxxSetupAsync(...)` / `co_await xxxCleanupAsync(...)`, 成功 `later.ok()` /
   失败 `later.failed(why)`, 入口 `return later.provider()` (非空句柄 = 已受理)。挂载里有
   挂载级状态时, 入口返回自己的状态对象 (unmount 收到的就是它), 完成通知仍走 `later`
+- **create 事务本身也是协程**: `createCtxEntry` 的同步阶段只做三件事 —— `attachHost(host)`
+  (只填 host / iface / log, `spawn` 依赖它们)、写出 `*plugin_ctx`、跑插件的同步 `check`;
+  之后 `onHostReady()` (业务初始化, 如订阅 round.start) 与注册事务一起进 `ctx.spawn(...)`,
+  完成后经 `notify` 交回。插件执行线程上不能同步等表, 所以业务初始化只能是协程;
+  不派生 `PluginBase` 的自定义上下文 (自带 `init(host)`) 仍走旧的同步路径。
 - **关闭期同样受理**: 实例进入 `Closing` (以及停用期间的 `Disabled`) 后调度原语
   `register_task` / `sleep` / `offload` 仍然受理 —— 关闭期的清理协程正需要它们; 这些操作的
   lease 计入 inflight, `unloadAsync` 的"等 inflight 归零"因此必然覆盖到清理协程, 跑完才
@@ -496,6 +501,11 @@ C++ 侧只有两种消费形态在插件 SDK (`agent_plugin_kit.h` / `client_plu
 >
 > **在插件执行线程上它会拒绝等待** (完成回调要投回这条线程, 而它正阻塞在那里):
 > 那里只能写异步形态 (`co_await` / 完成回调)。详见 §15.3。
+>
+> **受控轮询工具体 (`tool` 的 `asio::awaitable` 体) 里也不能 `co_await` 表调用**: ticket 的
+> awaiter 依赖 kit 自有 promise, 而那里是 asio 协程。需要当场结果时用显式策略
+> (`addShareStore(..., allowOnPluginThread=true)`; 工作体只在主程序 io 上执行时才是安全的),
+> 或把该工具改成 `pluginxx::Task` 体。
 
 > 当前进度: 阶段 A 的骨架与 `agentxx_agent_session` (v4), 阶段 B 的
 > `agentxx_agent_tools` (v5) / `permission` (v3) / `context` (v3) / `model` (v3) /

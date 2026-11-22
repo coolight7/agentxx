@@ -658,7 +658,7 @@ using pluginxx::detail::spawnTaskImpl;
 using pluginxx::detail::startBridgedRoot;
 using pluginxx::detail::YieldAwaiter;
 
-/// 手写 create 入口的公共实现: 构造上下文 (**可重入**) → 插件自己的检查 → 注册事务
+/// 手写 create 入口的公共实现: 构造上下文 (**可重入**) → 业务初始化 → 注册事务
 ///
 /// 少数插件需要自己控制上下文构造 (按平台建运行时、装日志 sink、查必需接口),
 /// 于是手写 `create` 入口。本函数把"可重入 / 异常兜底 / 失败通知"这三件重复事收在一处:
@@ -678,10 +678,14 @@ using pluginxx::detail::YieldAwaiter;
 /// ```
 ///
 /// - `*plugin_ctx` 非空 = 同一实例第二次 create (禁用后启用): 不重建上下文,
-///   跳过 `check`, 只跑注册事务;
+///   跳过 `check` 与业务初始化, 只跑注册事务;
+/// - 首次构造的同步阶段只做"绑定 host/iface" (`attachHost`, `spawn` 依赖它)、写出
+///   `*plugin_ctx` 与 `check`; `onHostReady` (要调表的业务初始化) 与注册事务进后台任务,
+///   完成后经 `notify` 恰好一次交回 —— 插件执行线程上不能同步等表;
 /// - `check` 返回非空串 = 构造失败; 上下文仍写回 `*plugin_ctx` (主程序随后会调
 ///   destroy 收尾), 完成通知已发 FAILED;
-/// - `create` 为空 = 只构造 (没有注册事务)。
+/// - `create` 为空 = 只构造 (没有注册事务);
+/// - 主机没有 `pluginxx.tasks` 表时 `spawn` 不可用, 退回旧路径 (跳过 `onHostReady`, 记警告)。
 template<typename CtxType, typename CheckFn, typename CreateFn>
 inline void createCtxEntry(
     const PluginxxHost*           host,
@@ -696,12 +700,22 @@ inline void createCtxEntry(
         notifyLifecycleFailure(host, notify, err, "plugin create: null plugin context");
         return;
     }
-    auto* ctx = static_cast<CtxType*>(*plugin_ctx);
-    if (!ctx) {
+    if (!notify || !notify->done) {
+        PluginString::set(host, err, "plugin create: null completion notify");
+        return;
+    }
+    auto*      ctx   = static_cast<CtxType*>(*plugin_ctx);
+    const bool fresh = (ctx == nullptr);
+    if (fresh) {
         try {
-            auto fresh = std::make_unique<CtxType>();
-            fresh->init(host);
-            ctx         = fresh.release();
+            auto instance = std::make_unique<CtxType>();
+            if constexpr (pluginxx::detail::KitInstanceCtx<CtxType>) {
+                instance->attachHost(host);
+            } else {
+                // 自定义上下文: 自己绑定 host / 接口表 (旧形态)
+                instance->init(host);
+            }
+            ctx         = instance.release();
             *plugin_ctx = ctx;
         } catch (const std::exception& e) {
             notifyLifecycleFailure(
@@ -715,7 +729,7 @@ inline void createCtxEntry(
             notifyLifecycleFailure(host, notify, err, "plugin create: unknown exception");
             return;
         }
-        // 构造阶段的插件自有检查 (失败时保留上下文, 让主程序随后 destroy 收尾)
+        // 构造阶段的插件自有检查 (同步; 只查接口表指针, 不调表)
         try {
             std::string reason = check(*ctx);
             if (!reason.empty()) {
@@ -730,20 +744,62 @@ inline void createCtxEntry(
             return;
         }
     }
-    pluginxx::detail::callLifecycleEntryVoid(host, ctx, notify, err, "plugin create", [&]() {
-        using CreateType = std::decay_t<CreateFn>;
-        if constexpr (std::is_same_v<CreateType, std::nullptr_t>) {
-            // 没有注册事务: 构造完成即加载完成
-            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-        } else {
-            if constexpr (std::is_pointer_v<CreateType>) {
-                if (!create) {
-                    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-                    return;
+    // 注册事务的调用形态收进一个助手: CreateFn 可能是 nullptr / 函数指针 / 可调用对象
+    using CreateType = std::decay_t<CreateFn>;
+    auto runCreate
+        = [](CreateType& fn, CtxType& instance, const PluginxxOperatorNotify* nf, PluginxxString* e) {
+              if constexpr (std::is_same_v<CreateType, std::nullptr_t>) {
+                  (void)fn;
+                  (void)instance;
+                  (void)e;
+                  nf->done(nf->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+              } else {
+                  if constexpr (std::is_pointer_v<CreateType>) {
+                      if (!fn) {
+                          (void)instance;
+                          (void)e;
+                          nf->done(nf->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+                          return;
+                      }
+                  }
+                  fn(instance, nf, e);
+              }
+          };
+    // 首次构造: 业务初始化是协程 (要调表), 与注册事务一起进后台任务。
+    // 闭包里的 create 必须按值持有: 它原本是本函数的转发引用, 调用方 (C 入口) 返回即失效。
+    if constexpr (pluginxx::detail::KitInstanceCtx<CtxType>) {
+        if (fresh && ctx->iface.tasks && ctx->iface.tasks->register_task) {
+            const PluginxxOperatorNotify done = *notify; // 借用指针: 按值持有到任务结束
+            CreateType createCopy(std::forward<CreateFn>(create));
+            ctx->spawn([host, done, createCopy = std::move(createCopy), runCreate](
+                           CtxType& instance, OpCtl&) mutable -> Task<void> {
+                try {
+                    co_await instance.onHostReady();
+                    // 注册事务可能在内部发起异步工作 (finishLater), 自己完成通知;
+                    // 这里只负责把同步写出的错误串释放掉
+                    PluginxxString localError{nullptr, 0};
+                    runCreate(createCopy, instance, &done, &localError);
+                    if (localError.data) {
+                        PluginString::free(host, &localError);
+                    }
+                } catch (const std::exception& e) {
+                    notifyLifecycleFailure(host, &done, nullptr, e.what());
+                } catch (...) {
+                    notifyLifecycleFailure(host, &done, nullptr, "plugin create: unknown exception");
                 }
-            }
-            create(*ctx, notify, err);
+                co_return;
+            });
+            return;
         }
+        if (fresh) {
+            ctx->log.warn(
+                "plugin create: host has no pluginxx.tasks; business init (onHostReady) skipped"
+            );
+        }
+    }
+    callLifecycleEntryVoid(host, ctx, notify, err, "plugin create", [&]() {
+        CreateType createCopy(std::forward<CreateFn>(create));
+        runCreate(createCopy, *ctx, notify, err);
     });
 }
 

@@ -151,7 +151,9 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
             StoreFn storeFn = nullptr;
             if (!tidStr.empty() && c.iface.session && c.iface.session->add_share_store) {
                 storeFn = [&c, ref, tidStr](std::string_view content) -> long long {
-                    return c.addShareStore(ref, tidStr, content);
+                    // 受控轮询工具体跑在插件执行线程上: kit 的 ticket awaiter 依赖
+                    // 自有 promise, asio 伸程里不能 co_await 表调用, 只能同步等一次往返
+                    return c.addShareStore(ref, tidStr, content, /*allowOnPluginThread=*/true);
                 };
             }
             // 子进程管道/计时器绑定到本协程的 executor (= 插件本地 reactor),
@@ -192,8 +194,9 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
             };
             StoreFn storeFn = nullptr;
             if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
-                storeFn = [&c, tidStr](std::string_view content) -> long long {
-                    return c.addShareStore(tidStr, content);
+                storeFn = [&c, ref, tidStr](std::string_view content) -> long long {
+                    // 同步体跑在工作线程池上, 默认策略就是真等 (不占插件线程)
+                    return c.addShareStore(ref, tidStr, content);
                 };
             }
             return windowsExecute(
@@ -256,8 +259,9 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
             };
             StoreFn storeFn = nullptr;
             if (!tidStr.empty() && c.iface.session && c.iface.session->add_share_store) {
-                storeFn = [&c, tidStr](std::string_view content) -> long long {
-                    return c.addShareStore(tidStr, content);
+                storeFn = [&c, ref, tidStr](std::string_view content) -> long long {
+                    // 受控轮询工具体跑在插件执行线程上, 同 Windows 侧: 只能同步等一次往返
+                    return c.addShareStore(ref, tidStr, content, /*allowOnPluginThread=*/true);
                 };
             }
             // 子进程管道/计时器绑定到本协程的 executor (= 插件本地 reactor),
@@ -298,8 +302,9 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
             };
             StoreFn storeFn = nullptr;
             if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
-                storeFn = [&c, tidStr](std::string_view content) -> long long {
-                    return c.addShareStore(tidStr, content);
+                storeFn = [&c, ref, tidStr](std::string_view content) -> long long {
+                    // 同步体跑在工作线程池上, 默认策略就是真等 (不占插件线程)
+                    return c.addShareStore(ref, tidStr, content);
                 };
             }
             return bashExecute(

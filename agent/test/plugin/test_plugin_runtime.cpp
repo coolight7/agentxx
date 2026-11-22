@@ -2684,10 +2684,10 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_FALSE(probe.onCaller.load());
             // 还没轮到执行时必然持有实例 lease (卸载等待必然覆盖它);
             // 插件线程已经跑完时这两项归零也是正常结果 (上一条注释已说明"可能更早").
-            // 只有"驱动票还没被执行"时 lease 必然还在: calls 与 activeDriverCount 的变化
-            // 不是原子的, 满负载下会出现 calls==0 且票已完结的瞬间。
-            if (probe.calls.load() == 0 && f.provider->activeDriverCount() > 0) {
-                XX_TEST_EXPECT_GE(f.provider->activeDriverCount(), size_t{1});
+            // 只有"驱动票还没被执行"时 lease 必然还在: 两次读数之间票可能已经完结,
+            // 所以 activeDriverCount 只读一次, 不能拿它两次比对。
+            const auto activeTickets = f.provider->activeDriverCount();
+            if (probe.calls.load() == 0 && activeTickets > 0) {
                 XX_TEST_EXPECT_GE(f.provider->lifetime->leaseCount(), size_t{1});
             }
 
