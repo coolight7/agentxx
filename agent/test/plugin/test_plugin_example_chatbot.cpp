@@ -1228,7 +1228,9 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_TRUE(request.find("video_url") == std::string::npos);
         // 但正文里有文件名/地址与原因, 模型知道收到了视频、也知道自己没看到内容
         XX_TEST_EXPECT_TRUE(request.find("b.mp4") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(request.find("附件未传给模型") != std::string::npos);
+        // 说明行锚在“计数 + 类型”上: 只看 `video_input = false` 会被提示词里的配置键名或
+        // 历史消息误中 (曾经就有用例靠系统提示词里的文档命中而“假通过”)
+        XX_TEST_EXPECT_TRUE(request.find("[Unsupport media] 1/视频") != std::string::npos);
         XX_TEST_EXPECT_TRUE(request.find("video_input = false") != std::string::npos);
         XX_TEST_EXPECT_TRUE(request.find("这个视频里是什么") != std::string::npos);
 
@@ -1245,7 +1247,7 @@ asio::awaitable<void> runBody(
         );
         XX_TEST_EXPECT_TRUE(requestWithVideo.find("再看一遍这个视频") != std::string::npos);
         XX_TEST_EXPECT_TRUE(requestWithVideo.find("video_url") != std::string::npos);
-        // 注意不能断言「正文里没有 [附件未传给模型]」: 上一轮那条消息的说明已经写进
+        // 注意不能断言「正文里没有 [Unsupport media]」: 上一轮那条消息的说明已经写进
         // 会话上下文, 历史每轮都会重发 —— 只能看本次这一条的正文
         setModelCaps(true, false, false);
     }
@@ -1265,6 +1267,7 @@ asio::awaitable<void> runBody(
         );
         XX_TEST_EXPECT_TRUE(request.find("input_audio") == std::string::npos);
         XX_TEST_EXPECT_TRUE(request.find("c.wav") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("[Unsupport media] 1/音频") != std::string::npos);
         XX_TEST_EXPECT_TRUE(request.find("audio_input = false") != std::string::npos);
         // 语音的平台识别文本仍在正文里 (投不投音频都不影响对话)
         XX_TEST_EXPECT_TRUE(request.find("这段语音说了什么") != std::string::npos);
@@ -1286,6 +1289,7 @@ asio::awaitable<void> runBody(
         );
         XX_TEST_EXPECT_TRUE(request.find("image_url") == std::string::npos);
         XX_TEST_EXPECT_TRUE(request.find("d.png") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("[Unsupport media] 1/图片") != std::string::npos);
         XX_TEST_EXPECT_TRUE(request.find("image_input = false") != std::string::npos);
         // 恢复图片能力 (后面的用例都按“只声明了图片”跑)
         setModelCaps(true, false, false);

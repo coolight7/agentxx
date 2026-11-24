@@ -145,8 +145,8 @@ TestResult testUiKit() {
     {
         // card 覆盖: 终端卡片留白更紧 (横向 8u / 纵向 4u)
         const Item card = agentxx::ui::kit::card({
-            {"title",    "索引"                                                       },
-            {"children", Json::array({Json::parse(R"({"kind":"Text","text":"inner"})")})}
+            {"title", "索引"                                              },
+            {"child", Json::parse(R"({"kind":"Text","text":"inner"})")}
         });
         XX_TEST_EXPECT_EQ(card.kind, std::string{"Block"});
         XX_TEST_EXPECT_EQ(card.variant, std::string{"card"});
@@ -177,7 +177,7 @@ TestResult testUiKit() {
         XX_TEST_EXPECT_EQ(line.gap.value, 8.0);
         XX_TEST_EXPECT_EQ(line.cross, std::string{"center"});
         XX_TEST_EXPECT_EQ(line.children.size(), size_t{2}); // 左侧内容 + 右侧文字
-        XX_TEST_EXPECT_EQ(line.children.back().tone, std::string{"hint"});
+        XX_TEST_EXPECT_EQ(line.children.back().color, std::string{"hint"});
         XX_TEST_EXPECT_EQ(textOf(line.children.back()), std::string{"3"});
 
         const Item* col = findItem(line, "Column");
@@ -249,18 +249,18 @@ TestResult testUiKit() {
             {"name",       "grep"                  },
             {"depict",     "在 src 下搜索 TODO"},
             {"status",     "完成"                },
-            {"statusTone", "success"               },
+            {"statusColor", "success"               },
             {"action",     "open:grep"             }
         });
         XX_TEST_EXPECT_EQ(row.kind, std::string{"Block"});
         XX_TEST_EXPECT_EQ(row.variant, std::string{"inset"});
-        XX_TEST_EXPECT_EQ(row.action.kind, Action::Kind::Dispatch);
+        XX_TEST_EXPECT_EQ(row.action.kind, Action::Kind::Call);
         XX_TEST_EXPECT_EQ(row.action.name, std::string{"open:grep"});
         const Item* badge = findItem(row, "Badge");
         XX_TEST_EXPECT_TRUE(badge != nullptr);
         if (badge != nullptr) {
             XX_TEST_EXPECT_EQ(textOf(*badge), std::string{"完成"});
-            XX_TEST_EXPECT_EQ(badge->tone, std::string{"success"});
+            XX_TEST_EXPECT_EQ(badge->color, std::string{"success"});
         }
         const Item* col = findItem(row, "Column");
         XX_TEST_EXPECT_TRUE(col != nullptr);
@@ -286,7 +286,7 @@ TestResult testUiKit() {
         XX_TEST_EXPECT_TRUE(col != nullptr);
         if (col != nullptr) {
             XX_TEST_EXPECT_EQ(col->children.size(), size_t{1});
-            XX_TEST_EXPECT_EQ(col->children.front().tone, std::string{"thinking"});
+            XX_TEST_EXPECT_EQ(col->children.front().color, std::string{"thinking"});
         }
         const Item  withLabel = agentxx::ui::kit::thinkingBlock({
             {"content", "正文"},
@@ -395,8 +395,8 @@ TestResult testUiKit() {
         XX_TEST_EXPECT_TRUE(confirm != nullptr);
         if (confirm != nullptr) {
             XX_TEST_EXPECT_EQ(confirm->label.fallback, std::string{"确认"});
-            XX_TEST_EXPECT_EQ(confirm->variant, std::string{"primary"});
-            XX_TEST_EXPECT_EQ(confirm->action.kind, Action::Kind::Dispatch);
+            XX_TEST_EXPECT_EQ(confirm->variant, std::string{"normal"});
+            XX_TEST_EXPECT_EQ(confirm->action.kind, Action::Kind::Call);
             XX_TEST_EXPECT_EQ(confirm->action.name, std::string{"__submit"});
         }
 
@@ -417,7 +417,7 @@ TestResult testUiKit() {
         XX_TEST_EXPECT_TRUE(btnNo != nullptr);
         if (btnNo != nullptr) {
             XX_TEST_EXPECT_EQ(btnNo->label.fallback, std::string{"否"});
-            XX_TEST_EXPECT_EQ(btnNo->variant, std::string{"ghost"});
+            XX_TEST_EXPECT_EQ(btnNo->variant, std::string{"simple"});
             XX_TEST_EXPECT_EQ(btnNo->action.name, std::string{"no"});
         }
     }
@@ -507,7 +507,7 @@ TestResult testUiKit() {
             {"name",       "grep"   },
             {"depict",     "搜索" },
             {"status",     "完成" },
-            {"statusTone", "success"}
+            {"statusColor", "success"}
         });
         const Item back = pluginxx::ui::parseBlock(pluginxx::ui::dumpItem(row));
         XX_TEST_EXPECT_EQ(back.kind, row.kind);

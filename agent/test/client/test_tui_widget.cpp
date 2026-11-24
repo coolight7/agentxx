@@ -772,7 +772,7 @@ void test_info_access_point_extended_components() {
     XX_TEST_EXPECT_TRUE(section != nullptr);
     const std::string items = R"({"items":[
         {"kind":"KV","pairs":[{"k":"Model","v":"gpt-x"}]},
-        {"kind":"Block","title":"Limits","variant":"card","children":[{"kind":"Text","text":"inside box"}]}
+        {"kind":"Block","title":"Limits","variant":"card","child":{"kind":"Text","text":"inside box"}}
     ]})";
     XX_TEST_EXPECT_EQ(mgr->updateInfoSection(inst.get(), section, std::string_view{items}), 0);
 

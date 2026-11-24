@@ -231,11 +231,12 @@ void ClientPluginManager::ensureClientChannelDeclared(std::string_view id) {
         decl.publish = pluginxx::BroadcastPublisher_e::Anyone;
     } else if (const auto owner = agentxx::events::naming::pluginNameOfTopic(id);
                !owner.empty()) {
-        // 插件自建频道 / 网络事件 (`plugin.<插件名>.<名字>`): 属主发布,
-        // 与 agent 侧 [PluginManager::ensureTopicBroadcast] 同一份约定
+        // 插件自建频道 / 网络事件 (`plugin.<插件名>.<名字>`): 属主按名字推断,
+        // 发布权与 agent 侧 [PluginManager::ensureTopicBroadcast] 同一份约定
+        // (框架对插件声明这类频道的默认值 = 任何人可发)
         decl.owner   = std::string{owner};
         decl.cache   = pluginxx::BroadcastCache_e::Latest;
-        decl.publish = pluginxx::BroadcastPublisher_e::Owner;
+        decl.publish = pluginxx::BroadcastPublisher_e::Anyone;
     } else {
         // 应用频道 (`agentxx.client.*` 等): 跨端时由另一端声明, 谁都能发
         decl.cache   = pluginxx::BroadcastCache_e::Latest;

@@ -570,7 +570,7 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
     };
 
     Item item;
-    item.tone = block.color;
+    item.color = block.color;
     item.bold = block.bold;
     item.dim  = block.dim;
     item.wrap = block.wrap;
@@ -680,7 +680,7 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
             out.valueJson = opt.value.is_null() ? std::string{} : opt.value.dump();
             out.label
                 = textOf(opt.labelKey, opt.label.empty() ? jsonValueText(opt.value) : opt.label);
-            out.tone = opt.color;
+            out.color = opt.color;
             item.options.push_back(std::move(out));
         }
         // 注: `commitOnPick` 不进描述层 —— 它是"点击候选项即提交整份表单"的
@@ -694,7 +694,7 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
             [](pluginxx::ui::TextValue label, std::string_view actionId, std::string_view variant) {
                 Item out = pluginxx::ui::build::button(
                     std::string_view{},
-                    pluginxx::ui::build::dispatch(std::string{actionId}),
+                    pluginxx::ui::build::call(std::string{actionId}),
                     variant
                 );
                 out.label = std::move(label);
@@ -706,7 +706,7 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
                 block.label
             ),
             kInterruptSubmitActionId,
-            "primary"
+            "normal"
         );
         Item cancel = makeButton(
             textOf(
@@ -715,7 +715,7 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
                 block.cancelLabel
             ),
             kInterruptCancelActionId,
-            "secondary"
+            "simple"
         );
         Item row   = pluginxx::ui::build::row({std::move(confirm), std::move(cancel)});
         row.hasGap = true;
@@ -775,7 +775,7 @@ InterruptUiBlock blockOf(const pluginxx::ui::Item& item) {
 
     InterruptUiBlock b;
     b.kind  = item.kind.empty() ? std::string{"text"} : item.kind;
-    b.color = item.tone;
+    b.color = item.color;
     b.bold  = item.bold;
     b.dim   = item.dim;
     b.wrap  = item.wrap;
@@ -818,7 +818,7 @@ InterruptUiBlock blockOf(const pluginxx::ui::Item& item) {
             InterruptUiOption out;
             out.value = opt.valueJson.empty() ? Json{} : Json::parse(opt.valueJson);
             splitText(opt.label, out.labelKey, out.label);
-            out.color = opt.tone;
+            out.color = opt.color;
             b.options.push_back(std::move(out));
         }
     } else {

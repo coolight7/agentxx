@@ -339,10 +339,8 @@ void test_form_validate_missing_options() {
 /// 容器内的控件也能收集与初始化 (row/box 内的控件)
 void test_form_nested_controls() {
     auto items = formItems(R"([
-        {"kind":"Block","title":"F","children":[
-            {"kind":"Row","children":[{"kind":"Control","control":"checkbox","id":"inner",
-                                       "label":"I","value":false}]}
-        ]}
+        {"kind":"Block","title":"F","child":{"kind":"Row","children":[{"kind":"Control","control":"checkbox","id":"inner",
+                                       "label":"I","value":false}]}}
     ])");
     auto ids   = agentxx::client::collectControlIds(items);
     XX_TEST_EXPECT_EQ(ids.size(), size_t{1});
@@ -396,7 +394,7 @@ void test_overlay_form_submit_through_action_channel() {
          "rows":[["a.txt","write"]]},
         {"kind":"Control","control":"checkbox","id":"remember","label":"Remember","value":false},
         {"kind":"Row","gap":8,"children":[
-            {"kind":"Button","label":"APPLY","variant":"primary","action":"__submit"},
+            {"kind":"Button","label":"APPLY","variant":"normal","action":"__submit"},
             {"kind":"Button","label":"DROP","action":"__cancel"}]}
     ]})";
     auto              overlay = agentxx::client::createUniversalOverlay(
@@ -484,7 +482,7 @@ void test_panel_form_registers_hit_regions() {
     const std::string items = R"({"items":[
         {"kind":"Control","control":"checkbox","id":"verbose","label":"Verbose","value":false},
         {"kind":"Row","gap":8,"children":[
-            {"kind":"Button","label":"SAVE","variant":"primary","action":"__submit"}]}
+            {"kind":"Button","label":"SAVE","variant":"normal","action":"__submit"}]}
     ]})";
     XX_TEST_EXPECT_EQ(mgr->updatePanel(inst.get(), panel, std::string_view{items}), 0);
 

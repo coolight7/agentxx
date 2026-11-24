@@ -316,36 +316,64 @@ std::pair<Element, size_t> buildDiagram(const Item& item, const UiRenderCtx& ctx
 // ---------------------------------------------------------------------------
 
 /// 按钮语义色 → 按钮样式
-PluginButtonRole buttonRoleOf(std::string_view tone) {
-    if (tone == "accent" || tone == "title" || tone == "tool") {
+PluginButtonRole buttonRoleOf(std::string_view color) {
+    if (color == "accent" || color == "title" || color == "tool") {
         return PluginButtonRole::Accent;
     }
-    if (tone == "error" || tone == "danger") {
+    if (color == "error" || color == "danger") {
         return PluginButtonRole::Danger;
     }
     return PluginButtonRole::Normal;
 }
 
-/// 按钮显示宽度 ("[ 标签 ]")
-int buttonWidth(std::string_view label) {
-    return pluginxx::ui::displayWidth(label) + 4;
+/// 按钮显示的文字
+///
+/// 描述层允许纯图标按钮: `label` 为空时用 `glyph` 当文字; 终端没有图标表, `icon`
+/// 只能退回成它的名字; 三者都没有就是 `Button`。
+std::string buttonCaption(
+    std::string_view label,
+    std::string_view glyph,
+    std::string_view icon
+) {
+    if (!label.empty()) {
+        return std::string{label};
+    }
+    if (!glyph.empty()) {
+        return std::string{glyph};
+    }
+    if (!icon.empty()) {
+        return std::string{icon};
+    }
+    return std::string{"Button"};
+}
+
+/// 按钮显示宽度 ("[ 文字 ]")
+int buttonWidth(std::string_view caption) {
+    return pluginxx::ui::displayWidth(caption) + 4;
 }
 
 /// 渲染按钮元素
-/// - `variant`: primary (强调反色) / secondary (默认按钮) / ghost|link (纯文字)
+/// - `caption`: 已经算好的显示文字 (含纯图标按钮的回退, 见 [buttonCaption]);
+///   命中宽度由 [buttonWidth] 按同一个字符串算
+/// - `variant`: `normal` (默认按钮) / `full` (主要按钮，终端按强调色画) /
+///   `simple` (纯文字，无边框)
+/// - `highlight`: 选中态 (与 `full` 一样走强调色)
 Element buttonElement(
-    std::string_view label,
-    std::string_view tone,
+    std::string_view caption,
+    std::string_view roleColor,
     std::string_view variant,
     const TUITheme&  theme,
-    bool             disabled
+    bool             disabled,
+    bool             highlight = false
 ) {
-    const std::string caption = label.empty() ? std::string{"Button"} : std::string{label};
-    if (variant == "ghost" || variant == "link") {
-        Element el = text(caption) | bold;
-        if (tone == "error" || tone == "danger") {
+    if (variant == "simple") {
+        Element el = text(caption);
+        if (highlight) {
+            el = el | bold;
+        }
+        if (roleColor == "error" || roleColor == "danger") {
             el = el | color(theme.errorColor);
-        } else if (tone == "hint") {
+        } else if (roleColor == "hint") {
             el = el | color(theme.hintColor);
         } else {
             el = el | color(theme.accentColor);
@@ -354,14 +382,13 @@ Element buttonElement(
     }
     PluginButtonDesc desc;
     desc.label = caption;
-    desc.role  = (variant == "primary" || variant.empty()) && variant != "secondary"
-                     ? PluginButtonRole::Accent
-                     : buttonRoleOf(tone);
+    desc.role
+        = (highlight || variant == "full") ? PluginButtonRole::Accent : buttonRoleOf(roleColor);
     Element el = renderPluginButton(desc, theme);
     return disabled ? el | theme.dim() : el;
 }
 
-/// 行为动作 id (TUI 只把动作原样转给动作通道: dispatch 用名字, route/command 用目标)
+/// 行为动作 id (TUI 只把动作原样转给动作通道: `call` 用名字, `route` 用目标)
 std::string actionIdOf(const pluginxx::ui::Action& action) {
     if (action.empty()) {
         return {};
@@ -604,9 +631,9 @@ Row renderTable(const Item& item, const UiRenderCtx& ctx) {
             const pluginxx::ui::TableCell* cell = (c < rowCells.size()) ? &rowCells[c] : nullptr;
             const std::string raw = (cell != nullptr) ? textOf(cell->text, ctx) : std::string{};
             cells.push_back(cellPadded(raw, widths[c], item.columns[c].align));
-            const std::string tone
-                = (cell != nullptr && !cell->tone.empty()) ? cell->tone : item.columns[c].tone;
-            colors.push_back(itemColor(tone, theme));
+            const std::string color
+                = (cell != nullptr && !cell->color.empty()) ? cell->color : item.columns[c].color;
+            colors.push_back(itemColor(color, theme));
             actions.push_back((cell != nullptr) ? actionIdOf(cell->action) : std::string{});
             args.push_back((cell != nullptr) ? cell->action.argsJson : std::string{});
         }
@@ -643,10 +670,10 @@ Row renderKeyValue(const Item& item, const UiRenderCtx& ctx) {
     for (const auto& p : item.pairs) {
         lines.push_back(hbox({
             text(pluginxx::ui::padRightToWidth(textOf(p.key, ctx), keyW))
-                | color(itemColor(p.kTone, theme)),
+                | color(itemColor(p.kColor, theme)),
             text(item.sep) | color(theme.hintColor),
             text(pluginxx::ui::truncateToWidth(textOf(p.value, ctx), valueW))
-                | color(itemColor(p.vTone, theme)),
+                | color(itemColor(p.vColor, theme)),
         }));
     }
     Row row;
@@ -690,7 +717,7 @@ Row renderTree(const Item& item, const UiRenderCtx& ctx) {
                     line += expanded ? "- " : "+ ";
                 }
                 line += label;
-                lines.push_back(text(line) | color(itemColor(node.tone, theme)));
+                lines.push_back(text(line) | color(itemColor(node.color, theme)));
                 const std::string actionId = actionIdOf(node.action);
                 if (!actionId.empty()) {
                     UiHitRegion region;
@@ -811,7 +838,7 @@ Row renderSparkline(const Item& item, const UiRenderCtx& ctx) {
             );
             return itemColor(item.colors[idx], theme);
         }
-        return itemColor(item.tone, theme);
+        return itemColor(item.color, theme);
     };
 
     constexpr int kLevelsPerRow = 8;
@@ -868,10 +895,10 @@ Row renderProgress(const Item& item, const UiRenderCtx& ctx) {
     const int    filled = static_cast<int>(ratio * static_cast<double>(barW) + 0.5);
 
     // 阈值配色: 由高到低匹配首个满足项 (解析时已按阈值降序)
-    std::string fillColor = item.tone.empty() ? "accent" : item.tone;
+    std::string fillColor = item.color.empty() ? "accent" : item.color;
     for (const auto& th : item.thresholds) {
         if (item.value >= th.at) {
-            fillColor = th.tone;
+            fillColor = th.color;
             break;
         }
     }
@@ -1208,8 +1235,8 @@ Rows listButtonRows(
     }
 
     for (const auto& button : buttons) {
-        const std::string& label = button.label;
-        const int          w     = buttonWidth(label);
+        const std::string caption = buttonCaption(button.label, {}, {});
+        const int          w     = buttonWidth(caption);
         // 换行判定: 本行已有按钮且放不下 (avail <= 0 = 不限宽, 不换行)
         if (avail > 0 && x > lead && x + 1 + w > avail) {
             flush();
@@ -1218,7 +1245,7 @@ Rows listButtonRows(
             els.push_back(text(" "));
             ++x;
         }
-        els.push_back(buttonElement(label, "", "secondary", theme, false));
+        els.push_back(buttonElement(caption, "", "normal", theme, false));
         if (isActionable(button.actionId, false, ctx)) {
             UiHitRegion region;
             region.kind    = UiHitRegionKind::Action;
@@ -1376,7 +1403,7 @@ Row renderListBlock(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
             );
             // 没有主标题时用副标题顶上 (终端不画封面)
             Element head = text(title.empty() ? sub : title)
-                           | color(itemColor(sel ? "accent" : entry.tone, theme));
+                           | color(itemColor(sel ? "accent" : entry.color, theme));
             if (sel) {
                 head = head | bold;
             }
@@ -1414,7 +1441,7 @@ Row renderListBlock(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
                     content = textOf(entry.subtitle, ctx);
                 }
                 Element el = text(cellPadded(content, std::max(1, w - 1), "start"))
-                             | color(itemColor(entry.selected ? "accent" : entry.tone, theme));
+                             | color(itemColor(entry.selected ? "accent" : entry.color, theme));
                 if (entry.selected) {
                     el = el | bold;
                 }
@@ -1628,13 +1655,14 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
 
     // ---------------- Text ----------------
     if (item.kind == "Text") {
-        std::string tone = item.tone;
-        if (item.textType == "title" && (tone.empty() || tone == "normal")) {
-            tone = "accent";
-        } else if (item.textType == "caption" && (tone.empty() || tone == "normal")) {
-            tone = "hint";
+        std::string resolvedColor = item.color;
+        if (item.textType == "title" && (resolvedColor.empty() || resolvedColor == "normal")) {
+            resolvedColor = "accent";
+        } else if (item.textType == "caption"
+                   && (resolvedColor.empty() || resolvedColor == "normal")) {
+            resolvedColor = "hint";
         }
-        Color      textColor = itemColor(tone, theme);
+        Color      textColor = itemColor(resolvedColor, theme);
         const auto lines     = textLines(item, ctx);
         if (lines.empty()) {
             return rows;
@@ -1682,7 +1710,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         }
         auto [el, builder] = renderMarkdown(
             item.markdown,
-            itemColor(item.tone, theme),
+            itemColor(item.color, theme),
             theme.markdownTheme,
             contentWidth(ctx)
         );
@@ -1736,7 +1764,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         if (value.empty()) {
             return rows;
         }
-        pushPlain(text("● " + value) | color(itemColor(item.tone, theme)), 1);
+        pushPlain(text("● " + value) | color(itemColor(item.color, theme)), 1);
         return rows;
     }
 
@@ -1756,7 +1784,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
             return rows;
         }
         pushPlain(
-            text(item.glyph) | color(itemColor(item.tone, theme)),
+            text(item.glyph) | color(itemColor(item.color, theme)),
             1,
             actionRegion(item.action, 1)
         );
@@ -1765,8 +1793,11 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
 
     // ---------------- Button ----------------
     if (item.kind == "Button") {
-        const std::string label = textOf(item.label, ctx);
-        Element           el = buttonElement(label, item.tone, item.variant, theme, item.disabled);
+        const std::string label   = textOf(item.label, ctx);
+        const std::string caption = buttonCaption(label, item.glyph, item.icon);
+        Element           el      = buttonElement(
+            caption, item.color, item.variant, theme, item.disabled, item.highlight
+        );
         const std::string actionId = actionIdOf(item.action);
         std::vector<UiHitRegion> regions;
         // 域内的表单提交/取消动作由主程序处理 (插件不需要绑定动作处理器), 其余动作要求
@@ -1778,7 +1809,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
             region.kind    = formSubmit ? UiHitRegionKind::FormSubmit : UiHitRegionKind::Action;
             region.x       = 0;
             region.y       = 0;
-            region.w       = buttonWidth(label.empty() ? std::string_view{"Button"} : label);
+            region.w       = buttonWidth(caption);
             region.h       = 1;
             region.id      = actionId;
             region.arg     = item.action.argsJson.empty() ? "{}" : item.action.argsJson;
@@ -2211,11 +2242,11 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
                 }
                 els.push_back(buttonElement(
                     shown,
-                    (static_cast<int>(i) == selected) ? std::string{"accent"} : opt.tone,
-                    (static_cast<int>(i) == selected) ? std::string{"primary"}
-                                                      : std::string{"secondary"},
+                    (static_cast<int>(i) == selected) ? std::string{"accent"} : opt.color,
+                    "normal",
                     theme,
-                    false
+                    false,
+                    static_cast<int>(i) == selected
                 ));
                 if (interactive && !item.id.empty()) {
                     addControlRegion(
@@ -2247,7 +2278,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
                 // 选中项: 指示符 + 反色底 (整行); 未选中: 同宽占位 + 普通色
                 Element entry = hbox({
                     text(active ? "+ " : "  "),
-                    text(shown) | color(itemColor(opt.tone, theme)),
+                    text(shown) | color(itemColor(opt.color, theme)),
                 });
                 entry         = active ? entry | bgcolor(theme.buttonActiveBgColor)
                                      | color(theme.buttonActiveTextColor) | bold
@@ -2420,8 +2451,8 @@ std::string resolveText(const pluginxx::ui::TextValue& text, const UiRenderCtx& 
     return textOf(text, ctx);
 }
 
-ftxui::Color itemColor(std::string_view tone, const TUITheme& theme) {
-    return uiRoleColor(tone, theme);
+ftxui::Color itemColor(std::string_view color, const TUITheme& theme) {
+    return uiRoleColor(color, theme);
 }
 
 // ---------------------------------------------------------------------------

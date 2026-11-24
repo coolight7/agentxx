@@ -8,13 +8,13 @@
   var root = global.pluginxx || (global.pluginxx = {});
   var ui = root.ui || (root.ui = {});
   var kit = ui.kit || (ui.kit = {});
-  kit.kitVersion = 1;
-  kit.apiVersion = 2;
+  kit.kitVersion = 2;
+  kit.apiVersion = 4;
   kit.defaultGap = 12;
   kit.cell = { width: 8, height: 20 };
 
   // 组件模板：变体数组 + 参数默认值
-  var TEMPLATES = {"title":{"variants":[{"template":{"kind":"Text","text":"$text","type":"title"}}],"params":{"text":null}},"hint":{"variants":[{"template":{"kind":"Text","text":"$text","type":"caption","tone":"hint"}}],"params":{"text":null}},"text":{"variants":[{"template":{"kind":"Text","text":"$text","tone":"$tone","mono":"$mono"}}],"params":{"text":null,"tone":"normal","mono":false}},"badge":{"variants":[{"template":{"kind":"Badge","text":"$text","tone":"$tone"}}],"params":{"text":null,"tone":"accent"}},"icon":{"variants":[{"requires":["Icon"],"template":{"kind":"Icon","name":"$name","glyph":"$glyph","size":"$size","tone":"$tone"}},{"template":{"kind":"Text","text":"$glyph","mono":true,"tone":"$tone"}}],"params":{"name":null,"glyph":null,"size":null,"tone":"normal"}},"gap":{"variants":[{"template":{"kind":"Gap","size":"$size"}}],"params":{"size":null}},"divider":{"variants":[{"template":{"kind":"Divider"}}],"params":{}},"button":{"variants":[{"template":{"kind":"Button","label":"$label","variant":"$variant","icon":"$icon","disabled":"$disabled","action":"$action"}}],"params":{"label":null,"variant":"secondary","icon":null,"disabled":false,"action":null}},"actionsRow":{"variants":[{"template":{"kind":"Row","gap":12,"children":{"$map":"buttons","wrap":{"kind":"Expanded","children":["$item"]}}}}],"params":{"buttons":null}},"card":{"variants":[{"template":{"kind":"Block","title":"$title","variant":"$variant","padding":"$padding","margin":"$margin","children":"$children"}}],"params":{"title":null,"variant":"card","padding":{"horizontal":8,"vertical":4},"margin":null,"children":null}},"listRow":{"variants":[{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"action":"$action","children":[{"kind":"Row","gap":8,"cross":"center","children":[{"kind":"Expanded","children":[{"kind":"Column","gap":4,"children":[{"kind":"Text","text":"$title"},{"$require":"subtitle","kind":"Text","text":"$subtitle","type":"caption","tone":"hint"}]}]},{"$require":"trailing","kind":"Text","text":"$trailing","tone":"hint"}]}]}}],"params":{"title":null,"subtitle":null,"trailing":null,"action":null}},"section":{"variants":[{"template":{"kind":"Column","gap":8,"children":[{"kind":"Text","text":"$title","type":"title"},{"kind":"Column","children":"$rows"}]}}],"params":{"title":null,"rows":null}},"kv":{"variants":[{"template":{"kind":"KV","pairs":"$pairs","sep":"$sep","keyWidth":"auto"}}],"params":{"pairs":null,"sep":null}},"table":{"variants":[{"template":{"kind":"Table","header":"$header","columns":"$columns","rows":"$rows"}}],"params":{"columns":null,"rows":null,"header":true}},"tree":{"variants":[{"template":{"kind":"Tree","connector":"$connector","nodes":"$nodes"}}],"params":{"nodes":null,"connector":true}},"listItem":{"variants":[{"template":{"id":"$id","title":"$title","subtitle":"$subtitle","trailing":"$trailing","image":"$image","icon":"$icon","tone":"$tone","selected":"$selected","action":"$action"}}],"params":{"id":null,"title":null,"subtitle":null,"trailing":null,"image":null,"icon":null,"tone":"normal","selected":false,"action":null}},"menuItem":{"variants":[{"template":{"title":"$title","icon":"$icon","action":"$action"}}],"params":{"title":null,"icon":null,"action":null}},"sparkline":{"variants":[{"template":{"kind":"Sparkline","data":"$data","height":"$height","glyphStyle":"$glyphStyle","showLast":"$showLast","tone":"$tone"}}],"params":{"data":null,"height":1,"glyphStyle":"block","showLast":true,"tone":"accent"}},"progressRow":{"variants":[{"template":{"kind":"Row","gap":8,"cross":"center","children":[{"$require":"label","kind":"Text","text":"$label"},{"kind":"Expanded","children":[{"kind":"Progress","value":"$value","total":"$total","unit":"$unit"}]}]}}],"params":{"label":null,"value":null,"total":100,"unit":"%"}},"toolCallRow":{"variants":[{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"action":"$action","children":[{"kind":"Row","gap":8,"cross":"center","children":[{"kind":"Expanded","children":[{"kind":"Column","gap":4,"children":[{"kind":"Text","text":"$name"},{"$require":"depict","kind":"Text","text":"$depict","type":"caption","tone":"hint"}]}]},{"$require":"status","kind":"Badge","text":"$status","tone":"$statusTone"}]}]}}],"params":{"name":null,"depict":null,"status":null,"statusTone":"hint","action":null}},"thinkingBlock":{"variants":[{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"children":[{"kind":"Column","gap":4,"children":[{"$require":"label","kind":"Text","text":"$label","type":"caption","tone":"hint"},{"kind":"Text","text":"$content","tone":"thinking"}]}]}}],"params":{"content":null,"label":null}},"sessionStats":{"variants":[{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"children":[{"kind":"Column","gap":4,"children":[{"$require":"title","kind":"Text","text":"$title","type":"title"},{"kind":"Table","header":true,"columns":"$columns","rows":"$rows"}]}]}}],"params":{"title":null,"columns":null,"rows":null}},"pathDiffRow":{"variants":[{"requires":["Diff"],"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"children":[{"kind":"Column","gap":4,"children":[{"$require":"title","kind":"Text","text":"$title","type":"caption","tone":"hint","mono":true},{"kind":"Diff","path":"$path","oldStr":"$oldStr","newStr":"$newStr"}]}]}},{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"children":[{"kind":"Column","gap":4,"children":[{"kind":"Text","text":"$path","type":"caption","tone":"hint","mono":true},{"kind":"Text","text":"${oldStr}\n${newStr}","mono":true}]}]}}],"params":{"path":null,"oldStr":null,"newStr":null,"title":null}},"diagramBlock":{"variants":[{"requires":["Diagram"],"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"children":[{"kind":"Column","gap":4,"children":[{"$require":"title","kind":"Text","text":"$title","type":"caption","tone":"hint"},{"kind":"Diagram","mermaid":"$mermaid"}]}]}},{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"children":[{"kind":"Text","text":"$mermaid","mono":true,"tone":"hint"}]}}],"params":{"mermaid":null,"title":null}},"interruptRow":{"variants":[{"template":{"kind":"Row","gap":8,"main":"end","children":[{"kind":"Expanded","children":[{"kind":"Button","label":"$confirmLabel","variant":"primary","action":"$confirmAction"}]},{"kind":"Expanded","children":[{"kind":"Button","label":"$cancelLabel","variant":"ghost","action":"$cancelAction"}]}]}}],"params":{"confirmLabel":null,"cancelLabel":null,"confirmAction":"__submit","cancelAction":"__cancel"}}};
+  var TEMPLATES = {"title":{"variants":[{"template":{"kind":"Text","text":"$text","type":"title"}}],"params":{"text":null}},"hint":{"variants":[{"template":{"kind":"Text","text":"$text","type":"caption","color":"hint"}}],"params":{"text":null}},"text":{"variants":[{"template":{"kind":"Text","text":"$text","color":"$color","mono":"$mono"}}],"params":{"text":null,"color":"normal","mono":false}},"badge":{"variants":[{"template":{"kind":"Badge","text":"$text","color":"$color"}}],"params":{"text":null,"color":"accent"}},"icon":{"variants":[{"requires":["Icon"],"template":{"kind":"Icon","name":"$name","glyph":"$glyph","size":"$size","color":"$color"}},{"template":{"kind":"Text","text":"$glyph","mono":true,"color":"$color"}}],"params":{"name":null,"glyph":null,"size":null,"color":"normal"}},"gap":{"variants":[{"template":{"kind":"Gap","size":"$size"}}],"params":{"size":null}},"divider":{"variants":[{"template":{"kind":"Divider"}}],"params":{}},"button":{"variants":[{"template":{"kind":"Button","label":"$label","variant":"$variant","highlight":"$highlight","icon":"$icon","glyph":"$glyph","color":"$color","size":"$size","disabled":"$disabled","action":"$action"}}],"params":{"label":null,"variant":"normal","highlight":false,"icon":null,"glyph":null,"color":null,"size":null,"disabled":false,"action":null}},"themeScope":{"variants":[{"requires":["ThemeScope"],"template":{"kind":"ThemeScope","data":"$data","child":"$child"}},{"template":"$child"}],"params":{"child":null,"data":null}},"actionsRow":{"variants":[{"template":{"kind":"Row","gap":12,"children":{"$map":"buttons","wrap":{"kind":"Expanded","child":"$item"}}}}],"params":{"buttons":null}},"card":{"variants":[{"template":{"kind":"Block","title":"$title","variant":"$variant","padding":"$padding","margin":"$margin","child":"$child"}}],"params":{"title":null,"variant":"card","padding":{"horizontal":8,"vertical":4},"margin":null,"child":null}},"listRow":{"variants":[{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"action":"$action","child":{"kind":"Row","gap":8,"cross":"center","children":[{"kind":"Expanded","child":{"kind":"Column","gap":4,"children":[{"kind":"Text","text":"$title"},{"$require":"subtitle","kind":"Text","text":"$subtitle","type":"caption","color":"hint"}]}},{"$require":"trailing","kind":"Text","text":"$trailing","color":"hint"}]}}}],"params":{"title":null,"subtitle":null,"trailing":null,"action":null}},"section":{"variants":[{"template":{"kind":"Column","gap":8,"children":[{"kind":"Text","text":"$title","type":"title"},{"kind":"Column","children":"$rows"}]}}],"params":{"title":null,"rows":null}},"kv":{"variants":[{"template":{"kind":"KV","pairs":"$pairs","sep":"$sep","keyWidth":"auto"}}],"params":{"pairs":null,"sep":null}},"table":{"variants":[{"template":{"kind":"Table","header":"$header","columns":"$columns","rows":"$rows"}}],"params":{"columns":null,"rows":null,"header":true}},"tree":{"variants":[{"template":{"kind":"Tree","connector":"$connector","nodes":"$nodes"}}],"params":{"nodes":null,"connector":true}},"listItem":{"variants":[{"template":{"id":"$id","title":"$title","subtitle":"$subtitle","trailing":"$trailing","image":"$image","icon":"$icon","color":"$color","selected":"$selected","action":"$action"}}],"params":{"id":null,"title":null,"subtitle":null,"trailing":null,"image":null,"icon":null,"color":"normal","selected":false,"action":null}},"menuItem":{"variants":[{"template":{"title":"$title","icon":"$icon","action":"$action"}}],"params":{"title":null,"icon":null,"action":null}},"sparkline":{"variants":[{"template":{"kind":"Sparkline","data":"$data","height":"$height","glyphStyle":"$glyphStyle","showLast":"$showLast","color":"$color"}}],"params":{"data":null,"height":1,"glyphStyle":"block","showLast":true,"color":"accent"}},"progressRow":{"variants":[{"template":{"kind":"Row","gap":8,"cross":"center","children":[{"$require":"label","kind":"Text","text":"$label"},{"kind":"Expanded","child":{"kind":"Progress","value":"$value","total":"$total","unit":"$unit"}}]}}],"params":{"label":null,"value":null,"total":100,"unit":"%"}},"slot":{"variants":[{"template":{"kind":"UISlot","slot":"$slot","args":"$args","fallback":"$fallback"}}],"params":{"slot":null,"args":null,"fallback":null}},"textVar":{"variants":[{"template":{"kind":"Text","text":"$text","color":"$color"}}],"params":{"text":null,"color":"normal"}},"varValue":{"variants":[{"template":{"var":"$name","default":"$fallback","unit":"$unit"}}],"params":{"name":null,"fallback":null,"unit":null}},"toolCallRow":{"variants":[{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"action":"$action","child":{"kind":"Row","gap":8,"cross":"center","children":[{"kind":"Expanded","child":{"kind":"Column","gap":4,"children":[{"kind":"Text","text":"$name"},{"$require":"depict","kind":"Text","text":"$depict","type":"caption","color":"hint"}]}},{"$require":"status","kind":"Badge","text":"$status","color":"$statusColor"}]}}}],"params":{"name":null,"depict":null,"status":null,"statusColor":"hint","action":null}},"thinkingBlock":{"variants":[{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"child":{"kind":"Column","gap":4,"children":[{"$require":"label","kind":"Text","text":"$label","type":"caption","color":"hint"},{"kind":"Text","text":"$content","color":"thinking"}]}}}],"params":{"content":null,"label":null}},"sessionStats":{"variants":[{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"child":{"kind":"Column","gap":4,"children":[{"$require":"title","kind":"Text","text":"$title","type":"title"},{"kind":"Table","header":true,"columns":"$columns","rows":"$rows"}]}}}],"params":{"title":null,"columns":null,"rows":null}},"pathDiffRow":{"variants":[{"requires":["Diff"],"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"child":{"kind":"Column","gap":4,"children":[{"$require":"title","kind":"Text","text":"$title","type":"caption","color":"hint","mono":true},{"kind":"Diff","path":"$path","oldStr":"$oldStr","newStr":"$newStr"}]}}},{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"child":{"kind":"Column","gap":4,"children":[{"kind":"Text","text":"$path","type":"caption","color":"hint","mono":true},{"kind":"Text","text":"${oldStr}\n${newStr}","mono":true}]}}}],"params":{"path":null,"oldStr":null,"newStr":null,"title":null}},"diagramBlock":{"variants":[{"requires":["Diagram"],"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"child":{"kind":"Column","gap":4,"children":[{"$require":"title","kind":"Text","text":"$title","type":"caption","color":"hint"},{"kind":"Diagram","mermaid":"$mermaid"}]}}},{"template":{"kind":"Block","variant":"inset","padding":{"horizontal":8,"vertical":4},"child":{"kind":"Text","text":"$mermaid","mono":true,"color":"hint"}}}],"params":{"mermaid":null,"title":null}},"interruptRow":{"variants":[{"template":{"kind":"Row","gap":8,"main":"end","children":[{"kind":"Expanded","child":{"kind":"Button","label":"$confirmLabel","variant":"normal","action":"$confirmAction"}},{"kind":"Expanded","child":{"kind":"Button","label":"$cancelLabel","variant":"simple","action":"$cancelAction"}}]}}],"params":{"confirmLabel":null,"cancelLabel":null,"confirmAction":"__submit","cancelAction":"__cancel"}}};
 
   function present(v) {
     if (v === undefined || v === null) return false;
@@ -144,15 +144,15 @@
   kit.hint = function (params, env) { return expand("hint", params || {}, env); };
 
   // 正文行
-  // 参数：text(text, 必填)、tone(tone, 默认 normal)、mono(bool, 默认 false)
+  // 参数：text(text, 必填)、color(color, 默认 normal)、mono(bool, 默认 false)
   kit.text = function (params, env) { return expand("text", params || {}, env); };
 
   // 状态小标签
-  // 参数：text(text, 必填)、tone(tone, 默认 accent)
+  // 参数：text(text, 必填)、color(color, 默认 accent)
   kit.badge = function (params, env) { return expand("badge", params || {}, env); };
 
   // 图标（目标不支持 Icon 时退化成 glyph 文本）
-  // 参数：name(string)、glyph(string)、size(size)、tone(tone, 默认 normal)
+  // 参数：name(string)、glyph(string)、size(size)、color(color, 默认 normal)
   kit.icon = function (params, env) { return expand("icon", params || {}, env); };
 
   // 竖直留白（缺省用客户端默认行距）
@@ -163,16 +163,20 @@
   // 参数：
   kit.divider = function (params, env) { return expand("divider", params || {}, env); };
 
-  // 按钮
-  // 参数：label(text, 必填)、variant(enum:buttonVariant, 默认 secondary)、icon(string)、disabled(bool, 默认 false)、action(action)
+  // 按钮（不写 label 就是纯图标按钮，图标与文字都没有时用 glyph 当文字；color 定内容色，会盖住选中 / 禁用态）
+  // 参数：label(text)、variant(enum:buttonVariant, 默认 normal)、highlight(bool, 默认 false)、icon(string)、glyph(string)、color(color)、size(size)、disabled(bool, 默认 false)、action(action)
   kit.button = function (params, env) { return expand("button", params || {}, env); };
+
+  // 子树样式作用域：包住一块内容，data 由客户端定义（musicxx 用 text / surface / button / mask / shimmer 五组颜色）；客户端不支持时只给内容，样式不生效
+  // 参数：child(item, 必填)、data(json, 必填)
+  kit.themeScope = function (params, env) { return expand("themeScope", params || {}, env); };
 
   // 一排等宽按钮（按钮列表里的每一项占一等份）
   // 参数：buttons(items, 必填)
   kit.actionsRow = function (params, env) { return expand("actionsRow", params || {}, env); };
 
   // 内容块（覆盖基础 kit：终端卡片的留白更紧）
-  // 参数：title(text)、variant(string, 默认 card)、padding(edges, 默认 {horizontal: 8, vertical: 4})、margin(edges)、children(items)
+  // 参数：title(text)、variant(string, 默认 card)、padding(edges, 默认 {horizontal: 8, vertical: 4})、margin(edges)、child(item)
   kit.card = function (params, env) { return expand("card", params || {}, env); };
 
   // 卡片里的一行（覆盖基础 kit：终端行更紧，右侧文字用说明色调）
@@ -196,7 +200,7 @@
   kit.tree = function (params, env) { return expand("tree", params || {}, env); };
 
   // 列表项（数据对象，给 ListViewBase / ListView 的 items 用）
-  // 参数：id(string)、title(text, 必填)、subtitle(text)、trailing(text)、image(string)、icon(string)、tone(tone, 默认 normal)、selected(bool, 默认 false)、action(action)
+  // 参数：id(string)、title(text, 必填)、subtitle(text)、trailing(text)、image(string)、icon(string)、color(color, 默认 normal)、selected(bool, 默认 false)、action(action)
   kit.listItem = function (params, env) { return expand("listItem", params || {}, env); };
 
   // 菜单项（数据对象，给 ListView 的 menu / itemMenu 用）
@@ -204,15 +208,27 @@
   kit.menuItem = function (params, env) { return expand("menuItem", params || {}, env); };
 
   // 迷你趋势图
-  // 参数：data(numbers, 必填)、height(int, 默认 1)、glyphStyle(enum:sparkStyle, 默认 block)、showLast(bool, 默认 true)、tone(tone, 默认 accent)
+  // 参数：data(numbers, 必填)、height(int, 默认 1)、glyphStyle(enum:sparkStyle, 默认 block)、showLast(bool, 默认 true)、color(color, 默认 accent)
   kit.sparkline = function (params, env) { return expand("sparkline", params || {}, env); };
 
   // 一行进度（覆盖基础 kit：agentxx 默认按百分比显示数值）
   // 参数：label(text)、value(float, 必填)、total(float, 默认 100)、unit(string, 默认 %)
   kit.progressRow = function (params, env) { return expand("progressRow", params || {}, env); };
 
+  // 在这里渲染一个槽位的内容（应用预留的或插件声明的）；没写 fallback 时不占位
+  // 参数：slot(string, 必填)、args(json)、fallback(item)
+  kit.slot = function (params, env) { return expand("slot", params || {}, env); };
+
+  // 一段带变量的文本（字符串里的 {变量 id} 由客户端绑定）
+  // 参数：text(text, 必填)、color(color, 默认 normal)
+  kit.textVar = function (params, env) { return expand("textVar", params || {}, env); };
+
+  // 把某个变量绑定成值（`{"var": …}`），可用在尺寸 / 进度 / 开关等值位置
+  // 参数：name(string, 必填)、fallback(json)、unit(string)
+  kit.varValue = function (params, env) { return expand("varValue", params || {}, env); };
+
   // 工具调用行：工具名 + 一行摘要 + 可选状态标签
-  // 参数：name(text, 必填)、depict(text)、status(text)、statusTone(tone, 默认 hint)、action(action)
+  // 参数：name(text, 必填)、depict(text)、status(text)、statusColor(color, 默认 hint)、action(action)
   kit.toolCallRow = function (params, env) { return expand("toolCallRow", params || {}, env); };
 
   // 思考 / 说明段落：可选小标题 + 次要色调的正文

@@ -161,8 +161,8 @@ InterruptUiBlock meterBlock(
 ) {
     pluginxx::ui::Item progress = pluginxx::ui::build::progress(value, total, "%");
     progress.label              = pluginxx::ui::TextValue::of(label);
-    for (auto& [at, tone] : thresholds) {
-        progress.thresholds.push_back(pluginxx::ui::Threshold{at, std::move(tone)});
+    for (auto& [at, color] : thresholds) {
+        progress.thresholds.push_back(pluginxx::ui::Threshold{at, std::move(color)});
     }
     return contentBlock(std::move(progress));
 }
@@ -183,10 +183,10 @@ InterruptUiOption
 
 InterruptUiBlock
     textBlock(std::string text, std::string color, int indent, bool wrap, bool bold, bool dim) {
-    // 内容块统一经组件项产出 (与插件 UI 同一套 schema): tone/bold/dim/wrap/indent
+    // 内容块统一经组件项产出 (与插件 UI 同一套 schema): color/bold/dim/wrap/indent
     // 在描述层都有对应字段, 转换不丢信息
     pluginxx::ui::Item item = pluginxx::ui::build::text(text);
-    item.tone               = color.empty() ? std::string{"normal"} : std::move(color);
+    item.color               = color.empty() ? std::string{"normal"} : std::move(color);
     item.wrap               = wrap;
     item.bold               = bold;
     item.dim                = dim;

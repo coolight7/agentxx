@@ -331,10 +331,10 @@ typedef struct AgentxxClientUiIface {
     /// 更新面板内容: itemsJson = {"items":[ …组件项… ]}
     /// - 组件来自**界面描述层** (`pluginxx::ui`, 独立库 cxx_pluginxx_ui): 规范写法是
     ///   组件名 PascalCase、字段 camelCase, 例:
-    ///   {"kind":"Text","text":"CPU","type":"body","tone":"normal"},
+    ///   {"kind":"Text","text":"CPU","type":"body","color":"normal"},
     ///   {"kind":"Progress","label":"cpu","value":0.5},
-    ///   {"kind":"Button","label":"Rebuild","action":{"kind":"dispatch","name":"rebuild"}}
-    /// - 文本样式用 `tone` (normal/hint/accent/title/error/…) 与 `type`
+    ///   {"kind":"Button","label":"Rebuild","action":{"kind":"call","name":"rebuild"}}
+    /// - 文本样式用 `color` (normal/hint/accent/title/error/…) 与 `type`
     ///   (body/caption/title); 插件用 SDK 的构建器 (`pluginxx::ui::build`) 或 kit
     ///   拼装即可, 不必手写 JSON
     /// - 未知组件与本客户端不支持的组件由主程序按自身能力降级 (最多降到文本),
@@ -370,7 +370,7 @@ typedef struct AgentxxClientUiIface {
         PluginxxString*           error_out
     );
     /// 更新 Info 栏段落内容: itemsJson 同 update_panel 的 items schema
-    ///   (如 {"kind":"Text","text":"index: 42","tone":"hint"});
+    ///   (如 {"kind":"Text","text":"index: 42","color":"hint"});
     ///   列表项由主程序按侧边栏 Append 段样式以 "|  xxx" 前缀展示
     PluginxxOperatorHandle*(PLUGINXX_CALL* update_info_section)(
         const PluginxxHost*       host,
@@ -434,10 +434,10 @@ typedef struct AgentxxClientUiIface {
     ///    "summary": "[~] a; [ ] b",          // 可选; 折叠头一行摘要 (缺省回退参数预览)
     ///    "items": [                          // 可选; 展开体内容
     ///      {"kind":"Text","text":"Todos:","type":"title"},
-    ///      {"kind":"Text","text":"[~] do task A","tone":"hint"},
+    ///      {"kind":"Text","text":"[~] do task A","color":"hint"},
     ///      {"kind":"Diagram","mermaid":"stateDiagram-v2..."} ]}
     /// - 按钮 (可点): {"kind":"Button","label":"Graph",
-    ///   "action":{"kind":"dispatch","name":"planning.open_graph"}}
+    ///   "action":{"kind":"call","name":"planning.open_graph"}}
     /// - 不使用构建器时按上面的规范写法手写即可 (组件名 PascalCase, 字段 camelCase);
     ///   本客户端不支持的组件由主程序按能力降级, 不会丢内容
     /// - tool_call_id: 目标工具调用 id (取自 DELTA/tool_start 的 tool_call_id);

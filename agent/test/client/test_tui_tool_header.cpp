@@ -745,8 +745,8 @@ struct ToolHeaderFixture {
             d.displayName = "Plan";
             d.summary     = "[~] reproduce issue";
             d.items       = utilxx_base::Json::parse(R"([
-                {"kind":"Button","label":" Graph ","tone":"accent",
-                 "action":{"kind":"dispatch","name":"planning.open_graph"}},
+                {"kind":"Button","label":" Graph ","color":"accent",
+                 "action":{"kind":"call","name":"planning.open_graph"}},
                 {"kind":"Text","type":"title","text":"Todos:"},
                 {"kind":"Text","text":"[~] do task A"}
             ])");

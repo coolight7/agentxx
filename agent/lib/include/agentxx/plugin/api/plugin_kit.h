@@ -146,7 +146,8 @@ inline std::string_view textOfView(const PluginxxStringView& v) noexcept {
  * - `subscribePluginBroadcastAsync` / `subscribePluginBroadcastExAsync`: 订阅
  *   (句柄由主程序随实例回收, 不需手动释放)。
  *
- * 频道 id 写全名: `plugin.<插件名>.*` 可用 (`publish: owner` 时归属就是本插件),
+ * 频道 id 写全名: `plugin.<插件名>.*` 可用 (声明里不写 `publish` 时插件频道默认
+ * 任何人可发; 显式写 `publish: owner` 就只有属主能发),
  * `agentxx.agent.*` / `agentxx.client.*` 是主程序频道, 插件只能订阅。
  */
 
@@ -208,7 +209,6 @@ inline bool publishPluginBroadcastNoWait(
     return handle != nullptr;
 }
 
-/// 订阅一条广播 (**提交即返回**; 句柄由主程序随实例卸载回收)
 /// 订阅一条广播 (**提交即返回**; 只报"主程序受理了这次订阅", 拿不到句柄)
 ///
 /// 订阅句柄只能经完成回调的 `payload` 交回 (v4 异步契约), 所以需要主动退订时

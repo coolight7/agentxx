@@ -1415,11 +1415,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(sub != nullptr);
             XX_TEST_EXPECT_TRUE(mgr->broadcasts()->declares(kTopic));
             const auto decl = mgr->broadcasts()->declOf(kTopic);
+            // 属主按名字推断 (按实例回收频道用), 发布权与插件自己声明的默认值一致
+            // ("任何人可发", 几个插件可以共写一条频道)
             XX_TEST_EXPECT_TRUE(
                 decl != nullptr && decl->owner == "agentxx_other"
-                && decl->publish == pluginxx::BroadcastPublisher_e::Owner
+                && decl->publish == pluginxx::BroadcastPublisher_e::Anyone
             );
-            // 主程序代发 (发布者 = 属主) → 订阅收到
+            // 主程序代发 (发布者 = 应用) → 订阅收到
             mgr->publishClientChannelValue(kTopic, R"({"n":1})");
             co_await drainPlugin(mgr, "example_plugin");
             XX_TEST_EXPECT_EQ(hits.load(), 4);
@@ -1916,7 +1918,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(dump.find("Gap") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("Divider") == std::string::npos);
                     // 副标题/说明等减淡内容走 hint 色 (与 `|- ` 前缀一致, 不再叠加 dim)
-                    XX_TEST_EXPECT_TRUE(dump.find("\"tone\":\"hint\"") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("\"color\":\"hint\"") != std::string::npos);
                     // 会话行: 标题 + 副标题 + 会话 id + 左侧加载帧 (tick 7 -> 第 8 帧 ⠧)
                     XX_TEST_EXPECT_TRUE(dump.find("技术群") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("assistant · 群聊 · always") != std::string::npos);
@@ -2012,7 +2014,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_EQ(sec.items[2].value("kind", ""), std::string{"Text"});
                     // 动作按描述层解析: 短写字符串与对象写法等价 (dispatch + 名字)
                     const auto graphAction = pluginxx::ui::parseAction(graphButton["action"]);
-                    XX_TEST_EXPECT_EQ(graphAction.kind, pluginxx::ui::Action::Kind::Dispatch);
+                    XX_TEST_EXPECT_EQ(graphAction.kind, pluginxx::ui::Action::Kind::Call);
                     XX_TEST_EXPECT_EQ(graphAction.name, std::string{"planning.open_graph"});
                     // 状态图源码经 dispatch 动作派发时由插件自持 (不随按钮双发)
                 }
@@ -2874,9 +2876,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_EQ(ctl.size(), 2U);
         XX_TEST_EXPECT_EQ(btn.kind, std::string{"Button"});
         XX_TEST_EXPECT_EQ(btn.label.fallback, std::string{"Go"});
-        XX_TEST_EXPECT_EQ(btn.tone, std::string{"accent"});
-        XX_TEST_EXPECT_EQ(btn.variant, std::string{"secondary"});
-        XX_TEST_EXPECT_TRUE(btn.action.kind == pluginxx::ui::Action::Kind::Dispatch);
+        XX_TEST_EXPECT_EQ(btn.color, std::string{"accent"});
+        XX_TEST_EXPECT_EQ(btn.variant, std::string{"normal"});
+        XX_TEST_EXPECT_TRUE(btn.action.kind == pluginxx::ui::Action::Kind::Call);
         XX_TEST_EXPECT_TRUE(btn.action.name.rfind("act_", 0) == 0);
         XX_TEST_EXPECT_EQ(btn.action.argsJson, std::string{R"({"k":1})"});
         // dispatch 固定 id
@@ -2936,7 +2938,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // owner=other 时精确未命中且无 "" 绑定 → false
         XX_TEST_EXPECT_FALSE(hasPluginBindingFor("agentxx_planning", "other_owner", &reg));
         XX_TEST_EXPECT_FALSE(hasPluginBinding("other_plugin", &reg));
-        // tone → 主题色映射 (组件层与中断项共用)
+        // color → 主题色映射 (组件层与中断项共用)
         const auto theme = TUITheme::darkTheme();
         XX_TEST_EXPECT_TRUE(uiRoleColor("hint", theme) == theme.hintColor);
         XX_TEST_EXPECT_TRUE(uiRoleColor("title", theme) == theme.accentColor);

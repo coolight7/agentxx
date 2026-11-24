@@ -33,7 +33,7 @@ if (SIDE === "client") {
       const who = (input.args && input.args.name) || "world";
       return [
         { kind: "Text", text: "JS Hello (client side)", type: "title" },
-        { kind: "Text", text: "target: " + who, tone: "hint" },
+        { kind: "Text", text: "target: " + who, color: "hint" },
         {
           kind: "Text",
           text: input.finished ? "result: " + (input.resultText || "") : "(running)",
@@ -60,8 +60,8 @@ if (SIDE === "client") {
   });
   if (info) {
     await agentxx.updateInfoSection(info, [
-      { kind: "Text", text: "side: client", tone: "hint" },
-      { kind: "Text", text: "渲染器: js_hello", tone: "hint" },
+      { kind: "Text", text: "side: client", color: "hint" },
+      { kind: "Text", text: "渲染器: js_hello", color: "hint" },
     ]);
   }
   const panel = await agentxx.registerPanel({ id: "js.demo.panel", props: { title: "JS Demo" } });
@@ -71,7 +71,7 @@ if (SIDE === "client") {
       {
         kind: "Button",
         label: "打个招呼",
-        action: { kind: "dispatch", name: "js.demo.hello" },
+        action: { kind: "call", name: "js.demo.hello" },
       },
     ]);
   }
@@ -111,8 +111,8 @@ if (SIDE === "client") {
       timerTicks += 1;
       if (info) {
         await agentxx.updateInfoSection(info, [
-          { kind: "Text", text: "side: client", tone: "hint" },
-          { kind: "Text", text: "timer tick " + timerTicks, tone: "hint" },
+          { kind: "Text", text: "side: client", color: "hint" },
+          { kind: "Text", text: "timer tick " + timerTicks, color: "hint" },
         ]);
       }
     },

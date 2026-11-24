@@ -1106,11 +1106,11 @@ struct ClientCtx : agentxx::plugin::ClientPluginBase {
 static std::string buildInfoItemsJson(ClientCtx& c) {
     // 组件项经描述层与扩展 kit 组装 (文本行用 kit::text, 进度用构建器)
     std::vector<pluginxx::ui::Item> items;
-    auto                            pushText = [&](const std::string& text, std::string tone = {}) {
+    auto                            pushText = [&](const std::string& text, std::string color = {}) {
         utilxx_base::Json params;
         params["text"] = text;
-        if (!tone.empty()) {
-            params["tone"] = std::move(tone);
+        if (!color.empty()) {
+            params["color"] = std::move(color);
         }
         items.push_back(agentxx::ui::kit::text(params));
     };

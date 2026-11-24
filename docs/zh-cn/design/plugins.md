@@ -895,8 +895,9 @@ cancel) + 1 张**网络表** `agentxx_plugin_net` (两侧都提供) + 6 张自�
 `Text` / `Divider` / `Gap` / `Button` / `Block` / `Row` / `Column` / `Expanded` / `Spacer` /
 `SizedBox` / `Padding` / `Align` / `Collapse` / `KV` / `Table` / `Tree` / `Progress` / `Badge` /
 `Control` / `Markdown` / `Icon` / `Diff` / `Sparkline` / `Diagram` / `ListViewBase` / `ListView`。
-本端没实现的可选块（`Stack` / `Image` / `musicxx.Shader`）**不列进去**，由适配自动降级
-（`Stack` → 最后一个子节点、`Image` → `alt` 文本、专属块 → 跳过）。
+本端没实现的可选块（`Stack` / `Image` / `ThemeScope` / `UISlot` / `musicxx.Shader`）
+**不列进去**，由适配自动降级（`Stack` → 最后一个子节点、`Image` → `alt` 文本、
+`ThemeScope` → 展开子节点、`UISlot` → 跳过、专属块 → 跳过）。
 
 列表块（`ListViewBase` / `ListView`）在终端的形态（详见 [ui-layer.md](ui-layer.md) §2）:
 
@@ -910,12 +911,18 @@ cancel) + 1 张**网络表** `agentxx_plugin_net` (两侧都提供) + 6 张自�
 写法要点（完整字段见库文档）:
 
 - 文本：`text`（`TextValue`：字符串或 `{key, fallback, args}`）/ `type`（`body`/`caption`/`title`）/
-  `tone`（语义色）/ `bold` / `dim` / `mono` / `wrap` / `maxLines` / `align` / `action`；
+  `color`（语义色，旧名 `tone` 已被库删除）/ `bold` / `dim` / `mono` / `wrap` / `maxLines` /
+  `align` / `action`；
 - 尺寸：**一个数值单位 u**（GUI 1u = 1 逻辑像素；终端按能力段的 `cell` 换算成列/行）、
   `{"percent": n}`、`"auto"`；`padding` / `margin` 用 `Edges`（数值 / `{horizontal,vertical}` /
   单边对象），不允许负值；
+- 单内容容器（`Block` / `Collapse` / `Expanded` / `SizedBox` / `Padding` / `Align` / `ThemeScope`）：
+  子块字段是 `child`（一个对象），多块内容包一层 `Column`；旧写法的 `children` 会被当未知字段忽略；
+- 按钮：`variant` = `normal` / `full` / `simple`，选中态 `highlight`，高度 `size`，
+  `label` 可省（纯图标按钮，终端用 `glyph` 当文字）；
 - 布局：`Row` / `Column` 的 `main`（含 `spaceBetween`）与 `cross`、`Expanded` / `Spacer` 的 `flex`；
-- 动作：字符串短写 = `dispatch`；对象形式 `{"kind":"dispatch"|"route"|"command"|"none", …}`。
+- 动作：字符串短写 = `call`；对象形式 `{"kind":"call"|"route"|"none", …}`
+  （旧名 `dispatch` / `command` 已被库删除，写了也当 `none`）。
 
 约束与降级:
 
@@ -951,7 +958,7 @@ cancel) + 1 张**网络表** `agentxx_plugin_net` (两侧都提供) + 6 张自�
   items.push_back(agentxx::ui::kit::toolCallRow({{"name", "grep"},
                                                  {"depict", "在 src 下搜索 TODO"},
                                                  {"status", "完成"},
-                                                 {"statusTone", "success"}},
+                                                 {"statusColor", "success"}},
                                                 ctx.kitEnv()));
   ctx.setPanelItems(ctx.panel, items);   // 或 auto ui = ctx.panelItems(ctx.panel); ui.add(...)
   ```
@@ -1230,9 +1237,9 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      的内容块 (`agent/lib/include/agentxx/middlewares/interrupt_ui.h`) 都是
      `cxx_pluginxx_ui` 的组件项（`pluginxx::ui::Item`），在 TUI 侧共用同一套渲染实现
      ([ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)，
-     渲染产出"行模型"，渲染与高度估算同源）；`tone` 取色 / 按钮配色 / `Diff` 渲染
+     渲染产出"行模型"，渲染与高度估算同源）；`color` 取色 / 按钮配色 / `Diff` 渲染
      在客户端自己的映射表里（[plugin_ui_items.h](/agent/client/include/agentxx-client/io/tui/plugin_ui_items.h)）。
-     两者区别只在**谁定义动作去处**：插件的 `dispatch` 回到 `bind_action_handler`，
+     两者区别只在**谁定义动作去处**：插件的 `call` 回到 `bind_action_handler`，
      中断的 `__submit`/`__cancel` 是域内约定（见 9.2）。
    - **中断描述由生产者用预设模板生成** (权限卡片 `preset::permissionCard` /
      类型化输入表单 `preset::inputForm` / 确认卡片 `preset::confirmCard`,
@@ -1242,10 +1249,11 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      **暂不支持插件自带的中断 UI**。
    - **协议内没有"参数类型"概念** (bool/int/enum 等已删除): 需要类型化输入时由
      生产者调用预设模板生成描述 (类型→控件的映射只存在于预设内)。
-   - **已丢弃的旧写法**（不留解析分支）：`indent`（用 `Padding`）/ `color`↔`role` 双名
-     （统一 `tone`）/ `box`（`Block`）/ `separator`（`Divider`）/ `meter`（`Progress`）/
-     `custom` / `canvas` / `when` / 单边 margin·padding（统一 `Edges`）/ 动作旧 kind
-     （`capability`/`action`）。详见库文档与 [ui-layer.md](ui-layer.md)。
+   - **已丢弃的旧写法**（不留解析分支）：`indent`（用 `Padding`）/ `tone`（用 `color`）/
+     `box`（`Block`）/ `separator`（`Divider`）/ `meter`（`Progress`）/ 单内容容器的 `children`
+     （用 `child`）/ 动作旧 kind（`dispatch`→`call`, `command` 已删）/ 按钮旧变体
+     （`primary`/`secondary`/`ghost` → `normal`/`full`/`simple`）/ `custom` / `canvas` / `when` /
+     单边 margin·padding（统一 `Edges`）。详见库文档与 [ui-layer.md](ui-layer.md)。
    - 结果契约: 中断结果恒为 `{"values": {"<控件 id>": 值}}` (空对象 = 未应答)。
 
 6. **语义渲染缓存**：
@@ -2574,7 +2582,7 @@ v3 起这些码不再作为入口返回值出现: 入口只表达"受理 / 未�
 
 | 成员 | 语义 |
 |---|---|
-| `declare_broadcast(decl_json, cb, ud, err)` | 声明频道：`id`（短名 `build` 由主程序补成 `plugin.<本插件 id>.build`；写全名也可以）、`cache`（`latest` 有当前值 / `none`）、`publish`（`owner` 只有属主能发 / `anyone` 谁都能发）、`pushOnSubscribe`（订阅时先推当前值，要求 `cache: latest`）、`coalesce`、`scope`（`app` / `system`）。应用频道（`agentxx.*`）不能被插件改写；同一 id 重复声明幂等（**声明内容完全相同时不改状态、不打"replaced"日志** —— 插件侧每次发布前都会先声明，周期频道不该因此刷日志），第二段流从 `end` 之后重新开始 |
+| `declare_broadcast(decl_json, cb, ud, err)` | 声明频道：`id`（短名 `build` 由主程序补成 `plugin.<本插件 id>.build`；写全名也可以）、`cache`（`latest` 有当前值 / `none`）、`publish`（`owner` 只有属主能发 / `anyone` 谁都能发；**省略时插件频道按 `anyone`** —— 几个插件可以共写一条频道，应用声明自己的频道则按 `owner`）、`pushOnSubscribe`（订阅时先推当前值，要求 `cache: latest`）、`coalesce`、`scope`（`app` / `system`）。应用频道（`agentxx.*`）不能被插件改写；同一 id 重复声明幂等（**声明内容完全相同时不改状态、不打"replaced"日志** —— 插件侧每次发布前都会先声明，周期频道不该因此刷日志），第二段流从 `end` 之后重新开始 |
 | `publish_broadcast(id, payload_json, cb, ud, err)` | 发布：属主发 `owner` 频道、任何插件发 `anyone` 频道；未声明 / 已结束 / 没权限在完成回调里按 `not_declared` / `ended` / `not_owner` 失败（原因在 `payload` 文本里） |
 | `subscribe_broadcast(scope, id, handler, ud, options_json, cb, ud, err)` | 订阅：`options_json` 形如 `{"intervalMs":200,"mode":"delay|drop"}`（每个订阅自己的通知间隔，互不影响）。**完成回调的 `payload` 是订阅句柄的十进制文本**，用 `unsubscribe_broadcast(host, sub, cb, ud, err)` 撤销 |
 | `subscribe_broadcast_ex(..., on_end, ...)` | 同上，另收流结束回调（频道被 `end` 时回调一次，随后该订阅消失） |
@@ -2610,13 +2618,13 @@ v4 起这 7 个成员都是**异步操作契约**（见 §8.0）：返回 `Plugi
 
 | 分组 | 函数 |
 |---|---|
-| 声明 / 发布 | `declarePluginBroadcast(host, bc, id, anyonePublish=false, cacheLatest=true)`；`publishPluginBroadcast(host, bc, id, payload, anyonePublish=false)`（未声明时先补声明）。两者内部走阻塞形态, 返回 `bool` |
-| 订阅 | `subscribePluginBroadcast(host, bc, scope, id, handler, ud)`（需要结束回调时用表成员 `subscribe_broadcast_ex` + `pluginxx::pluginxxSubscriptionFromText`；撤销用 `unsubscribePluginBroadcast(host, bc, sub)`） |
-| 当前值 | 表成员 `read_broadcast`（`co_await readBroadcast(ctx, ...)`） |
-| 结束 | 表成员 `end_broadcast`（阻塞形态） |
+| 声明 / 发布 | `declarePluginBroadcastNoWait(host, bc, id, anyonePublish=false, cacheLatest=true)`；`publishPluginBroadcastNoWait(host, bc, id, payload, anyonePublish=false)`（未声明时先补声明）。都是**提交即返回**的 bool（拿到“已受理”，不是业务结论） |
+| 订阅 | `subscribePluginBroadcastNoWait(host, bc, scope, id, handler, ud)`；需要结束回调时 `co_await subscribePluginBroadcastExAsync(ctx, scope, id, handler, on_end, ud, options)` + `subscriptionOf(result)` 取句柄；撤销用 `unsubscribePluginBroadcastNoWait(host, bc, sub)` |
+| 当前值 | 表成员 `read_broadcast`（`co_await tableOpAsync(ctx, …, bc->read_broadcast …)`） |
+| 结束 | 表成员 `end_broadcast`（同上，协程形态） |
 
 存量调用形状 `iface.events->publish / subscribe` 与 `PluginEventsCompat` 已删：发布 / 订阅只有
-广播表一套，存量代码都改成了 `publishPluginBroadcast` / `subscribePluginBroadcast`。
+广播表一套，存量代码都改成了 `publishPluginBroadcastNoWait` / `subscribePluginBroadcastNoWait`。
 
 ### 20.4 示例与用例
 
@@ -2677,9 +2685,12 @@ v4 起这 7 个成员都是**异步操作契约**（见 §8.0）：返回 `Plugi
 - 广播表 (`agentxx.broadcasts`) 的写侧同一标准 (`publish_broadcast` / `declare_broadcast`):
   只要求落在 `plugin.*` 里, 不核对“是不是本实例的名字”(该入口签名也不带实例信息), 但
   声明时主程序会把频道属主记成**调用方实例名** (按属主回收频道也靠它)。
-- 共用一段时的代价 (知悉即可): 广播频道只能有一个属主, 同一 id 被多个插件声明时
-  后声明者覆盖 (应用频道不能被插件覆盖), 属主禁用/卸载会把频道一起回收 —— 想稳定共享
-  就声明成 `publish: anyone` 并集中在一个“主”插件里声明, 其余插件只往后写值。
+- 共用一段时要知道的两点: ① 广播频道只能有一个属主, 同一 id 被多个插件声明时
+  后声明者覆盖 (应用频道不能被插件覆盖), 属主禁用/卸载会把频道一起回收 —— 想让频道
+  活得比某个插件长, 就集中在一个“主”插件里声明, 其余插件只往后写值;
+  ② 插件频道的发布权**默认是 `anyone`** (声明时不写 `publish` 就是这个), 只有显式写
+  `publish: owner` 才限定属主。主程序在“订阅一条还没人声明的频道”时补的声明用同一份
+  默认值, 因此谁先声明都不会改变能不能写。
 
 ### 21.2 值事件段
 

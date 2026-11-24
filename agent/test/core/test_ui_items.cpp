@@ -75,7 +75,7 @@ TestResult testUiItems() {
         if (item) {
             XX_TEST_EXPECT_EQ(item->kind, std::string{"Text"});
             XX_TEST_EXPECT_EQ(item->text.fallback, std::string{"hello"});
-            XX_TEST_EXPECT_EQ(item->tone, std::string{"accent"});
+            XX_TEST_EXPECT_EQ(item->color, std::string{"accent"});
             XX_TEST_EXPECT_TRUE(item->bold);
             XX_TEST_EXPECT_TRUE(item->wrap);
         }
@@ -200,7 +200,7 @@ TestResult testUiItems() {
             XX_TEST_EXPECT_EQ(item->options[0].label.key, std::string{"interrupt.yes"});
             XX_TEST_EXPECT_EQ(item->options[1].valueJson, std::string{"false"});
             XX_TEST_EXPECT_EQ(item->options[1].label.fallback, std::string{"No"});
-            XX_TEST_EXPECT_EQ(item->options[1].tone, std::string{"error"});
+            XX_TEST_EXPECT_EQ(item->options[1].color, std::string{"error"});
         }
     }
     {
@@ -271,7 +271,7 @@ TestResult testUiItems() {
         XX_TEST_EXPECT_TRUE(item.has_value());
         if (item) {
             XX_TEST_EXPECT_EQ(item->text.fallback, std::string{"3"});
-            XX_TEST_EXPECT_EQ(item->tone, std::string{"accent"});
+            XX_TEST_EXPECT_EQ(item->color, std::string{"accent"});
         }
     }
 

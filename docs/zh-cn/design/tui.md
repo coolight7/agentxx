@@ -1136,7 +1136,7 @@ UTF-8 字节按旧代码页解码 —— 中文整屏乱码, 且一个中文字�
 
 ### 3.4 文案与样式
 
-- 界面文案一律经 `tr()/trf()` 取; 技术字段 (tone/args 等) 不翻译。
+- 界面文案一律经 `tr()/trf()` 取; 技术字段 (color/args 等) 不翻译。
 - 弹窗一律用 `tuiSurfacePopup/tuiSurfaceFrame/tuiSurfaceToast` 组装; 不要自行拼边框。
 - `bgcolor(ftxui::Color::Default)` 会把单元格背景重置为终端默认色 (抹掉父级背景),
   需要"不着色"时用 `UiActionStyle` 的默认值语义 (框架内部已跳过 Default)。

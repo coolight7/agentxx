@@ -1177,8 +1177,8 @@ TestResult testPluginSdk() {
             );
             pluginxx::ui::Item apply = pluginxx::ui::build::button(
                 "APPLY",
-                pluginxx::ui::build::dispatch("apply"),
-                "primary"
+                pluginxx::ui::build::call("apply"),
+                "normal"
             );
             XX_TEST_EXPECT_EQ(client.setPanelItems(panel, {block, apply}), 0);
         }

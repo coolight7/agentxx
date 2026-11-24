@@ -203,7 +203,7 @@ size_t measureItem(const pluginxx::ui::Item& item, const UiRenderCtx& ctx);
 size_t measureItems(const std::vector<pluginxx::ui::Item>& items, const UiRenderCtx& ctx);
 
 /// 取组件项使用的语义色 (与 [uiRoleColor] 同一映射)
-ftxui::Color itemColor(std::string_view tone, const TUITheme& theme);
+ftxui::Color itemColor(std::string_view color, const TUITheme& theme);
 
 /// 组件描述文案 → 显示文本 (TextValue: 先按键查语言表, 缺键用 fallback, 最后按 `args`)
 std::string resolveText(const pluginxx::ui::TextValue& text, const UiRenderCtx& ctx);

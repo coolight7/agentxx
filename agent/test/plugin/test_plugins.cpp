@@ -3901,17 +3901,17 @@ throw new Error("top-level rollback probe");
         // 注: GraphRegistry 无删除类型接口 (设计如此), 类型名保留在注册表中;
         // 回滚语义由 GraphTypeSlot 失效 + 第二次加载能重新注册同名类型共同证明。
         XX_TEST_EXPECT_EQ(sctx->pluginMount->getPromptJson(), promptBefore);
-        // 订阅已撤销: 频道随实例卸载整批回收 (发布必然失败, 也不会回调已卸载的 handler)
+        // 订阅已撤销: 挂载失败回滚按挂载摘掉广播订阅 —— 频道声明本身留着
+        // (频道不随挂载失败删除), 但订阅数归零, 之后的发布不会再回调已失效的 handler
         {
-            std::string watchErr;
-            XX_TEST_EXPECT_FALSE(
-                sctx->pluginManager->broadcasts()->publish(
-                    "plugin.test_start_fail_plugin.watch",
-                    "{}",
-                    std::string_view{},
-                    &watchErr
-                )
-            );
+            auto       registry = sctx->pluginManager->broadcasts();
+            const auto infoJson = registry->infoJson("plugin.test_start_fail_plugin.watch");
+            XX_TEST_EXPECT_FALSE(infoJson.empty());
+            if (!infoJson.empty()) {
+                const auto info = utilxx_base::Json::parse(infoJson);
+                XX_TEST_EXPECT_EQ(info.value<int>("subscribers", -1), 0);
+                XX_TEST_EXPECT_EQ(info.value<std::string>("owner", ""), "test_start_fail_plugin");
+            }
         }
         // 能力已注销: 失败加载不得留下能力注册 (短名 `dso.rollback.cap` 注册时被补全)
         XX_TEST_EXPECT_FALSE(

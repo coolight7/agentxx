@@ -31,9 +31,9 @@ namespace {
 ///
 /// 输入形态 (与 `update_status_item` 的 JSON 一致): 每个片段都是界面描述层的组件项
 /// (字段名同描述层, 见 `pluginxx/ui.h`):
-/// - `segments`: `[{text,tone}]` 文本片段 (状态栏常见的"分色多段"写法)
+/// - `segments`: `[{text,color}]` 文本片段 (状态栏常见的"分色多段"写法)
 /// - `sparkline`: 迷你趋势图参数 (`data` 必需; 高度强制 1 行, 即 `glyphHeight: 1`)
-/// - `meter`: 进度/计量条参数 (`value`/`total`/`width`/`label`/`unit`/`thresholds`/`tone`)
+/// - `meter`: 进度/计量条参数 (`value`/`total`/`width`/`label`/`unit`/`thresholds`/`color`)
 ///
 /// 三者可任意组合, 按 `segments → sparkline → meter` 顺序以单个空格拼接为一行;
 /// 状态栏高度固定一行, 因此 sparkline 的图形高度恒为 1。
@@ -53,7 +53,7 @@ ftxui::Element
                 continue;
             }
             Item cell = pluginxx::ui::build::text(text);
-            cell.tone = seg.value("tone", std::string{"hint"});
+            cell.color = seg.value("color", std::string{"hint"});
             cells.push_back(std::move(cell));
         }
     }

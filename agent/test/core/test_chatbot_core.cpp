@@ -1756,7 +1756,7 @@ void testPanelItems() {
     const auto* placeholderItem = findTextContaining(placeholder, "等待服务端数据");
     XX_TEST_EXPECT_TRUE(placeholderItem != nullptr);
     if (placeholderItem != nullptr) {
-        XX_TEST_EXPECT_EQ(placeholderItem->tone, std::string{"hint"});
+        XX_TEST_EXPECT_EQ(placeholderItem->color, std::string{"hint"});
     }
 
     const PanelSnapshot snap = samplePanelSnapshot();
@@ -1779,12 +1779,12 @@ void testPanelItems() {
     const auto* bulletItem = findTextContaining(items, "|- ");
     XX_TEST_EXPECT_TRUE(bulletItem != nullptr);
     if (bulletItem != nullptr) {
-        XX_TEST_EXPECT_EQ(bulletItem->tone, std::string{"hint"});
+        XX_TEST_EXPECT_EQ(bulletItem->color, std::string{"hint"});
     }
     const auto* subtitleItem = findTextContaining(items, "assistant · 群聊 · always");
     XX_TEST_EXPECT_TRUE(subtitleItem != nullptr);
     if (subtitleItem != nullptr) {
-        XX_TEST_EXPECT_EQ(subtitleItem->tone, std::string{"hint"});
+        XX_TEST_EXPECT_EQ(subtitleItem->color, std::string{"hint"});
         // 只 hint 色, 不再叠加 dim —— caption 会让副标题比 `|- ` 前缀还暗一档
         XX_TEST_EXPECT_TRUE(subtitleItem->textType != std::string{"caption"});
     }
@@ -1792,7 +1792,7 @@ void testPanelItems() {
     const auto* idItem = findTextEqual(items, "id G1");
     XX_TEST_EXPECT_TRUE(idItem != nullptr);
     if (idItem != nullptr) {
-        XX_TEST_EXPECT_EQ(idItem->tone, std::string{"hint"});
+        XX_TEST_EXPECT_EQ(idItem->color, std::string{"hint"});
         XX_TEST_EXPECT_TRUE(idItem->wrap);
     }
 
@@ -1801,7 +1801,7 @@ void testPanelItems() {
     XX_TEST_EXPECT_TRUE(queueItem != nullptr);
     if (queueItem != nullptr) {
         XX_TEST_EXPECT_EQ(queueItem->align, std::string{"end"});
-        XX_TEST_EXPECT_EQ(queueItem->tone, std::string{"accent"});
+        XX_TEST_EXPECT_EQ(queueItem->color, std::string{"accent"});
     }
 
     // 人设段: 名字 / 模型 / 用量 / 提示词摘录
@@ -1812,13 +1812,13 @@ void testPanelItems() {
     const auto* personaDetail = findTextContaining(items, "会话 2/64 · 绑定 3");
     XX_TEST_EXPECT_TRUE(personaDetail != nullptr);
     if (personaDetail != nullptr) {
-        XX_TEST_EXPECT_EQ(personaDetail->tone, std::string{"hint"});
+        XX_TEST_EXPECT_EQ(personaDetail->color, std::string{"hint"});
         XX_TEST_EXPECT_TRUE(personaDetail->textType != std::string{"caption"});
     }
     const auto* promptItem = findTextContaining(items, "你是 QQ 群里的助手");
     XX_TEST_EXPECT_TRUE(promptItem != nullptr);
     if (promptItem != nullptr) {
-        XX_TEST_EXPECT_EQ(promptItem->tone, std::string{"hint"});
+        XX_TEST_EXPECT_EQ(promptItem->color, std::string{"hint"});
         XX_TEST_EXPECT_TRUE(promptItem->textType != std::string{"caption"});
     }
 
@@ -1831,7 +1831,7 @@ void testPanelItems() {
     const auto* statsItem = findTextContaining(items, "失败 1");
     XX_TEST_EXPECT_TRUE(statsItem != nullptr);
     if (statsItem != nullptr) {
-        XX_TEST_EXPECT_EQ(statsItem->tone, std::string{"hint"});
+        XX_TEST_EXPECT_EQ(statsItem->color, std::string{"hint"});
         XX_TEST_EXPECT_TRUE(statsItem->textType != std::string{"caption"});
     }
 

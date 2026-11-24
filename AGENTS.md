@@ -290,6 +290,13 @@ path/to/agentxx_test --log-level warn string_util regex
   `itemMenu` 只在 `selected` 项下展开, 编辑/加删/刷新等动作排成按钮行, `height` 超限补"还有 N 项",
   封面/图标终端不画（实现: `ui_components.cpp` 的 `renderListBlock`/`listButtonRows`）;
   扩展 kit 已重生成, 插件可直接用 `agentxx::ui::kit::listItem/menuItem`
+- **词汇代次 (库 0.2, `uiApiVersion` 4) 的写法定下来后别再回去**: 语义色是 `color`
+  (`tone` 已由库删除); 单内容容器 (`Block`/`Collapse`/`Expanded`/`SizedBox`/`Padding`/`Align`/
+  `ThemeScope`) 的子块是 `child`（一个对象, 多块包一层 `Column`）; 动作 kind 只有
+  `call`/`route`/`none`（字符串短写 = `call`, `dispatch`/`command` 已删）; 按钮 `variant` 是
+  `normal`/`full`/`simple`, 选中态用 `highlight`, 高度用 `size`, `label` 可省（终端用 `glyph`）;
+  新块 `ThemeScope` 与 `UISlot` 本端**不声明**（`adapt` 分别展开子节点 / 跳过, 终端没有
+  内容运行时）; 扩展 kit 是 kitVersion 2（已重生成）
 - 相关测试模块: `ui_kit`（扩展 kit + 能力矩阵适配）、`ui_items`（中断桥接/纯文本）、
   `tui_ui_items`（渲染/测量/命中）
 - 将来的 GUI 客户端只需实现渲染 + 上报能力, 复用描述层/适配/kit; 清单见

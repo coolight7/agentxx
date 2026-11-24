@@ -37,7 +37,7 @@ enum class PluginButtonRole : uint8_t {
     Danger = 2,
 };
 
-/// 按钮渲染参数 (由组件项 `Button` 的 action/variant/tone 字段换算而来)
+/// 按钮渲染参数 (由组件项 `Button` 的 action/variant/color 字段换算而来)
 struct PluginButtonDesc {
     std::string      label;    ///< 按钮文字 (已 strip; 渲染时自动左右补空格)
     std::string      actionId; ///< 可点动作 id (空 = 纯静态)
@@ -50,10 +50,10 @@ struct PluginButtonDesc {
 /// 按 role 配色渲染按钮 (label 自动左右各补一空格)
 ftxui::Element renderPluginButton(const PluginButtonDesc& desc, const TUITheme& theme);
 
-/// UI 项文本颜色 (tone → 主题色; 插件 items 与中断 items 共用同一映射)
+/// UI 项文本颜色 (color → 主题色; 插件 items 与中断 items 共用同一映射)
 /// - title/accent → accentColor; hint → hintColor; error → errorColor;
 ///   thinking → thinkingColor; tool → toolColor; normal/未知 → normalColor
-ftxui::Color uiRoleColor(std::string_view tone, const TUITheme& theme);
+ftxui::Color uiRoleColor(std::string_view color, const TUITheme& theme);
 
 /// diff 内容渲染 (message decor 与 DiffOverlay 共用)
 /// - path 非空时首行展示 "[file] {path}"

@@ -376,7 +376,7 @@ ModelConfigOverlay::ModelConfigOverlay(TUICtx& ctx) :
 void ModelConfigOverlay::buildItems() {
     using pluginxx::ui::build::button;
     using pluginxx::ui::build::caption;
-    using pluginxx::ui::build::dispatch;
+    using pluginxx::ui::build::call;
     using pluginxx::ui::build::divider;
     using pluginxx::ui::build::row;
 
@@ -549,8 +549,8 @@ void ModelConfigOverlay::buildItems() {
     // 提交行: __submit / __cancel 是域内约定 (见 ui_components.h), 由本组件处理
     formItems_.push_back(row(
         {
-            button(std::string{tr("ui.save")}, dispatch(kFormSubmitActionId), "primary"),
-            button(std::string{tr("ui.cancel")}, dispatch(kFormCancelActionId), "secondary"),
+            button(std::string{tr("ui.save")}, call(kFormSubmitActionId), "normal"),
+            button(std::string{tr("ui.cancel")}, call(kFormCancelActionId), "simple"),
         },
         pluginxx::ui::gen::kDefaultCellWidth * 2.0
     ));

@@ -45,7 +45,15 @@
 `Control` / `Markdown` / `Icon` / `Diff` / `Sparkline` / `Diagram` / `ListViewBase` / `ListView`。
 
 客户端**没实现**的可选块不列进去，由适配自动降级：`Stack` → 最后一个子节点、
-`Image` → `alt` 文本、`musicxx.Shader`（musicxx 专属块）→ 跳过。
+`Image` → `alt` 文本、`ThemeScope` → 展开子节点（样式不生效）、`UISlot` → 跳过
+（终端没有内容运行时，画不了插槽）、`musicxx.Shader`（musicxx 专属块）→ 跳过。
+
+组件词汇从 0.1 升到 0.2（`uiApiVersion` 4）后的两处写法要点：
+
+- 单内容容器（`Block` / `Collapse` / `Expanded` / `SizedBox` / `Padding` / `Align` / `ThemeScope`）
+  的子块字段是 **`child`**（一个对象），不再接受 `children` 数组；多块内容包一层 `Column`；
+- 语义色字段统一叫 **`color`**（不再有 `tone`）；按钮的 `variant` 是 `normal` / `full` / `simple`，
+  选中态用 `highlight`，高度用 `size`，`label` 可省（纯图标按钮，终端用 `glyph` 当文字）。
 
 列表块（`ListViewBase` / `ListView`）在终端的方式（`renderListBlock`，与 GUI 的差别都在这里）：
 
@@ -79,7 +87,7 @@ TUI 客户端上报的能力（`tuiUiCapabilities()`）与渲染前 `adaptItems`
 
 ```jsonc
 {
-  "apiVersion": 2,
+  "apiVersion": 4,
   "kind": "tui",
   "blocks": ["Text", "Divider", "…"],     // 实际支持（<= kTuiBlockNames）
   "controls": ["buttons", "select", "checkbox", "switch", "text", "number", "password"],
@@ -119,7 +127,7 @@ std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>
 
 | kit | 命名空间 | 内容 |
 |---|---|---|
-| 基础 kit（库） | `pluginxx::ui::kit` | `title` / `hint` / `text` / `badge` / `icon` / `gap` / `divider` / `button` / `actionsRow` / `card` / `listRow` / `section` / `kv` / `table` / `tree` / `sparkline` / `progressRow` + `cols` / `rows` |
+| 基础 kit（库） | `pluginxx::ui::kit` | `title` / `hint` / `text` / `badge` / `icon` / `gap` / `divider` / `button` / `themeScope` / `actionsRow` / `card` / `listRow` / `section` / `kv` / `table` / `tree` / `sparkline` / `progressRow` / `slot` / `textVar` / `varValue` + `cols` / `rows` |
 | 扩展 kit（本项目） | `agentxx::ui::kit` | 上面全部 + agentxx 风格的覆盖与常用组合：`card` / `listRow`（终端留白更紧）、`progressRow`（默认按百分比）、`toolCallRow`、`thinkingBlock`、`sessionStats`、`pathDiffRow`、`diagramBlock`、`interruptRow` |
 
 - 插件写 `agentxx::ui::Item` / `agentxx::ui::build::button` / `agentxx::ui::kit::toolCallRow`
@@ -137,7 +145,7 @@ std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>
 
 - **库不提供"表单 + 提交"这一层**：控件只在**值变化时**派发自己的 `action`，
   客户端把 `{id, value}` 合并进参数（插件自己写的 `args` 保留，冲突以客户端补的为准）；
-- 动作 kind：`dispatch`（字符串短写即它）/ `route` / `command` / `none`；
+- 动作 kind：`call`（字符串短写即它）/ `route` / `none`；
 - 控件值类型：`checkbox`/`switch` → 布尔；`text`/`password` → 字符串（**password 只影响显示**：
   输入框里打码成圆点，提交值仍是明文）；`number` → 数值；`buttons`/`select` → 候选项原值；
 - 控件状态由客户端维护（焦点、编辑中的文本、本地覆盖值、校验提示），不属于描述；
@@ -197,7 +205,8 @@ CLI / 日志 / FFI 文本主程序走库的 `plainText`（`interruptUiPlainText`
 `Progress` / `Badge` / `Control` / `Markdown`。
 
 可选（不实现就别写进 `blocks`，由适配降级）：`Icon`（GUI 用 `name`，不认识就用 `glyph`）、
-`Image`（取不到源用 `alt`）、`Stack`、`Diff`、`Sparkline`、`Diagram`、
+`Image`（取不到源用 `alt`）、`Stack`、`Diff`、`Sparkline`、`Diagram`、`ThemeScope`（子树样式作用域，
+`data` 的含义由客户端定义）、`UISlot`（插槽，需要内容运行时）、
 `ListViewBase` / `ListView`（列表块，GUI 里就是应用的列表组件：`layout` 四种形态、
 项点击传 `index`/`itemId`、`height`/`padding`、`menu`/`itemMenu` 与编辑动作）与客户端专属块。
 
@@ -236,9 +245,9 @@ auto renderable = pluginxx::ui::adaptDocument(doc, guiCapabilities(), &adaptRepo
 
 ### 11.4 动作与控件通道
 
-- 守卫 `dispatch`：交回内容归属方（面板/Info/装饰/overlay 由插件实例的动作绑定接住），
+- 守卫 `call`：交回内容归属方（面板/Info/装饰/overlay 由插件实例的动作绑定接住），
   客户端把 `{id, value}` 合并进动作参数；
-- `route` / `command`：由客户端定义可跳范围与官方动作；
+- `route`：由客户端定义可跳范围与官方页面；
 - 控件状态（焦点、编辑中的值、本地覆盖值、校验）在客户端，描述里的 `value` 只是初值；
 - 域内提交（如果需要）自己实现，不要指望描述层有提交语义。
 

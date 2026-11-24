@@ -494,13 +494,13 @@ static UsageStat parseUsage(const std::string& raw) {
 
 static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageStat& st) {
     // 组件项经描述层与扩展 kit 组装 (同一份描述, 终端与将来的 GUI 客户端共用;
-    // 每行是一个 Text, 语义色用 tone)
+    // 每行是一个 Text, 语义色用 color)
     std::vector<pluginxx::ui::Item> items;
-    auto                            pushText = [&](const std::string& text, std::string tone = {}) {
+    auto                            pushText = [&](const std::string& text, std::string color = {}) {
         utilxx_base::Json params;
         params["text"] = text;
-        if (!tone.empty()) {
-            params["tone"] = std::move(tone);
+        if (!color.empty()) {
+            params["color"] = std::move(color);
         }
         items.push_back(agentxx::ui::kit::text(params));
     };

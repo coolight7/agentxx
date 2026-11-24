@@ -27,7 +27,7 @@ const row = kit.listRow({ title: '切歌次数', trailing: '3' });
 // 传 env（客户端能力摘要）：kit 挑更合适的变体；能力摘要见客户端状态快照的 ui 段
 const items = [
   kit.title({ text: '系统' }),
-  kit.toolCallRow({ name: 'grep', depict: '在 src 下搜索 TODO', status: '完成', statusTone: 'success' }),
+  kit.toolCallRow({ name: 'grep', depict: '在 src 下搜索 TODO', status: '完成', statusColor: 'success' }),
   kit.diagramBlock({ mermaid: 'stateDiagram-v2\n  [*] --> A' }),
 ];
 ```

@@ -1005,7 +1005,7 @@ void test_component_bridge() {
         XX_TEST_EXPECT_EQ(indentedItem->children.size(), size_t{1});
         XX_TEST_EXPECT_EQ(indentedItem->children[0].kind, std::string{"Text"});
         XX_TEST_EXPECT_EQ(indentedItem->children[0].text.fallback, std::string{"缩进行"});
-        XX_TEST_EXPECT_EQ(indentedItem->children[0].tone, std::string{"accent"});
+        XX_TEST_EXPECT_EQ(indentedItem->children[0].color, std::string{"accent"});
         XX_TEST_EXPECT_TRUE(indentedItem->padding.left > 0.0);
     }
 
@@ -1037,7 +1037,7 @@ void test_component_bridge() {
         XX_TEST_EXPECT_EQ(submitRow->children[0].kind, std::string{"Button"});
         XX_TEST_EXPECT_EQ(submitRow->children[1].kind, std::string{"Button"});
         XX_TEST_EXPECT_TRUE(
-            submitRow->children[0].action.kind == pluginxx::ui::Action::Kind::Dispatch
+            submitRow->children[0].action.kind == pluginxx::ui::Action::Kind::Call
         );
         XX_TEST_EXPECT_EQ(
             submitRow->children[0].action.name,

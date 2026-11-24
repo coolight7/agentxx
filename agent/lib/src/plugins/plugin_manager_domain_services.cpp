@@ -93,11 +93,14 @@ void PluginManager::ensureTopicBroadcast(std::string_view id) {
         return;
     }
     if (const auto owner = pluginNameOfBroadcast(id); !owner.empty()) {
+        // 插件自建频道: 属主按名字推断 (用来按实例回收频道), 发布权取框架对插件
+        // 声明同一类频道的默认值 "任何人可发" —— 频道权限由先声明的一方决定,
+        // 这里收窄成"仅属主"会让"先订阅后声明"与反过来的行为不一致
         pluginxx::BroadcastDecl decl;
         decl.id      = std::string{id};
         decl.owner   = owner;
         decl.cache   = pluginxx::BroadcastCache_e::Latest;
-        decl.publish = pluginxx::BroadcastPublisher_e::Owner;
+        decl.publish = pluginxx::BroadcastPublisher_e::Anyone;
         decl.scope   = pluginxx::BroadcastScope_e::App;
         std::string err;
         if (!broadcasts_->declare(decl, &err)) {

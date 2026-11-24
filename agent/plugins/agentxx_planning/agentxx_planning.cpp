@@ -732,9 +732,9 @@ std::string_view todoIcon(std::string_view state) {
     return "[ ]";
 }
 
-/// todo 状态 → 文本 tone (title=已完成的强调色 / 空=进行中普通色 / hint=其余减淡)
-/// - tone 取值见界面描述层 schema (`pluginxx::ui`): normal/hint/accent/title/…
-std::string_view todoTone(std::string_view state) {
+/// todo 状态 → 文本 color (title=已完成的强调色 / 空=进行中普通色 / hint=其余减淡)
+/// - color 取值见界面描述层 schema (`pluginxx::ui`): normal/hint/accent/title/…
+std::string_view todoColor(std::string_view state) {
     if (state == "completed") {
         return "title";
     }
@@ -777,14 +777,14 @@ static std::string buildTodosSummary(const utilxx_base::Json& plan) {
 
 /// 追加 Todo 列表与 Note 备忘 items (消息装饰/类型级渲染器/Info 段落共用,
 /// 避免多处渲染不一致; 调用方见 [buildPlanItems])
-/// - 组件项用描述层与 kit 组装: 文本行是 Text (tone 空 = 普通文本色)
+/// - 组件项用描述层与 kit 组装: 文本行是 Text (color 空 = 普通文本色)
 static void
     appendTodoAndNoteItems(const utilxx_base::Json& plan, std::vector<pluginxx::ui::Item>& items) {
-    auto pushText = [&](const std::string& text, std::string tone = {}) {
+    auto pushText = [&](const std::string& text, std::string color = {}) {
         utilxx_base::Json params;
         params["text"] = text;
-        if (!tone.empty()) {
-            params["tone"] = std::move(tone);
+        if (!color.empty()) {
+            params["color"] = std::move(color);
         }
         items.push_back(agentxx::ui::kit::text(params));
     };
@@ -801,7 +801,7 @@ static void
                 if (!content.empty()) {
                     pushText(
                         fmt::format("{} {}", todoIcon(state), content),
-                        std::string{todoTone(state)}
+                        std::string{todoColor(state)}
                     );
                 }
             } else if (td.is_string()) {
@@ -841,7 +841,7 @@ static utilxx_base::Json buildPlanItems(const utilxx_base::Json& plan, bool grap
     if (!roadmap.empty()) {
         if (graphAsButton) {
             pluginxx::ui::Action action;
-            action.kind = pluginxx::ui::Action::Kind::Dispatch;
+            action.kind = pluginxx::ui::Action::Kind::Call;
             action.name = kActionOpenGraph;
 
             // 前缀与按钮做成相邻两项: 由客户端合并到同一行 (按钮紧跟文本之后)。

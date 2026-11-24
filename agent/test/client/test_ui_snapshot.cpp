@@ -289,7 +289,7 @@ TestResult testUiSnapshots() {
     // ---------------- 表格 (CJK 宽度 + 右对齐 + 超宽截断 + 可点单元格) ----------------
     {
         auto res = renderJson(
-            R"([{"kind":"Table","header":true,"columns":[{"title":"名称","width":80},{"title":"耗时","align":"end","width":48}],"rows":[["编译","1.4s"],[{"text":"测试用例集","action":{"kind":"dispatch","name":"open:test-log","args":{"line":12}}},"0.6s"],["a-very-long-file-name.cpp","12.4K"]]}])",
+            R"([{"kind":"Table","header":true,"columns":[{"title":"名称","width":80},{"title":"耗时","align":"end","width":48}],"rows":[["编译","1.4s"],[{"text":"测试用例集","action":{"kind":"call","name":"open:test-log","args":{"line":12}}},"0.6s"],["a-very-long-file-name.cpp","12.4K"]]}])",
             ctxFor(48)
         );
         XX_EXPECT_SNAPSHOT("table_cjk", res, 48, 10);
@@ -328,7 +328,7 @@ TestResult testUiSnapshots() {
             {"kind":"Control","control":"text","id":"name","label":"名称","value":"default-name"},
             {"kind":"Control","control":"switch","id":"enabled","label":"启用","value":true},
             {"kind":"Control","control":"number","id":"count","label":"数量","value":3,"min":0,"max":10,"step":1,"integer":true},
-            {"kind":"Row","children":[{"kind":"Button","label":"提交","variant":"primary","action":"__submit"},{"kind":"Button","label":"取消","action":"__cancel"}]}
+            {"kind":"Row","children":[{"kind":"Button","label":"提交","variant":"normal","action":"__submit"},{"kind":"Button","label":"取消","action":"__cancel"}]}
         ])";
         auto              items    = pluginxx::ui::parseBlocks(utilxx_base::Json::parse(formJson));
         auto              ctx      = ctxFor(48);

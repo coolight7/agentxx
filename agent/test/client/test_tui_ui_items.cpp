@@ -303,7 +303,7 @@ TestResult testTuiUiItems() {
             {"kind":"Table","header":false,
              "columns":[{"title":"A","width":48},{"title":"B","width":48}],
              "rows":[["x",{"text":"open",
-                           "action":{"kind":"dispatch","name":"open:file","args":{"line":12}}}]]}
+                           "action":{"kind":"call","name":"open:file","args":{"line":12}}}]]}
         ])",
             ctxFor(40)
         );
@@ -412,7 +412,7 @@ TestResult testTuiUiItems() {
     {
         auto res = renderJson(
             R"([{"kind":"Block","title":"Index","variant":"card",
-                                   "children":[{"kind":"Text","text":"inner"}]}])",
+                                   "child":{"kind":"Text","text":"inner"}}])",
             ctxFor(30)
         );
         auto text = renderToText(res, 30);
@@ -425,7 +425,7 @@ TestResult testTuiUiItems() {
         // 折叠: 展开时提示符为 - 且含子项; 折叠时 + 且不含子项
         auto expanded = renderJson(
             R"([{"kind":"Collapse","id":"c1","title":"Stack","expanded":true,
-                                        "children":[{"kind":"Text","text":"detail"}]}])",
+                                        "child":{"kind":"Text","text":"detail"}}])",
             ctxFor(30)
         );
         auto expandedText = renderToText(expanded, 30);
@@ -436,7 +436,7 @@ TestResult testTuiUiItems() {
 
         auto collapsed = renderJson(
             R"([{"kind":"Collapse","id":"c1","title":"Stack","expanded":false,
-                                        "children":[{"kind":"Text","text":"detail"}]}])",
+                                        "child":{"kind":"Text","text":"detail"}}])",
             ctxFor(30)
         );
         auto collapsedText = renderToText(collapsed, 30);
@@ -458,7 +458,7 @@ TestResult testTuiUiItems() {
         };
         auto res = renderJson(
             R"([{"kind":"Collapse","id":"c1","title":"Stack","expanded":true,
-                                    "children":[{"kind":"Text","text":"detail"}]}])",
+                                    "child":{"kind":"Text","text":"detail"}}])",
             ctx
         );
         auto text = renderToText(res, 30);
@@ -469,7 +469,7 @@ TestResult testTuiUiItems() {
         // 横排: 固定宽度列 + 自适应列, 同一行渲染
         auto res = renderJson(
             R"([{"kind":"Row","gap":8,"children":[
-            {"kind":"SizedBox","width":32,"children":[{"kind":"Text","text":"CPU"}]},
+            {"kind":"SizedBox","width":32,"child":{"kind":"Text","text":"CPU"}},
             {"kind":"Text","text":"55%"}
         ]}])",
             ctxFor(20)
@@ -512,8 +512,8 @@ TestResult testTuiUiItems() {
         // 横向铺满用 Expanded（按比例分剩余空间）表达: 两列各一份 → 各 10 列 + 1 列间距
         auto res = renderJson(
             R"([{"kind":"Row","gap":8,"children":[
-            {"kind":"Expanded","children":[{"kind":"Text","text":"AA"}]},
-            {"kind":"Expanded","children":[{"kind":"Text","text":"BB"}]}
+            {"kind":"Expanded","child":{"kind":"Text","text":"AA"}},
+            {"kind":"Expanded","child":{"kind":"Text","text":"BB"}}
         ]}])",
             ctxFor(21)
         );
@@ -529,8 +529,8 @@ TestResult testTuiUiItems() {
         // 对照: 固定宽度列 (SizedBox) 不吃剩余空间, 第二列从固定宽度处开始
         auto res = renderJson(
             R"([{"kind":"Row","gap":8,"children":[
-            {"kind":"SizedBox","width":32,"children":[{"kind":"Text","text":"AA"}]},
-            {"kind":"SizedBox","width":32,"children":[{"kind":"Text","text":"BB"}]}
+            {"kind":"SizedBox","width":32,"child":{"kind":"Text","text":"AA"}},
+            {"kind":"SizedBox","width":32,"child":{"kind":"Text","text":"BB"}}
         ]}])",
             ctxFor(21)
         );
@@ -544,7 +544,7 @@ TestResult testTuiUiItems() {
         // percent 宽度: 基准是直接父容器本轮可分配的宽度 (40 列的一半 = 20 列)
         auto res = renderJson(
             R"([{"kind":"Row","gap":0,"children":[
-            {"kind":"SizedBox","width":{"percent":50},"children":[{"kind":"Text","text":"A"}]},
+            {"kind":"SizedBox","width":{"percent":50},"child":{"kind":"Text","text":"A"}},
             {"kind":"Text","text":"B"}
         ]}])",
             ctxFor(40)
@@ -561,7 +561,7 @@ TestResult testTuiUiItems() {
         // 40u → 5 列; 比例 1 (正方形) → ceil(5×8 / (1×20)) = 2 行 (内容 1 行, 余下补空行)
         auto res = renderJson(
             R"([{"kind":"SizedBox","width":40,"aspect":1,
-                                   "children":[{"kind":"Text","text":"x"}]}])",
+                                   "child":{"kind":"Text","text":"x"}}])",
             ctxFor(20)
         );
         XX_TEST_EXPECT_TRUE(screenHas(renderToText(res, 20), "x"));
@@ -571,7 +571,7 @@ TestResult testTuiUiItems() {
     {
         // Align: 没有命中区域时交给布局靠右 (文本落在最后一列)
         auto res = renderJson(
-            R"([{"kind":"Align","align":"end","children":[{"kind":"Text","text":"END"}]}])",
+            R"([{"kind":"Align","align":"end","child":{"kind":"Text","text":"END"}}])",
             ctxFor(20)
         );
         const std::string grid = renderToGrid(res, 20);
@@ -617,11 +617,11 @@ TestResult testTuiUiItems() {
         };
         auto res = renderJson(
             R"([{"kind":"Collapse","id":"outer","title":"外层","expanded":true,
-                 "children":[
+                 "child":{"kind":"Column","gap":0,"children":[
                      {"kind":"Text","text":"外层内容"},
                      {"kind":"Collapse","id":"inner","title":"内层","expanded":true,
-                      "children":[{"kind":"Text","text":"内层内容"}]}
-                 ]}])",
+                      "child":{"kind":"Text","text":"内层内容"}}
+                 ]}}])",
             ctx
         );
         auto text = renderToText(res, 30);
@@ -642,11 +642,11 @@ TestResult testTuiUiItems() {
         };
         auto res2 = renderJson(
             R"([{"kind":"Collapse","id":"outer","title":"外层","expanded":true,
-                 "children":[
+                 "child":{"kind":"Column","gap":0,"children":[
                      {"kind":"Text","text":"外层内容"},
                      {"kind":"Collapse","id":"inner","title":"内层","expanded":true,
-                      "children":[{"kind":"Text","text":"内层内容"}]}
-                 ]}])",
+                      "child":{"kind":"Text","text":"内层内容"}}
+                 ]}}])",
             ctx2
         );
         auto text2 = renderToText(res2, 30);
@@ -694,7 +694,7 @@ TestResult testTuiUiItems() {
     // ---------------- 图表 ----------------
     {
         auto res = renderJson(
-            R"([{"kind":"Sparkline","data":[0,1,2,3,4],"tone":"accent"}])",
+            R"([{"kind":"Sparkline","data":[0,1,2,3,4],"color":"accent"}])",
             ctxFor(40)
         );
         auto text = renderToText(res, 40);
@@ -794,7 +794,7 @@ TestResult testTuiUiItems() {
         ctx.form  = form.get();
         auto res  = renderJson(
             R"([{"kind":"Row","gap":8,"children":[
-                 {"kind":"Button","label":"应用","variant":"primary","action":"__submit"},
+                 {"kind":"Button","label":"应用","variant":"normal","action":"__submit"},
                  {"kind":"Button","label":"取消","action":"__cancel"}]}])",
             ctx
         );
@@ -955,10 +955,10 @@ TestResult testTuiUiItems() {
         // 前缀 + 按钮写成相邻两项: 客户端把相邻的 Text + Button 合并到同一行,
         // 按钮紧跟在文本之后。若改用 Row 表达, 没声明 flex 的列会分走剩余宽度 ——
         // 按钮被推到行的右侧, 按钮底色被拉长到该列的右边缘 (planning 的 Graph 行如此)。
-        // 按钮取 variant=primary: 实色底, 便于按单元底色断言覆盖范围 (默认的 secondary
+        // 按钮取 color=accent: 实色底, 便于按单元底色断言覆盖范围 (默认的 normal
         // 是半透明底, 混到默认底色上后分不出覆盖范围)
         auto res = renderJson(
-            R"([{"kind":"Text","text":"|- "},{"kind":"Button","label":"Rebuild","variant":"primary"}])",
+            R"([{"kind":"Text","text":"|- "},{"kind":"Button","label":"Rebuild","color":"accent"}])",
             ctxFor(40)
         );
         auto text = renderToText(res, 40);

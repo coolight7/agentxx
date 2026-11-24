@@ -25,7 +25,7 @@ constexpr double kQueueCols = 24.0;
 /// 列表项前缀文本 (`|- `)
 pluginxx::ui::Item listBullet() {
     pluginxx::ui::Item item = pluginxx::ui::build::text("|- ");
-    item.tone               = "hint";
+    item.color               = "hint";
     item.wrap               = false;
     return item;
 }
@@ -36,7 +36,7 @@ pluginxx::ui::Item listBullet() {
 /// `|- ` 前缀明显更暗, 同一栏里两种"减淡"看起来不一致; 这里只要 hint 色。
 pluginxx::ui::Item hintText(std::string value) {
     pluginxx::ui::Item item = pluginxx::ui::build::text(value);
-    item.tone               = "hint";
+    item.color               = "hint";
     return item;
 }
 
@@ -115,12 +115,12 @@ std::vector<pluginxx::ui::Item> panelItemsOf(const PanelSnapshot& snapshot) {
         Item marker = build::text(
             session.running ? std::string{panelSpinnerFrame(snapshot.tick)} : std::string{"·"}
         );
-        marker.tone = session.running ? "accent" : "hint";
+        marker.color = session.running ? "accent" : "hint";
         marker.wrap = false;
 
         // 右侧: 排队消息条数 (有积压时用强调色), 靠右对齐
         Item queueText = build::text(panelSessionQueueText(session));
-        queueText.tone  = session.queued > 0 ? "accent" : "hint";
+        queueText.color  = session.queued > 0 ? "accent" : "hint";
         queueText.align = "end";
         queueText.wrap  = false;
 
@@ -158,7 +158,7 @@ std::vector<pluginxx::ui::Item> panelItemsOf(const PanelSnapshot& snapshot) {
                 markerText = "·";
             }
             Item marker = build::text(markerText);
-            marker.tone = pending ? "accent" : (task.state == "done" ? "hint" : "warn");
+            marker.color = pending ? "accent" : (task.state == "done" ? "hint" : "warn");
             marker.wrap = false;
 
             Item row = build::row(

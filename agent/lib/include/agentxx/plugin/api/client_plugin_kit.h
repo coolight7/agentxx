@@ -655,13 +655,13 @@ public:
     /// 生成按钮组件 (动作 id 自增 act_N; 处理函数留在插件侧 map, 见类头说明)
     /// - `onClick` 为空时仍生成可点按钮 (固定动作名由调用方另行 on() 绑定, 例如
     ///   planning 的常量动作名)
-    /// - `tone`: 语义色 (空 = 按钮默认色; "accent" / "error" / "hint" 等)
-    /// - `variant`: 按钮样式 ("primary" / "secondary" / "ghost" / "link"; 空 = secondary)
+    /// - `color`: 语义色 (空 = 按钮默认色; "accent" / "error" / "hint" 等)
+    /// - `variant`: 按钮样式 ("normal" / "full" / "simple"; 空 = normal)
     /// - `args`: 派发时回传给 handler 的参数 (客户端在动作参数里原样带上)
     pluginxx::ui::Item makeButton(
         std::string       label,
         Handler           onClick = nullptr,
-        std::string       tone    = {},
+        std::string       color    = {},
         utilxx_base::Json args    = utilxx_base::Json::object(),
         std::string       variant = {}
     ) {
@@ -670,7 +670,7 @@ public:
             handlers_[id] = std::move(onClick);
         }
         pluginxx::ui::Action action;
-        action.kind = pluginxx::ui::Action::Kind::Dispatch;
+        action.kind = pluginxx::ui::Action::Kind::Call;
         action.name = id;
         if (args.is_object() && !args.empty()) {
             action.argsJson = args.dump();
@@ -679,11 +679,11 @@ public:
         // agentxx/plugin/api/agentxx_ui_kit.g.h)
         pluginxx::ui::Json params;
         params["label"]        = std::move(label);
-        params["variant"]      = variant.empty() ? std::string{"secondary"} : std::move(variant);
+        params["variant"]      = variant.empty() ? std::string{"normal"} : std::move(variant);
         params["action"]       = pluginxx::ui::dumpAction(action);
         pluginxx::ui::Item btn = agentxx::ui::kit::button(params);
-        if (!tone.empty()) {
-            btn.tone = std::move(tone);
+        if (!color.empty()) {
+            btn.color = std::move(color);
         }
         return btn;
     }
