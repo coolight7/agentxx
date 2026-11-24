@@ -15,7 +15,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 - **纯 C 边界**：跨边界仅传递纯 C 基本类型、函数指针、不透明句柄与 `PluginxxStringView` (data+size 只读借用，不要求 NUL 结尾)，严禁直接传递 `std::string/vector/function` 或 C++ 异常
 - **跨编译器/标准库/语言兼容**：主程序与插件可由不同编译器、不同 STL (libstdc++/libc++/MSVC STL) 或不同语言独立编译，运行时稳定兼容
 - **内存所有权**：所有跨边界堆内存统一经 `host->alloc/free` (核心 vtable 内存管理操作) 管理，接收方用后 `host->free`；字符串复制采用头文件内联助手 `pluginxx_strdup(host, ...)`
-- **原生协程异步支持**：经 `plugin_kit.h` 的 `Task<T>`，插件协程在**插件执行线程**上推进，挂起让出、完成经同一条线程回调唤醒，主程序与插件的协程执行可互相交错切换，且运行于同一线程无锁，无轮询、无私有事件循环（没有配插件执行线程时就是 io 线程，见 §15.3）
+- **原生协程异步支持**：插件协程一律是 `asio::awaitable`（`pluginxx::sleepAsync` / `pluginxx::offloadAsync` / `co_await *Async(...)` 表调用），在**插件执行线程**上推进，挂起让出、完成经同一条线程回调唤醒，主程序与插件的协程执行可互相交错切换，且运行于同一线程无锁、无私有事件循环（没有配插件执行线程时就是 io 线程，见 §15.3）
 - **单线程会话**：主程序会话可变状态仅在主 IO 线程串行访问；插件代码只在插件执行线程上跑（见 §15.3），插件注册/状态访问由主程序内部投递回 IO 线程，插件无感
 
 ---
@@ -143,7 +143,7 @@ auto b64 = utilxx_base::base64Encode(data);
 | 路径 | 命名空间 | 内容 |
 |---|---|---|
 | `pluginxx/api/` | 纯 C (`Agentxx*`); 两个 C++ 头例外 | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/主程序 vtable/入口符号)、`tables.h` (通用接口表: broadcasts/capabilities/scheduler/tasks/cancel/plugins/config/json/log)、`broadcast_handle.h` (C++: 订阅句柄 ⇄ 完成回调 `payload` 的十进制文本, 主程序与插件共用)、`iface_meta.h` (C++: 各表 `IfaceMeta` 特化) |
-| `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK (header-only): `kit.h` (通用部分: 跨边界字符串工具 `PluginStringView`/`PluginString`、通用接口表聚合 `PluginIfaceCore`、实例级 `Logger`、`Task<T>` 锚定协程与锚定原语 `sleep`/`yield`/`offload`/`invoke_cap`、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏)、`guard.h` (C ABI 边界异常守卫 `guardCall`/`guardCallVoid`/`logTo`) |
+| `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK (header-only): `kit.h` (通用部分: 跨边界字符串工具 `PluginStringView`/`PluginString`、通用接口表聚合 `PluginIfaceCore`、实例级 `Logger`、asio 协程驱动桥 `PollOneBridge`/`PolledRoot` (本地执行器 + 受控轮询 + 终态上报)、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn` (`asio::awaitable`)、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏)、`guard.h` (C ABI 边界异常守卫 `guardCall`/`guardCallVoid`/`logTo`) |
 | `pluginxx/runtime/` | `pluginxx` | 主程序侧运行时: `runtime.h` (实例状态机/执行 lease/投递通道)、`driver.h` (协程驱动 ticket)、`instance_base.h` (实例基类 + 主程序控制块 + C ABI 内存 + 通用表相关登记: 事件订阅/睡眠句柄/能力声明)、`manager_base.h` (管理器基类 + vtable 入口上下文)、`op_driver.h` (统一 Operation 驱动器) |
 | `pluginxx/host/` | `pluginxx` | 主程序侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常保护/io 线程同步投递)、`capability_registry.h` + `capability_chain.h` (能力登记表与实现链: 实现行按 scope / 优先级排序后调用)、`broadcast_registry.h` (广播频道登记表: 声明 / 发布 / 订阅 / 当前值 / 结束)、`domain_services.h` (业务数据入口 `DomainServices`: 通用表需要主程序数据的入口)、`host_core.h` (主程序核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现 + 功能埋点原语 `declarePoint`/`emitPointAsync`)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`)、`lifecycle.h` (主程序生命周期骨架 `PluginHostLifecycle<InstanceT>`: 加载/启停/禁用启用/卸载/级联依赖) |
 
@@ -184,8 +184,8 @@ auto b64 = utilxx_base::base64Encode(data);
 - **SDK 分层**: 通用部分 (`pluginxx/kit/kit.h` / `guard.h`) 在 `cxx_pluginxx`，业务 helper 按端
   分成三个头 (`agentxx/plugin/api/`)：`plugin_kit.h` 两端共用 (框架名引入、广播 / 网络便捷入口、
   生命周期入口公共实现 `createCtxEntry` / `destroyCtxEntry`、`agentxx::ui` 别名)、
-  `agent_plugin_kit.h` (工具注册 `tool`（按实现体形态分派: kit 协程体 / 同步体 / asio 协程体）、
-  `ToolSchemaBuilder`、`providePoint`、图节点、工具权限声明、会话运行时 / 后台任务、`PluginBase`) 与
+  `agent_plugin_kit.h` (工具注册 `toolAsync`（体一律 `asio::awaitable`，阻塞工作经 `onWorkerAsync` 交给工作池）、
+  `ToolSchemaBuilder`、`providePoint`、图节点、工具权限声明、`callToolAsync`、会话运行时 / 后台任务、`PluginBase`) 与
   `client_plugin_kit.h` (client 六张表调用、界面组件、`ClientPluginBase`)；三者都把通用名以逐条
   `using` 引入 `agentxx::plugin`，双端插件两个端头都包含。`plugin_guard.h` 是边界异常守卫；
   通用基类 `pluginxx::PluginBaseT<IfacesT>` 以主程序接口表聚合为模板实参，agentxx 侧
@@ -233,16 +233,16 @@ auto b64 = utilxx_base::base64Encode(data);
 推荐使用官方 header-only SDK (位于 `agentxx/plugin/api/`)：agent 侧插件包含 `agent_plugin_kit.h`，
 client 侧插件包含 `client_plugin_kit.h`，双端插件两个都包含 (两者都已包含两端共用的 `plugin_kit.h`)。
 最新框架提供了开箱即用的声明式导出宏、链式 Schema 构建器、宽容参数提取器与通用取消注册中心。
-其中 `Task<T>` 协程 (以及 `sleep`/`yield`/`offload`/`call_tool`/`invoke_cap` 原语) 的推进
-交由主程序的**协程驱动桥**调度：见 §16 与 §15 的生命周期契约。
+插件协程一律是 `asio::awaitable` (表调用写 `co_await *Async(...)`)，其推进交给主程序的
+**协程驱动桥** (`PollOneBridge`) 调度：见 §16 与 §15 的生命周期契约。
 
 该 SDK 由框架通用部分与主程序业务部分两段组成 (业务部分再按端拆开)：
 
 | 部分 | 位置 | 内容 |
 |---|---|---|
-| 通用 (与主程序业务无关) | `pluginxx/kit/kit.h`、`pluginxx/kit/guard.h` | `PluginStringView`/`PluginString`、通用接口表查询与聚合 `PluginIfaceCore`、`Logger`、`Task<T>` 与锚定原语 (`sleep`/`yield`/`offload`/`invoke_cap`)、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏、边界异常守卫 |
+| 通用 (与主程序业务无关) | `pluginxx/kit/kit.h`、`pluginxx/kit/guard.h` | `PluginStringView`/`PluginString`、通用接口表查询与聚合 `PluginIfaceCore`、`Logger`、asio 协程驱动桥 (`PollOneBridge`/`PolledRoot`)、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏、边界异常守卫 |
 | agentxx 业务 (两端共用) | `agentxx/plugin/api/plugin_kit.h` | 框架通用名引入、广播 / 网络便捷入口、生命周期入口公共实现 (`createCtxEntry` / `destroyCtxEntry`)、`agentxx::ui` 别名 |
-| agentxx 业务 (agent 侧) | `agentxx/plugin/api/agent_plugin_kit.h` | 接口表聚合 `AgentIfaces`、工具注册 `tool`（kit 协程体 / 同步体 / asio 协程体）、`ToolSchemaBuilder`、`providePoint`、图节点、工具权限声明、`call_tool`、会话运行时 / 后台任务、`PluginBase`、`AGENTXX_AGENT_PLUGIN_*_EXPORT` |
+| agentxx 业务 (agent 侧) | `agentxx/plugin/api/agent_plugin_kit.h` | 接口表聚合 `AgentIfaces`、工具注册 `toolAsync`（体一律 `asio::awaitable`，阻塞工作经 `onWorkerAsync` 交给工作池）、`ToolSchemaBuilder`、`providePoint`、图节点、工具权限声明、`callToolAsync`、会话运行时 / 后台任务、`PluginBase`、`AGENTXX_AGENT_PLUGIN_*_EXPORT` |
 | agentxx 业务 (client 侧) | `agentxx/plugin/api/client_plugin_kit.h` + `plugin_guard.h` | 接口表聚合 `ClientIfaces`、client 六张表调用、界面组件与 `ClientPluginBase`、`ActionController`、工具特化渲染适配器、`AGENTXX_CLIENT_PLUGIN_*_EXPORT` |
 
 `agentxx::plugin::PluginBase` 即 `pluginxx::PluginBaseT<AgentIfaces>` 的 agentxx 派生类
@@ -258,7 +258,8 @@ using namespace agentxx::plugin;
 struct MyPluginCtx : public PluginBase {};
 
 // 完整插件骨架 (create / stop / mount / unmount 的写法) 见 agent/plugins/example_plugin;
-// 这里只讲"注册一个工具": 三种写法都是同一个 `tool`, 按实现体的形态选跑法。
+// 这里只讲"注册一个工具": 体形态只有一种 (`asio::awaitable`), 入口是 `toolAsync`;
+// 要跑阻塞工作就把它包进 `onWorkerAsync` (函数体交给工作池线程)。
 //
 // 注册放在挂载事务里做 (协程): 每条登记都记在本次挂载的 agent 名下,
 // `co_await` 只是拿"是否登记成功"。
@@ -270,19 +271,20 @@ auto mySchema = (co_await schemaOf(ctx, "my_sync_tool"))
                     .boolean("full_output", "Return all output", false, true)
                     .build();
 
-// 2. 同步体 (在工作池线程上跑, 可以直接阻塞; 不占插件执行线程)
-//    形态之一: (ctx, args_json, tid, workDir, cancel_token)
-co_await tool(
+// 2. 阻塞工作: 用 `agentxx::plugin::onWorkerAsync(...)` 包起来 —— 包装后仍是
+//    `asio::awaitable` 体, 函数体本身跑在工作池线程上, 不占插件执行线程)
+//    `onWorkerAsync` 自动按 SDK 支持的调用形状转发 (`args` / `tid` / `workDir` / `cancel` 各取所需)
+co_await toolAsync(
     ctx,
     ref,
     "my_sync_tool",
     "Perform heavy work in a worker thread",
     mySchema,
-    [](MyPluginCtx&     c,
-       std::string_view args_json,
-       std::string_view tid,
-       std::string_view workDir,
-       const PluginxxCancelToken* cancel) -> std::string {
+    agentxx::plugin::onWorkerAsync([](MyPluginCtx&     c,
+                                  std::string_view args_json,
+                                  std::string_view tid,
+                                  std::string_view workDir,
+                                  const PluginxxCancelToken* cancel) -> std::string {
         // ArgReader: 强类型读取 (转不了就是参数错误, 不猜也不取一部分)
         ArgReader args(args_json);
         auto      path = args.require<std::string>("path");
@@ -294,40 +296,24 @@ co_await tool(
             return "canceled";
         }
         return R"({"status":"done"})";
-    }
+    })
 );
 
-// 3. 同一个 tool: 只有 (ctx, args) 的短形态也是同步体
-co_await tool(
+// 3. 只有 (ctx, args) 的短形态同样经 `onWorkerAsync` 包一层
+co_await toolAsync(
     ctx,
     ref,
     "my_short_tool",
     "Fast tool depict",
     R"({"type":"object","properties":{}})",
-    [](MyPluginCtx& c, std::string_view args_json) -> std::string {
+    agentxx::plugin::onWorkerAsync([](MyPluginCtx& c, std::string_view args_json) -> std::string {
         return R"({"result":42})";
-    }
+    })
 );
 
-// 4. kit 协程体 (体返回 Task<T>): 可以 co_await sleep / offload / call_tool;
-//    挂起期间不占任何线程, 阻塞段写 co_await offload(ex, ...)
-co_await tool(
-    ctx,
-    ref,
-    "my_async_tool",
-    "Async coroutine tool",
-    R"({"type":"object","properties":{}})",
-    [ref](MyPluginCtx& c, std::string_view args_json, OpCtl ctl) -> Task<std::string> {
-        co_await sleep(c, 100);
-        ctl.throw_if_canceled();
-        // 跨插件互调: co_await call_tool(c, ref, "other_tool", "{}", ctl.scopeKey);
-        co_return R"({"status":"ok"})";
-    }
-);
-
-// 5. asio 协程体 (体返回 asio::awaitable<T>): 只给必须等内核就绪对象的工具用
-//    (子进程管道 / 异步文件 IO / asio 定时器), 由桥按受控轮询推进 (见 §16.5)
-co_await tool(
+// 4. asio 协程体 (体返回 asio::awaitable<T>): 所有工具都是这一种; 等的是
+//    内核就绪对象时 (子进程管道 / 异步文件 IO / asio 定时器) 由桥按受控轮询推进 (见 §16.5)
+co_await toolAsync(
     ctx,
     ref,
     "my_awaitable_tool",
@@ -346,7 +332,6 @@ co_await tool(
         co_return co_await doHttpGetAsync(args.raw(), std::string(workDir));
     }
 );
-```
 ```
 
 ### SDK 核心基础设施组件
@@ -377,15 +362,17 @@ co_await tool(
    - 适用于长时间运行的外部进程或底层阻塞 IO（如 `agentxx_execute_command`），一旦主程序发起取消即可毫秒级即时终止子进程组，无需等待轮询间隔
 5. **统一异步操作模型 (操作 start/cancel)**：
    - 工具/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 操作，终结经完成通知器恰好一次上报: 能力/图节点/lifecycle 用 `PluginxxOperatorNotify.done(status,payload)`; 工具用 `AgentxxPluginToolNotify` 的三个入口 (`done` 两段 / `done_text` 只有正文 / `done_frame` 整帧, 见 §8.4)
-   - `Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调
-   - 工具体按形态分三档（都是同一个 `tool`）：kit 协程体 (`Task<T>`)、同步体、asio 协程体 (`asio::awaitable`)；asio 协程体只给必须等内核就绪对象的工具用，
-     等待插件本地 reactor 上的 I/O 就绪通知，由桥按声明式受控轮询推进（§16.5）
-   - capability (含功能埋点实现行) 的 SDK helper 按**返回类型严格分发**：返回字符串的同步业务在
-     调用内完成；返回 `Task<T>` 的异步业务由统一 root adapter 收尾（provider 句柄可取消，
-     完成通知在协程真正结束后发出，输入视图由拥有型 `Request` 保证跨挂起点有效）
-   - `graph_node` 使用同一 root adapter 注册自定义图节点类型：快同步节点返回节点输出
-     JSON（`std::string`），异步节点返回 `Task<std::string>`；node/config/state/thread_id
-     由拥有型 `RootRequest` 保证跨挂起点有效，`run_cancel` 置取消标志并取消嵌套 awaiter
+   - 协程帧由 asio 管理 (`asio::co_spawn` 到桥的本地执行器)，`PolledRoot` 只做终态上报与
+     Job 回收的 exactly-once 仲裁，帧在完成处理器里释放
+   - 工具体只有一种形态: `asio::awaitable` (入口 `toolAsync`)，签名与老的同步体同形，
+     只是返回 awaitable；等待的是内核就绪对象时由桥按声明式受控轮询推进 (§16.5)。
+     **阻塞工作必须用 `agentxx::plugin::onWorkerAsync(fn)` 包起来**：包装层把函数体交给
+     主程序工作池线程 (不占插件执行线程)，函数体同样拿得到取消令牌与工作目录
+   - capability / 功能埋点实现行的 SDK helper 同样收 `asio::awaitable` 业务 (`providePointAsync`)：
+     provider 句柄可取消，完成通知在协程真正结束后发出，输入视图由拥有型 `Request` 保证跨挂起点有效
+   - `graph_node` (`graphNodeAsync`) 使用同一 root adapter 注册自定义图节点类型：同步节点返回
+     `std::string`，异步节点返回 `asio::awaitable<std::string>`；node/config/state/thread_id
+     由拥有型 `RootRequest` 保证跨挂起点有效，`run_cancel` 置取消标志并置协程取消信号
 6. **公共便捷助手 (各插件重复手写的三件小事)**:
    - `pluginLog(ctx, level, msg)` / `pluginLog(host, logIf, level, msg)`: 实例日志输出
      (上下文为空静默; 后者供直接持有主程序 + 日志接口表的插件使用)
@@ -395,11 +382,11 @@ co_await tool(
      优先经主程序 `json_escape` 接口, 接口缺失/失败时回退本地转义, 供手工拼装 JSON 文本
    - 插件内 `using agentxx::plugin::xxx;` 引入后按原名调用 (内置插件已统一改用)
 
-**后台任务 spawn (主程序托管)**：`spawn` 启动的后台协作任务 (如周期采集 `while(!ctl.canceled()) { offload; sleep; }`, `ctl` 为 `OpCtl`) 自 API v1 起注册到主程序 `agentxx.agent.tasks` 接口表，与工具/能力 op 同构管理：
+**后台任务 spawn (主程序托管)**：`spawn` 启动的后台协作任务 (如周期采集 `while (!ctl.canceled()) { co_await sleepAsync(c, 1000); ... }`, `ctl` 为 `OpCtl`) 自 API v1 起注册到主程序 `agentxx.agent.tasks` 接口表，与工具/能力 op 同构管理：
 
 - **注册**：`spawn()` 内部自动调 `register_task` (io 线程) → 主程序把句柄推入实例 `outstandingOps` (与工具 op 同列表) 并持 `inflight` (存活标记)
-- **运行**：协程照常经 `sleep`/`offload` 挂起于主程序；主程序无感，句柄静默
-- **卸载**：插件卸载时主程序 `detachAll` 统一取消 (调插件 cancel_fn: 置 cancelFlag + 唤醒挂起的 sleep/offload) → 协程 `while(!ctl.canceled())` 退出 → `finishIfDone` (帧销毁后经 `notify.done` 恰好一次上报) → 主程序 `guard.reset` (inflight-1) + 回收句柄 → `waitInflightZero` 精确等待归零 → `dlclose` 安全，无协程帧悬挂/UAF
+- **运行**：协程照常经 `sleepAsync` / `offloadAsync` 挂起于主程序；主程序无感，句柄静默
+- **卸载**：插件卸载时主程序 `detachAll` 统一取消 (调插件 cancel_fn: 置 cancelFlag + 唤醒挂起的 sleepAsync/offloadAsync) → 协程 `while (!ctl.canceled())` 退出 → 完成处理器里 `notify.done` 恰好一次上报 (帧由 asio 释放) → 主程序 `guard.reset` (inflight-1) + 回收句柄 → `waitInflightZero` 精确等待归零 → `dlclose` 安全，无协程帧悬挂/UAF
 - **无降级**：主程序无 `agentxx.agent.tasks` 表或注册失败时 `spawn` 直接失败 (不提供无人托管的自管协程退化路径)
 - **线程约束**：`cancel_fn` 由主程序在 io 线程回调 (协作式)；`notify.done` 可从插件任意线程上报 (主程序 `OpCore::onDone` 原子 CAS + 投递回 io)；kit 协程完成路径恒在 io 线程
 
@@ -460,16 +447,16 @@ client 侧没有作用域引用 (`PluginxxScopeRef`), 不带 agent 挂载序号�
 当场回调** (注册类调用"登记后立刻可见"的语义与同步调用完全一致), 其它线程排队到 IO 线程。
 注册类调用必须 `co_await` (或等回调) 完成再继续。
 
-C++ 侧只有两种消费形态在插件 SDK (`agent_plugin_kit.h` / `client_plugin_kit.h`; 业务便捷层 `xxx(ctx, ...)`
-同样只给这两种形态):
+C++ 侧有两种消费形态在插件 SDK (`agent_plugin_kit.h` / `client_plugin_kit.h`; 业务便捷层 `xxxAsync(ctx, ...)`
+同样只给这几种形态):
 
 | 形态 | 入口 | 约束 |
 |---|---|---|
-| 调用即提交 | `xxx(ctx, args)` → `pluginxx::TableOpTicket`; `co_await` 它拿 `TableOpResult{status, payload, startError}` | 提交发生在调用内 (拿到 ticket 时已经在跑); 业务失败不抛异常, 取消是其中一种状态; 结果正文只能取一次 |
+| asio 异步操作 | `pluginxx::asyncTableOp(ctx, ex, start)`; kit 的 `tableOpAsync` / `sendInputAsync` / `openChannelAsync` / `submitAsyncWorkAsync` 等 `*Async` 入口 | 插件侧**唯一**形态: 插件协程一律是 `asio::awaitable`; 文本参数**按值** (`std::string`), 否则发起后不立即 `co_await` 时会指向已释放对象 |
 | 回调 | `tableOpCallback(ctx, start, done)` | 任意线程; `done` 在**调用方所属插件的执行线程**上恰好一次 (没配插件执行器时就是 IO 线程, 见 §15.3) |
 
-- 一条 ticket 可以之后才 `co_await`; 多条并发提交用 `pluginxx::whenAll(tickets)` 一次收齐;
-  `.forget()` = 提交完不管结果
+- 要几条调用并行: 用 `asio::co_spawn` 分别开协程再一起等 (`*Async` 入口本身是协程,
+  **提交发生在开始 `co_await` 的那一刻**)
 - **注册类调用仍要 `co_await` 完再继续** —— 登记本身提交就生效, 但失败原因只有结果里有
 - 生命周期入口 (`create` / `mount` / `stop` / `destroy`) 里的注册与清理事务因此都可以写成协程:
   入口用 `auto later = pluginxx::finishLater(notify)` 拿到凭据, `ctx.spawn(...)` 跑
@@ -492,20 +479,25 @@ C++ 侧只有两种消费形态在插件 SDK (`agent_plugin_kit.h` / `client_plu
   的 `runtimeStop`)
 - 主程序的 `pluginxx.tasks` 表缺失时无法驱动注册协程, 入口直接报错而不是退回同步注册
 
-> **唯一的同步等待原语**: `pluginxx::tableOpSyncWait(host, cancel, scheduler, start, timeoutMs)`
-> (及 `tableOpSyncWait(ctx, ...)`)。它只给"必须当场拿到结果且不能写成协程"的地方用 ——
-> 目前只有 JS 运行时插件的桥 (QuickJS 是同步 C API, 脚本回调必须同步返回) 与 kit 内部
-> 几个同步便捷函数 (语言切换 / 工具权限声明这类)。之前那批阻塞包装
+> **没有同步等待原语了**: `pluginxx::tableOpSyncWait` 与它服务的同步桥
+> (`pluginxx/api/sync_bridge.h`、`SyncBridgeCallback`、`OpCore::commit` 就地回调) 已全部
+> 删除。需要结果就写协程 (`co_await *Async(...)`), 不需要结果用 `*NoWait` /
+> `clientTableCall`; 回调形态用 `tableOpCallback`。之前那批阻塞包装
 > (`tableOpBlocking` / `invoke_capability_blocking` / `call_tool_blocking` / kit 侧 `*Blocking`)
-> 已删除; `boundaries` 的"插件表调用形态"规则会拦回退。
+> 也一并删除; `boundaries` 的"插件表调用形态"规则会拦回退。
 >
-> **在插件执行线程上它会拒绝等待** (完成回调要投回这条线程, 而它正阻塞在那里):
-> 那里只能写异步形态 (`co_await` / 完成回调)。详见 §15.3。
+> **kit 自制协程也已删除** (2026-11): `pluginxx::Task<T>` / `TableOpTicket` / `whenAll` /
+> `tableOp` / `sleep` / `offload` / `yield` / `invoke_cap` / `capability` 的 ticket 形态与
+> 它们的 awaiter 类型 (`PromiseBase` / `BridgeRoot` / `SleepTicket` / `OffloadTicket` /
+> `TableOpState` / `InvokeCapAwaiter`) 全部下线。插件协程一律 `asio::awaitable`, 计时用
+> `sleepAsync`、阻塞工作用 `offloadAsync` / `onWorkerAsync`、插件互调用 `callToolAsync` /
+> `callToolResultAsync`, 登记类用同名 `*Async` 入口。
 >
-> **受控轮询工具体 (`tool` 的 `asio::awaitable` 体) 里也不能 `co_await` 表调用**: ticket 的
-> awaiter 依赖 kit 自有 promise, 而那里是 asio 协程。需要当场结果时用显式策略
-> (`addShareStore(..., allowOnPluginThread=true)`; 工作体只在主程序 io 上执行时才是安全的),
-> 或把该工具改成 `pluginxx::Task` 体。
+> **插件执行线程上不等待**: kit 入口用默认的 `refuseOnPluginThread`, 在那里直接返回失败
+> 并带原因文本 (操作已提交但拿不到结果)。详见 §15.3。
+>
+> **受控轮询工具体 (声明为 polled 的 `asio::awaitable` 体) 里只 `co_await` asio 形态入口**:
+> 那里是 asio 协程帧, 只用 `*Async` (`addShareStoreAsync` / `offloadAsync` / `sleepAsync` 等)。
 
 > 当前进度: 阶段 A 的骨架与 `agentxx_agent_session` (v4), 阶段 B 的
 > `agentxx_agent_tools` (v5) / `permission` (v3) / `context` (v3) / `model` (v3) /
@@ -573,7 +565,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 > `PluginxxOperatorHandle*`, 结果 (正文 / 句柄 id / 失败原因) 经 `PluginxxOperatorCallback`
 > 恰好一次交回, 返回 `NULL` = 未受理 + `error_out` (见 §8.0)。client 侧连同步查询成员
 > 也没有保留, 渲染回调与命令 `execute` 同样是异步契约。插件侧不需要协程的场合用
-> `plugin_kit.h` 的两种形态之一 (`co_await tableOp` / `tableOpCallback`)。
+> 表调用形态之一 (`co_await *Async(...)` / `tableOpCallback`)。
 > 两端需同一代头文件重编。
 > 更早的档位: v6 (2026-11 工具结果两段上报) —— `agentxx_agent_tools` 抬到 4: 工具结果拆成
 > "正文 (原样字节) + 元数据 JSON"两段, 完成通知器换成 `AgentxxPluginToolNotify`,
@@ -597,7 +589,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 > 能力是"能力名 + JSON 载荷"的 RPC: 提供方在 `start` / `mount` 里用 kit 的
 > `capability(ctx, "名", fn, opts)` 登记 (`PluginxxCapabilitySpec`: `impls` / `merge` /
 > `phases` / `priority` / `timeoutMs` / `scope`), 调用方经 `agentxx.capabilities` 表的
-> `invoke_capability` 调用 (kit: `co_await invoke_cap(ctx, ...)`);
+> `invoke_capability` 调用 (直接调表成员, 包成自己的 `asio::awaitable`);
 > 主程序侧查清单用 `PluginManager::capabilities()->infoJson/listJson`, 功能埋点走
 > `emitPoint` / `emitPointAsync`。调用必须携带**调用方插件实例** (主程序据此
 > 持有它的执行租约, 卸载等待覆盖本次调用)。FFI 的 C 接口目前没有单独的能力调用入口。
@@ -724,7 +716,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   只有 `failed` 会被套上 `[Error: <text>]` (多行时首行 `[Error]` 后接原文);
   `canceled` / `interrupted` 没有正文时补 `[Canceled]` / `[Interrupt]` 占位; `ok` 原样透传。
   工具实现**不要**调它。
-- **插件侧写法**: 在工具回调里直接 `throw`, 或返回 `ToolResult`. `tool` 的三种体都既接受 `std::string` (成功) 也接受 `ToolResult`;
+- **插件侧写法**: 在工具回调里直接 `throw`, 或返回 `ToolResult`. 工具体既接受 `std::string` (成功) 也接受 `ToolResult`;
   抛出的异常在 SDK 边界变成 `PLUGINXX_OPERATOR_FAILED` (取消上报 `PLUGINXX_OPERATOR_CANCELED`),
   主程序 `awaitPluginOpResult` 收到状态与载荷后直接给出 `ToolResult` ——
   **不再以异常形式抛给调用方**。JS 插件可以在结果对象里写 `{status, text}`。
@@ -790,8 +782,8 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 | 入口 | 签名 | 用途 |
 |------|------|------|
 | `done` | `(host_ud, status, result, payload)` | 常规用法 |
-| `done_text` | `(host_ud, status, result)` | Task 型工具 (`tool`): 业务体只能给正文 |
-| `done_frame` | `(host_ud, status, frame)` | asio 协程体工具 (`tool` 的 awaitable 形态): SDK 在插件侧把两段拼成帧 |
+| `done_text` | `(host_ud, status, result)` | 业务体只给正文 (无元数据) |
+| `done_frame` | `(host_ud, status, frame)` | `toolAsync` 注册的工具: SDK 在插件侧把两段拼成帧 |
 
 后两个的签名与 `PluginxxOperatorNotify.done` 完全一致, 所以能整接插给插件框架的协程根
 (那里只传一段字符串)。**插件不引用主程序符号** (插件不链接 libagentxx), 三个入口的
@@ -803,7 +795,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 
 SDK 侧对应关系: 工具实现体返回 `agentxx::util::ToolResult` 时,
 `metadataPayloadJson()` 产出元数据、`text` 就是正文; 插件互调要拿完整结果 (含附件)
-用 `co_await call_tool_result(...)` 返回 `ToolResult`, 只要正文继续用 `call_tool`。
+用 `co_await callToolResultAsync(...)` 返回 `ToolResult`, 只要正文继续用 `callToolAsync`。
 
 ---
 
@@ -836,13 +828,11 @@ cancel) + 1 张**网络表** `agentxx_plugin_net` (两侧都提供) + 6 张自�
 |------|------|
 | 只要提交, 不要结果 (更新面板/状态栏/Info 段落、overlay、装饰、退订) | `clientTableCall(...)` 或 `ClientPluginBase` 的 `setPanelJson` / `setStatusJson` / `showOverlay` 一类方法 (提交即返回, 任何线程都不等) |
 | 要结果, 且在协程里 (start 事务、spawn 出来的任务) | `co_await clientTableOpAsync(ctx, ...)`, 句柄用 `clientHandleOf<T>(res)` 取 |
-| 要结果, 但只在 `create` 这类加载线程上 | `clientTableOp` / `clientTableText` / `clientTableHandle` (阻塞形态) |
+| 要结果, 但不在协程里 | 写成回调形态 `tableOpCallback(...)`; 没有同步入口 |
 
-> **插件执行线程上不允许同步等**: 插件线程与 client io 线程是两条线程, 在那里等结果
-> 就是让插件自己停住 (`tableOpSyncWait` 的 `refuseOnPluginThread`, 见 §15.3)。上面第三
-> 行的阻塞入口在插件执行线程上会直接失败并带上原因文本 (操作本身已提交, 但拿不到结果),
-> 不能用在 start / mount / 工具 / 频道回调里。境界检查: `boundaries` 规则禁止插件源码
-> 直接使用 `clientTableOp` / `clientTableText` / `clientTableHandle`。
+> **没有同步入口**: `clientTableOp` / `clientTableText` / `clientTableHandle` 已删除 (插件
+> 线程与 client io 线程是两条线程, 在那里等结果就是让插件自己停住)。`boundaries` 规则
+> 禁止这些名字回到插件源码。
 >
 > 需要在频道/动作回调里懒注册 Info 段落时用 `ClientPluginBase::ensureInfoSection`:
 > 注册请求立刻提交, 句柄由主程序受理后写回槽位, 之后用 `infoSection(id)` 取到再推内容
@@ -1353,7 +1343,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
     - **参数写错仍同步抛异常** (`TypeError` 一类): 那是脚本写错了, 不是调用失败
     - 纯本地函数保持**同步**: `log` / `jsonEscape` / `jsonGetString` / `scope()` / `setTimeout` / `clearTimeout`, client 侧另有 `showToast` / `closeOverlay` / `requestCancel`
     - 需要“当场给内容”的回调仍然同步: 工具行渲染器的 `collapsed` / `expanded`、client 命令的 `execute` (要延后取结果就在里面 `.then` 后 `showToast`)
-- **JS SDK 与 C++ 插件 SDK 同名同义**：`registerTool` / `unregisterTool` / `callTool`、`subscribe` / `unsubscribe` / `publish`、`addSkillDir` / `addMemoryFile` / `addMcpServer` (含 remove)、`registerToolPermission` / `registerReadPathPermission` / `registerWritePathPermission` / `unregisterToolPermission`、`getConfig` / `getPluginArgs` / `getLanguage` / `setLanguage`、`log`、`scope()` (返回 `{agentId, mountSeq}`，等同 C++ 侧的 `PluginxxScopeRef`)、`setTimeout` / `clearTimeout`、`jsonEscape(text)` / `jsonGetString(jsonText, key)` (对应 `pluginxx.json` 的两个成员；`jsonEscape` 与 C++ kit 一样返回**带引号**的 JSON 字符串字面量)。注册工具时与 C++ 侧 `tool` 同一组可选项：`timeoutMs`（次调用的默认超时，0 = 不限）、`autoSummary` / `parallelSafe` / `repeatCallCheck`（对应 `AGENTXX_PLUGIN_TOOL_FLAG_*`）。工具回调的 `ctx` 是 `{sessionId, toolCallId, isCanceled()}`：**协作式取消**与 C++ SDK 同语义，主程序取消（会话取消 / 超时 / 后台任务取消）只置标记，脚本在回调里轮询 `ctx.isCanceled()` 才看得到，不看就一直跑到结束（那次的终态是 `canceled`，结果不再被采用）。
+- **JS SDK 与 C++ 插件 SDK 同名同义**：`registerTool` / `unregisterTool` / `callTool`、`subscribe` / `unsubscribe` / `publish`、`addSkillDir` / `addMemoryFile` / `addMcpServer` (含 remove)、`registerToolPermission` / `registerReadPathPermission` / `registerWritePathPermission` / `unregisterToolPermission`、`getConfig` / `getPluginArgs` / `getLanguage` / `setLanguage`、`log`、`scope()` (返回 `{agentId, mountSeq}`，等同 C++ 侧的 `PluginxxScopeRef`)、`setTimeout` / `clearTimeout`、`jsonEscape(text)` / `jsonGetString(jsonText, key)` (对应 `pluginxx.json` 的两个成员；`jsonEscape` 与 C++ kit 一样返回**带引号**的 JSON 字符串字面量)。注册工具时与 C++ 侧 `toolAsync` 同一组可选项：`timeoutMs`（次调用的默认超时，0 = 不限）、`autoSummary` / `parallelSafe` / `repeatCallCheck`（对应 `AGENTXX_PLUGIN_TOOL_FLAG_*`）。工具回调的 `ctx` 是 `{sessionId, toolCallId, isCanceled()}`：**协作式取消**与 C++ SDK 同语义，主程序取消（会话取消 / 超时 / 后台任务取消）只置标记，脚本在回调里轮询 `ctx.isCanceled()` 才看得到，不看就一直跑到结束（那次的终态是 `canceled`，结果不再被采用）。
 - **网络 (`agentxx_plugin_net`) 已对齐**：`netCall(op, args)` / `netFetch(urlOrOptions)` / `netDownload(urlOrOptions, fileName)` / `netHttpServe(options)` / `netInfo()` 返回 **Promise**（总是 resolve 成结果对象，业务结论看 `ok`：连不上、超时都是 `ok:false` + `error`，不是异常）；`netWsConnect(urlOrOptions)` / `netWsSend(id, text)` / `netWsClose(id, code, reason)` / `netHttpRespond(options)` 提交即返回 `{ok:true, requestId}`（`ok` 只表示已提交，业务结果看 `ws.open` / `ws.close` 这类事件）；`netCancel(requestId)` 是表里的同步成员。同引擎里的脚本共享一份网络资源（归属是引擎这个插件实例，见 §22），连接 id 请自己带脚本名前缀；命令/渲染这类**同步回调**里拿不到 Promise 结果，请改成“先回一句 + `.then` 里再 `showToast`”
 - **后台任务已对齐**：`submitAsyncWork(options)` (返回 `asyncId`，被拒时为空串) / `cancelAsyncWork(id)` / `getAsyncWork(id)` / `listAsyncWork(sessionId?)`，只能操作本实例提交的任务；`options.onEvent(phase, payload)` 的 `phase` 取 `queued` / `started` / `finished` / `canceled`，payload 是解析后的对象。主程序在容器 io 线程发事件，引擎转投 JS 线程后才调脚本回调，脚本侧无需考虑线程
 - **查询面已对齐**：`getPrompt()` / `setPrompt(objOrString)` / `getToolPrompt(name)` (提示词贡献与工具提示词)、`getSessionWorkDir(sessionId?)` / `isCanceled(sessionId?)`、`getMessages(sessionId)` / `messagesCount(sessionId)`、`getGraphJson()` / `getGraphName()` / `setGraphJson(objOrString)`、`listMounts()` / `getMount(agentId?)` (缺省查本实例所属 agent)、`addShareStore(sessionId, content)` (返回条目 id)、`getOwnResources()`、`getModelConfig()`
@@ -1389,7 +1379,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 
 | 插件 | 说明 |
 |------|------|
-| `example_plugin` | 原生 C++ 综合示例 (同步体/kit 协程体/asio 协程体三种工具、call_tool/sleep、**协程驱动桥**、功能埋点订阅/事件/能力/client 入口) |
+| `example_plugin` | 原生 C++ 综合示例 (asio 协程体工具、`onWorkerAsync` 包装的阻塞工具、`callToolAsync`/`sleepAsync`、**协程驱动桥**、功能埋点订阅/事件/能力/client 入口) |
 | `example_graph_node` | Graph 扩展示例 (自定义节点类型 + set_graph_json 改图, 需 `agentxx_agent_graph` 接口) |
 | `example_js` | JS 插件示例 (C++ 壳 + `plugin.js`；同一动态库双入口，脚本用 `agentxx.side` 分支，client 侧给 `js_hello` 注册工具特化渲染) |
 | `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
@@ -1665,7 +1655,7 @@ Closing → CloseFailed → Closing (可重试)
 |---|---|---|
 | 主程序状态（实例表/挂载/注册表/图/定时器/会话） | io 线程 | `PluginManager` / `ClientPluginManager` 的全部状态机与会话业务 |
 | 插件代码（回调 + 生命周期入口） | **插件执行线程** | agent 侧由 `AgentHost` 起（`agentxx-plugin`），client 侧由 `ClientPluginManager` 首次加载插件时自动起（`agentxx-client-plugin`，没有开关）；一条线程按受理顺序串行执行所有实例的插件代码 |
-| 插件显式委托的工作 | 后台线程池 | `offload` / 同步体 / 磁盘与目录扫描 / `netCall` 等（显式例外，插件自己知道） |
+| 插件显式委托的工作 | 后台线程池 | `offloadAsync` / `onWorkerAsync` / 磁盘与目录扫描 / `netCall` 等（显式例外，插件自己知道） |
 | 插件自管线程 | 插件自己 | JS 引擎的脚本线程等（§15.5） |
 
 派发规则：
@@ -1679,29 +1669,25 @@ Closing → CloseFailed → Closing (可重试)
   回调之后，`stop` 之后不再受理新的派发；
 - 方向约定：**io 线程永不阻塞等插件线程**，**插件线程也不阻塞等 io 线程**。插件在
   回调里调表 = 投到 io 的异步操作，完成回调再投回插件线程；要结果就写成协程
-  (`co_await tableOp` / `co_await clientTableOpAsync`) 或回调形态，不要等；
-- **同步等待原语只有一个**：kit 的 `tableOpSyncWait`（插件自己的线程停住等结果）。
-  它的完成回调不能投回这条线程（那就是自己等自己），所以 kit 把它包成**同步桥**
-  (`pluginxx/api/sync_bridge.h`：固定标记 + 唤醒体 + ud)，主程序 `OpCore::commit`
-  识别标记后**在完成线程（io）就地调用** —— 就地跑的只是唤醒体（写状态 + 通知条件
-  变量），插件业务代码仍在插件线程上继续；
-- **准入策略**：`tableOpSyncWait` 末参 `SyncWaitThreadPolicy`，**全部 kit 入口都用默认的
-  `refuseOnPluginThread`**：在插件执行线程上不再等，直接返回失败并带上原因文本
-  （操作已经提交，但拿不到结果）。“能不能阻塞”的真正判据是这个策略，而不是调用方
-  自己以为的线程身份；
+  (`co_await *Async(...)` / `co_await clientTableOpAsync`) 或回调形态，不要等；
+- **没有同步等待原语了**: `pluginxx::tableOpSyncWait` 与它的同步桥 (`sync_bridge.h` 的
+  固定标记 + 唤醒体、`OpCore` 识别标记后就地回调) 已删除; 运行时与后台任务的 `*Sync`
+  便捷形态 (`mountRootSync` / `openChannelSync` / `submitAsyncWorkSync` ...) 同步删除。
+  想等结果只能写协程, 不想等结果用提交即返回形态; `boundaries` 规则 16 拦回退;
+- **kit 入口在插件执行线程上直接拒绝** (`refuseOnPluginThread`): 返回失败并带上原因文本
+  (操作已提交, 但拿不到结果), 不会把插件卡在"自己等自己"上;
 - **插件代码一律用异步/提交即返回形态**：注册事务写 `finishLater(notify)` +
   `ctx.spawn(...)` + `return later.provider()`，表调用逐条 `co_await`；展示面更新用
   提交即返回的助手 (`setPanelJson` / `setStatusJson` / `publishPluginBroadcastNoWait`
   一类，`cb = nullptr` 不产生任何等待)；参考 `example_plugin` / `agentxx_filesystem` /
   `agentxx_system_monitor` 的入口；
-- **仅存的同步用法**（都有明确理由，不属回退）：
-  - `create` 期的实例级查询（参数 / 配置文件路径 / 清单）—— `create` 跑在加载线程
-    池上（不是 io、也不是插件执行线程），查询会把那个工作线程停一下（与 `dlopen`
-    同类）；新增代码优先用 `co_await configAsync()` / `argsJsonAsync()` /
-    `configPathAsync()` / `languageAsync()` 在 `start` 里取，那里完全不等；
-  - 同步体 / `offload` 一类**已经在线程池上**的实现体（阻塞是它的语义）；
-  - JS 引擎的脚本线程：QuickJS 是同步 C API，脚本回调里必须当场回答
-    （`boundaries` 允许清单里只有它和 `example_js` 的 create 期清单查询）。
+- **剩下会阻塞的地方都在线程池/插件自己的线程上**:
+  - `create` 期的实例级查询改用协程形态 (`co_await configAsync()` / `argsJsonAsync()` /
+    `configPathAsync()` / `languageAsync()`); 加载线程上空等也无好处, 那里同样写协程;
+  - `onWorkerAsync` / `offloadAsync` 一类**已经在线程池上**的实现体（阻塞是它的语义）;
+  - 插件自有 io 线程上的网络/平台助手 (`netCall` 一类): 它们等的是自己的线程, 不占
+    主程序 io 线程;
+  - JS 引擎也不再有同步等待: 脚本侧表调用一律返回 Promise。
 - **主程序 → 插件方向也不阻塞**：所有插件入口（操作 start/完成回调、渲染器、命令、
   动作、广播处理器、通道事件、`start/stop/mount/unmount`）都经 `dispatchToPlugin` 投到
   插件执行线程，主程序侧等的是协程 (`awaitPluginLifecycle` / `asio::awaitable`)，
@@ -1725,7 +1711,7 @@ Closing → CloseFailed → Closing (可重试)
   overBudget / dropped / unschedulable）—— 排查“谁在拖慢执行器”看这一组数；
 - `scheduler.is_io_thread` 成员名未变（避免 ABI 换代），语义是“当前线程是不是**该插件
   的执行线程**”（没配插件线程时等于 io 线程）—— 它回答“在这里阻塞会不会把插件自己
-  卡住”，kit 的同步桥与 `netCall` 一类阻塞助手用它做安全闸。
+  卡住”，kit 与 `netCall` 一类阻塞助手用它做安全闸。
 - 主程序在卸载/关闭时先阻止新进入，再取消旧操作，再等待全部插件代码与回调返回
   （事件式 idle 通知 + 绝对截止时间），最后 stop/destroy/dlclose；
   超时进入 `CloseFailed` 并保留上下文与动态库（可重试），不会静默泄漏。
@@ -1752,8 +1738,8 @@ Closing → CloseFailed → Closing (可重试)
 - **线程与运行时都属于 start 事务**：`create` 不启动线程；`start` 创建运行时并启动
   线程、提交运行时注册 (能力)；`stop` 停止线程并释放运行时；`destroy` 只释放本地状态，
   不调用主程序接口。
-- **start 里的能力登记走异步形态**：start 跑在插件执行线程上，那里不能同步等主程序
-  (`tableOpSyncWait` 按 `refuseOnPluginThread` 拒绝)，所以登记时交完成回调并返回 provider
+- **start 里的能力登记走异步形态**：start 跑在插件执行线程上，那里不能等主程序
+  (kit 入口按 `refuseOnPluginThread` 直接拒绕)，所以登记时交完成回调并返回 provider
   句柄，结论在回调里经 `notify.done` 交回；失败时先撤掉本次刚起动的引擎线程再报错。
 - **stop 必须可重复且不能被调用线程自锁**：插件线程若可能反向调用主程序 vtable
   (主程序在非 IO 线程上发出的表调用会把工作体排队到 IO 线程，即 `startTableOp`)，
@@ -1780,7 +1766,7 @@ Closing → CloseFailed → Closing (可重试)
   执行失败时把登记撤回并交给延后释放（见下一条）。
 - **表调用桥由引擎持有，`user_data` 是一块真实内存**：回调令牌是
   `JsBridgeToken{engine, id}`（堆分配，完成回调自己释放），不能把序号当指针传 ——
-  主程序会对 `user_data` 按指针读 8 字节标记（`pluginxx::isSyncBridgeCallback`）。
+  主程序会对 `user_data` 按指针读 8 字节。
 - **收尾要“结算”而不是“丢掉”在飞桥**：桥上的 `transform` 可能持有脚本引用
   （如工具的 `execute` 函数），直接丢掉会让这些 gc 对象留在 runtime 里
   （Debug 下 `JS_FreeRuntime` 断言 `list_obj_list`）。引擎停止时循环
@@ -1855,7 +1841,7 @@ Closing → CloseFailed → Closing (可重试)
 
 > 本节描述**协程驱动协议**：插件协程与主程序协程在同一主程序 IO 执行
 > 序列中交错推进，不额外开线程、不阻塞 IO；等待以"主程序可见唤醒源"为主，插件本地 reactor 上的
-> I/O 就绪等待由**声明式受控轮询**（`tool` 的 asio 协程体）驱动，见 §16.5。方案与阶段划分见
+> I/O 就绪等待由**声明式受控轮询**（`toolAsync` 的协程体）驱动，见 §16.5。方案与阶段划分见
 > `resource/history/plugin-refactor-3/plugin.md`，实施记录见
 > `resource/history/plugin-refactor-3/work.md`。
 
@@ -1929,7 +1915,7 @@ typedef struct PluginxxCoroutineRuntimeIface {
   `cancelPendingDrivers()`，取消仍未开始的请求以免 lease 永久残留并记日志。
   正常关闭不依赖它：kit 在实例上下文销毁时自行 `cancel_driver`。
 
-### 16.4 kit 侧实现 (`detail::PollOneBridge` + `detail::BridgeRoot` / `detail::PolledRoot`)
+### 16.4 kit 侧实现 (`detail::PollOneBridge` + `detail::PolledRoot`)
 
 `PluginBase::bridge()` 返回本实例的桥
 （每实例一份，无任何进程级可变状态）。
@@ -1942,7 +1928,7 @@ typedef struct PluginxxCoroutineRuntimeIface {
 | `wakePending_` | 一次显式 `wake` 尚未被请求覆盖（兼容"插件直接向 `local_executor` 投递"） |
 | `driverQueued_` / `driverRunning_` | 已申请请求（含 `request_driver` 正在返回的窗口）/ 回调正在执行 |
 | `pendingEpoch_` / `nextEpoch_` | 请求世代，用于识别"回调已处理本轮请求"的窗口 |
-| `polledRoots_` | 进行中**受控轮询根**数（`tool` 的 asio 协程体；0 = 不轮询、不建定时器） |
+| `polledRoots_` | 进行中**受控轮询根**数（`toolAsync`/`capabilityAsync`/`graphNodeAsync`/`spawn` 的协程体；0 = 不轮询、不建定时器） |
 | `pumpPending_` | 受控轮询判定"该继续驱动"（第二类申请请求理由） |
 | `pumpWaitScheduled_` / `pumpWaitOp_` | 已排定的退避定时器（主程序 `scheduler.sleep`）与其句柄 |
 | `pollBurst_` | 连续"有进展"步数（用于突发上限让出） |
@@ -1956,7 +1942,7 @@ typedef struct PluginxxCoroutineRuntimeIface {
 3. 主程序回调完成后只做 `postToLocal(continuation) + wake()`，**绝不在主程序回调栈内
    恢复插件协程**，也不在主程序 IO 线程上跑插件业务代码；
 4. 并发投递 N 个步骤最终会得到 N 张请求（不会因 wake 合并只推进一个）；
-5. 主程序拒绝驱动/桥停止时，所有活跃根（含受控轮询根）被终结为失败（`FAILED`），
+5. 主程序拒绝驱动/桥停止时，所有未结束的受控轮询根被终结为失败 (`FAILED`)，
    主程序 Operation 因此不会悬挂。
 
 **受控轮询（pump）调度策略**（只作用于 asio 协程体工具的根，见 §16.5）：
@@ -1971,20 +1957,7 @@ polledRoots_ 归零
     → 取消已排定的退避，之后不再申请请求（空闲零开销）
 ```
 
-**根的生命周期（`BridgeRoot` / `PolledRoot`）**
-
-- 根对象由**桥持有强引用**（`roots_`）：挂起中的根除了"下一次恢复任务"没有任何持有者，
-  桥若不持有，排队任务执行完就会销毁帧，之后到达的主程序回调就会访问已释放的协程帧；
-- 完成/放弃的仲裁是 **exactly-once**（CAS）：正常完成走 `finishIfDone`，主程序拒绝
-  驱动走 `abandon`，两条路径只有一个能上报终态；
-- 被放弃的根移入 `abandonedRoots_`，**帧活到桥销毁为止**（那时实例已无未完成的主程序
-  操作），期间迟到的主程序回调因 `shouldAdvance()==false` 安全跳过；
-- 协程帧的销毁与 op 句柄（`Job`）的释放统一发生在一个"协程已终止或不可能再被恢复"
-  的时点（`destroyFrame()`）：正常完成时在 `finishIfDone` 内；放弃路径在桥销毁时。
-  释放动作**不能**放在 `abandon` 里 —— 被放弃的根可能正在 driver 内执行，其输入
-  (`RootRequest`/`OpCtl`) 仍被协程以引用使用。
-
-受控轮询根用同一套仲裁语义但形态更简单（`PolledRoot`，见 `tool` 的 asio 协程体）：
+**根的生命周期（`PolledRoot`）**
 
 - 协程是 `asio::awaitable`，其**帧由 asio 自己持有**（completion handler / 本地 reactor
   销毁时统一释放），因此 `PolledRoot` 不销毁帧，只做"终态上报 + Job 回收"的
@@ -1992,20 +1965,21 @@ polledRoots_ 归零
 - 正常完成：`detail::runPolledPumpJob` 认领 → 注销登记（`polledRoots_` 递减，必要时
   停止 pump）→ 上报终态 → 执行清理回收 `Job`；
 - 桥停止：`failAllPolledRoots` 把未结束的根整批摘下 → 每个根按 `FAILED` 上报一次 →
-  执行清理回收 `Job`；挂起的帧随本地 reactor 销毁而释放。
+  执行清理回收 `Job`；挂起的帧随本地 reactor 销毁而释放；
+- 释放动作**不能**放在上报之前 —— 被放弃的根可能正在 driver 内执行，其输入
+  (`RootRequest`/`OpCtl`) 仍被协程以引用使用。
 
 **已接桥的 kit 路径**
 
 | kit 组件 | 桥接语义 |
 |----------|----------|
-| `tool` / `capability` / `graph_node`（返回 `Task<T>`） | 首步由 host driver 推进；start 内不跑插件协程 |
+| `toolAsync` / `capabilityAsync` / `graphNodeAsync`（体返回 `asio::awaitable<...>`） | 首步由 host driver 推进；start 内不跑插件协程 |
 | `spawn`（后台任务） | 同上（首步不在调用方栈内执行） |
-| `sleep(ctx, ms)` | 主程序计时器适配：到期回调只 post + wake |
-| `call_tool` / `invoke_cap` | 主程序回调式互调：完成回调只 post + wake |
-| `yield(ctx)` | 让出一轮：投递 continuation 后由下一次请求推进 |
-| `offload(ctx, work)` | **工作体仍在主程序工作线程池**（显式例外），只有完成后的恢复回到 driver 序列；池由主程序在创建插件管理器时注入（见下方"offload 线程池来源"） |
-| `tool(ctx, ref, name, …, 体返回 asio::awaitable<T>)` | **声明式受控轮询**：业务体是 `asio::awaitable<std::string>`，跑在桥的本地执行器上，由"有进展立即续 + 无进展 10ms 退避 + 突发上限 256 后让出 1ms"推进（见 §16.5） |
-| 同步体 / 同步 `capability` | 不变（同步路径本就不需要驱动） |
+| `sleepAsync(ctx, ms)` | 主程序计时器适配：到期回调只 post + wake |
+| `callToolAsync` / 表调用 `co_await *Async(...)` | 主程序回调式完成：完成回调只 post + wake，协程在下一轮驱动里继续 |
+| `offloadAsync(ctx, work)` | **工作体仍在主程序工作线程池**（显式例外），只有完成后的恢复回到 driver 序列；池由主程序在创建插件管理器时注入（见下方"offload 线程池来源"） |
+| `toolAsync` 的 asio 协程体（等内核就绪对象） | **受控轮询**：业务体跑在桥的本地执行器上，由"有进展立即续 + 无进展 10ms 退避 + 突发上限 256 后让出 1ms"推进（见 §16.5） |
+| 同步能力体（返回 `std::string`） | 不变（同步路径本就不需要驱动） |
 
 `bridge().local_executor()` 暴露本地执行器，插件可用 `asio::co_spawn` 把自己的
 `asio::awaitable` 排进同一序列；这些 awaitable 需要等待"有主程序可见唤醒源"的操作
@@ -2016,17 +1990,17 @@ polledRoots_ 归零
 `AgentHost` 注入进程共享池，`BaseAgent` 自建管理器时注入本 agent 的
 `AgentContext::threadPool`。`postToWorkerThread` 的取值顺序是 注入池 → 主 agent 上下文
 的池 → 管理器自建私有池（只建一次，记一条警告日志），因此 agent 上下文未挂载、
-已释放或原有池不可用时，插件阻塞工作（同步体）仍能执行，不会统一报
+已释放或原有池不可用时，插件阻塞工作（`onWorkerAsync` / `offloadAsync`）仍能执行，不会统一报
 `plugin offload: no thread pool`。
 
-### 16.5 受控轮询（`tool` 的 asio 协程体）与明确不支持
+### 16.5 受控轮询（`toolAsync` 的协程体）与明确不支持
 
 **为什么需要它**：`poll_one()` 只能"执行已就绪的 handler"，不会让**插件本地 reactor**
 上的等待对象到期。因此"业务体本来就是 asio 协程、等待的是 socket/管道/文件/本地 timer
 的 I/O 就绪通知"这类工具（websearch 的 HTTP、execute_command 的子进程管道、filesystem
 的 `asio::stream_file`），在没有 wake source 时无法被推进。
 
-**方案：声明式受控轮询（`tool` 的 asio 协程体）**。插件在注册时就**声明**"该工具需要受控轮询
+**方案：声明式受控轮询（`toolAsync` 的协程体）**。插件在注册时就**声明**"该工具需要受控轮询
 驱动"（而不是隐藏轮询），参数显式且可观测：
 
 | 项 | 值 | 说明 |
@@ -2038,7 +2012,7 @@ polledRoots_ 归零
 | 取消 | 置取消标志 + 取消已排定的退避 + 取消写入 `CancelRegistry` | 插件不必等满一个退避时间片即可看到取消并结束根 |
 | 无 driver 的主程序 | 不支持 | `coroutine_runtime` 是主程序必备能力：缺失时 kit 无法推进协程（驱动请求失败会终结未结束的根并记日志），不再有 offload 降级路径 |
 
-业务签名与同步体的 5 参数形态同形（只是返回 `asio::awaitable<std::string>`），注册函数名同样是 `tool`，因此迁移
+业务签名与老的同步体 5 参数形态同形（只是返回 `asio::awaitable<std::string>`），注册入口是 `toolAsync`，因此迁移
 通常只是换一个注册函数名：
 
 ```cpp
@@ -2056,12 +2030,11 @@ tool(ctx, ref, name, depict, schema,
    `epoll_wait(0)`），等待阶段最坏多 10ms 延迟（网络/子进程可接受）；实现为常量便于调优。
 2. **重 CPU 段不得留在 polled 协程里**：它运行在插件执行线程上（没配插件线程时就是主程序 io 线程；
    有独立插件线程时是那条，但仍会拖慢同一线程上的其它插件回调 / 触发主程序看门狗告警）。
-   目录遍历 / 全文件扫描 / 向量相似度继续用同步体；确需在
-   polled 协程内做重计算的用主程序 `offload` 显式卸载。
-3. **polled 协程内不使用 kit 的 `Task` 型原语**（`sleep`/`call_tool`/`invoke_cap`）：
-   它们的 awaiter 依赖 kit 自有 promise 接口，而 polled 协程是 `asio::awaitable`。
-   需要计时用 asio 原生 `steady_timer`（pump 下可用），需要主程序回调式接口时经
-   `bridge().local_executor()` 自行投递后续步骤（后续可选补 asio 版适配器）。
+   目录遍历 / 全文件扫描 / 向量相似度用 `onWorkerAsync` 包一层交给工作池；确需在
+   polled 协程内做重计算的用 `offloadAsync` 显式卸载。
+3. **polled 协程内只用 asio 形态**：计时用 asio 原生 `steady_timer`（pump 下可用）或
+   `pluginxx::sleepAsync`，表调用一律 `co_await *Async(...)`，重 CPU 段用 `offloadAsync` 卸到工作池；
+   不要在这里自旋等外部线程（那会把插件执行线程占住，同实例其它回调跟着卡）。
 4. **可替换性**：将来实现 `wait_source`（主程序等待插件交出的 fd/handle）或主程序侧 IO
    服务后，只需把"何时申请下一次请求"的策略从"10ms 退避"换成"就绪通知"，polled 工具
    的业务代码与 ABI 形态不变。
@@ -2071,16 +2044,16 @@ tool(ctx, ref, name, depict, schema,
 - **未声明 polled 却依赖私有 reactor**：仅依赖私有 `io_context` 的 socket/timer/
   process/file 等待**不会**被桥推进。桥在同一实例持续 8 次 driver 无进展且仍有活跃根时
   输出一次警告（"awaited work has no host-visible wake source"），提示改用
-  ①主程序回调式完成（适配器 post + wake）②主程序计时器（`co_await sleep`）
-  ③`tool` 的 asio 协程体 ④显式受限工作线程（`offload` / 同步体，并在
+  ①主程序回调式完成（适配器 post + wake）②主程序计时器（`co_await sleepAsync`）
+  ③`toolAsync` 的 asio 协程体 ④显式受限工作线程（`onWorkerAsync`，并在
   能力说明里标注）；它不会自旋，因此警告之后请求数不再增长。
 - **误用检查**：首次驱动会校验是否运行在插件的执行线程上（`scheduler.is_io_thread`，
   语义见 §15.3），不符时记日志。
 
 ### 16.6 内置插件迁移状态
 
-- **所有使用 kit 的插件自动接桥**：`tool`/`capability`/`graph`/`spawn` 与
-  `sleep`/`call_tool`/`invoke_cap`/`yield`/`offload` 的恢复路径都已走驱动序列，插件
+- **所有使用 kit 的插件自动接桥**：`toolAsync`/`capabilityAsync`/`graphNodeAsync`/`spawn` 与
+  表调用、`sleepAsync`/`offloadAsync` 的恢复路径都已走驱动序列，插件
   业务代码无需改动。
 - **已迁移到 asio 协程体**：
 
@@ -2090,19 +2063,19 @@ tool(ctx, ref, name, depict, schema,
   | `agentxx_execute_command`：`execute_bash_command` / `execute_windows_command`（Boost.Process v2 分支） | 子进程管道/计时器绑定协程 executor；并发多命令共享同一 poll 序列与同一个本地 reactor，不再各占一个池线程直到超时 |
   | `agentxx_filesystem`：`read` / `write` / `edit` | `asio::stream_file` 异步读写；文件 IO 真异步（可用性经 `utilxx_base::isAsyncFileIoSupported()` 判断：编译期宏 + 运行时 io_uring 探测），避免大文件读写占用池线程 |
 
-- **保持同步体（显式例外）**：
+- **保持阻塞实现（显式例外，经 `onWorkerAsync` 交给工作池）**：
   - `agentxx_filesystem`：`list` / `glob` / `grep` —— 目录遍历 + 全文件扫描 + 正则/编码
     转换属 CPU/阻塞 IO（asio 无异步目录 API），放进 pump 只会阻塞同实例其它工具；
   - `agentxx_execute_command`：非 Boost.Process v2 的 popen 回退分支（同步实现）；
-  - `agentxx_filesystem`：文件异步 I/O 不可用环境（同步回退，注册侧自动切回
-    同步体）—— 可用性统一经 `utilxx_base::isAsyncFileIoSupported()` 判断：
+  - `agentxx_filesystem`：文件异步 I/O 不可用环境（同步回退，同样经 `onWorkerAsync` 交给工作池）
+    —— 可用性统一经 `utilxx_base::isAsyncFileIoSupported()` 判断：
     编译期未启用 asio 文件 I/O（`ASIO_HAS_FILE` / `BOOST_ASIO_HAS_FILE` 均未定义），
     或 Linux/Android 上运行时无法创建 io_uring 环（容器/虚拟化的 seccomp 过滤
     ——`/proc/self/status` 的 `Seccomp: 2`——会拦截 `io_uring_setup`，操作系统内核版本过旧时返回
     `ENOSYS`）；判断结果按进程缓存，测试可经 `setAsyncFileIoSupported(false)` 强制
     关闭以覆盖同步回退路径；
   - `agentxx_rag_search`：embedding 网络段先把实现体恢复为协程形态（其注释记录了
-    "原版 asio 协程接口改为同步实现"）再迁移；分块/相似度等 CPU 段继续 offload（**二期**）。
+    "原版 asio 协程接口改为同步实现"）再迁移；分块/相似度等 CPU 段继续 `offloadAsync`（**二期**）。
 - **保持现状（无私有 reactor 等待）**：codegraph / planning / system_monitor / math /
   string / system / JS 系插件；JS 引擎是既有"自管线程 + notify"正确形态。
 - **`ClientPluginManager` 的 `asio::thread_pool(1)`**：只用于 `dlopen`/entry 这类不可避免的
@@ -2110,8 +2083,8 @@ tool(ctx, ref, name, depict, schema,
   后台设施；client 侧插件不产生需要驱动的协程根，因此 client kit 不创建桥
   （主程序已暴露同一 IID，后续需要时可直接接入）。
 - **样例**：
-  - `example_bridge`：两个"真实唤醒源"（主程序计时器 + 主程序回调式互调）与桥诊断字段；
-  - `example_polled_timer`：**受控轮询**样例 —— 在插件本地 executor 上 `co_await`
+  - `example_plugin` 的 `example_bridge` 工具：两个"真实唤醒源"（主程序计时器 + 主程序回调式互调）与桥诊断字段；
+  - `example_plugin` 的 `example_polled_timer` 工具：**受控轮询**样例 —— 在插件本地 executor 上 `co_await`
     3 次 asio `steady_timer`，返回实测耗时与 `driverAvailable/onHostIoThread/pumpOnStart`。
 
 ### 16.7 验证
@@ -2639,7 +2612,7 @@ v4 起这 7 个成员都是**异步操作契约**（见 §8.0）：返回 `Plugi
 |---|---|
 | 声明 / 发布 | `declarePluginBroadcast(host, bc, id, anyonePublish=false, cacheLatest=true)`；`publishPluginBroadcast(host, bc, id, payload, anyonePublish=false)`（未声明时先补声明）。两者内部走阻塞形态, 返回 `bool` |
 | 订阅 | `subscribePluginBroadcast(host, bc, scope, id, handler, ud)`（需要结束回调时用表成员 `subscribe_broadcast_ex` + `pluginxx::pluginxxSubscriptionFromText`；撤销用 `unsubscribePluginBroadcast(host, bc, sub)`） |
-| 当前值 | 表成员 `read_broadcast`（`co_await readBroadcast(ctx, ...)`；同步桥用 `tableOpSyncWait`） |
+| 当前值 | 表成员 `read_broadcast`（`co_await readBroadcast(ctx, ...)`） |
 | 结束 | 表成员 `end_broadcast`（阻塞形态） |
 
 存量调用形状 `iface.events->publish / subscribe` 与 `PluginEventsCompat` 已删：发布 / 订阅只有
