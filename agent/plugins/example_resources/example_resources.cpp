@@ -48,13 +48,13 @@ struct ResCtx : public agentxx::plugin::PluginBase {
 };
 
 /// 读自身清单字段 (协程形态: 表成员是“提交 + co_await”, 插件执行线程上不能同步等)
-static pluginxx::Task<std::string> ownInfoStringAsync(ResCtx& ctx, const char* key) {
+static asio::awaitable<std::string> ownInfoStringAsync(ResCtx& ctx, const char* key) {
     const PluginxxHost* host = ctx.host;
     if (!ctx.iface.plugins || !ctx.iface.plugins->get_own_info || !ctx.iface.json
         || !ctx.iface.json->json_get_string) {
         co_return std::string{};
     }
-    auto r = co_await pluginxx::tableOp(
+    auto r = co_await tableOpAsync(
         ctx,
         [host, &ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return ctx.iface.plugins->get_own_info(host, cb, ud, err);
@@ -141,7 +141,7 @@ static void    resAgentStart(ResCtx&, const PluginxxOperatorNotify* notify, Plug
 }
 
 /// 挂载事务 (**协程形态**): 追加运行时 skill 目录 + 记一条日志
-static pluginxx::Task<void>
+static asio::awaitable<void>
     resAgentSetup(ResCtx& ctx, agentxx::plugin::AgentRef ref) {
     const PluginxxHost* host = ctx.host;
 
@@ -153,7 +153,7 @@ static pluginxx::Task<void>
         auto        base            = dirOf(co_await ownInfoStringAsync(ctx, "path"));
         std::string runtimeSkillDir = fmt::format("{}/skills_runtime", base);
         auto        regResult
-            = co_await agentxx::plugin::registerSkillDir(ctx, ref.ptr(), runtimeSkillDir);
+            = co_await agentxx::plugin::registerSkillDirAsync(ctx, ref.ptr(), runtimeSkillDir);
         if (!regResult.ok()) {
             auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
                 "[example_resources] register runtime skill dir failed"
@@ -210,7 +210,7 @@ static void* resAgentMount(
     auto later = agentxx::plugin::finishLater(notify);
     // 资源登记交给协程: “提交 + co_await”, 完成通知随之异步发出
     const agentxx::plugin::AgentRef agentRef(*spec);
-    ctx.spawn([later, agentRef](ResCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](ResCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
         try {
             co_await resAgentSetup(c, agentRef);
             later.ok();

@@ -11,6 +11,7 @@
 /// 13 版本门槛 / 14 引用校验 (空 / 未知 id / 过期序号) / 15 20 张表与挂载表查询
 #include "agentxx-test/plugin/test_plugin_host_mount.h"
 #include "agentxx-test/plugin/plugin_thread_fixture.h"
+#include "agentxx-test/plugin/test_table_op.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/assembly_snapshot.h"
@@ -339,7 +340,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             // 只挂在 A 上
             // 表成员是异步契约: 用例跑在主程序 IO 线程上, 主程序内联完成
             auto refA = scopeRefOf("agent_a", seqA);
-            const auto regOp = pluginxx::tableOpSyncWait(
+            const auto regOp = agentxx::test::tableOpWait(
                 hostView,
                 static_cast<const PluginxxCancelIface*>(
                     queryTable(hostView, PLUGINXX_IFACE_CANCEL)
@@ -362,7 +363,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             XX_TEST_EXPECT_FALSE(valueB.has_value());
 
             // 收尾: 注销后 A 上也拿不到结果 (证明上面拿到的结果确实来自这行)
-            const auto unregOp = pluginxx::tableOpSyncWait(
+            const auto unregOp = agentxx::test::tableOpWait(
                 hostView,
                 static_cast<const PluginxxCancelIface*>(
                     queryTable(hostView, PLUGINXX_IFACE_CANCEL)
@@ -483,7 +484,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             );
             auto probeName = agentxx::plugin::PluginStringView::fromCstr("host_mount_probe");
             auto registerSync = [&](const PluginxxScopeRef* ref) {
-                return pluginxx::tableOpSyncWait(
+                return agentxx::test::tableOpWait(
                     hostView,
                     cancelTbl,
                     schedTbl,
@@ -493,7 +494,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
                 );
             };
             auto unregisterSync = [&](const PluginxxScopeRef* ref) {
-                return pluginxx::tableOpSyncWait(
+                return agentxx::test::tableOpWait(
                     hostView,
                     cancelTbl,
                     schedTbl,

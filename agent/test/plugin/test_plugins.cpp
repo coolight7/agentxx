@@ -1,5 +1,6 @@
 #include "agentxx-test/plugin/test_plugins.h"
 #include "agentxx-test/plugin/plugin_thread_fixture.h"
+#include "agentxx-test/plugin/test_table_op.h"
 
 #include "agentxx-test/test_coro_util.h"
 
@@ -157,7 +158,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_EQ(ifaceConfig->version, PLUGINXX_IFACE_CONFIG_VERSION);
             const auto caps    = agentxx::plugin::AgentIfaces::query(inst->hostView());
             auto       langOf  = [&]() {
-                return pluginxx::tableOpSyncWait(
+                return agentxx::test::tableOpWait(
                     inst->hostView(),
                     caps.cancel,
                     caps.scheduler,
@@ -167,7 +168,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 );
             };
             auto setLang = [&](const PluginxxStringView* lang) {
-                return pluginxx::tableOpSyncWait(
+                return agentxx::test::tableOpWait(
                            inst->hostView(),
                            caps.cancel,
                            caps.scheduler,
@@ -218,7 +219,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto scopeRaw   = ref.raw();
             auto emptyKeySv = makeSv("");
             // 表成员是异步契约: 这里在测试线程上等结果 (测试线程不是主程序 IO 线程)
-            auto workDirRes = agentxx::plugin::tableOpSyncWait(
+            auto workDirRes = agentxx::test::tableOpWait(
                 inst->hostView(),
                 agentxx::plugin::queryInterface<PluginxxCancelIface>(
                     inst->hostView(),
@@ -271,7 +272,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(ifacePrompt->get_tool_prompt != nullptr);
             // 未配置的工具 → 完成回调给失败 (表成员是异步契约, 这里阻塞等结果)
             auto unknownSv = makeSv("no_such_tool");
-            auto promptOp  = agentxx::plugin::tableOpSyncWait(
+            auto promptOp  = agentxx::test::tableOpWait(
                 inst->hostView(),
                 nullptr,
                 nullptr,
@@ -284,7 +285,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
                         err
                     );
                 },
-                5000
+                std::chrono::milliseconds{5000}
             );
             XX_TEST_EXPECT_TRUE(promptOp.accepted());
             XX_TEST_EXPECT_FALSE(promptOp.ok());
@@ -1263,16 +1264,16 @@ throw new Error("top-level rollback probe");
             static SlowCtx slowCtx;
             slowCtx.attachHost(inst23->hostView());
             const auto slowRef = scopeRefOf(*ctx->pluginManager);
-            agentxx::plugin::tool(
+            co_await agentxx::plugin::toolAsync(
                 slowCtx,
                 slowRef,
                 "slow_timeout_tool",
                 "slow tool for unload race test",
                 "{}",
-                [](SlowCtx&, std::string_view) -> std::string {
+                agentxx::plugin::onWorkerAsync([](SlowCtx&, std::string_view) -> std::string {
                     std::this_thread::sleep_for(std::chrono::milliseconds(600));
                     return "{}";
-                },
+                }),
                 100
             );
 
@@ -1650,14 +1651,14 @@ throw new Error("top-level rollback probe");
             // 启用状态: publish 正常 (`pluginxx.broadcasts` 通用表)
             const auto bc30 = agentxx::plugin::AgentIfaces::query(inst30->hostView()).broadcasts;
             XX_TEST_EXPECT_TRUE(bc30 != nullptr && bc30->publish_broadcast != nullptr);
-            // 表成员是异步契约: kit 的便捷入口内部走阻塞形态 (用例在主程序 IO 线程上)
-            agentxx::plugin::declarePluginBroadcast(
+            // 表成员是异步契约: 测试在主程序 IO 线程上, 用提交即返回的形态 (不需要等结果)
+            agentxx::plugin::declarePluginBroadcastNoWait(
                 inst30->hostView(),
                 bc30,
                 "plugin.example_plugin.demo"
             );
             XX_TEST_EXPECT_TRUE(
-                agentxx::plugin::publishPluginBroadcast(
+                agentxx::plugin::publishPluginBroadcastNoWait(
                     inst30->hostView(),
                     bc30,
                     "plugin.example_plugin.demo",
@@ -1667,7 +1668,7 @@ throw new Error("top-level rollback probe");
             co_await ctx->pluginManager->disable("example_plugin");
             // 禁用状态: 接口表 publish 拒绝 (返回 false)
             XX_TEST_EXPECT_FALSE(
-                agentxx::plugin::publishPluginBroadcast(
+                agentxx::plugin::publishPluginBroadcastNoWait(
                     inst30->hostView(),
                     bc30,
                     "plugin.example_plugin.demo",
@@ -1928,18 +1929,18 @@ throw new Error("top-level rollback probe");
             static SlowCtx slowCtx;
             slowCtx.attachHost(inst31->hostView());
             const auto slowRef = scopeRefOf(*ctx->pluginManager);
-            agentxx::plugin::tool(
+            co_await agentxx::plugin::toolAsync(
                 slowCtx,
                 slowRef,
                 "timeout_tool",
                 "tool slower than its own default timeout",
                 "{}",
-                [](SlowCtx&, std::string_view) -> std::string {
+                agentxx::plugin::onWorkerAsync([](SlowCtx&, std::string_view) -> std::string {
                     // 业务体比 default_timeout_ms 慢: 主程序按超时给失败终态,
                     // 插件侧照旧跑完并上报 (随后释放该次调用的占用)
                     std::this_thread::sleep_for(std::chrono::milliseconds{250});
                     return "slow body finished";
-                },
+                }),
                 100 ///< default_timeout_ms
             );
             auto timeoutTool = ctx->toolRegistry->find("timeout_tool");
@@ -1962,15 +1963,15 @@ throw new Error("top-level rollback probe");
             static BoomCtx boomCtx;
             boomCtx.attachHost(inst31->hostView());
             const auto boomRef = scopeRefOf(*ctx->pluginManager);
-            agentxx::plugin::tool(
+            co_await agentxx::plugin::toolAsync(
                 boomCtx,
                 boomRef,
                 "boom_tool",
                 "boom test",
                 "{}",
-                [](BoomCtx&, std::string_view) -> std::string {
+                agentxx::plugin::onWorkerAsync([](BoomCtx&, std::string_view) -> std::string {
                     throw std::runtime_error("shim boom");
-                }
+                })
             );
             auto tool = ctx->toolRegistry->find("boom_tool");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
@@ -1991,15 +1992,15 @@ throw new Error("top-level rollback probe");
             static MsgCtx msgCtx;
             msgCtx.attachHost(inst31->hostView());
             const auto msgRef = scopeRefOf(*ctx->pluginManager);
-            agentxx::plugin::tool(
+            co_await agentxx::plugin::toolAsync(
                 msgCtx,
                 msgRef,
                 "error_looking_text_tool",
                 "returns text that looks like an error but reports success",
                 "{}",
-                [](MsgCtx&, std::string_view) -> std::string {
+                agentxx::plugin::onWorkerAsync([](MsgCtx&, std::string_view) -> std::string {
                     return "[Error: this line only looks like a failure]";
-                }
+                })
             );
             auto tool = ctx->toolRegistry->find("error_looking_text_tool");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
@@ -2052,8 +2053,6 @@ throw new Error("top-level rollback probe");
                 std::this_thread::sleep_for(std::chrono::milliseconds{5});
             }
             XX_TEST_EXPECT_TRUE(goodHandlerRan.load(std::memory_order_acquire));
-            pluginxx::unsubscribePluginBroadcast(subBad);
-            pluginxx::unsubscribePluginBroadcast(subGood);
         }
 
         auto ok31 = co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -2769,15 +2768,15 @@ throw new Error("top-level rollback probe");
         FakeCtx fctx;
         fctx.attachHost(fakeInst->hostView());
         const auto fakeRef = scopeRefOf(*rollbackCtx->pluginManager);
-        agentxx::plugin::tool(
+        co_await agentxx::plugin::toolAsync(
             fctx,
             fakeRef,
             "fake_rollback_tool",
             "desc",
             "{}",
-            [](std::string_view) {
+            agentxx::plugin::onWorkerAsync([](std::string_view) {
                 return "ok";
-            }
+            })
         );
         XX_TEST_EXPECT_TRUE(rollbackCtx->toolRegistry->contains("fake_rollback_tool"));
 
@@ -3263,7 +3262,7 @@ throw new Error("top-level rollback probe");
                 spec.tool_name = agentxx::plugin::PluginStringView::fromCstr("agentxx_share_store");
                 // 表成员是异步契约: 用阻塞形态在同一栈上等结果
                 auto permOp = [&]() {
-                    return agentxx::plugin::tableOpSyncWait(
+                    return agentxx::test::tableOpWait(
                         fsInst->hostView(),
                         nullptr,
                         nullptr,
@@ -3277,7 +3276,7 @@ throw new Error("top-level rollback probe");
                                 err
                             );
                         },
-                        5000
+                        std::chrono::milliseconds{5000}
                     );
                 };
                 XX_TEST_EXPECT_FALSE(permOp().ok());
@@ -3457,7 +3456,7 @@ throw new Error("top-level rollback probe");
                     std::vector<int32_t> decisions;
                     const auto           pathRef = scopeRefOf(*ctx->pluginManager);
                     // 表成员是异步契约: 用阻塞形态在同一栈上等结果
-                    auto pathOp = agentxx::plugin::tableOpSyncWait(
+                    auto pathOp = agentxx::test::tableOpWait(
                         fsInst->hostView(),
                         nullptr,
                         nullptr,
@@ -3471,7 +3470,7 @@ throw new Error("top-level rollback probe");
                                 err
                             );
                         },
-                        5000
+                        std::chrono::milliseconds{5000}
                     );
                     XX_TEST_EXPECT_TRUE(pathOp.ok());
                     // 完成时 payload 是判定数组的 JSON 文本
@@ -3489,7 +3488,7 @@ throw new Error("top-level rollback probe");
 
                     // 非法入参: 空数组 / 空指针 → 未受理 (调用方跳过过滤)
                     auto pathOpOf = [&]() {
-                        return agentxx::plugin::tableOpSyncWait(
+                        return agentxx::test::tableOpWait(
                             fsInst->hostView(),
                             nullptr,
                             nullptr,
@@ -3503,7 +3502,7 @@ throw new Error("top-level rollback probe");
                                     err
                                 );
                             },
-                            5000
+                            std::chrono::milliseconds{5000}
                         );
                     };
                     query.path_count = 0;
@@ -3556,7 +3555,7 @@ throw new Error("top-level rollback probe");
                     query.paths       = views.data();
                     const auto pathRef = scopeRefOf(*ctx->pluginManager);
                     // 表成员是异步契约: 权限中间件未加载时完成回调给失败
-                    auto pathOp = agentxx::plugin::tableOpSyncWait(
+                    auto pathOp = agentxx::test::tableOpWait(
                         fsInst->hostView(),
                         nullptr,
                         nullptr,
@@ -3570,7 +3569,7 @@ throw new Error("top-level rollback probe");
                                 err
                             );
                         },
-                        5000
+                        std::chrono::milliseconds{5000}
                     );
                     XX_TEST_EXPECT_FALSE(pathOp.ok());
                 }
@@ -4087,8 +4086,8 @@ throw new Error("top-level rollback probe");
 
         // 2) round_start 值能经广播频道送达订阅者 (验证发布/订阅流程本身)
         std::atomic<int> hits{0};
-        // 表成员是异步契约: kit 的订阅入口内部走阻塞形态, 句柄以十进制文本交回
-        auto* sub = agentxx::plugin::subscribePluginBroadcast(
+        // 表成员是异步契约: 用例用 test_table_op.h 的同步等待包一眼 (句柄经完成回调交回)
+        auto* sub = agentxx::test::subscribeBroadcastWait(
             probeInst->hostView(),
             bcIface,
             nullptr,
@@ -4102,7 +4101,7 @@ throw new Error("top-level rollback probe");
 
         // 3) PluginBase 订阅的清理回调生效: 已取消标记在轮次开始后被清掉
         //    (create 事务里由 `onHostReady` 自动订阅; 这里直接订阅同一个处理器)
-        auto* roundSub = agentxx::plugin::subscribePluginBroadcast(
+        auto* roundSub = agentxx::test::subscribeBroadcastWait(
             probeInst->hostView(),
             bcIface,
             nullptr,

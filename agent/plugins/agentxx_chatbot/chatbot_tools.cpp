@@ -500,7 +500,8 @@ void applyDebugAttachments(const Json& args, InboundEvent& event) {
 
 } // namespace
 
-std::string toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJson) {
+asio::awaitable<std::string>
+    toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJson) {
     const auto args = parseArgsOrThrow(argsJson);
     if (deps.engine == nullptr) {
         throw std::runtime_error("chatbot 插件状态不可用");
@@ -548,11 +549,11 @@ std::string toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJs
     if (event.accountId.empty() || event.chatId.empty()) {
         throw std::invalid_argument("account 与 chatId 必填");
     }
-    deps.engine->onInbound(event);
+    co_await deps.engine->onInbound(event);
     Json out = Json::object();
     out["accepted"] = true;
     out["chat"]     = ChatKey{event.accountId, event.type, event.chatId}.key();
-    return out.dump();
+    co_return out.dump();
 }
 
 std::string toolDebugOutbox(const ChatbotToolDeps& deps, std::string_view argsJson) {
@@ -765,7 +766,7 @@ std::string toolRecallMessage(
     return out.dump();
 }
 
-std::string toolTask(
+asio::awaitable<std::string> toolTask(
     const ChatbotToolDeps& deps,
     std::string_view       threadId,
     std::string_view       argsJson
@@ -804,7 +805,7 @@ std::string toolTask(
         request.prompt  = prompt;
         request.model   = stringArg(args, "model");
 
-        auto result = deps.tasks->submit(request);
+        auto result = co_await deps.tasks->submit(request);
         if (!result.ok) {
             // 提交被拒是「参数/额度」问题, 让模型换个做法: 按工具失败上报
             throw std::runtime_error(result.message);
@@ -816,16 +817,16 @@ std::string toolTask(
             chatKey,
             request.persona
         );
-        return result.message;
+        co_return result.message;
     }
     if (op == "status") {
-        return deps.tasks->statusText(chatKey, stringArg(args, "id"));
+        co_return deps.tasks->statusText(chatKey, stringArg(args, "id"));
     }
     if (op == "cancel") {
-        return deps.tasks->cancel(chatKey, stringArg(args, "id"));
+        co_return co_await deps.tasks->cancel(chatKey, stringArg(args, "id"));
     }
     if (op == "list") {
-        return deps.tasks->listText(chatKey);
+        co_return deps.tasks->listText(chatKey);
     }
     throw std::invalid_argument(
         "op 取值非法: 用 submit / status / cancel / list (收到 '" + op + "')"

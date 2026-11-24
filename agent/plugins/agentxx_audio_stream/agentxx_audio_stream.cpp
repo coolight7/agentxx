@@ -154,9 +154,9 @@ static void audioStreamAgentStart(
 }
 
 /// 挂载事务 (**协程形态**): 取工具提示词 + 建 schema + 注册工具
-static pluginxx::Task<void>
+static asio::awaitable<void>
     audioStreamAgentSetup(AudioStreamPluginCtx& ctx, agentxx::plugin::AgentRef ref) {
-    auto schemaBuilder = co_await agentxx::plugin::schemaOf(ctx, "agentxx_audio_stream");
+    auto schemaBuilder = co_await agentxx::plugin::schemaOfAsync(ctx, "agentxx_audio_stream");
     auto schema
         = schemaBuilder
               .enumString(
@@ -180,13 +180,13 @@ static pluginxx::Task<void>
               )
               .build();
 
-    co_await agentxx::plugin::tool(
+    co_await agentxx::plugin::toolAsync(
         ctx,
         ref,
         "agentxx_audio_stream",
         "Capture system audio or microphone stream on Windows (WASAPI). Audio frames are pushed as plugin events to topic 'plugin.agentxx_audio_stream.audio'. Supports start, stop, and status query.",
         schema,
-        [](AudioStreamPluginCtx& c, std::string_view args_json) -> agentxx::plugin::ToolResult {
+        agentxx::plugin::onWorkerAsync([](AudioStreamPluginCtx& c, std::string_view args_json) -> agentxx::plugin::ToolResult {
             agentxx::plugin::ArgReader args(args_json);
             auto                       command = args.require<std::string>("command");
             if (!args.ok()) {
@@ -223,7 +223,7 @@ static pluginxx::Task<void>
             }
 
             return agentxx::plugin::ToolResult::fail(R"_(unknown command: use start/stop/status)_");
-        }
+        })
     );
     co_return;
 }
@@ -250,7 +250,7 @@ static void* audioStreamAgentMount(
     // 工具注册交给协程: schema/提示词读取与注册逐条 co_await, 全部生效后再放行挂载
     const agentxx::plugin::AgentRef agentRef(*spec);
     ctx.spawn(
-        [later, agentRef](AudioStreamPluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        [later, agentRef](AudioStreamPluginCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
             try {
                 co_await audioStreamAgentSetup(c, agentRef);
                 later.ok();

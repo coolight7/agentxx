@@ -8,7 +8,8 @@
 /// - 任务记录回收: 过期终态清理与 `maxRecords` 挤掉最旧
 /// - 面板: 「后台任务」行文本、状态中文标记、快照 JSON 往返 (空数组不写)
 ///
-/// 全部同步 (不 co_await): 这一层不碰网络也不碰主程序。
+/// 提交/取消是协程 (它们背后是表调用): 用例内用本地 `io_context` 跑完再取结果
+/// (见 `runAwaitable`), 除此之外这一层不碰网络也不碰主程序。
 #include "agentxx-test/core/test_chatbot_task.h"
 
 #include "agentxx_chatbot/chatbot_panel.h"
@@ -17,6 +18,12 @@
 
 #include "utilxx_base/json.h"
 
+#include "asio/awaitable.hpp"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "asio/io_context.hpp"
+
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -33,8 +40,42 @@ namespace test {
 
 namespace {
 
+namespace asio = ::boost::asio;
+
 using namespace agentxx::chatbot;
 using utilxx_base::Json;
+
+/// 协程体: 参数按值复制进帧, 不会比协程先死
+///
+/// 直接写 `co_spawn(io, [&]{...}(), detached)` 是错的: lambda 协程帧只存闭包指针,
+/// 临时闭包在语句结束就析构 (规则同 `test_coro_util.h` 的 `keepAliveRun`)。
+template<typename T>
+asio::awaitable<void> runInto(asio::awaitable<T> call, std::optional<T>* out) {
+    *out = co_await std::move(call);
+}
+
+/// 在本地 io_context 上把一个协程跑完并取回结果
+///
+/// 用例仍是同步函数: 假运行时的提交/取消都不挂起, 所以 `run()` 会直接跑完。
+template<typename T>
+T runAwaitable(asio::awaitable<T> call) {
+    asio::io_context io;
+    std::optional<T> out;
+    asio::co_spawn(io, runInto(std::move(call), &out), asio::detached);
+    io.run();
+    return std::move(*out);
+}
+
+/// 提交一条任务并等结果
+TaskSubmitResult submitOf(ChatbotTaskManager& manager, const TaskSubmit& request) {
+    return runAwaitable(manager.submit(request));
+}
+
+/// 取消并等结果
+std::string
+    cancelOf(ChatbotTaskManager& manager, std::string_view chatKey, std::string_view asyncId) {
+    return runAwaitable(manager.cancel(std::string{chatKey}, std::string{asyncId}));
+}
 
 constexpr int32_t kPhaseQueued   = 0;
 constexpr int32_t kPhaseStarted  = 1;
@@ -56,32 +97,29 @@ struct FakeHost {
     /// 依次返回的 id (每提交一次取一个; 空了 = 提交失败)
     std::vector<std::string> ids{};
     std::string              submitError = "后端拒绝";
-    /// `resultOf` 返回的任务记录 JSON (空 = 拿不到)
-    std::string              ledgerJson{};
     std::vector<std::string> canceled{};
 
     TaskRuntime runtime() {
         TaskRuntime rt;
-        rt.submit = [this](const TaskSubmit& request, std::string& err) -> std::string {
+        // 真实运行时里这两步都是表调用 (协程); 假实现直接完成, 不挂起
+        rt.submit = [this](const TaskSubmit& request, std::string& err)
+            -> asio::awaitable<std::string> {
             ++submitCalls;
             lastPrompt  = request.prompt;
             lastPersona = request.persona;
             lastChatKey = request.chatKey;
             if (ids.empty()) {
                 err = submitError;
-                return {};
+                co_return std::string{};
             }
             const auto id = ids.front();
             ids.erase(ids.begin());
-            return id;
+            co_return id;
         };
-        rt.cancel = [this](std::string_view asyncId) -> int32_t {
+        rt.cancel = [this](std::string_view asyncId) -> asio::awaitable<int32_t> {
             ++cancelCalls;
             canceled.emplace_back(asyncId);
-            return 0;
-        };
-        rt.resultOf = [this](std::string_view) {
-            return ledgerJson;
+            co_return 0;
         };
         return rt;
     }
@@ -120,7 +158,7 @@ void testSubmit() {
     request.chatKey = "qq_main|group|G1";
     request.persona = "assistant";
     request.prompt  = "查一下今天的汇率";
-    const auto first = manager.submit(request);
+    const auto first = submitOf(manager, request);
     XX_TEST_EXPECT_TRUE(first.ok);
     XX_TEST_EXPECT_EQ(first.asyncId, std::string{"async-1"});
     XX_TEST_EXPECT_TRUE(contains(first.message, "async-1"));
@@ -146,7 +184,7 @@ void testSubmit() {
     titled.chatKey = "qq_main|group|G1";
     titled.prompt  = "很长的正文内容";
     titled.title   = "汇率";
-    const auto second = manager.submit(titled);
+    const auto second = submitOf(manager, titled);
     XX_TEST_EXPECT_TRUE(second.ok);
     const auto* titledRecord = manager.recordOf("async-2");
     XX_TEST_EXPECT_TRUE(titledRecord != nullptr);
@@ -158,7 +196,7 @@ void testSubmit() {
     TaskSubmit multiline;
     multiline.chatKey = "qq_main|group|G2";
     multiline.prompt  = "第一行\n第二行\t带缩进";
-    XX_TEST_EXPECT_TRUE(manager.submit(multiline).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, multiline).ok);
     const auto* flat = manager.recordOf("async-3");
     XX_TEST_EXPECT_TRUE(flat != nullptr);
     if (flat != nullptr) {
@@ -175,7 +213,7 @@ void testSubmitRejects() {
     TaskSubmit empty;
     empty.chatKey = "qq_main|group|G1";
     empty.prompt  = "   ";
-    const auto emptyResult = manager.submit(empty);
+    const auto emptyResult = submitOf(manager, empty);
     XX_TEST_EXPECT_FALSE(emptyResult.ok);
     XX_TEST_EXPECT_TRUE(contains(emptyResult.message, "正文为空"));
     XX_TEST_EXPECT_EQ(host.submitCalls, 0);
@@ -186,7 +224,7 @@ void testSubmitRejects() {
     TaskSubmit ok;
     ok.chatKey = "qq_main|group|G1";
     ok.prompt  = "做点事";
-    const auto noRuntimeResult = noRuntime.submit(ok);
+    const auto noRuntimeResult = submitOf(noRuntime, ok);
     XX_TEST_EXPECT_FALSE(noRuntimeResult.ok);
     XX_TEST_EXPECT_TRUE(contains(noRuntimeResult.message, "submit_async_work"));
 
@@ -197,7 +235,7 @@ void testSubmitRejects() {
     TaskSubmit request;
     request.chatKey = "qq_main|group|G1";
     request.prompt  = "做点事";
-    const auto rejected = rejectManager.submit(request);
+    const auto rejected = submitOf(rejectManager, request);
     XX_TEST_EXPECT_FALSE(rejected.ok);
     XX_TEST_EXPECT_TRUE(contains(rejected.message, "后端拒绝"));
     XX_TEST_EXPECT_EQ(rejectManager.allRecords().size(), size_t{0});
@@ -214,21 +252,21 @@ void testPendingLimit() {
     TaskSubmit request;
     request.chatKey = "qq_main|group|G1";
     request.prompt  = "做点事";
-    XX_TEST_EXPECT_TRUE(manager.submit(request).ok);
-    XX_TEST_EXPECT_TRUE(manager.submit(request).ok);
-    const auto third = manager.submit(request);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, request).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, request).ok);
+    const auto third = submitOf(manager, request);
     XX_TEST_EXPECT_FALSE(third.ok);
     XX_TEST_EXPECT_TRUE(contains(third.message, "上限 2"));
 
     // 别的会话不受影响
     request.chatKey = "qq_main|group|G2";
-    XX_TEST_EXPECT_TRUE(manager.submit(request).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, request).ok);
 
     // 结束一条后又可以提交
     host.clockMs = 2000;
     XX_TEST_EXPECT_TRUE(manager.onEvent("async-1", kPhaseFinished, R"({"hasError":false})"));
     request.chatKey = "qq_main|group|G1";
-    XX_TEST_EXPECT_TRUE(manager.submit(request).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, request).ok);
 }
 
 /* ==================== 事件状态机 ==================== */
@@ -243,7 +281,7 @@ void testEventStateMachine() {
     request.chatKey = "qq_main|group|G1";
     request.persona = "assistant";
     request.prompt  = "巡一遍仓库";
-    XX_TEST_EXPECT_TRUE(manager.submit(request).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, request).ok);
 
     // 排队 → 起跑 → 结果 (任务记录里有 result 字段)
     XX_TEST_EXPECT_TRUE(manager.onEvent("async-7", kPhaseQueued, R"({"queueAhead":2})"));
@@ -256,9 +294,10 @@ void testEventStateMachine() {
     XX_TEST_EXPECT_EQ(running->queueAhead, 0);
     XX_TEST_EXPECT_EQ(running->startedAtMs, int64_t{4000});
 
-    host.clockMs   = 9500;
-    host.ledgerJson = Json{{"state", "done"}, {"result", "上游三个提交, 没有异常"}}.dump();
+    host.clockMs = 9500;
     XX_TEST_EXPECT_TRUE(manager.onEvent("async-7", kPhaseFinished, R"({"hasError":false})"));
+    // 结果正文不在事件载荷里: 入口在终态向主程序任务表要过一次后补上 (本层不调表)
+    manager.setResultHead("async-7", "上游三个提交, 没有异常");
     const auto* done = manager.recordOf("async-7");
     XX_TEST_EXPECT_EQ(done->state, TaskState::Done);
     XX_TEST_EXPECT_EQ(done->finishedAtMs, int64_t{9500});
@@ -275,7 +314,7 @@ void testEventStateMachine() {
     TaskSubmit failing;
     failing.chatKey = "qq_main|group|G1";
     failing.prompt  = "再跑一次";
-    XX_TEST_EXPECT_TRUE(manager.submit(failing).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, failing).ok);
     XX_TEST_EXPECT_TRUE(manager.onEvent(
         "async-8",
         kPhaseFinished,
@@ -290,7 +329,7 @@ void testEventStateMachine() {
     TaskSubmit queuedCancel;
     queuedCancel.chatKey = "qq_main|group|G1";
     queuedCancel.prompt  = "排队就被撤";
-    XX_TEST_EXPECT_TRUE(manager.submit(queuedCancel).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, queuedCancel).ok);
     host.clockMs = 20'000;
     XX_TEST_EXPECT_TRUE(manager.onEvent("async-9", kPhaseCanceled, R"({"canceled":true})"));
     const auto* canceled = manager.recordOf("async-9");
@@ -298,7 +337,7 @@ void testEventStateMachine() {
     XX_TEST_EXPECT_EQ(canceled->startedAtMs, canceled->submittedAtMs);
 
     // 载荷不是合法 JSON: 也要能落到终态 (不能被异常带走)
-    XX_TEST_EXPECT_TRUE(manager.submit(queuedCancel).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, queuedCancel).ok);
     XX_TEST_EXPECT_TRUE(manager.onEvent("async-10", kPhaseFinished, "not json"));
     XX_TEST_EXPECT_EQ(manager.recordOf("async-10")->state, TaskState::Done);
 }
@@ -314,39 +353,39 @@ void testCancel() {
     TaskSubmit request;
     request.chatKey = "qq_main|group|G1";
     request.prompt  = "做点事";
-    XX_TEST_EXPECT_TRUE(manager.submit(request).ok);
-    XX_TEST_EXPECT_TRUE(manager.submit(request).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, request).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, request).ok);
 
     // 单条
-    const auto one = manager.cancel("qq_main|group|G1", "async-2");
+    const auto one = cancelOf(manager, "qq_main|group|G1", "async-2");
     XX_TEST_EXPECT_TRUE(contains(one, "已取消 1 个"));
     XX_TEST_EXPECT_EQ(host.canceled.size(), size_t{1});
     XX_TEST_EXPECT_EQ(host.canceled[0], std::string{"async-2"});
 
     // 别的会话里的 id: 拒绝 (防止跨群取消)
-    const auto cross = manager.cancel("qq_main|group|G2", "async-1");
+    const auto cross = cancelOf(manager, "qq_main|group|G2", "async-1");
     XX_TEST_EXPECT_TRUE(contains(cross, "没有任务"));
 
     // 已结束的: 明确说不用取消
     XX_TEST_EXPECT_TRUE(
         manager.onEvent("async-1", kPhaseFinished, R"({"hasError":false})")
     );
-    const auto finished = manager.cancel("qq_main|group|G1", "async-1");
+    const auto finished = cancelOf(manager, "qq_main|group|G1", "async-1");
     XX_TEST_EXPECT_TRUE(contains(finished, "已经结束"));
 
     // 全部: 只剩一条进行中 (async-2 还在排队)
-    const auto all = manager.cancel("qq_main|group|G1", "");
+    const auto all = cancelOf(manager, "qq_main|group|G1", "");
     XX_TEST_EXPECT_TRUE(contains(all, "已取消 1 个"));
     // 终态由主程序的回调带回来: 补一条之后就没有进行中的了
     XX_TEST_EXPECT_TRUE(manager.onEvent("async-2", kPhaseCanceled, R"({"canceled":true})"));
-    const auto again = manager.cancel("qq_main|group|G1", "");
+    const auto again = cancelOf(manager, "qq_main|group|G1", "");
     XX_TEST_EXPECT_TRUE(contains(again, "没有进行中"));
 }
 
 void testCancelWithoutRuntime() {
     ChatbotTaskManager manager;
     manager.init(TaskRuntime{}, {});
-    XX_TEST_EXPECT_TRUE(contains(manager.cancel("qq_main|group|G1", "async-1"), "没有后台任务入口"));
+    XX_TEST_EXPECT_TRUE(contains(cancelOf(manager, "qq_main|group|G1", "async-1"), "没有后台任务入口"));
 }
 
 /* ==================== 文本渲染 ==================== */
@@ -361,7 +400,7 @@ void testTexts() {
     request.chatKey = "qq_main|group|G1";
     request.persona = "assistant";
     request.prompt  = "查一下今天的汇率";
-    XX_TEST_EXPECT_TRUE(manager.submit(request).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, request).ok);
 
     // 空清单
     XX_TEST_EXPECT_TRUE(contains(manager.listText("qq_main|group|G2"), "还没有后台任务"));
@@ -390,9 +429,10 @@ void testTexts() {
     XX_TEST_EXPECT_TRUE(contains(manager.statusText("qq_main|group|G1", ""), "async-1"));
 
     // 终态: 带耗时与结果开头, 通知正文能直接发给人
-    host.clockMs    = 200'000;
-    host.ledgerJson = Json{{"result", Json::array({"一条", "两条", "三条"})}}.dump();
+    host.clockMs = 200'000;
     XX_TEST_EXPECT_TRUE(manager.onEvent("async-1", kPhaseFinished, R"({"hasError":false})"));
+    // 主程序给的结果是数组时入口会拼成多行文本, 这里直接给拼接后的正文
+    manager.setResultHead("async-1", "一条\n两条\n三条");
     const auto* record = manager.recordOf("async-1");
     XX_TEST_EXPECT_TRUE(record != nullptr);
     if (record != nullptr) {
@@ -415,7 +455,7 @@ void testTexts() {
     TaskSubmit second;
     second.chatKey = "qq_main|group|G1";
     second.prompt  = "算了";
-    XX_TEST_EXPECT_TRUE(manager.submit(second).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, second).ok);
     XX_TEST_EXPECT_TRUE(manager.onEvent("async-2", kPhaseCanceled, R"({"canceled":true})"));
     const auto canceledNote = ChatbotTaskManager::finishedText(*manager.recordOf("async-2"));
     XX_TEST_EXPECT_TRUE(contains(canceledNote, "已取消"));
@@ -436,18 +476,18 @@ void testPrune() {
     request.prompt  = "做点事";
 
     // 过期终态记录在下次提交时被清掉
-    XX_TEST_EXPECT_TRUE(manager.submit(request).ok);
+    XX_TEST_EXPECT_TRUE(submitOf(manager, request).ok);
     host.clockMs = 5000;
     XX_TEST_EXPECT_TRUE(manager.onEvent("async-1", kPhaseFinished, "{}"));
     host.clockMs = 7000; // 超过 keepFinishedMs
-    XX_TEST_EXPECT_TRUE(manager.submit(request).ok); // async-2
+    XX_TEST_EXPECT_TRUE(submitOf(manager, request).ok); // async-2
     XX_TEST_EXPECT_TRUE(manager.recordOf("async-1") == nullptr);
     XX_TEST_EXPECT_TRUE(manager.recordOf("async-2") != nullptr);
 
     // maxRecords: 超出后丢最旧的已结束记录 (进行中的不丢)
     host.clockMs = 8000;
     XX_TEST_EXPECT_TRUE(manager.onEvent("async-2", kPhaseFinished, "{}"));
-    XX_TEST_EXPECT_TRUE(manager.submit(request).ok); // async-3
+    XX_TEST_EXPECT_TRUE(submitOf(manager, request).ok); // async-3
     // async-2 已结束, 名额满 (1 条) → 它被挤掉
     XX_TEST_EXPECT_TRUE(manager.recordOf("async-2") == nullptr);
     XX_TEST_EXPECT_TRUE(manager.recordOf("async-3") != nullptr);

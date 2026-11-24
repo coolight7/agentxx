@@ -158,18 +158,18 @@ void ChatbotTaskManager::prune() {
     std::erase_if(records_, tooOld);
 }
 
-TaskSubmitResult ChatbotTaskManager::submit(const TaskSubmit& request) {
+asio::awaitable<TaskSubmitResult> ChatbotTaskManager::submit(TaskSubmit request) {
     TaskSubmitResult result;
     const std::string prompt = trimCopy(request.prompt);
     if (prompt.empty()) {
         result.message = "提交失败: 任务正文为空 (把要做的事写清楚)";
-        return result;
+        co_return result;
     }
     if (!runtime_.submit) {
         result.message
             = "提交失败: 当前主程序没有后台任务入口 (需要 agentxx.agent.runtime 表的 "
               "submit_async_work), 请改为在本轮直接做完";
-        return result;
+        co_return result;
     }
     prune();
     if (options_.maxPendingPerChat > 0
@@ -179,16 +179,16 @@ TaskSubmitResult ChatbotTaskManager::submit(const TaskSubmit& request) {
                          + " 个后台任务在排队/运行 (上限 "
                          + std::to_string(options_.maxPendingPerChat)
                          + "), 先等它们出结果或取消掉一些";
-        return result;
+        co_return result;
     }
 
     TaskSubmit filled = request;
     filled.prompt     = prompt;
     std::string err;
-    const auto  asyncId = runtime_.submit(filled, err);
+    const auto  asyncId = co_await runtime_.submit(filled, err);
     if (asyncId.empty()) {
         result.message = "提交失败: " + (err.empty() ? std::string{"主程序拒绝了这次提交"} : err);
-        return result;
+        co_return result;
     }
 
     TaskRecord record;
@@ -220,22 +220,23 @@ TaskSubmitResult ChatbotTaskManager::submit(const TaskSubmit& request) {
     result.ok      = true;
     result.asyncId = asyncId;
     result.message = submittedText(records_.back());
-    return result;
+    co_return result;
 }
 
-std::string ChatbotTaskManager::cancel(std::string_view chatKey, std::string_view asyncId) {
+asio::awaitable<std::string>
+    ChatbotTaskManager::cancel(std::string chatKey, std::string asyncId) {
     if (!runtime_.cancel) {
-        return "取消失败: 当前主程序没有后台任务入口";
+        co_return "取消失败: 当前主程序没有后台任务入口";
     }
     std::vector<std::string> targets;
     if (!asyncId.empty()) {
         const auto* record = recordOf(asyncId);
         if (record == nullptr || record->chatKey != chatKey) {
-            return "取消失败: 这个会话里没有任务 " + std::string{asyncId};
+            co_return "取消失败: 这个会话里没有任务 " + std::string{asyncId};
         }
         if (!taskStatePending(record->state)) {
-            return "任务 " + std::string{asyncId} + " 已经结束 (" + taskStateName(record->state)
-                   + "), 不用取消";
+            co_return "任务 " + std::string{asyncId} + " 已经结束 ("
+                      + taskStateName(record->state) + "), 不用取消";
         }
         targets.emplace_back(asyncId);
     } else {
@@ -245,21 +246,29 @@ std::string ChatbotTaskManager::cancel(std::string_view chatKey, std::string_vie
             }
         }
         if (targets.empty()) {
-            return "这个会话没有进行中的后台任务";
+            co_return "这个会话没有进行中的后台任务";
         }
     }
 
     size_t canceled = 0;
     for (const auto& id : targets) {
-        if (runtime_.cancel(id) == 0) {
+        if (co_await runtime_.cancel(id) == 0) {
             ++canceled;
         }
     }
     if (canceled == 0) {
-        return "取消失败: 主程序没有接受取消请求 (任务可能刚好结束)";
+        co_return "取消失败: 主程序没有接受取消请求 (任务可能刚好结束)";
     }
-    return "已取消 " + std::to_string(canceled) + " 个后台任务"
-           + (targets.size() > 1 ? "" : (" (" + targets.front() + ")"));
+    co_return "已取消 " + std::to_string(canceled) + " 个后台任务"
+              + (targets.size() > 1 ? "" : (" (" + targets.front() + ")"));
+}
+
+void ChatbotTaskManager::setResultHead(std::string_view asyncId, std::string_view resultText) {
+    auto* record = mutableRecordOf(asyncId);
+    if (record == nullptr) {
+        return;
+    }
+    record->resultHead = headOf(singleLine(resultText), options_.resultHeadChars);
 }
 
 TaskRecord* ChatbotTaskManager::mutableRecordOf(std::string_view asyncId) {
@@ -322,19 +331,8 @@ bool ChatbotTaskManager::onEvent(
                 // 排队中被取消: 没有起跑时间, 用提交时间当作结束时间的起点
                 record->startedAtMs = record->submittedAtMs;
             }
-            // 结果正文不在事件载荷里 (可能很大): 终态时向主程序任务表要一次
-            if (record->state == TaskState::Done && runtime_.resultOf) {
-                const auto json = runtime_.resultOf(record->asyncId);
-                if (!json.empty()) {
-                    try {
-                        const auto entry = Json::parse(json);
-                        record->resultHead
-                            = headOf(textOf(entry, "result"), options_.resultHeadChars);
-                    } catch (const std::exception&) {
-                        // 任务记录读不到就当没有正文 (会话里仍然有完整结果)
-                    }
-                }
-            }
+            // 结果正文不在事件载荷里 (可能很大): 由入口另发一次异步拉取,
+            // 拉到后经 [setResultHead] 补上 (本层不调表, 保持纯逻辑)
             return true;
         }
         default:

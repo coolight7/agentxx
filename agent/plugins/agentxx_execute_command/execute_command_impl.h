@@ -101,7 +101,10 @@ using agentxx::plugin::ToolStatus;
 using IsCanceledFn = std::function<bool()>;
 
 /// 写入 share_store 回调 (返回 ID，失败返回 -1); 插件侧注入，测试可传 nullptr
-using StoreFn = std::function<long long(std::string_view)>;
+///
+/// **协程形态**: 写 share_store 是一次表调用，插件执行线程上只能 `co_await`，
+/// 所以回调本身也写成协程 (调用点都在组装结果的协程里)。
+using StoreFn = std::function<asio::awaitable<long long>(std::string_view)>;
 
 /// 事件驱动的命令取消注册表 (已提升至插件框架通用基础设施 agentxx::plugin::CancelRegistry)
 using CancelRegistry = agentxx::plugin::CancelRegistry;
@@ -772,7 +775,8 @@ inline void appendOutputSection(std::string& out, std::string_view mark, std::st
 /// 构造超时错误结果文本 (多行纯文本输出, 非 JSON)
 /// - 只写内容, 不写 `[Error]` 标记: 失败结果的首行由执行层统一加
 ///   (见 toolcall.cpp 的 formatToolResultText)
-inline std::string makeTimeoutResult(
+/// - 协程形态: 超限时要 `co_await` 写 share_store
+inline asio::awaitable<std::string> makeTimeoutResult(
     int            timeout,
     std::string    strout,
     std::string    strerr,
@@ -784,7 +788,7 @@ inline std::string makeTimeoutResult(
         long long id = -1;
         // 仅超限时才 offload 到 share_store
         if (storeFn && utilxx_base::utf8GetLength(strout) > kMaxStdOutUtf8Length) {
-            id = storeFn(strout);
+            id = co_await storeFn(strout);
         }
         strout = truncateStdOut(strout, id);
     }
@@ -793,7 +797,7 @@ inline std::string makeTimeoutResult(
     } else if (!strerr.empty()) {
         long long id = -1;
         if (storeFn && utilxx_base::utf8GetLength(strerr) > kMaxStdErrUtf8Length) {
-            id = storeFn(strerr);
+            id = co_await storeFn(strerr);
         }
         strerr = truncateStdErr(strerr, id);
     }
@@ -804,7 +808,7 @@ inline std::string makeTimeoutResult(
     );
     appendOutputSection(result, "StdOut", strout);
     appendOutputSection(result, "StdErr", strerr);
-    return result;
+    co_return result;
 }
 
 /// 构造 Windows tool 的子进程启动参数: 可执行文件 + argv 列表
@@ -893,7 +897,7 @@ inline asio::awaitable<ToolResult> runProcPipeline(
         const auto  exitCode = proc.exit_code();
         std::string result;
         if (timedOut.load(std::memory_order_acquire)) {
-            result = detail::makeTimeoutResult(timeout, strout, strerr, storeFn);
+            result = co_await detail::makeTimeoutResult(timeout, strout, strerr, storeFn);
         } else {
             result = fmt::format("[ExitCode]\n{}\n", exitCode);
             if (full_output || 0 != exitCode) {
@@ -905,7 +909,7 @@ inline asio::awaitable<ToolResult> runProcPipeline(
                         long long id = -1;
                         if (storeFn
                             && utilxx_base::utf8GetLength(strout) > detail::kMaxStdOutUtf8Length) {
-                            id = storeFn(strout);
+                            id = co_await storeFn(strout);
                         }
                         strout = detail::truncateStdOut(strout, id);
                     }
@@ -919,7 +923,7 @@ inline asio::awaitable<ToolResult> runProcPipeline(
                         long long id = -1;
                         if (storeFn
                             && utilxx_base::utf8GetLength(strerr) > detail::kMaxStdErrUtf8Length) {
-                            id = storeFn(strerr);
+                            id = co_await storeFn(strerr);
                         }
                         strerr = detail::truncateStdErr(strerr, id);
                     }
@@ -1218,6 +1222,8 @@ inline asio::awaitable<ToolResult> windowsExecuteAsync(
 // 执行体 —— popen 回退版 (仅 AGENTXX_ENABLE_BOOST_PROCESS 关闭时编译/注册)
 // - 阻塞实现: 只允许经 plugin_kit.h 的 tool (offload 工作线程) 注册,
 // 禁止在主程序 IO 线程 / 受控轮询协程内直接调用
+// - 拿不到 [StoreFn]: 写 share_store 是表调用, 阻塞体里做不了 (表调用只有协程
+//   形态), 因此本路径超限时只截断、提示里不带条目 id
 // - 无法指定子进程工作目录: 未给 `cwd` 时继承 agent 进程 cwd; 给了 `cwd` 时用
 //   `cd` 命令前缀切目录 (见下方 bashExecute), 无会话取消支持
 // =====================================================================
@@ -1226,7 +1232,6 @@ inline ToolResult bashExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled    = nullptr,
-    const StoreFn&           storeFn        = nullptr,
     CancelRegistry*          cancelRegistry = nullptr,
     std::string_view         sessionKey     = {}
 ) {
@@ -1282,11 +1287,7 @@ inline ToolResult bashExecute(
     utilxx_base::autoConvertToUtf8(out);
     // 手动裁剪: popen 回退同样按 stdout 限制截断 (不依赖 ToolcallNode)
     if (!out.empty()) {
-        long long id = -1;
-        if (storeFn && utilxx_base::utf8GetLength(out) > detail::kMaxStdOutUtf8Length) {
-            id = storeFn(out);
-        }
-        out = detail::truncateStdOut(out, id);
+        out = detail::truncateStdOut(out, /*storeId=*/-1);
     }
     return ToolResult::ok(std::move(out));
 }
@@ -1295,12 +1296,11 @@ inline ToolResult windowsExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled    = nullptr,
-    const StoreFn&           storeFn        = nullptr,
     CancelRegistry*          cancelRegistry = nullptr,
     std::string_view         sessionKey     = {}
 ) {
     // 无 bp::v2 时 Windows 命令同样走 popen 回退 (cmd.exe 语义由提示词引导)
-    return bashExecute(arguments, workDir, isCanceled, storeFn, cancelRegistry, sessionKey);
+    return bashExecute(arguments, workDir, isCanceled, cancelRegistry, sessionKey);
 }
 
 #endif // BOOST_PROCESS_V2_PROCESS_HPP

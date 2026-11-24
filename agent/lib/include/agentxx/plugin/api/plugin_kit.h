@@ -21,11 +21,14 @@
 #include "asio/associated_executor.hpp"
 #include "asio/async_result.hpp"
 #include "asio/awaitable.hpp"
+#include "asio/bind_cancellation_slot.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
+#include "asio/error.hpp"
 #include "asio/executor_work_guard.hpp"
 #include "asio/io_context.hpp"
 #include "asio/post.hpp"
+#include "asio/this_coro.hpp"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 #include "pluginxx/kit/kit.h"
@@ -69,7 +72,6 @@ namespace plugin {
  * 插件源码一直书写 `agentxx::plugin::Xxx`, 为保持**插件源码零改动**, 这里把插件框架通用
  * 部分的名字逐条引入本命名空间:
  * - 类型本体只有 `pluginxx` 一份 (using 声明不产生新类型, 无 ODR 风险);
- * - `agentxx::plugin::Task<T>` 与 `pluginxx::Task<T>` 是同一模板;
  * - 新增插件框架通用名字时按需在此追加一行, 引入面始终显式可读。
  *
  * 注意: 这不是"转发头"——没有 `agentxx/plugin/api/plugin_kit_core.h` 之类的路径兼容层,
@@ -79,19 +81,17 @@ namespace plugin {
 using pluginxx::ArgReader;
 using pluginxx::CanceledException;
 using pluginxx::CancelRegistry;
-using pluginxx::capability;
+using pluginxx::capabilityAsync;
 using pluginxx::ctxGuardLogger;
 using pluginxx::finishLater;
 using pluginxx::ifaceHas;
 using pluginxx::ifaceHasVersion;
-using pluginxx::invoke_cap;
 using pluginxx::Json;
 using pluginxx::jsonEscape;
 using pluginxx::JsonView;
 using pluginxx::LifecycleFinisher;
 using pluginxx::logCreateFailure;
 using pluginxx::Logger;
-using pluginxx::offload;
 using pluginxx::OpCtl;
 using pluginxx::PluginBaseT;
 using pluginxx::PluginIfaceCore;
@@ -102,17 +102,11 @@ using pluginxx::PluginStringView;
 using pluginxx::queryInterface;
 using pluginxx::RootRequest;
 using pluginxx::ScopeRef;
-using pluginxx::sleep;
+using pluginxx::sleepAsync;
 using pluginxx::spawn;
-using pluginxx::tableOp;
 using pluginxx::tableOpCallback;
-using pluginxx::tableOpSyncWait;
 using pluginxx::TableOpResult;
-using pluginxx::TableOpTicket;
-using pluginxx::Task;
 using pluginxx::validateInterface;
-using pluginxx::whenAll;
-using pluginxx::yield;
 
 namespace detail {
 
@@ -148,165 +142,13 @@ inline std::string_view textOfView(const PluginxxStringView& v) noexcept {
 /* ==================== 广播便捷入口 (插件侧) ==================== *
  * 插件面的发布 / 订阅一律走框架的 `<应用名>.broadcasts` 表
  * (取代早期的 `pluginxx.events` 事件表):
- * - `publishPluginBroadcast`: 频道不存在时先声明 (幂等) 再发布;
- * - `subscribePluginBroadcast`: 订阅 (句柄由主程序随实例回收, 不需手动释放)。
+ * - `publishPluginBroadcastAsync`: 频道不存在时先声明 (幂等) 再发布;
+ * - `subscribePluginBroadcastAsync` / `subscribePluginBroadcastExAsync`: 订阅
+ *   (句柄由主程序随实例回收, 不需手动释放)。
  *
  * 频道 id 写全名: `plugin.<插件名>.*` 可用 (`publish: owner` 时归属就是本插件),
  * `agentxx.agent.*` / `agentxx.client.*` 是主程序频道, 插件只能订阅。
  */
-
-/// 声明一条广播频道 (幂等; 已声明时保持原声明)
-///
-/// - 插件只能声明自己的频道: 短名 (`demo`) 由主程序补成 `plugin.<插件 id>.demo`,
-///   写全名 (`plugin.<插件名>.demo`) 也可以;
-/// - `agentxx.*` 是主程序频道, 插件声明会被拒 (需要时请主程序声明);
-/// - `anyonePublish` = true 时两端都能发 (跨端共享频道用)。
-/// - 订阅自己的频道前先声明它, 否则订阅会被拒 (声明是显式动作)。
-/// 广播表调用要用的取消/调度表 (阻塞形态的"能不能阻塞"判据)
-///
-/// 进程级静态数据, 按 IID 查一次即可; 广播不在热路径上, 不做缓存。
-inline std::pair<const PluginxxCancelIface*, const PluginxxSchedulerIface*>
-    broadcastCallIfaces(const PluginxxHost* host) {
-    if (!host) {
-        return {nullptr, nullptr};
-    }
-    return {
-        queryInterface<PluginxxCancelIface>(host, PLUGINXX_IFACE_CANCEL),
-        queryInterface<PluginxxSchedulerIface>(host, PLUGINXX_IFACE_SCHEDULER),
-    };
-}
-
-/// 声明一条广播频道 (**协程形态**: 调用即提交, `co_await` 拿 `TableOpResult`)
-template<typename Ctx>
-inline pluginxx::TableOpTicket declarePluginBroadcast(
-    const Ctx&       ctx,
-    std::string_view id,
-    bool             anyonePublish = false,
-    bool             cacheLatest   = true
-) {
-    const std::string decl = "{\"id\":\"" + std::string{id} + "\",\"cache\":\""
-                             + (cacheLatest ? "latest" : "none") + "\",\"publish\":\""
-                             + (anyonePublish ? "anyone" : "owner") + "\"}";
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, decl, id](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (id.empty() || !ctx.host || !ctx.iface.broadcasts
-                || !ctx.iface.broadcasts->declare_broadcast) {
-                return nullptr;
-            }
-            auto declSv = PluginStringView::from(decl.data(), decl.size());
-            return ctx.iface.broadcasts->declare_broadcast(ctx.host, &declSv, cb, ud, err);
-        }
-    );
-}
-
-inline bool declarePluginBroadcast(
-    const PluginxxHost*            host,
-    const PluginxxBroadcastsIface* broadcasts,
-    std::string_view               id,
-    bool                           anyonePublish = false,
-    bool                           cacheLatest   = true
-) {
-    if (!host || !broadcasts || !broadcasts->declare_broadcast || id.empty()) {
-        return false;
-    }
-    const std::string decl = "{\"id\":\"" + std::string{id} + "\",\"cache\":\""
-                             + (cacheLatest ? "latest" : "none") + "\",\"publish\":\""
-                             + (anyonePublish ? "anyone" : "owner") + "\"}";
-    const auto declSv = PluginStringView::from(decl.data(), decl.size());
-    const auto caps   = broadcastCallIfaces(host);
-    // 阻塞形态: 只在 create 或不跑插件代码的线程上可用 (插件执行线程上会被拒绝,
-    // 见 pluginxx/api/sync_bridge.h); 需要提交即返回时用 *NoWait 形态
-    return pluginxx::tableOpSyncWait(
-               host,
-               caps.first,
-               caps.second,
-               [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                   return broadcasts->declare_broadcast(host, &declSv, cb, ud, err);
-               }
-    )
-        .ok();
-}
-
-/// 发布一条广播 (频道不存在时自动声明; 失败只记日志并返回 false)
-///
-/// - `anyonePublish` 为 true 时声明成"任何人都能发" (跨端共享频道用)
-inline bool publishPluginBroadcast(
-    const PluginxxHost*            host,
-    const PluginxxBroadcastsIface* broadcasts,
-    std::string_view               id,
-    std::string_view               payload,
-    bool                           anyonePublish = false
-) {
-    if (!host || !broadcasts || !broadcasts->publish_broadcast || id.empty()) {
-        return false;
-    }
-    const auto idSv = PluginStringView::from(id.data(), id.size());
-    // 先声明 (已声明时主程序按幂等处理); 不关心结果 —— 应用频道不能改声明
-    declarePluginBroadcast(host, broadcasts, id, anyonePublish);
-    const auto payloadSv = PluginStringView::from(payload.data(), payload.size());
-    const auto caps      = broadcastCallIfaces(host);
-    return pluginxx::tableOpSyncWait(
-               host,
-               caps.first,
-               caps.second,
-               [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                   return broadcasts->publish_broadcast(host, &idSv, &payloadSv, cb, ud, err);
-               }
-    )
-        .ok();
-}
-
-/// 撤销一条广播订阅 (异步表的阻塞形态; 幂等)
-///
-/// `sub` 来自 [subscribePluginBroadcast]; 主程序在实例卸载时也会一并回收。
-inline bool unsubscribePluginBroadcast(
-    const PluginxxHost*            host,
-    const PluginxxBroadcastsIface* broadcasts,
-    PluginxxSubscription*          sub
-) {
-    if (!host || !broadcasts || !broadcasts->unsubscribe_broadcast || sub == nullptr) {
-        return false;
-    }
-    const auto caps = broadcastCallIfaces(host);
-    return pluginxx::tableOpSyncWait(
-               host,
-               caps.first,
-               caps.second,
-               [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                   return broadcasts->unsubscribe_broadcast(host, sub, cb, ud, err);
-               }
-    )
-        .ok();
-}
-
-/// 订阅一条广播 (返回句柄; 主程序在实例卸载时一并回收)
-inline PluginxxSubscription* subscribePluginBroadcast(
-    const PluginxxHost*            host,
-    const PluginxxBroadcastsIface* broadcasts,
-    const PluginxxScopeRef*        scope,
-    std::string_view               id,
-    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
-    void* ud
-) {
-    if (!host || !broadcasts || !broadcasts->subscribe_broadcast || id.empty() || !handler) {
-        return nullptr;
-    }
-    const auto idSv = PluginStringView::from(id.data(), id.size());
-    const auto caps = broadcastCallIfaces(host);
-    auto       op   = pluginxx::tableOpSyncWait(
-        host,
-        caps.first,
-        caps.second,
-        [&](PluginxxOperatorCallback cb, void* opUd, PluginxxString* err) {
-            return broadcasts->subscribe_broadcast(host, scope, &idSv, handler, ud, nullptr, cb,
-                                                   opUd, err);
-        }
-    );
-    // 表成员是异步契约: 订阅句柄以十进制文本放在 `payload` 里交回
-    return op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
-}
 
 /* ---- 提交即返回形态 ---- *
  *
@@ -367,6 +209,10 @@ inline bool publishPluginBroadcastNoWait(
 }
 
 /// 订阅一条广播 (**提交即返回**; 句柄由主程序随实例卸载回收)
+/// 订阅一条广播 (**提交即返回**; 只报"主程序受理了这次订阅", 拿不到句柄)
+///
+/// 订阅句柄只能经完成回调的 `payload` 交回 (v4 异步契约), 所以需要主动退订时
+/// 请用协程形态 [subscribePluginBroadcastAsync] + [subscriptionOf]。
 template<typename IdView>
 inline bool subscribePluginBroadcastNoWait(
     const PluginxxHost*            host,
@@ -407,107 +253,17 @@ inline bool unsubscribePluginBroadcastNoWait(
     return handle != nullptr;
 }
 
-/// 发布一条广播 (**协程形态**: 调用即提交, 发布前先声明频道)
-///
-/// 结果的 `.ok()` 才是"主程序受理并执行完成"; `publish` 的失败只对调用方有意义
-/// (日志由插件自己打), 主程序不会因为发布失败而中断会话。
-template<typename Ctx>
-inline pluginxx::TableOpTicket publishPluginBroadcast(
-    const Ctx&       ctx,
-    std::string_view id,
-    std::string_view payload,
-    bool             anyonePublish = false
-) {
-    // 声明本身也是提交即返回, 不等结果 (已声明时主程序按幂等处理)
-    declarePluginBroadcast(ctx, id, anyonePublish).forget();
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, id, payload](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (id.empty() || !ctx.host || !ctx.iface.broadcasts
-                || !ctx.iface.broadcasts->publish_broadcast) {
-                return nullptr;
-            }
-            auto idSv      = PluginStringView::from(id.data(), id.size());
-            auto payloadSv = PluginStringView::from(payload.data(), payload.size());
-            return ctx.iface.broadcasts->publish_broadcast(
-                ctx.host,
-                &idSv,
-                &payloadSv,
-                cb,
-                ud,
-                err
-            );
-        }
-    );
-}
-
-/// 撤销一条广播订阅 (**协程形态**; 幂等)
-template<typename Ctx>
-inline pluginxx::TableOpTicket unsubscribePluginBroadcast(
-    const Ctx&            ctx,
-    PluginxxSubscription* sub
-) {
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, sub](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (sub == nullptr || !ctx.host || !ctx.iface.broadcasts
-                || !ctx.iface.broadcasts->unsubscribe_broadcast) {
-                return nullptr;
-            }
-            return ctx.iface.broadcasts->unsubscribe_broadcast(ctx.host, sub, cb, ud, err);
-        }
-    );
-}
-
-/// 订阅一条广播 (**协程形态**: `co_await` 之后用 [subscriptionOf] 取句柄)
-template<typename Ctx>
-inline pluginxx::TableOpTicket subscribePluginBroadcast(
-    const Ctx&             ctx,
-    const PluginxxScopeRef* scope,
-    std::string_view        id,
-    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
-    void* ud
-) {
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, scope, id, handler, ud](PluginxxOperatorCallback cb,
-                                       void*                    opUd,
-                                       PluginxxString*          err)
-            -> PluginxxOperatorHandle* {
-            if (id.empty() || !handler || !ctx.host || !ctx.iface.broadcasts
-                || !ctx.iface.broadcasts->subscribe_broadcast) {
-                return nullptr;
-            }
-            auto idSv = PluginStringView::from(id.data(), id.size());
-            return ctx.iface.broadcasts->subscribe_broadcast(
-                ctx.host,
-                scope,
-                &idSv,
-                handler,
-                ud,
-                nullptr,
-                cb,
-                opUd,
-                err
-            );
-        }
-    );
-}
-
-/// 订阅句柄从表结果里取出来 (失败返回 NULL; 配合 [subscribePluginBroadcast] 的协程形态)
+/// 订阅句柄从表结果里取出来 (失败返回 NULL; 配合 [subscribePluginBroadcastAsync])
 inline PluginxxSubscription* subscriptionOf(const pluginxx::TableOpResult& result) {
     return result.ok() ? pluginxx::pluginxxSubscriptionFromText(result.text()) : nullptr;
 }
 
-/// 订阅一条广播 (扩展形态: 带频道结束回调与选项) — **协程形态**
+/// 订阅一条广播 (扩展形态; **asio 协程形态**)
 ///
-/// - `optionsJson` 形如 `{"intervalMs":100,"mode":"coalesce"}`, 空串 = 全用默认值;
-/// - `onEnd` 可选: 频道被结束 (或声明撤销) 时回调一次;
-/// - `co_await` 之后用 [subscriptionOf] 取句柄。
+/// 与 [subscribePluginBroadcastExAsync] (agentxx 侧的同名入口) 同参数,
+/// `co_await` 之后用 [subscriptionOf] 取句柄。
 template<typename Ctx>
-inline pluginxx::TableOpTicket subscribePluginBroadcastEx(
+inline asio::awaitable<pluginxx::TableOpResult> subscribePluginBroadcastExAsync(
     const Ctx&             ctx,
     const PluginxxScopeRef* scope,
     std::string_view        id,
@@ -516,18 +272,21 @@ inline pluginxx::TableOpTicket subscribePluginBroadcastEx(
     void*            ud,
     std::string_view optionsJson = {}
 ) {
+    auto channel = std::string{id};
     auto options = std::string{optionsJson};
-    return pluginxx::tableOp(
+    co_return co_await pluginxx::asyncTableOp(
         ctx,
-        [&ctx, scope, id, handler, onEnd, ud, options](PluginxxOperatorCallback cb,
-                                                      void*                    opUd,
-                                                      PluginxxString*          err)
-            -> PluginxxOperatorHandle* {
-            if (id.empty() || !handler || !ctx.host || !ctx.iface.broadcasts
+        co_await asio::this_coro::executor,
+        [&ctx, scope, channel = std::move(channel), handler, onEnd, ud, options = std::move(options)](
+            PluginxxOperatorCallback cb,
+            void*                    opUd,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            if (channel.empty() || !handler || !ctx.host || !ctx.iface.broadcasts
                 || !ctx.iface.broadcasts->subscribe_broadcast_ex) {
                 return nullptr;
             }
-            auto idSv = PluginStringView::from(id.data(), id.size());
+            auto idSv  = PluginStringView::from(channel.data(), channel.size());
             auto optSv = options.empty()
                              ? PluginxxStringView{nullptr, 0}
                              : PluginStringView::from(options.data(), options.size());
@@ -551,32 +310,20 @@ inline pluginxx::TableOpTicket subscribePluginBroadcastEx(
 ///
 /// `id` / `payload` 为跨边界视图 (插件里常见的是 `PluginStringView::fromCstr` 的产物),
 /// 内部零拷贝转成 `string_view`。
-inline bool publishPluginBroadcast(
+inline bool publishPluginBroadcastNoWait(
     const PluginxxHost*            host,
     const PluginxxBroadcastsIface* broadcasts,
     const PluginxxStringView&      id,
     const PluginxxStringView&      payload,
     bool                           anyonePublish = false
 ) {
-    return publishPluginBroadcast(
+    return publishPluginBroadcastNoWait(
         host,
         broadcasts,
         PluginStringView::str(id),
         PluginStringView::str(payload),
         anyonePublish
     );
-}
-
-/// 订阅一条广播 (ABI 视图形态; 与 `string_view` 版同义)
-inline PluginxxSubscription* subscribePluginBroadcast(
-    const PluginxxHost*            host,
-    const PluginxxBroadcastsIface* broadcasts,
-    const PluginxxScopeRef*        scope,
-    const PluginxxStringView&      id,
-    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
-    void* ud
-) {
-    return subscribePluginBroadcast(host, broadcasts, scope, PluginStringView::str(id), handler, ud);
 }
 
 /* ==================== 网络便捷入口 (插件侧) ====================
@@ -629,34 +376,19 @@ struct NetResult {
  */
 namespace detail {
 
-using pluginxx::detail::advanceRootOnce;
 using pluginxx::detail::autoStopSpawns;
 using pluginxx::detail::AwaiterState;
-using pluginxx::detail::BridgeRoot;
 using pluginxx::detail::callLifecycleEntry;
 using pluginxx::detail::callLifecycleEntryVoid;
 using pluginxx::detail::CompletionGuard;
 using pluginxx::detail::createInstanceEntry;
 using pluginxx::detail::destroyInstanceEntry;
-using pluginxx::detail::destroyBridgeFrame;
-using pluginxx::detail::finishIfDone;
 using pluginxx::detail::invokeCap;
-using pluginxx::detail::InvokeCapAwaiter;
-using pluginxx::detail::InvokeCapState;
 using pluginxx::detail::jsonGet;
 using pluginxx::detail::notifyLifecycleFailure;
-using pluginxx::detail::OffloadState;
-using pluginxx::detail::OffloadTicket;
 using pluginxx::detail::PolledRoot;
 using pluginxx::detail::PollOneBridge;
-using pluginxx::detail::PromiseBase;
-using pluginxx::detail::resumePluginCoroutine;
 using pluginxx::detail::RootRequest;
-using pluginxx::detail::SleepState;
-using pluginxx::detail::SleepTicket;
-using pluginxx::detail::spawnTaskImpl;
-using pluginxx::detail::startBridgedRoot;
-using pluginxx::detail::YieldAwaiter;
 
 /// 手写 create 入口的公共实现: 构造上下文 (**可重入**) → 业务初始化 → 注册事务
 ///
@@ -772,7 +504,7 @@ inline void createCtxEntry(
             const PluginxxOperatorNotify done = *notify; // 借用指针: 按值持有到任务结束
             CreateType createCopy(std::forward<CreateFn>(create));
             ctx->spawn([host, done, createCopy = std::move(createCopy), runCreate](
-                           CtxType& instance, OpCtl&) mutable -> Task<void> {
+                           CtxType& instance, OpCtl&) mutable -> asio::awaitable<void> {
                 try {
                     co_await instance.onHostReady();
                     // 注册事务可能在内部发起异步工作 (finishLater), 自己完成通知;
@@ -836,4 +568,3 @@ using namespace ::pluginxx::ui;
 
 } // namespace ui
 } // namespace agentxx
-

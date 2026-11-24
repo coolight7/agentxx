@@ -1398,7 +1398,6 @@ asio::awaitable<void> test_command_cancel_registry_preCanceled(
         args,
         agentxx::tools::testResolvedWorkDir(agentContext),
         /*isCanceled=*/nullptr,
-        /*storeFn=*/nullptr,
         &reg,
         "preCanceled_sess"
     );

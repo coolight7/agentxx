@@ -35,7 +35,7 @@ struct PluginCtx : public agentxx::plugin::PluginBase {
     std::string                                                 projectRoot;
 };
 
-static pluginxx::Task<HostConfig> readHostConfigAsync(PluginCtx& ctx) {
+static asio::awaitable<HostConfig> readHostConfigAsync(PluginCtx& ctx) {
     HostConfig          cfg;
     const PluginxxHost* host = ctx.host;
     if (!host || !ctx.iface.config) {
@@ -43,7 +43,7 @@ static pluginxx::Task<HostConfig> readHostConfigAsync(PluginCtx& ctx) {
     }
     // 表成员是异步操作契约: 提交 + co_await (create 跑在插件执行线程, 不能同步等)
     if (ctx.iface.config->get_config) {
-        auto r = co_await pluginxx::tableOp(
+        auto r = co_await tableOpAsync(
             ctx,
             [host, &ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return ctx.iface.config->get_config(host, cb, ud, err);
@@ -57,7 +57,7 @@ static pluginxx::Task<HostConfig> readHostConfigAsync(PluginCtx& ctx) {
         }
     }
     if (ctx.iface.config->get_plugin_args) {
-        auto r = co_await pluginxx::tableOp(
+        auto r = co_await tableOpAsync(
             ctx,
             [host, &ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return ctx.iface.config->get_plugin_args(host, cb, ud, err);
@@ -150,7 +150,7 @@ Workflow: use `search` to resolve the exact symbol name, then `context`/`callers
 )_";
 
 /// 注入系统提示词段 (**协程形态**: 调用即提交, 结果里才知道写没写成)
-static pluginxx::Task<void>
+static asio::awaitable<void>
     injectCodegraphSystemPrompt(PluginCtx& ctx, agentxx::plugin::ScopeRef ref) {
     if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->set_prompt) {
         co_return;
@@ -160,7 +160,7 @@ static pluginxx::Task<void>
     append["codegraph"]      = std::string(kSystemCodegraphPrompt);
     j["appendSystemPrompts"] = append;
     std::string payload      = j.dump();
-    auto        r            = co_await agentxx::plugin::setPromptJson(ctx, ref.ptr(), payload);
+    auto        r            = co_await agentxx::plugin::setPromptJsonAsync(ctx, ref.ptr(), payload);
     if (!r.ok()) {
         pluginLog(
             ctx.host,
@@ -185,13 +185,13 @@ static pluginxx::Task<void>
 /// 把五个工具的描述补进主程序提示词表 (已有条目不覆盖)
 /// - **协程形态**: 先读当前提示词 JSON, 再写回本实例的贡献
 /// - 主程序按所有者记录贡献, 插件卸载/禁用时自动撤销
-static pluginxx::Task<void>
+static asio::awaitable<void>
     ensureToolPromptsInHost(PluginCtx& ctx, agentxx::plugin::ScopeRef ref) {
     if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->get_prompt
         || !ctx.iface.prompt->set_prompt) {
         co_return;
     }
-    auto readResult = co_await agentxx::plugin::promptJson(ctx, ref.ptr());
+    auto readResult = co_await agentxx::plugin::promptJsonAsync(ctx, ref.ptr());
     if (!readResult.ok() || readResult.text().empty()) {
         co_return;
     }
@@ -249,7 +249,7 @@ static pluginxx::Task<void>
     }
     patch["toolPrompt"] = tools;
     std::string payload = patch.dump();
-    auto        wr      = co_await agentxx::plugin::setPromptJson(ctx, ref.ptr(), payload);
+    auto        wr      = co_await agentxx::plugin::setPromptJsonAsync(ctx, ref.ptr(), payload);
     if (!wr.ok()) {
         pluginLog(
             ctx.host,
@@ -487,25 +487,25 @@ struct SchemaBuilder {
 
 /// 注册五个查询工具 (**协程形态**)
 /// - 每个注册都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到失败原因
-static pluginxx::Task<void>
+static asio::awaitable<void>
     registerAllTools(PluginCtx& ctx, agentxx::plugin::ScopeRef ref) {
     constexpr int kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
     // agentxx_codegraph_search
     {
-        auto          p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_codegraph_search");
+        auto          p      = co_await toolPromptOfAsync(ctx, "agentxx_codegraph_search");
         const auto    def    = defaultToolPrompt("agentxx_codegraph_search");
         std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
         b.str("query", p.args.contains("query") ? p.args["query"] : def.query);
         b.integer("limit", p.args.contains("limit") ? p.args["limit"] : def.limit, 20);
-        co_await agentxx::plugin::tool(
+        co_await toolAsync(
             ctx,
             ref,
             "agentxx_codegraph_search",
             depict,
             b.dump({"query"}),
-            [](PluginCtx& c, std::string_view args_json) -> std::string {
+            agentxx::plugin::onWorkerAsync([](PluginCtx& c, std::string_view args_json) -> std::string {
                 agentxx::plugin::ArgReader args(args_json);
                 std::string                query = args.value<std::string>("query", std::string{});
                 if (query.empty()) {
@@ -540,7 +540,7 @@ static pluginxx::Task<void>
                 }
                 out += indexFooter(c.mgr.get(), r.nodes.empty());
                 return out;
-            },
+            }),
             0,
             kAutoSummary
         );
@@ -548,7 +548,7 @@ static pluginxx::Task<void>
 
     // agentxx_codegraph_context
     {
-        auto          p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_codegraph_context");
+        auto          p      = co_await toolPromptOfAsync(ctx, "agentxx_codegraph_context");
         const auto    def    = defaultToolPrompt("agentxx_codegraph_context");
         std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
@@ -559,13 +559,13 @@ static pluginxx::Task<void>
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             3
         );
-        co_await agentxx::plugin::tool(
+        co_await toolAsync(
             ctx,
             ref,
             "agentxx_codegraph_context",
             depict,
             b.dump({"symbol"}),
-            [](PluginCtx& c, std::string_view args_json) -> std::string {
+            agentxx::plugin::onWorkerAsync([](PluginCtx& c, std::string_view args_json) -> std::string {
                 agentxx::plugin::ArgReader args(args_json);
                 std::string symbol = args.value<std::string>("symbol", std::string{});
                 if (symbol.empty()) {
@@ -584,7 +584,7 @@ static pluginxx::Task<void>
                     };
                 }
                 return contextToText(r.context, c.mgr.get());
-            },
+            }),
             0,
             kAutoSummary
         );
@@ -592,7 +592,7 @@ static pluginxx::Task<void>
 
     // agentxx_codegraph_callers
     {
-        auto          p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_codegraph_callers");
+        auto          p      = co_await toolPromptOfAsync(ctx, "agentxx_codegraph_callers");
         const auto    def    = defaultToolPrompt("agentxx_codegraph_callers");
         std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
@@ -602,13 +602,13 @@ static pluginxx::Task<void>
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             3
         );
-        co_await agentxx::plugin::tool(
+        co_await toolAsync(
             ctx,
             ref,
             "agentxx_codegraph_callers",
             depict,
             b.dump({"symbol"}),
-            [](PluginCtx& c, std::string_view args_json) -> std::string {
+            agentxx::plugin::onWorkerAsync([](PluginCtx& c, std::string_view args_json) -> std::string {
                 agentxx::plugin::ArgReader args(args_json);
                 std::string symbol = args.value<std::string>("symbol", std::string{});
                 if (symbol.empty()) {
@@ -622,7 +622,7 @@ static pluginxx::Task<void>
                     };
                 }
                 return impactToText("Callers", r.impact, c.mgr.get());
-            },
+            }),
             0,
             kAutoSummary
         );
@@ -630,7 +630,7 @@ static pluginxx::Task<void>
 
     // agentxx_codegraph_callees
     {
-        auto          p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_codegraph_callees");
+        auto          p      = co_await toolPromptOfAsync(ctx, "agentxx_codegraph_callees");
         const auto    def    = defaultToolPrompt("agentxx_codegraph_callees");
         std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
@@ -640,13 +640,13 @@ static pluginxx::Task<void>
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             3
         );
-        co_await agentxx::plugin::tool(
+        co_await toolAsync(
             ctx,
             ref,
             "agentxx_codegraph_callees",
             depict,
             b.dump({"symbol"}),
-            [](PluginCtx& c, std::string_view args_json) -> std::string {
+            agentxx::plugin::onWorkerAsync([](PluginCtx& c, std::string_view args_json) -> std::string {
                 agentxx::plugin::ArgReader args(args_json);
                 std::string symbol = args.value<std::string>("symbol", std::string{});
                 if (symbol.empty()) {
@@ -660,7 +660,7 @@ static pluginxx::Task<void>
                     };
                 }
                 return impactToText("Callees", r.impact, c.mgr.get());
-            },
+            }),
             0,
             kAutoSummary
         );
@@ -668,7 +668,7 @@ static pluginxx::Task<void>
 
     // agentxx_codegraph_path
     {
-        auto          p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_codegraph_path");
+        auto          p      = co_await toolPromptOfAsync(ctx, "agentxx_codegraph_path");
         const auto    def    = defaultToolPrompt("agentxx_codegraph_path");
         std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
@@ -679,13 +679,13 @@ static pluginxx::Task<void>
             p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
             10
         );
-        co_await agentxx::plugin::tool(
+        co_await toolAsync(
             ctx,
             ref,
             "agentxx_codegraph_path",
             depict,
             b.dump({"from", "to"}),
-            [](PluginCtx& c, std::string_view args_json) -> std::string {
+            agentxx::plugin::onWorkerAsync([](PluginCtx& c, std::string_view args_json) -> std::string {
                 agentxx::plugin::ArgReader args(args_json);
                 std::string                from = args.value<std::string>("from", std::string{});
                 std::string                to   = args.value<std::string>("to", std::string{});
@@ -721,7 +721,7 @@ static pluginxx::Task<void>
                 }
                 out += indexFooter(c.mgr.get(), r.path.empty());
                 return out;
-            },
+            }),
             0,
             kAutoSummary
         );
@@ -821,7 +821,7 @@ using namespace agentxx_codegraph_plugin;
 ///
 /// 接口存在性校验放在 createCtxEntry 的 check 里 (同步、不碰表), 这里只做需要
 /// co_await 的配置读取与本地初始化。
-static pluginxx::Task<std::string> codegraphInit(PluginCtx& ctx) {
+static asio::awaitable<std::string> codegraphInit(PluginCtx& ctx) {
     auto cfg = co_await readHostConfigAsync(ctx);
     if (cfg.dataDir.empty()) {
         pluginLog(ctx.host, ctx.iface.log, 3, "agentxx_codegraph: dataDir not set, skip tools");
@@ -912,7 +912,7 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
         [](PluginCtx& ctx, const PluginxxOperatorNotify* n, PluginxxString*) {
             // 配置读取 / 索引库初始化 / 进程级启动工作都经协程: 完成通知随之异步发出
             auto later = agentxx::plugin::finishLater(n);
-            ctx.spawn([later](PluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+            ctx.spawn([later](PluginCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
                 try {
                     auto reason = co_await codegraphInit(c);
                     if (!reason.empty()) {
@@ -939,7 +939,7 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
 ///   (与迁移前 create 的降级行为一致)。
 /// - 每条注册都 `co_await` 完再继续: 登记本身已经生效, 等结果只为了拿到失败原因;
 ///   `co_await` 期间不占线程 (主程序在 IO 线程上是内联完成的, 不会多一次等待)
-static pluginxx::Task<void>
+static asio::awaitable<void>
     codegraphAgentMountSetup(PluginCtx& ctx, agentxx::plugin::ScopeRef ref) {
     if (!ctx.mgr) {
         co_return;
@@ -949,7 +949,7 @@ static pluginxx::Task<void>
     co_await registerAllTools(ctx, ref);
 
     if (ctx.iface.broadcasts) {
-        co_await agentxx::plugin::subscribePluginBroadcast(
+        co_await subscribePluginBroadcastAsync(
             ctx,
             ref.ptr(),
             "agentxx.agent.host.client_attached",
@@ -969,13 +969,13 @@ static int codegraphAgentStartSetup(PluginCtx& ctx) {
         return 0;
     }
 
-    ctx.spawn([](PluginCtx& c, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<void> {
-        co_await agentxx::plugin::sleep(c, 2000);
+    ctx.spawn([](PluginCtx& c, agentxx::plugin::OpCtl ctl) -> asio::awaitable<void> {
+        co_await sleepAsync(c, 2000);
         if (ctl.canceled()) {
             co_return;
         }
         const auto startedAt = std::chrono::steady_clock::now();
-        const bool ok = co_await agentxx::plugin::offload(c, [&c](const PluginxxCancelToken*) {
+        const bool ok = co_await offloadAsync(c, [&c](const PluginxxCancelToken*) {
             return c.mgr->updateIndex();
         });
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1032,7 +1032,7 @@ static void* codegraphAgentMount(
     auto later = agentxx::plugin::finishLater(notify);
     // 注册事务交给协程: 工具/prompt/订阅逐条"提交 + co_await", 全部生效后再放行挂载
     const agentxx::plugin::AgentRef agentRef(*spec);
-    ctx.spawn([later, agentRef](PluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](PluginCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
         try {
             co_await codegraphAgentMountSetup(c, agentRef);
             later.ok();
@@ -1249,7 +1249,7 @@ extern "C" PLUGINXX_EXPORT void agentxx_client_plugin_create(
 }
 
 /// client 侧注册事务 (协程): Info 段落 + 两条跨端数据订阅
-static pluginxx::Task<void> codegraphClientSetupAsync(ClientCtx& ctx) {
+static asio::awaitable<void> codegraphClientSetupAsync(ClientCtx& ctx) {
     const PluginxxHost* host = ctx.host;
     const auto          ui   = ctx.ui;
     if (ui && ui->register_info_section) {
@@ -1326,7 +1326,7 @@ static void codegraphClientStart(
         return;
     }
     auto later = agentxx::plugin::finishLater(notify);
-    ctx.spawn([later](ClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later](ClientCtx& c, pluginxx::OpCtl&) -> asio::awaitable<void> {
         try {
             co_await codegraphClientSetupAsync(c);
         } catch (const std::exception& e) {

@@ -78,7 +78,7 @@ struct RagAgentState {
 
 /// 挂载事务 (mount 的实际内容): 读取配置、构建索引并注册检索工具 (**协程形态**)
 /// - 表调用 (读模型配置/注册工具) 都是“提交 + `co_await`”
-static pluginxx::Task<void> ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
+static asio::awaitable<void> ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
     if (!ctx.iface.model || !ctx.iface.model->get_config) {
         ctx.log.warn(fmt::format(
             "agentxx_rag_search: host model iface unavailable, `{}` not registered",
@@ -86,7 +86,7 @@ static pluginxx::Task<void> ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
         ));
         co_return;
     }
-    auto cfgResult = co_await modelConfigJson(ctx, st.ref.ptr());
+    auto cfgResult = co_await modelConfigJsonAsync(ctx, st.ref.ptr());
     utilxx_base::Json cfg;
     bool              hasCfg = false;
     if (cfgResult.ok() && !cfgResult.text().empty()) {
@@ -128,7 +128,7 @@ static pluginxx::Task<void> ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
         co_return;
     }
 
-    auto schema = (co_await schemaOf(ctx, kNameSearch))
+    auto schema = (co_await schemaOfAsync(ctx, kNameSearch))
                       .string(
                           "query",
                           "Search query to find relevant documents.",
@@ -142,13 +142,13 @@ static pluginxx::Task<void> ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
                       )
                       .build();
 
-    co_await tool(
+    co_await toolAsync(
         ctx,
         st.ref,
         kNameSearch,
         kDepictSearch,
         schema,
-        [&st](RagPluginCtx& c, std::string_view args_json, const PluginxxCancelToken* cancel_token
+        agentxx::plugin::onWorkerAsync([&st](RagPluginCtx& c, std::string_view args_json, const PluginxxCancelToken* cancel_token
         ) -> agentxx::plugin::ToolResult {
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CanceledException("rag_search Canceled");
@@ -193,7 +193,7 @@ static pluginxx::Task<void> ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
                 });
             }
             return agentxx::plugin::ToolResult::ok(output.dump(2));
-        },
+        }),
         0,
         kAutoSummary
     );
@@ -231,7 +231,7 @@ static void* ragMount(
     auto* st   = new RagAgentState{AgentRef(*spec), nullptr};
     auto  later = finishLater(notify);
     // 配置读取/索引构建/工具注册逐条“提交 + co_await”; 完成通知经 later 异步发出
-    ctx.spawn([later, st](RagPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, st](RagPluginCtx& c, OpCtl&) -> asio::awaitable<void> {
         try {
             co_await ragSetup(c, *st);
             later.ok();

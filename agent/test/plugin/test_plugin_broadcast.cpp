@@ -14,6 +14,7 @@
 /// 6. 生命周期: 禁用/卸载后频道与订阅回到基线
 #include "agentxx-test/plugin/test_plugin_broadcast.h"
 #include "agentxx-test/plugin/plugin_thread_fixture.h"
+#include "agentxx-test/plugin/test_table_op.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
@@ -150,16 +151,17 @@ const PluginxxBroadcastsIface* broadcastTableOf(PluginInstance* inst) {
     );
 }
 
-/// 一次广播表调用 (阻塞形态)
+/// 一次广播表调用 (等结果)
 ///
-/// 表成员是异步操作契约: 用例跑在主程序 IO 线程上, 主程序内联完成, 不产生等待。
+/// 表成员是异步操作契约: 用例跑在主程序 IO 线程上, 这里用测试专用的
+/// [agentxx::test::tableOpWait] 换取同步形状 (提交 + 完成回调 + 条件变量)。
 /// 失败细节在结果正文里 (例如 `read_broadcast: no_value`), 因此下面的便捷入口把它
 /// 记进 [gLastBroadcastReason], 供断言检查具体原因。
 template<typename Fn>
 pluginxx::detail::TableOpResult broadcastOp(PluginInstance* inst, Fn&& start) {
     const auto* host   = inst->hostView();
     const auto  ifaces = agentxx::plugin::AgentIfaces::query(host);
-    return pluginxx::tableOpSyncWait(
+    return agentxx::test::tableOpWait(
         host,
         ifaces.cancel,
         ifaces.scheduler,

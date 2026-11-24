@@ -190,11 +190,11 @@ std::string planningFileName(const std::string& tid) {
 /// 主程序数据目录 (AgentConfig dataDir; 经 agentxx.agent.config 接口表)
 /// - **协程形态**: 表成员是“提交 + co_await”, 插件执行线程上不能同步等;
 ///   结果写进 `ctx.dataDir` 缓存, 之后的回调 (工具/事件) 不再调表
-pluginxx::Task<void> resolveDataDirAsync(PluginCtx& ctx) {
+asio::awaitable<void> resolveDataDirAsync(PluginCtx& ctx) {
     if (!ctx.host || !ctx.iface.config || !ctx.iface.config->get_config) {
         co_return;
     }
-    auto r = co_await pluginxx::tableOp(
+    auto r = co_await tableOpAsync(
         ctx,
         [&ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return ctx.iface.config->get_config(ctx.host, cb, ud, err);
@@ -368,7 +368,7 @@ extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* o
 /// 挂载事务 (mount 的实际内容): prompt 贡献 + 规划工具注册 + client_attached 订阅 (**协程形态**)。
 /// - `ref` 为本次挂载的 agent 引用, 提示词/工具/订阅都记在该 agent 名下
 /// - 每条登记都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到失败原因
-static pluginxx::Task<void>
+static asio::awaitable<void>
     planningSetup(PluginCtx* ctx, agentxx::plugin::AgentRef ref) {
     const PluginxxHost* host = ctx->host;
     // 数据目录先读一次并缓存: 后面的工具回调与事件回调里不能再同步等表调用
@@ -392,7 +392,7 @@ static pluginxx::Task<void>
         j["toolPrompt"]                        = std::move(toolPrompt);
 
         std::string js = j.dump();
-        auto        wr = co_await agentxx::plugin::setPromptJson(*ctx, ref.ptr(), js);
+        auto        wr = co_await agentxx::plugin::setPromptJsonAsync(*ctx, ref.ptr(), js);
         if (!wr.ok()) {
             pluginLog(
                 ctx,
@@ -415,7 +415,7 @@ static pluginxx::Task<void>
 
     {
         std::string schema
-            = (co_await agentxx::plugin::schemaOf(*ctx, kNamePlanning))
+            = (co_await schemaOfAsync(*ctx, kNamePlanning))
                   .enumString(
                       "mode",
                       kArgModeDesc,
@@ -449,13 +449,13 @@ static pluginxx::Task<void>
                   .string("notes", kArgNotesDesc)
                   .build();
 
-        co_await agentxx::plugin::tool(
+        co_await toolAsync(
             *ctx,
             ref,
             kNamePlanning,
             kDepictPlanning,
             schema,
-            [](PluginCtx& c, std::string_view args_json, std::string_view thread_id
+            agentxx::plugin::onWorkerAsync([](PluginCtx& c, std::string_view args_json, std::string_view thread_id
             ) -> std::string {
                 std::string argsStr(args_json.data() ? args_json.data() : "", args_json.size());
                 auto        arguments = argsStr.empty() ? utilxx_base::Json::object()
@@ -532,7 +532,7 @@ static pluginxx::Task<void>
                 publishPlanningEvent(c, planJson);
 
                 return "success";
-            },
+            }),
             0,
             kRepeatCheck
         );
@@ -540,7 +540,7 @@ static pluginxx::Task<void>
 
     // 主程序约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
     if (ctx->iface.broadcasts) {
-        auto subResult = co_await agentxx::plugin::subscribePluginBroadcast(
+        auto subResult = co_await subscribePluginBroadcastAsync(
             *ctx,
             ref.ptr(),
             "agentxx.agent.host.client_attached",
@@ -622,7 +622,7 @@ extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_agent_plugin_mount(
             auto later = agentxx::plugin::finishLater(notify);
             // 注册事务交给协程: 提示词/工具/订阅逐条“提交 + co_await”, 全部生效后再放行挂载
             const agentxx::plugin::AgentRef agentRef(*spec);
-            ctx->spawn([later, agentRef](PluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+            ctx->spawn([later, agentRef](PluginCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
                 try {
                     co_await planningSetup(&c, agentRef);
                     later.ok();

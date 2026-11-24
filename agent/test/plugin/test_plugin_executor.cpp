@@ -28,7 +28,6 @@
 #include "pluginxx/runtime/driver.h"
 #include "pluginxx/runtime/op_driver.h"
 #include "pluginxx/runtime/plugin_thread.h"
-#include "pluginxx/api/sync_bridge.h"
 #include "pluginxx/host/table_op.h"
 #include "utilxx_base/log.h"
 
@@ -700,185 +699,6 @@ asio::awaitable<void> test_js_engine_on_plugin_thread() {
     co_return;
 }
 
-// =====================================================================
-// 9. 同步桥: 插件执行线程同步等 io, 完成回调在完成线程就地调用
-// =====================================================================
-
-/// 完成回调 / 同步桥唤醒体的观测点
-struct SyncWakeBox {
-    std::atomic<std::thread::id> thread{};                ///< 回调所在线程
-    std::atomic<int32_t>         status{PLUGINXX_OPERATOR_FAILED};
-    std::atomic<int>             hits{0};                 ///< 调用次数
-    std::string                  text;                    ///< 结果正文 (完成后读)
-    Latch*                       latch = nullptr;         ///< 插件线程在这里等 (可空)
-};
-
-/// 记录一次完成回调 (普通回调与同步桥唤醒体同一个函数, 只看它跑在哪条线程上)
-void PLUGINXX_CALL recordSyncWake(
-    void*                     ud,
-    int32_t                   status,
-    const PluginxxStringView* payload
-) {
-    auto* box = static_cast<SyncWakeBox*>(ud);
-    if (box == nullptr) {
-        return;
-    }
-    if (payload && payload->data && payload->size > 0) {
-        box->text.assign(payload->data, static_cast<size_t>(payload->size));
-    }
-    box->status.store(status);
-    box->thread.store(std::this_thread::get_id());
-    box->hits.fetch_add(1, std::memory_order_release);
-    if (box->latch) {
-        box->latch->signal();
-    }
-}
-
-asio::awaitable<void> test_sync_bridge() {
-    // 9.1 标记只对同步桥的包装回调成立; 调用后包装块释放 (不崩、不重复调用)
-    {
-        struct Probe {
-            int hits = 0;
-        } probe;
-        int plain = 0;
-        XX_TEST_EXPECT_FALSE(pluginxx::isSyncBridgeCallback(nullptr));
-        XX_TEST_EXPECT_FALSE(pluginxx::isSyncBridgeCallback(&plain));
-
-        auto* bridge = new pluginxx::SyncBridgeCallback();
-        bridge->fn   = +[](void* ud, int32_t, const PluginxxStringView*) {
-            ++static_cast<Probe*>(ud)->hits;
-        };
-        bridge->ud = &probe;
-        XX_TEST_EXPECT_TRUE(pluginxx::isSyncBridgeCallback(bridge));
-        pluginxx::invokeSyncBridge(bridge, PLUGINXX_OPERATOR_OK, nullptr);
-        XX_TEST_EXPECT_EQ(probe.hits, 1);
-    }
-
-    Fixture f;
-    if (!co_await f.start()) {
-        XX_TEST_EXPECT_TRUE(false);
-        co_return;
-    }
-    const auto ioThreadId = std::this_thread::get_id();
-    XX_TEST_EXPECT_TRUE(f.mgr->hasPluginExecutor());
-
-    // 9.2 普通完成回调: 配了插件执行器时投到插件线程
-    {
-        SyncWakeBox box;
-        auto        core = pluginxx::OpCore::createDetached(
-            f.mgr->runtime(),
-            "plugin_executor: 普通完成回调",
-            f.inst
-        );
-        core->setCallback(&recordSyncWake, &box);
-        core->accept();
-        const std::string        body = "callback-ok";
-        const PluginxxStringView view{body.data(), static_cast<uint64_t>(body.size())};
-        pluginxx::OpCore::onDoneCore(core.get(), PLUGINXX_OPERATOR_OK, &view);
-        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
-            return box.hits.load() == 1;
-        }));
-        XX_TEST_EXPECT_TRUE(core->completed());
-        // 插件回调是插件代码: 必须落在插件线程上
-        XX_TEST_EXPECT_TRUE(box.thread.load() == f.pluginThreadId.load());
-        XX_TEST_EXPECT_EQ(box.text, std::string{"callback-ok"});
-    }
-
-    // 9.3 同步桥: 插件线程上起一次表操作并真等它 —— 唤醒体在 io 线程就地跑
-    //
-    // 若唤醒体被投回插件线程 (旧行为), 插件线程正在 `latch.wait` 等它, 就成了自己
-    // 等自己: 本组会在 5s 超时后失败。
-    {
-        SyncWakeBox       box;
-        Latch             latch;
-        box.latch         = &latch;
-        std::atomic<bool> pluginRan{false};
-        std::atomic<bool> accepted{false};
-        const bool        queued = pluginxx::dispatchToPlugin(
-            f.inst,
-            "plugin_executor: 同步等 io",
-            [&] {
-                pluginRan.store(true);
-                auto* bridge = new pluginxx::SyncBridgeCallback();
-                bridge->fn   = &recordSyncWake;
-                bridge->ud   = &box;
-                auto* handle = pluginxx::startTableOp(
-                    f.mgr.get(),
-                    &pluginxx::invokeSyncBridge,
-                    bridge,
-                    nullptr,
-                    "plugin_executor: sync wait",
-                    []() -> std::string {
-                        return std::string{"table-ok"};
-                    },
-                    f.inst
-                );
-                accepted.store(handle != nullptr);
-                // 插件线程真等完成回调 (只等这一件事, 不跑任何插件业务)
-                box.latch->wait(5000);
-            },
-            pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
-        );
-        XX_TEST_EXPECT_TRUE(queued);
-        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
-            return pluginRan.load();
-        }));
-        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
-            return accepted.load();
-        }));
-        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
-            return box.hits.load() == 1;
-        }));
-        // 唤醒体在完成线程 (io) 上就地调用 —— 不是插件线程
-        XX_TEST_EXPECT_TRUE(box.thread.load() == ioThreadId);
-        XX_TEST_EXPECT_EQ(static_cast<int>(box.status.load()), int32_t{PLUGINXX_OPERATOR_OK});
-        XX_TEST_EXPECT_EQ(box.text, std::string{"table-ok"});
-    }
-
-    // 9.4 插件执行线程上默认拒绝等待: 直接回原因文本, 不把线程挂住
-    //
-    // kit 的全部入口都用默认策略 (refuseOnPluginThread): 插件线程上调表只提交、不等结果，
-    // 拿不到就带原因返回。这里用一个“受理但永不完成”的表操作验证不会卡住。
-    {
-        static PluginxxSchedulerIface fakeScheduler{};
-        fakeScheduler.is_io_thread = +[](const PluginxxHost*) -> int32_t { return 1; };
-
-        std::atomic<bool> ran{false};
-        std::atomic<int>  accepted{-1};
-        std::string       startError;
-        const bool        queued = pluginxx::dispatchToPlugin(
-            f.inst,
-            "plugin_executor: 拒绝同步等待",
-            [&] {
-                ran.store(true);
-                auto res = pluginxx::tableOpSyncWait(
-                    static_cast<const PluginxxHost*>(nullptr),
-                    nullptr,
-                    &fakeScheduler,
-                    [](PluginxxOperatorCallback, void*, PluginxxString*)
-                        -> PluginxxOperatorHandle* {
-                        // 受理但永不完成: 真等就会挂住这条线程
-                        return reinterpret_cast<PluginxxOperatorHandle*>(
-                            static_cast<intptr_t>(1)
-                        );
-                    }
-                );
-                accepted.store(res.accepted() ? 1 : 0);
-                startError = std::string{res.startError};
-            },
-            pluginxx::PluginDispatchOptions{.allowClosing = true, .measure = false}
-        );
-        XX_TEST_EXPECT_TRUE(queued);
-        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
-            return ran.load();
-        }));
-        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
-            return accepted.load() >= 0;
-        }));
-        XX_TEST_EXPECT_EQ(accepted.load(), 0);
-        XX_TEST_EXPECT_TRUE(startError.find("plugin execution thread") != std::string::npos);
-    }
-}
 
 } // namespace
 
@@ -895,7 +715,6 @@ asio::awaitable<TestResult> run_plugin_executor_tests() {
     co_await test_executor_stopped();
     co_await test_real_host_js_engine_start();
     co_await test_js_engine_on_plugin_thread();
-    co_await test_sync_bridge();
 
     result.passed = g_pe_passed;
     result.failed = g_pe_failed;

@@ -11,7 +11,8 @@
 /// - 配置校验: 每种非法配置给出预期错误
 /// - 侧边栏「机器人」栏: 快照 JSON 往返 / 展示文案 / 组件树 (加载帧与排队数)
 ///
-/// 这些函数不碰网络也不碰主程序, 因此本模块是同步的 (不 co_await)。
+/// 这些函数不碰网络也不碰主程序; 只有 `ChatbotRouter::acquire` 是协程
+/// (懒创建要开通道), 用例用本地 `io_context` 跑完 (见 `acquireOf`), 其余仍同步。
 #include "agentxx-test/core/test_chatbot_core.h"
 
 #include "agentxx_chatbot/chatbot_config.h"
@@ -23,9 +24,13 @@
 #include "agentxx_chatbot/chatbot_time.h"
 #include "agentxx_chatbot/chatbot_types.h"
 
+#include "asio/awaitable.hpp"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -56,6 +61,34 @@ size_t totalCodePoints(const std::vector<std::string>& parts) {
 
 bool contains(const std::string& haystack, std::string_view needle) {
     return haystack.find(needle) != std::string::npos;
+}
+
+/// 协程体: 参数按值复制进帧 (临时闭包不能直接当协程体)
+template<typename T>
+asio::awaitable<void> runInto(asio::awaitable<T> call, std::optional<T>* out) {
+    *out = co_await std::move(call);
+}
+
+/// 在本地 io_context 上把协程跑完并取结果 (开通道的 hook 不挂起, `run()` 直接跑完)
+template<typename T>
+T runAwaitable(asio::awaitable<T> call) {
+    asio::io_context io;
+    std::optional<T> out;
+    asio::co_spawn(io, runInto(std::move(call), &out), asio::detached);
+    io.run();
+    return std::move(*out);
+}
+
+/// 取通道 (等协程结果)
+int64_t acquireOf(
+    ChatbotRouter&      router,
+    const ChatKey&      key,
+    const RouteResult&  route,
+    std::string         chatTitle,
+    uint64_t            seq,
+    std::string&        err
+) {
+    return runAwaitable(router.acquire(key, route, chatTitle, seq, err));
 }
 
 /* ==================== UTF-8 与文本规整 ==================== */
@@ -1293,9 +1326,9 @@ void testRouterQuota() {
                      std::string_view,
                      std::string_view,
                      std::string_view
-                 ) -> int64_t {
+                 ) -> asio::awaitable<int64_t> {
         ++opened;
-        return ++nextChannel;
+        co_return ++nextChannel;
     };
     hooks.close = [&closed](int64_t) {
         ++closed;
@@ -1304,24 +1337,24 @@ void testRouterQuota() {
 
     std::string openErr;
     const int64_t channel1
-        = router.acquire(g1, router.route(g1), "G1", 10, openErr);
+        = acquireOf(router, g1, router.route(g1), "G1", 10, openErr);
     XX_TEST_EXPECT_TRUE(channel1 > 0);
     XX_TEST_EXPECT_EQ(opened, 1);
     XX_TEST_EXPECT_EQ(router.find(g1.key()), channel1);
     XX_TEST_EXPECT_EQ(router.activeCount("p"), size_t{1});
 
     // 同一个群再开: 复用原通道, 不重复建
-    const int64_t again = router.acquire(g1, router.route(g1), "G1", 11, openErr);
+    const int64_t again = acquireOf(router, g1, router.route(g1), "G1", 11, openErr);
     XX_TEST_EXPECT_EQ(again, channel1);
     XX_TEST_EXPECT_EQ(opened, 1);
 
     // 第二个群: 仍在上限内
-    const int64_t channel2 = router.acquire(g2, router.route(g2), "G2", 20, openErr);
+    const int64_t channel2 = acquireOf(router, g2, router.route(g2), "G2", 20, openErr);
     XX_TEST_EXPECT_TRUE(channel2 > 0);
     XX_TEST_EXPECT_EQ(router.activeCount("p"), size_t{2});
 
     // 第三个群: 达上限, 回收最久未活动的 G1 (seq 11 < 20)
-    const int64_t channel3 = router.acquire(g3, router.route(g3), "G3", 30, openErr);
+    const int64_t channel3 = acquireOf(router, g3, router.route(g3), "G3", 30, openErr);
     XX_TEST_EXPECT_TRUE(channel3 > 0);
     XX_TEST_EXPECT_EQ(closed, 1);
     XX_TEST_EXPECT_EQ(router.find(g1.key()), int64_t{0});
@@ -1329,7 +1362,7 @@ void testRouterQuota() {
     XX_TEST_EXPECT_EQ(router.activeCount("p"), size_t{2});
 
     // 被回收的群再回来: 重新开一条 (会话库里上下文仍在)
-    const int64_t reopened = router.acquire(g1, router.route(g1), "G1", 40, openErr);
+    const int64_t reopened = acquireOf(router, g1, router.route(g1), "G1", 40, openErr);
     XX_TEST_EXPECT_TRUE(reopened > 0);
     XX_TEST_EXPECT_TRUE(reopened != channel1);
     XX_TEST_EXPECT_EQ(opened, 4);
@@ -1365,7 +1398,7 @@ void testRouterQuota() {
     stranger.type      = ChatType::Group;
     stranger.chatId    = "G404";
     XX_TEST_EXPECT_EQ(
-        router.acquire(stranger, router.route(stranger), "G404", 50, openErr),
+        acquireOf(router, stranger, router.route(stranger), "G404", 50, openErr),
         int64_t{0}
     );
     XX_TEST_EXPECT_TRUE(!openErr.empty());

@@ -11,12 +11,13 @@ using namespace agentxx::plugin;
 
 struct Ctx : PluginBase {};
 
-void useStlParam(Ctx& ctx) {
-    capability(
+asio::awaitable<void> useStlParam(Ctx& ctx) {
+    co_await capabilityAsync(
         ctx,
         "bad.cap",
         [](Ctx&, std::string_view, const std::vector<std::string>&) -> std::string {
             return {};
         }
     );
+    co_return;
 }

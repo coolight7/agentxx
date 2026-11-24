@@ -3,10 +3,10 @@
 /// 覆盖：
 /// - 输入所有权：tool 根操作的 args/session/tool_call_id 由 Request 拥有，
 ///   主程序借用缓冲区失效后协程继续读取仍然正确；
-/// - 完成协议：同步能力（正常/抛异常）与异步 Task 能力都是 exactly-once 完成；
+/// - 完成协议：同步能力（正常/抛异常）与异步 asio 能力都是 exactly-once 完成；
 /// - 功能埋点实现行：`providePoint` 两种业务体形态（收上下文+载荷 / 只收载荷）都能登记；
-/// - 返回类型分发：返回字符串立即完成，返回 `Task<T>` 时由协程真正结束后
-///   才完成，并返回主程序可取消的 provider 句柄。
+/// - 返回类型分发：返回字符串立即完成，返回 `asio::awaitable<T>` 时由协程真正
+///   结束后才完成，并返回主程序可取消的 provider 句柄。
 ///
 /// 用例不依赖真实管理器：用伪主程序接口表捕获 SDK 注册出来的 spec，再直接按 ABI
 /// 调用 `execute_start`/`run_start`，因此可以精确控制借用缓冲区的生命周期。
@@ -16,11 +16,20 @@
 #include "agentxx/plugin/api/agent_plugin_kit.h"
 #include "agentxx/plugin/api/client_plugin_kit.h"
 
+#include "asio/co_spawn.hpp"
+#include "asio/io_context.hpp"
+#include "asio/steady_timer.hpp"
+#include "asio/this_coro.hpp"
+#include "asio/use_awaitable.hpp"
+
 #include <atomic>
+#include <chrono>
 #include <coroutine>
 #include <cstdlib>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <type_traits>
 
 #define XX_TEST_PASSED result.passed
 #define XX_TEST_FAILED result.failed
@@ -181,12 +190,21 @@ int32_t PLUGINXX_CALL fakeIsIoThread(const PluginxxHost*) {
     return 1;
 }
 
+/// 伪定时器 (定义见下方: 需要先声明, 供 [g_fakeScheduler] 引用)
+PluginxxOperatorHandle* PLUGINXX_CALL fakeSleep(
+    const PluginxxHost*      host,
+    int64_t                  ms,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+);
+
 /// 伪调度表: 驱动两成员走同一份 fake 实现 (v2 起 coroutine_runtime 已并入 scheduler)
 const PluginxxSchedulerIface g_fakeScheduler = {
     /* version */ PLUGINXX_IFACE_SCHEDULER_VERSION,
     /* struct_size */ sizeof(PluginxxSchedulerIface),
     /* is_io_thread */ fakeIsIoThread,
-    /* sleep */ nullptr,
+    /* sleep */ fakeSleep,
     /* offload */ nullptr,
     /* request_driver */ fakeRequestDriver,
     /* cancel_driver */ fakeCancelDriver,
@@ -319,12 +337,56 @@ const AgentxxClientUiIface g_fakeClientUi = {
     /* close_overlay */ nullptr,
 };
 
+/// 伪主程序的定时器登记: 记录到期回调, 由 [runDriver] 在到期后触发
+///
+/// 桥的轮询退避 (`PollOneBridge` 的 10ms) 需要 `scheduler.sleep` 才能安排下一次
+/// 驱动请求, 所以伪造的调度器必须提供它。
+struct FakeTimer {
+    std::chrono::steady_clock::time_point due;
+    PluginxxOperatorCallback              cb = nullptr;
+    void*                                 ud = nullptr;
+};
+
+std::vector<FakeTimer> g_fakeTimers;
+
+PluginxxOperatorHandle* PLUGINXX_CALL fakeSleep(
+    const PluginxxHost*,
+    int64_t                  ms,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*
+) {
+    FakeTimer timer;
+    timer.due = std::chrono::steady_clock::now()
+              + std::chrono::milliseconds(ms < 0 ? 0 : ms);
+    timer.cb = cb;
+    timer.ud = ud;
+    g_fakeTimers.push_back(timer);
+    return reinterpret_cast<PluginxxOperatorHandle*>(uintptr_t{1});
+}
+
 /// 执行一次待处理的驱动请求 (推进桥的本地执行器一个有限步骤);
 /// 反复调用直到 `false` 表示当前没有可推进的工作。
 bool runDriver() {
+    bool progressed = false;
+    // 先触发已到期的计时器 (主程序 IO 线程上它们先于驱动回调执行)
+    const auto now = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < g_fakeTimers.size();) {
+        if (g_fakeTimers[i].due <= now) {
+            auto entry = g_fakeTimers[i];
+            g_fakeTimers.erase(g_fakeTimers.begin() + static_cast<ptrdiff_t>(i));
+            if (entry.cb) {
+                entry.cb(entry.ud, PLUGINXX_OPERATOR_OK, nullptr);
+            }
+            progressed = true;
+            continue;
+        }
+        ++i;
+    }
+
     auto* ticket = g_pendingDriver;
     if (!ticket || ticket->done) {
-        return false;
+        return progressed;
     }
     g_pendingDriver = nullptr;
     ticket->done    = true;
@@ -333,6 +395,49 @@ bool runDriver() {
     }
     delete ticket;
     return true;
+}
+
+/// 在一个私有 io_context 上跑完一个 asio 协程并取结果 (同步用例用)
+///
+/// 只用于“提交 + 等结果”这类简单场景: 假 host 的登记是内联完成的, 所以
+/// `io.run()` 只会把 `asio::post` 回来的续体跑掉, 不会真的阻塞。
+template<typename T>
+    requires(!std::is_void_v<T>)
+T runAwaitable(asio::awaitable<T> awaitable) {
+    asio::io_context io;
+    T                out{};
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> { out = co_await std::move(awaitable); },
+        asio::detached
+    );
+    io.run();
+    return out;
+}
+
+/// 挂起一小会儿 (asio steady_timer): 老用例里的手动闸门 [Gate] 的替代品
+///
+/// 桥的本地执行器由主程序驱动轮次 `poll_one`, timer 到期后下一次驱动就会恢复。
+inline asio::awaitable<void>
+    awaitTick(std::chrono::milliseconds ms = std::chrono::milliseconds(30)) {
+    auto              ex = co_await asio::this_coro::executor;
+    asio::steady_timer timer(ex, ms);
+    co_await timer.async_wait(asio::use_awaitable);
+}
+
+/// 反复推进主程序驱动直到条件成立 (或超时); 返回最终条件
+template<typename Pred>
+bool pumpUntil(Pred pred, int timeoutMs = 5000) {
+    const auto deadline
+        = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (pred()) {
+            return true;
+        }
+        (void)runDriver();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return pred();
 }
 
 /// 接口表查询 (定义见下方: 需要先声明伪 runtime 表)
@@ -449,42 +554,213 @@ struct ToolNotifyProbe {
         }
     }
 
+    static void PLUGINXX_CALL doneFrame(
+        void*                     ud,
+        int32_t                   status,
+        const PluginxxStringView* frame
+    ) {
+        auto& probe  = *static_cast<ToolNotifyProbe*>(ud);
+        ++probe.calls;
+        probe.status = status;
+        if (frame && frame->data) {
+            const auto parts = agentxx::plugin::decodeToolResultFrame(
+                std::string_view{frame->data, static_cast<size_t>(frame->size)}
+            );
+            probe.result.assign(parts.result);
+            probe.payload.assign(parts.metadata);
+        }
+    }
+
     AgentxxPluginToolNotify notify() {
-        // Task 型工具只走 done_text; done / done_frame 不参与
+        // 受控轮询工具用整帧通知器 (两段结果在收尾时拼成帧)
         return AgentxxPluginToolNotify{
             &ToolNotifyProbe::done,
             &ToolNotifyProbe::doneText,
-            nullptr,
+            &ToolNotifyProbe::doneFrame,
             this
         };
     }
 };
 
-/// 手动放行的挂起点：测试先让 start 返回，再改变外部状态并 resume。
-struct Gate {
-    bool*                    released = nullptr;
-    std::coroutine_handle<>* handle   = nullptr;
-
-    bool await_ready() const noexcept {
-        return released && *released;
-    }
-
-    void await_suspend(std::coroutine_handle<> h) const noexcept {
-        if (handle) {
-            *handle = h;
-        }
-    }
-
-    void await_resume() const noexcept {}
-};
-
 struct SdkCtx : PluginBase {};
 
-/// 结束一个手动驱动的根协程：与 SDK resume 路径一致（destroy 帧 + 派发 notify +
-/// 回收 opCleanup_）。
-template<typename Promise>
-void finishRoot(std::coroutine_handle<> h) {
-    detail::finishIfDone(std::coroutine_handle<Promise>::from_address(h.address()));
+/// 编译期检查: asio 形态的便捷入口能在 `asio::awaitable` 里实例化
+///
+/// 不执行 (只取地址让模板实例化): 这些入口的返回类型、参数形状、`co_await` 兼容性
+/// 都在编译期确定, 跑起来需要真实的主程序表, 所以这里只做类型层面的检查。
+asio::awaitable<void> compileCheckAsyncTableHelpers(SdkCtx& ctx) {
+    auto send = co_await sendInputAsync(ctx, 1, "{}");
+    (void)send.ok();
+    auto channelId = co_await openChannelAsync(ctx, ChannelOptions{}, [](const ChannelEvent&) {});
+    auto closed    = co_await closeChannelAsync(ctx, channelId);
+    (void)closed.accepted();
+    auto canceled = co_await cancelChannelAsync(ctx, channelId);
+    (void)canceled.ok();
+    auto responded = co_await respondInterruptAsync(ctx, channelId, 1, "{}");
+    (void)responded.ok();
+    auto state = co_await channelStateJsonAsync(ctx, channelId);
+    (void)state.text();
+    auto list = co_await listRuntimeJsonAsync(ctx);
+    (void)list.text();
+    AsyncWorkOptions opt;
+    auto work = co_await submitAsyncWorkAsync(ctx, opt);
+    (void)work.text();
+    auto workCanceled = co_await cancelAsyncWorkAsync(ctx, std::string{work.text()});
+    (void)workCanceled.ok();
+    auto workJson = co_await getAsyncWorkJsonAsync(ctx, "async-1");
+    (void)workJson.text();
+    auto generic = co_await tableOpAsync(ctx, [](auto, void*, PluginxxString*) {
+        return static_cast<PluginxxOperatorHandle*>(nullptr);
+    });
+    (void)generic.accepted();
+    co_return;
+}
+
+/// 伪 runtime 表: 只实现 `send_input` (异步完成, 用来验证 asio 形态的恢复路径)
+///
+/// 完成回调故意在**另一条线程**上、延迟一小会儿再调 —— 与真实主程序一致
+/// (表成员受理后在主程序/插件执行线程上回调), 借此验证:
+/// - 结果不会在回调线程上继续协程 (必须经 `asio::post` 回到调用方执行器);
+/// - 提交发生在调用处, 不等 `co_await`。
+struct AsyncSendCapture {
+    std::atomic<int>        calls{0};
+    std::atomic<bool>       completed{false};
+    std::string             lastInput;
+    std::thread::id         completedOn{};
+};
+
+AsyncSendCapture g_asyncSend;
+bool             g_asyncSendDelay = true;
+
+PluginxxOperatorHandle* PLUGINXX_CALL fakeMountRootAccepted(
+    const PluginxxHost*,
+    const AgentxxPluginMountRootSpec*,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*
+) {
+    // 本用例不挂根: 只要求"表里存在" (hasRuntime 的判据)
+    if (cb) {
+        cb(ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    return fakeAcceptedHandle();
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL fakeSendInputDelayed(
+    const PluginxxHost*,
+    int64_t,
+    const PluginxxStringView* inputJson,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*
+) {
+    if (inputJson && inputJson->data) {
+        g_asyncSend.lastInput = std::string{inputJson->data, static_cast<size_t>(inputJson->size)};
+    }
+    ++g_asyncSend.calls;
+    // 回调在另一条线程上、稍后触发
+    std::thread([cb, ud]() {
+        if (g_asyncSendDelay) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        static const char kPayload[] = "sent-ok";
+        const PluginxxStringView payload{kPayload, sizeof(kPayload) - 1};
+        g_asyncSend.completedOn = std::this_thread::get_id();
+        g_asyncSend.completed.store(true, std::memory_order_release);
+        if (cb) {
+            cb(ud, PLUGINXX_OPERATOR_OK, &payload);
+        }
+    }).detach();
+    return fakeAcceptedHandle();
+}
+
+const AgentxxPluginRuntimeIface g_fakeRuntime = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginRuntimeIface),
+    /* mount_root */ fakeMountRootAccepted,
+    /* unmount_root */ nullptr,
+    /* open_channel */ nullptr,
+    /* close_channel */ nullptr,
+    /* send_input */ fakeSendInputDelayed,
+    /* cancel */ nullptr,
+    /* select_model */ nullptr,
+    /* respond_interrupt */ nullptr,
+    /* get_channel_state */ nullptr,
+    /* get_context_messages */ nullptr,
+    /* list_runtime */ nullptr,
+    /* register_trigger */ nullptr,
+    /* unregister_trigger */ nullptr,
+    /* emit_event */ nullptr,
+    /* register_timer */ nullptr,
+    /* unregister_timer */ nullptr,
+    /* submit_async_work */ nullptr,
+    /* cancel_async_work */ nullptr,
+    /* get_async_work */ nullptr,
+    /* list_async_work */ nullptr,
+};
+
+const void* PLUGINXX_CALL
+    fakeQueryInterfaceWithRuntime(const PluginxxHost*, const PluginxxStringView* iid) {
+    if (!iid || !iid->data) {
+        return nullptr;
+    }
+    const std::string_view name{iid->data, static_cast<size_t>(iid->size)};
+    if (name == AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME) {
+        return &g_fakeRuntime;
+    }
+    return fakeQueryInterface(nullptr, iid);
+}
+
+const PluginxxHostVtable g_runtimeVtable = {
+    /* alloc */ fakeAlloc,
+    /* free */ fakeFree,
+    /* query_interface */ fakeQueryInterfaceWithRuntime,
+};
+
+/// asio 形态的表调用: 在插件自有 io 线程上 `co_await`, 完成经 post 回到同一条线程
+void runAsyncTableOpCase(TestResult& result) {
+    const PluginxxHost host{&g_runtimeVtable, nullptr};
+    SdkCtx             ctx;
+    ctx.host  = &host;
+    ctx.iface = AgentIfaces::query(&host);
+    XX_TEST_EXPECT_TRUE(ctx.iface.runtime != nullptr);
+
+    g_asyncSend.calls.store(0);
+    g_asyncSend.completed.store(false, std::memory_order_release);
+    g_asyncSend.lastInput.clear();
+    g_asyncSend.completedOn = std::thread::id{};
+
+    asio::io_context io;
+    std::thread::id  ioThread;
+    bool             resumedOnIoThread = false;
+    std::string      seen;
+    bool             unsupportedAccepted = true;
+    std::string      unsupportedError;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            ioThread = std::this_thread::get_id();
+            auto r   = co_await sendInputAsync(ctx, 42, R"({"text":"hi"})");
+            seen                 = std::string{r.text()};
+            resumedOnIoThread    = std::this_thread::get_id() == ioThread;
+            // 表中没有 `get_channel_state`: 未受理 (不给结果正文)
+            auto missing        = co_await channelStateJsonAsync(ctx, 42);
+            unsupportedAccepted = missing.accepted();
+            unsupportedError    = missing.startError;
+        },
+        asio::detached
+    );
+    io.run();
+
+    XX_TEST_EXPECT_TRUE(g_asyncSend.completed.load(std::memory_order_acquire));
+    XX_TEST_EXPECT_TRUE(g_asyncSend.calls.load() == 1);
+    XX_TEST_EXPECT_TRUE(seen == "sent-ok");
+    XX_TEST_EXPECT_TRUE(resumedOnIoThread);
+    XX_TEST_EXPECT_TRUE(g_asyncSend.completedOn != ioThread);
+    XX_TEST_EXPECT_TRUE(g_asyncSend.lastInput == R"({"text":"hi"})");
+    XX_TEST_EXPECT_TRUE(!unsupportedAccepted);
+    XX_TEST_EXPECT_TRUE(!unsupportedError.empty());
 }
 
 } // namespace
@@ -492,76 +768,88 @@ void finishRoot(std::coroutine_handle<> h) {
 TestResult testPluginSdk() {
     TestResult         result;
     const PluginxxHost host{&g_fakeVtable, nullptr};
+    // asio 形态入口的实例化检查 (只取地址, 不执行)
+    (void)&compileCheckAsyncTableHelpers;
+    // asio 形态表调用: 自有 io 线程上的协程 + 跨线程完成
+    runAsyncTableOpCase(result);
 
     /// tool 根操作的输入由 Request 拥有 —— 主程序借用缓冲区失效后，协程挂起
     /// 恢复继续读取 args 仍必须得到原值。
     {
-        bool                    released = false;
-        std::coroutine_handle<> handle{};
-        std::string             seen;
-        std::string             seenSession;
+        bool        finished = false;
+        std::string seen;
+        std::string seenSession;
 
         // box 先声明：它必须比 ctx（持有 shim + 协程）活得更久。
         struct Box {
-            bool*                    released = nullptr;
-            std::coroutine_handle<>* handle   = nullptr;
-            std::string*             seen     = nullptr;
-            std::string*             session  = nullptr;
-        } box{&released, &handle, &seen, &seenSession};
+            bool*        finished = nullptr;
+            std::string* seen     = nullptr;
+            std::string* session  = nullptr;
+        } box{&finished, &seen, &seenSession};
 
         SdkCtx ctx;
         ctx.attachHost(&host);
 
         g_captured = CapturedRegistration{};
-        agentxx::plugin::tool(
+        auto reg   = runAwaitable(toolAsync(
             ctx,
             g_agentRef,
             "sdk_owns_args",
             "depict",
             "{}",
-            [&box](SdkCtx&, std::string_view args, OpCtl& ctl) -> Task<std::string> {
+            [&box](SdkCtx&, std::string_view args, OpCtl& ctl) -> asio::awaitable<std::string> {
                 // 挂起前记录视图；恢复后（主程序借用缓冲区已失效）再读取。
                 auto argsView = args;
-                co_await Gate{box.released, box.handle};
+                co_await awaitTick(std::chrono::milliseconds(40));
                 box.seen->assign(argsView.data(), argsView.size());
                 box.session->assign(ctl.scopeKey.data(), ctl.scopeKey.size());
+                *box.finished = true;
                 co_return *box.seen;
             }
-        );
+        ));
+        XX_TEST_EXPECT_TRUE(reg.ok());
         XX_TEST_EXPECT_TRUE(g_captured.hasTool);
 
         auto spec = g_captured.tool;
-        XX_TEST_EXPECT_TRUE(spec.execute_start != nullptr);
+        // 协程体工具走 `execute_start_invoke` (随调用带入会话工作目录)
+        XX_TEST_EXPECT_TRUE(spec.execute_start_invoke != nullptr);
 
         // 主程序借用缓冲区：start 返回后立即被覆写，插件不得再依赖它。
         std::string borrowedArgs = R"({"n":42})";
         std::string borrowedSid  = "sess-42";
+        std::string borrowedWork = "/tmp/work";
         auto        argsSv       = PluginStringView::from(borrowedArgs.data(), borrowedArgs.size());
         auto        sidSv        = PluginStringView::from(borrowedSid.data(), borrowedSid.size());
         auto        cidSv        = PluginStringView::fromCstr("call-42");
+        auto        workSv       = PluginStringView::from(borrowedWork.data(), borrowedWork.size());
 
         ToolNotifyProbe probe;
         auto             notify = probe.notify();
-        void* op = spec.execute_start(spec.user_data, &argsSv, &sidSv, &cidSv, &notify, nullptr);
+        AgentxxPluginToolInvoke invoke{};
+        invoke.struct_size   = sizeof(AgentxxPluginToolInvoke);
+        invoke.args_json     = &argsSv;
+        invoke.session_id    = &sidSv;
+        invoke.tool_call_id  = &cidSv;
+        invoke.work_dir      = &workSv;
+        invoke.notify        = &notify;
+        void* op = spec.execute_start_invoke(spec.user_data, &invoke, nullptr);
         XX_TEST_EXPECT_TRUE(op != nullptr);
         XX_TEST_EXPECT_EQ(probe.calls, 0);
-        // 首步由 host driver 推进: 跑一次驱动让协程挂起到 Gate
+        // 首步由 host driver 推进: 跑一次驱动让协程挂到 timer 上
         XX_TEST_EXPECT_TRUE(runDriver());
         // 借用缓冲区失效
         borrowedArgs.assign(borrowedArgs.size(), 'x');
         borrowedSid.assign(borrowedSid.size(), 'y');
 
-        XX_TEST_EXPECT_TRUE(handle != nullptr);
-        released = true;
-        handle.resume();
+        // 计时器到期后由主程序驱动恢复协程, 直到根完成
+        XX_TEST_EXPECT_TRUE(pumpUntil([&] { return probe.calls > 0; }));
+        XX_TEST_EXPECT_TRUE(finished);
         XX_TEST_EXPECT_EQ(seen, std::string{R"({"n":42})"});
         XX_TEST_EXPECT_EQ(seenSession, std::string{"sess-42"});
-        // 协程已到 final_suspend，按 SDK 根完成流程收尾
-        finishRoot<Task<std::string>::promise_type>(handle);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
         XX_TEST_EXPECT_EQ(probe.result, std::string{R"({"n":42})"});
-        // Task 型工具只能给正文, 元数据为空
+        // 工具只给正文, 元数据为空
         XX_TEST_EXPECT_TRUE(probe.payload.empty());
     }
 
@@ -571,7 +859,7 @@ TestResult testPluginSdk() {
         SdkCtx ctx;
         ctx.attachHost(&host);
         g_captured = CapturedRegistration{};
-        auto pt    = agentxx::plugin::providePoint(
+        auto pt    = runAwaitable(providePointAsync(
             ctx,
             g_agentRef,
             points::ContextCountTokens,
@@ -580,9 +868,8 @@ TestResult testPluginSdk() {
                 return pointAnswer(fmt::format(R"({{"echo":{},"priority":5}})", payload));
             },
             PointImplOptions{.priority = 5}
-        );
-        XX_TEST_EXPECT_TRUE(pt.accepted());
-        XX_TEST_EXPECT_TRUE(pt.done());
+        ));
+        XX_TEST_EXPECT_TRUE(pt.ok());
         XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
         {
             NotifyProbe probe;
@@ -599,16 +886,15 @@ TestResult testPluginSdk() {
 
         // 收上下文+载荷的形态
         g_captured = CapturedRegistration{};
-        auto pt2   = agentxx::plugin::providePoint(
+        auto pt2   = runAwaitable(providePointAsync(
             ctx,
             g_agentRef,
             points::ToolSummarizeOutput,
             [](SdkCtx&, std::string_view payload) -> std::string {
                 return std::string{payload};
             }
-        );
-        XX_TEST_EXPECT_TRUE(pt2.accepted());
-        XX_TEST_EXPECT_TRUE(pt2.done());
+        ));
+        XX_TEST_EXPECT_TRUE(pt2.ok());
         XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
         {
             NotifyProbe probe;
@@ -622,21 +908,18 @@ TestResult testPluginSdk() {
         }
     }
 
-    /// capability: 同步字符串能力 + 异步 Task<string> 能力 (统一 root adapter)。
+    /// capability: 同步字符串能力 + 异步 asio 能力 (统一 root adapter)。
     {
         SdkCtx ctx;
         ctx.attachHost(&host);
         g_captured = CapturedRegistration{};
-        XX_TEST_EXPECT_TRUE(
-            agentxx::plugin::capability(
-                ctx,
-                "test.cap.sync",
-                [](SdkCtx&, std::string_view method, std::string_view args) -> std::string {
-                    return fmt::format(R"({{"method":"{}","args":{}}})", method, args);
-                }
-            )
-                .done()
-        );
+        XX_TEST_EXPECT_TRUE(runAwaitable(capabilityAsync(
+            ctx,
+            "test.cap.sync",
+            [](SdkCtx&, std::string_view method, std::string_view args) -> std::string {
+                return fmt::format(R"({{"method":"{}","args":{}}})", method, args);
+            }
+        )).ok());
         XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
 
         NotifyProbe probe;
@@ -650,31 +933,24 @@ TestResult testPluginSdk() {
         XX_TEST_EXPECT_TRUE(probe.payload.find("ping") != std::string::npos);
     }
     {
-        bool                    released = false;
-        std::coroutine_handle<> handle{};
-        bool                    finished = false;
+        bool        finished = false;
 
         struct AsyncBox {
-            bool*                    released = nullptr;
-            std::coroutine_handle<>* handle   = nullptr;
-            bool*                    finished = nullptr;
-        } box{&released, &handle, &finished};
+            bool* finished = nullptr;
+        } box{&finished};
 
         SdkCtx ctx;
         ctx.attachHost(&host);
         g_captured = CapturedRegistration{};
-        XX_TEST_EXPECT_TRUE(
-            agentxx::plugin::capability(
-                ctx,
-                "test.cap.async",
-                [&box](SdkCtx&, std::string_view method, std::string_view) -> Task<std::string> {
-                    co_await Gate{box.released, box.handle};
-                    *box.finished = true;
-                    co_return fmt::format("done:{}", method);
-                }
-            )
-                .done()
-        );
+        XX_TEST_EXPECT_TRUE(runAwaitable(capabilityAsync(
+            ctx,
+            "test.cap.async",
+            [&box](SdkCtx&, std::string_view method, std::string_view) -> asio::awaitable<std::string> {
+                co_await awaitTick(std::chrono::milliseconds(40));
+                *box.finished = true;
+                co_return fmt::format("done:{}", method);
+            }
+        )).ok());
         XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
         XX_TEST_EXPECT_TRUE(g_captured.capCancel != nullptr);
 
@@ -685,15 +961,12 @@ TestResult testPluginSdk() {
         void* op = g_captured.capStart(g_captured.capUd, nullptr, &method, &args, &notify, nullptr);
         XX_TEST_EXPECT_TRUE(op != nullptr); ///< 未完成 -> provider 句柄
         XX_TEST_EXPECT_EQ(probe.calls, 0);  ///< 不得提前完成
-        XX_TEST_EXPECT_TRUE(runDriver());   ///< 首步由 host driver 推进 (挂起到 Gate)
+        XX_TEST_EXPECT_TRUE(runDriver());   ///< 首步由 host driver 推进 (挂到 timer 上)
         XX_TEST_EXPECT_FALSE(finished);
 
         // 借用缓冲区 (method/args 视图) 失效后协程仍能完成 (Request 拥有输入)。
-        released = true;
-        XX_TEST_EXPECT_TRUE(handle != nullptr);
-        handle.resume();
+        XX_TEST_EXPECT_TRUE(pumpUntil([&] { return probe.calls > 0; }));
         XX_TEST_EXPECT_TRUE(finished);
-        finishRoot<Task<std::string>::promise_type>(handle);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
         XX_TEST_EXPECT_TRUE(probe.payload.find("done:async-ping") != std::string::npos);
@@ -704,7 +977,7 @@ TestResult testPluginSdk() {
         SdkCtx ctx;
         ctx.attachHost(&host);
         g_captured       = CapturedRegistration{};
-        auto nodeTicket   = agentxx::plugin::graph_node(
+        auto nodeTicket   = runAwaitable(graphNodeAsync(
             ctx,
             g_agentRef,
             "test.node.sync",
@@ -717,10 +990,9 @@ TestResult testPluginSdk() {
                     agentxx::plugin::nodeStateOf(req)
                 );
             }
-        );
+        ));
         // 登记提交即生效; 假 host 的登记是内联完成的
-        XX_TEST_EXPECT_TRUE(nodeTicket.accepted());
-        XX_TEST_EXPECT_TRUE(nodeTicket.done());
+        XX_TEST_EXPECT_TRUE(nodeTicket.ok());
         XX_TEST_EXPECT_TRUE(g_captured.hasGraphNode);
         XX_TEST_EXPECT_TRUE(g_captured.graphNode.run_start != nullptr);
         XX_TEST_EXPECT_TRUE(g_captured.graphNode.run_cancel != nullptr);
@@ -747,7 +1019,7 @@ TestResult testPluginSdk() {
         SdkCtx ctx;
         ctx.attachHost(&host);
         g_captured       = CapturedRegistration{};
-        auto nodeTicket   = agentxx::plugin::graph_node(
+        auto nodeTicket   = runAwaitable(graphNodeAsync(
             ctx,
             g_agentRef,
             "test.node.throw",
@@ -755,10 +1027,9 @@ TestResult testPluginSdk() {
             [](SdkCtx&, const RootRequest&) -> std::string {
                 throw std::runtime_error("node boom");
             }
-        );
+        ));
         // 登记提交即生效; 假 host 的登记是内联完成的
-        XX_TEST_EXPECT_TRUE(nodeTicket.accepted());
-        XX_TEST_EXPECT_TRUE(nodeTicket.done());
+        XX_TEST_EXPECT_TRUE(nodeTicket.ok());
         auto        spec = g_captured.graphNode;
         NotifyProbe probe;
         auto        notify = probe.notify();
@@ -770,32 +1041,28 @@ TestResult testPluginSdk() {
         XX_TEST_EXPECT_TRUE(probe.payload.find("node boom") != std::string::npos);
     }
 
-    /// graph_node: Task<string> 节点 —— provider 句柄 + 借用输入失效后仍完成。
+    /// graph_node: 异步 asio 节点 —— provider 句柄 + 借用输入失效后仍完成。
     {
-        bool                    released = false;
-        std::coroutine_handle<> handle{};
-        bool                    finished = false;
-        std::string             seenState;
+        bool        finished = false;
+        std::string seenState;
 
         struct AsyncBox {
-            bool*                    released  = nullptr;
-            std::coroutine_handle<>* handle    = nullptr;
-            bool*                    finished  = nullptr;
-            std::string*             seenState = nullptr;
-        } box{&released, &handle, &finished, &seenState};
+            bool*        finished  = nullptr;
+            std::string* seenState = nullptr;
+        } box{&finished, &seenState};
 
         SdkCtx ctx;
         ctx.attachHost(&host);
         g_captured       = CapturedRegistration{};
-        auto nodeTicket   = agentxx::plugin::graph_node(
+        auto nodeTicket   = runAwaitable(graphNodeAsync(
             ctx,
             g_agentRef,
             "test.node.async",
             "{}",
-            [&box](SdkCtx&, const RootRequest& req, OpCtl ctl) -> Task<std::string> {
+            [&box](SdkCtx&, const RootRequest& req, OpCtl ctl) -> asio::awaitable<std::string> {
                 std::string node{agentxx::plugin::nodeNameOf(req)};
                 std::string state{agentxx::plugin::nodeStateOf(req)};
-                co_await Gate{box.released, box.handle};
+                co_await awaitTick(std::chrono::milliseconds(40));
                 if (ctl.canceled()) {
                     co_return std::string{"Canceled"};
                 }
@@ -803,10 +1070,9 @@ TestResult testPluginSdk() {
                 *box.finished  = true;
                 co_return fmt::format(R"({{"async":"{}"}})", node);
             }
-        );
+        ));
         // 登记提交即生效; 假 host 的登记是内联完成的
-        XX_TEST_EXPECT_TRUE(nodeTicket.accepted());
-        XX_TEST_EXPECT_TRUE(nodeTicket.done());
+        XX_TEST_EXPECT_TRUE(nodeTicket.ok());
         XX_TEST_EXPECT_TRUE(g_captured.hasGraphNode);
         XX_TEST_EXPECT_TRUE(g_captured.graphNode.run_cancel != nullptr);
 
@@ -821,15 +1087,12 @@ TestResult testPluginSdk() {
             = spec.run_start(spec.user_data, &nameSv, &cfgSv, &stateSv, &tidSv, &notify, nullptr);
         XX_TEST_EXPECT_TRUE(op != nullptr); ///< 未完成 -> provider 句柄
         XX_TEST_EXPECT_EQ(probe.calls, 0);
-        XX_TEST_EXPECT_TRUE(runDriver()); ///< 首步由 host driver 推进 (挂起到 Gate)
+        XX_TEST_EXPECT_TRUE(runDriver()); ///< 首步由 host driver 推进 (挂到 timer 上)
         XX_TEST_EXPECT_FALSE(finished);
 
         // 主程序借用缓冲区失效后 (置空视图) 协程仍能完成 (Request 拥有输入)
-        released = true;
-        XX_TEST_EXPECT_TRUE(handle != nullptr);
-        handle.resume();
+        XX_TEST_EXPECT_TRUE(pumpUntil([&] { return probe.calls > 0; }));
         XX_TEST_EXPECT_TRUE(finished);
-        finishRoot<Task<std::string>::promise_type>(handle);
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
         XX_TEST_EXPECT_TRUE(probe.payload.find("n2") != std::string::npos);
@@ -1012,7 +1275,9 @@ TestResult testPluginSdk() {
         XX_TEST_EXPECT_TRUE(client.setToolDecor("call_1", {}) != 0);
         XX_TEST_EXPECT_TRUE(client.showItemsOverlay("t", items) != 0);
         XX_TEST_EXPECT_FALSE(client.hostSupports("agentxx.client.components"));
-        XX_TEST_EXPECT_TRUE(client.regionSize("p").width == 0);
+        // 未刷新过快照时快照是空对象, 区域尺寸查询给 0 (改成协程形态后这里只验证降级路径)
+        XX_TEST_EXPECT_TRUE(client.clientStateSnapshot().is_object());
+        XX_TEST_EXPECT_TRUE(client.uiCapabilities().supportsBlock("Text"));
     }
 
     // ---- ArgReader: 字符串转数值/布尔的严格解析 ----

@@ -20,6 +20,7 @@
 /// 12 定时器 / 13 关通道与连带注销 / 14 禁用回收 / 15 卸载根
 #include "agentxx-test/plugin/test_plugin_agent_runtime.h"
 #include "agentxx-test/plugin/plugin_thread_fixture.h"
+#include "agentxx-test/plugin/test_table_op.h"
 
 #include "agentxx-test/core/test_agent.h"
 
@@ -125,8 +126,8 @@ struct RuntimeReply {
 
 /// 调一次 runtime 表成员并等到完成
 ///
-/// 用例全程跑在容器 io 线程上, 主程序的表操作在调用方本来就在 IO 线程时内联完成,
-/// 因此这里是"调用即得结果"; 换到别的线程也会经 OpCore 排队后等回调。
+/// 表成员是异步操作契约: 这里用测试专用的 [agentxx::test::tableOpWait]
+/// (提交 + 完成回调 + 条件变量) 换取同步形状。
 ///
 /// - `Member` 是表成员指针 (如 `&AgentxxPluginRuntimeIface::mount_root`);
 /// - 其余参数原样转发, 完成回调由本函数补在末尾。
@@ -138,7 +139,7 @@ RuntimeReply callRuntime(
 ) {
     const auto caps  = agentxx::plugin::AgentIfaces::query(host);
     auto       tuple = std::make_tuple(std::forward<Args>(args)...);
-    const auto res   = pluginxx::tableOpSyncWait(
+    const auto res   = agentxx::test::tableOpWait(
         host,
         caps.cancel,
         caps.scheduler,

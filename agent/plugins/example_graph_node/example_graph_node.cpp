@@ -87,7 +87,7 @@ std::string normalizeIntent(std::string_view s) {
 /// - **协程形态**: 节点执行业务跑在插件自己的执行线程上, 那里不能同步等表调用
 ///   (kit 的同步入口在插件线程上直接拒绝), 因此这里 `co_await` 凭据;
 /// - 接口不可用/查询失败时返回空数组 (老主程序降级: 路由退化为 fallback)
-pluginxx::Task<utilxx_base::Json> sessionMessages(
+asio::awaitable<utilxx_base::Json> sessionMessages(
     AgentCtx&                          ctx,
     const agentxx::plugin::ScopeRef&   ref,
     const agentxx::plugin::RootRequest& req
@@ -155,7 +155,7 @@ bool lastAssistantHasToolCalls(const utilxx_base::Json& messages) {
 /// - 后续轮次: 按 "最后一条 assistant 是否带 tool_calls" 写 __route__ (tools/end), 保持原
 ///   agent loop 行为
 /// - config: {"intents": ["datetime", "normal"], "fallback": "normal"}
-pluginxx::Task<std::string> intentRouterRun(
+asio::awaitable<std::string> intentRouterRun(
     AgentCtx&                          ctx,
     const agentxx::plugin::ScopeRef&   ref,
     const agentxx::plugin::RootRequest& req
@@ -298,7 +298,7 @@ std::string datetimeNodeRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
 ///
 /// 读当前图定义 → 改写为意图路由流程 (**协程形态**)
 /// - 读与写都是“提交 + `co_await`”: 返回时定义已写入, `errOut` 给出失败原因
-static pluginxx::Task<bool> modifyGraphToIntentFlow(
+static asio::awaitable<bool> modifyGraphToIntentFlow(
     AgentCtx&                        ctx,
     const agentxx::plugin::ScopeRef& agent,
     std::string&                     errOut
@@ -307,7 +307,7 @@ static pluginxx::Task<bool> modifyGraphToIntentFlow(
         errOut = "graph iface not available";
         co_return false;
     }
-    auto readResult = co_await agentxx::plugin::graphJson(ctx, agent.ptr());
+    auto readResult = co_await agentxx::plugin::graphJsonAsync(ctx, agent.ptr());
     std::string jsonStr{readResult.text()};
     if (!readResult.ok() || jsonStr.empty()) {
         errOut = "get_graph_json returned no definition";
@@ -419,7 +419,7 @@ static pluginxx::Task<bool> modifyGraphToIntentFlow(
     graph["edges"] = std::move(edges);
 
     const std::string newJson = graph.dump();
-    auto              wr      = co_await agentxx::plugin::setGraphJson(ctx, agent.ptr(), newJson);
+    auto              wr      = co_await agentxx::plugin::setGraphJsonAsync(ctx, agent.ptr(), newJson);
     if (!wr.ok()) {
         errOut = wr.accepted() ? std::string(wr.text()) : wr.startError;
         if (errOut.empty()) {
@@ -467,10 +467,10 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
 /// 挂载事务 (mount): 登记自定义节点类型并改写执行图 (**协程形态**)
 /// - `ref` 为本次挂载的 agent 引用, 节点类型与该 agent 的图定义都记在它名下
 /// - 每条登记都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到失败原因
-static pluginxx::Task<void>
+static asio::awaitable<void>
     exampleGraphAgentSetup(AgentCtx& ctx, agentxx::plugin::AgentRef ref) {
     // 1. 注册意图识别节点类型 (统一 root adapter: 输入拥有化 + provider 句柄)
-    auto nodeResult = co_await agentxx::plugin::graph_node(
+    auto nodeResult = co_await graphNodeAsync(
         ctx,
         ref,
         "example_intent_router",
@@ -486,7 +486,7 @@ static pluginxx::Task<void>
         };
     }
     // 2. 注册时间输出节点类型
-    auto datetimeResult = co_await agentxx::plugin::graph_node(
+    auto datetimeResult = co_await graphNodeAsync(
         ctx,
         ref,
         "example_datetime",
@@ -560,7 +560,7 @@ static void* exampleGraphAgentMount(
     auto later = agentxx::plugin::finishLater(notify);
     // 注册事务交给协程: 节点类型/图定义逐条“提交 + co_await”, 全部生效后再放行挂载
     const agentxx::plugin::AgentRef agentRef(*spec);
-    ctx.spawn([later, agentRef](AgentCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](AgentCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
         try {
             co_await exampleGraphAgentSetup(c, agentRef);
             c.log.info("example_graph_node mounted, graph modified");

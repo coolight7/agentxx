@@ -49,7 +49,7 @@ struct ExecPluginCtx : public PluginBase {
 /// - 主程序按所有者记录贡献 (见 PluginManager::setPromptJson), 插件卸载/禁用时
 ///   自动撤销并恢复基础值; 同一工具由多个插件实例贡献时互不覆盖
 /// - 主程序未提供 prompt 接口表 (精简主程序) 时跳过: 描述文本仍随工具注册直接生效
-static pluginxx::Task<void>
+static asio::awaitable<void>
     publishToolPrompt(ExecPluginCtx& ctx, const ScopeRef& ref, std::string_view toolName, const ExecPromptText& prompt) {
     if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->set_prompt) {
         pluginLog(
@@ -75,7 +75,7 @@ static pluginxx::Task<void>
 
     const std::string js   = patch.dump();
     auto              agentRef = ref.raw();
-    auto              wr       = co_await setPromptJson(ctx, &agentRef, js);
+    auto              wr       = co_await setPromptJsonAsync(ctx, &agentRef, js);
     if (!wr.ok()) {
         pluginLog(&ctx, 3, fmt::format("agentxx_execute_command: set_prompt({}) failed", toolName));
         co_return;
@@ -87,7 +87,7 @@ static pluginxx::Task<void>
     );
 }
 
-static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef ref) {
+static asio::awaitable<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef ref) {
     // 环境/提示词/工具注册全部是 agent 级工作 (提示词按 agent 贡献, 工具进该 agent
     // 的工具表)。环境探测本身与 agent 无关, 但只在首次挂载时做一次即可, 这里仍按
     // 挂载做, 保证多 agent 不会共享一份过期结果。
@@ -109,7 +109,7 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
     co_await publishToolPrompt(ctx, ref, kNameWindows, winPrompt);
 
     auto winSchema
-        = (co_await agentxx::plugin::schemaOf(ctx, kNameWindows))
+        = (co_await schemaOfAsync(ctx, kNameWindows))
               .string(
                   "command",
                   argDescOr(winPrompt, "command", kWindowsCommandArgDescFallback),
@@ -126,7 +126,7 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
               .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-    co_await tool(
+    co_await toolAsync(
         ctx,
         ref,
         kNameWindows,
@@ -150,10 +150,13 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
             };
             StoreFn storeFn = nullptr;
             if (!tidStr.empty() && c.iface.session && c.iface.session->add_share_store) {
-                storeFn = [&c, ref, tidStr](std::string_view content) -> long long {
-                    // 受控轮询工具体跑在插件执行线程上: kit 的 ticket awaiter 依赖
-                    // 自有 promise, asio 伸程里不能 co_await 表调用, 只能同步等一次往返
-                    return c.addShareStore(ref, tidStr, content, /*allowOnPluginThread=*/true);
+                storeFn = [&c, ref, tidStr](std::string_view content) -> asio::awaitable<long long> {
+                    co_return co_await agentxx::plugin::addShareStoreAsync(
+                        c,
+                        ref,
+                        tidStr,
+                        std::string(content)
+                    );
                 };
             }
             // 子进程管道/计时器绑定到本协程的 executor (= 插件本地 reactor),
@@ -170,13 +173,13 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
         }
     );
 #else
-    co_await tool(
+    co_await toolAsync(
         ctx,
         ref,
         kNameWindows,
         winPrompt.depict,
         winSchema,
-        [ref](ExecPluginCtx&             c,
+        agentxx::plugin::onWorkerAsync([](ExecPluginCtx&             c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -192,22 +195,14 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
                 }
                 return c.cancelRegistry.isCanceled(tidStr);
             };
-            StoreFn storeFn = nullptr;
-            if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
-                storeFn = [&c, ref, tidStr](std::string_view content) -> long long {
-                    // 同步体跑在工作线程池上, 默认策略就是真等 (不占插件线程)
-                    return c.addShareStore(ref, tidStr, content);
-                };
-            }
             return windowsExecute(
                 args.raw(),
                 std::string(workDir),
                 isCanceled,
-                storeFn,
                 &c.cancelRegistry,
                 tidStr
             );
-        }
+        })
     );
 #endif
 
@@ -218,7 +213,7 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
     co_await publishToolPrompt(ctx, kNameBash, bashPrompt);
 
     auto bashSchema
-        = (co_await agentxx::plugin::schemaOf(ctx, kNameBash))
+        = (co_await schemaOfAsync(ctx, kNameBash))
               .string(
                   "command",
                   argDescOr(bashPrompt, "command", kBashToolDepict),
@@ -235,7 +230,7 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
               .build();
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-    co_await tool(
+    co_await toolAsync(
         ctx,
         ref,
         kNameBash,
@@ -259,9 +254,13 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
             };
             StoreFn storeFn = nullptr;
             if (!tidStr.empty() && c.iface.session && c.iface.session->add_share_store) {
-                storeFn = [&c, ref, tidStr](std::string_view content) -> long long {
-                    // 受控轮询工具体跑在插件执行线程上, 同 Windows 侧: 只能同步等一次往返
-                    return c.addShareStore(ref, tidStr, content, /*allowOnPluginThread=*/true);
+                storeFn = [&c, ref, tidStr](std::string_view content) -> asio::awaitable<long long> {
+                    co_return co_await agentxx::plugin::addShareStoreAsync(
+                        c,
+                        ref,
+                        tidStr,
+                        std::string(content)
+                    );
                 };
             }
             // 子进程管道/计时器绑定到本协程的 executor (= 插件本地 reactor),
@@ -278,13 +277,13 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
         }
     );
 #else
-    co_await tool(
+    co_await toolAsync(
         ctx,
         ref,
         kNameBash,
         bashPrompt.depict,
         bashSchema,
-        [ref](ExecPluginCtx&             c,
+        agentxx::plugin::onWorkerAsync([](ExecPluginCtx&             c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -300,22 +299,14 @@ static pluginxx::Task<void> setupExecPluginAsync(ExecPluginCtx& ctx, ScopeRef re
                 }
                 return c.cancelRegistry.isCanceled(tidStr);
             };
-            StoreFn storeFn = nullptr;
-            if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
-                storeFn = [&c, ref, tidStr](std::string_view content) -> long long {
-                    // 同步体跑在工作线程池上, 默认策略就是真等 (不占插件线程)
-                    return c.addShareStore(ref, tidStr, content);
-                };
-            }
             return bashExecute(
                 args.raw(),
                 std::string(workDir),
                 isCanceled,
-                storeFn,
                 &c.cancelRegistry,
                 tidStr
             );
-        }
+        })
     );
 #endif
 #endif
@@ -353,7 +344,7 @@ static void* execMount(
     }
     const AgentRef agentRef(*spec);
     // 注册事务交给协程: 每个注册都是"提交 + co_await", 全部生效后再放行挂载
-    ctx.spawn([later, agentRef](ExecPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](ExecPluginCtx& c, OpCtl&) -> asio::awaitable<void> {
         try {
             co_await setupExecPluginAsync(c, agentRef);
             later.ok();

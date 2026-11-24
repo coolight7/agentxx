@@ -20,18 +20,18 @@ constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
 struct SysPluginCtx : public PluginBase {};
 
 /// 注册事务 (mount 的实际内容; 每个 agent 各自一份)。
-static pluginxx::Task<void> sysSetupAsync(SysPluginCtx& ctx, ScopeRef ref) {
-    auto schema = (co_await agentxx::plugin::schemaOf(ctx, kNameDatetime)).build();
+static asio::awaitable<void> sysSetupAsync(SysPluginCtx& ctx, ScopeRef ref) {
+    auto schema = (co_await agentxx::plugin::schemaOfAsync(ctx, kNameDatetime)).build();
 
-    co_await tool(
+    co_await toolAsync(
         ctx,
         ref,
         kNameDatetime,
         kDepictDatetime,
         schema,
-        [](std::string_view) -> std::string {
+        agentxx::plugin::onWorkerAsync([](std::string_view) -> std::string {
             return currentDatetimeExecute();
-        },
+        }),
         0,
         kRepeatCheck
     );
@@ -63,7 +63,7 @@ static void* sysMount(
     }
     const AgentRef agentRef(*spec);
     // 注册事务交给协程: 每个注册都是"提交 + co_await", 全部生效后再放行挂载
-    ctx.spawn([later, agentRef](SysPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](SysPluginCtx& c, OpCtl&) -> asio::awaitable<void> {
         try {
             co_await sysSetupAsync(c, agentRef);
             later.ok();

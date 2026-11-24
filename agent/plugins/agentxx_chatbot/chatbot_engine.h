@@ -22,6 +22,7 @@
 #include "platform/platform.h"
 
 #include "asio/any_io_executor.hpp"
+#include "asio/awaitable.hpp"
 #include "asio/steady_timer.hpp"
 
 #include <cstdint>
@@ -35,6 +36,8 @@
 
 namespace agentxx {
 namespace chatbot {
+
+namespace asio = ::boost::asio;
 
 /// 一个会话的历史条目 (供 `chatbot_history`)
 struct HistoryItem {
@@ -122,21 +125,28 @@ class ChatbotEngine {
 public:
 
     /// 运行时会话操作的注入点 (由入口文件实现, 转成 SDK 调用)
+    ///
+    /// 需要结果的入口是**协程形态** (`asio::awaitable`): 调度层跑在插件 io 线程上,
+    /// 表调用在那里只能 `co_await` (同步等会把这条线程堵住)。返回 void 的入口保持
+    /// 同步函数签名, 实现方投递后立即返回 (失败只记日志)。
     struct Runtime {
         /// 投一条输入到通道; 返回运行时错误码 (0 = 成功)
-        std::function<int32_t(int64_t channelId, std::string_view inputJson)> sendInput;
-        /// 取消通道当前轮次
+        ///
+        /// 文本参数**按值**: 调用方常传临时量 (`input.dump()`), 而这里的实现是
+        /// 一个协程 —— 帧只保存自己复制进去的东西。
+        std::function<asio::awaitable<int32_t>(int64_t channelId, std::string inputJson)>
+            sendInput;
+        /// 取消通道当前轮次 (投递后即返回)
         std::function<void(int64_t channelId)> cancel;
-        /// 应答一个中断
-        std::function<void(int64_t channelId, int64_t interruptId, std::string_view values)>
+        /// 应答一个中断 (投递后即返回)
+        std::function<void(int64_t channelId, int64_t interruptId, std::string values)>
             respondInterrupt;
-        /// 通道状态 JSON
-        std::function<std::string(int64_t channelId)> channelState;
-        /// 运行时清单 JSON (仅 `chatbot_status` 用)
-        std::function<std::string()> runtimeList;
         /// 打开一个会话通道 (人设名 + sessionId + 标题 → 通道 id; 失败 0)
-        std::function<int64_t(std::string_view, std::string_view, std::string_view)> openChannel;
-        /// 关闭一个通道
+        std::function<asio::awaitable<int64_t>(std::string personaName,
+                                               std::string sessionId,
+                                               std::string title)>
+            openChannel;
+        /// 关闭一个通道 (投递后即返回)
         std::function<void(int64_t channelId)> closeChannel;
         /// 下载一个入站附件 (平台层实现; 落盘后回填 `localPath`)
         std::function<void(const std::string& accountId, MediaRef& attachment)>
@@ -145,7 +155,8 @@ public:
         ///
         /// - `args` 是命令名后面那段文字 (`submit 帮我查一下…` / `list` / `cancel all`)
         /// - 返回给用户看的回复正文 (不抛异常; 失败也在正文里说清楚)
-        std::function<std::string(std::string_view chatKey, std::string_view args)> taskCommand;
+        std::function<asio::awaitable<std::string>(std::string chatKey, std::string args)>
+            taskCommand;
     };
 
     void init(
@@ -159,8 +170,11 @@ public:
     /// 建路由表 (start 里调; 之后配置不变)
     void buildRoutes();
 
-    /// 平台事件入口 (平台层在插件 io 线程上调用)
-    void onInbound(const InboundEvent& event);
+    /// 平台事件入口 (平台层在插件 io 线程上调用; 入口以协程方式跑)
+    ///
+    /// 参数**按值**: 入口经 `spawnIo` 投到 io 线程, 平台回调里的引用
+    /// 在协程恢复时早已失效 (协程帧里的引用不会把对象留住)。
+    asio::awaitable<void> onInbound(InboundEvent event);
 
     void onPlatformState(
         std::string_view accountId,
@@ -297,10 +311,20 @@ private:
     /// 通知状态变化 (面板快照发布)
     void notifyChanged();
 
+    /// 在插件 io 执行器上起一段协程 (回调里发起投递用; 异常只记日志不外抛)
+    void spawn(asio::awaitable<void> work);
+
+    /// 把一段已构好的输入 JSON 投到通道 (异步完成; 失败只记日志)
+    asio::awaitable<void> sendTaskResultToChannel(int64_t channelId, std::string inputJson);
+
     SessionState& stateOf(const std::string& chatKey);
 
     /// 投递缓冲 (通道空闲时组装并 send_input)
-    void flush(const std::string& chatKey, std::string_view reason);
+    ///
+    /// 协程形态: 开通道与投输入都是表调用, 在插件 io 线程上只能 `co_await`。
+    /// `chatKey` **按值**: 调用方多是 `spawn(flush(...))`, 发起方 (普通函数或
+    /// 定时器回调) 在协程挂起后就返回了, 传引用会读到已释放的栈/闭包。
+    asio::awaitable<void> flush(std::string chatKey, std::string_view reason);
 
     /// 组装一次输入 JSON
     ///
@@ -326,7 +350,7 @@ private:
     );
 
     /// 处理关键词命令; 返回 true = 已被命令消费 (不进模型)
-    bool handleCommand(
+    asio::awaitable<bool> handleCommand(
         const std::string&       chatKey,
         const InboundEvent&      event,
         const ParsedCommand&     command

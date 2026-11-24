@@ -3063,7 +3063,7 @@ static PluginxxOperatorHandle* PLUGINXX_CALL xx_cnet_call(
         std::shared_ptr<pluginxx::OpCore> core;
         try {
             core = pluginxx::OpCore::createDetached(mgr->runtime(), "net." + opStr);
-            core->setCallback(cb, cb_ud, true);
+            core->setCallback(cb, cb_ud);
             core->accept();
         } catch (const std::exception& e) {
             agentxx::plugin::hostMemorySetString(error_out, e.what());

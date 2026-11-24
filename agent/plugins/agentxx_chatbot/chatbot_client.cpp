@@ -133,7 +133,7 @@ void PLUGINXX_CALL onConnState(const PluginxxStringView* payload, void* ud) {
 /// client 侧注册事务 (协程形态)
 ///
 /// 没有界面能力 (CLI / 老主程序) 时直接返回: 面板注册失败不影响 agent 侧功能。
-pluginxx::Task<void> chatbotClientSetupAsync(ChatbotClientCtx& ctx) {
+asio::awaitable<void> chatbotClientSetupAsync(ChatbotClientCtx& ctx) {
     const PluginxxHost* host = ctx.host;
     const auto          ui   = ctx.iface.ui;
     if (!ui) {
@@ -234,7 +234,7 @@ void chatbotClientStart(
         return;
     }
     auto later = agentxx::plugin::finishLater(notify);
-    ctx.spawn([later](ChatbotClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later](ChatbotClientCtx& c, pluginxx::OpCtl&) -> asio::awaitable<void> {
         try {
             co_await chatbotClientSetupAsync(c);
         } catch (const std::exception& e) {

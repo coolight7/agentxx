@@ -10,6 +10,7 @@
 /// - T5 加载失败 → 声明资源不生效 ("失败不生效"语义)
 #include "agentxx-test/plugin/test_plugin_resources.h"
 #include "agentxx-test/plugin/plugin_thread_fixture.h"
+#include "agentxx-test/plugin/test_table_op.h"
 
 #include "agentxx/agent/prompt_sources.h"
 #include "agentxx/agent/resource_applier.h"
@@ -412,12 +413,12 @@ mcp:
         // ---- 运行时注册 skill 目录 (冻结后应拒绝: 仅 yaml 与初始化时追加生效) ----
         // 表成员是异步契约: 每个调用都用阻塞形态在同一个栈上等结果
         auto resOk = [&](auto&& start) {
-            return agentxx::plugin::tableOpSyncWait(
+            return agentxx::test::tableOpWait(
                        inst->hostView(),
                        nullptr,
                        nullptr,
                        std::forward<decltype(start)>(start),
-                       5000
+                       std::chrono::milliseconds{5000}
                    )
                 .ok();
         };
@@ -443,14 +444,14 @@ mcp:
         // ---- 快照 JSON (get_own_resources) - 运行时 skill 未注册故不含 ----
         std::string ownJson;
         if (res3 && res3->get_own_resources) {
-            auto op = agentxx::plugin::tableOpSyncWait(
+            auto op = agentxx::test::tableOpWait(
                 inst->hostView(),
                 nullptr,
                 nullptr,
                 [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                     return res3->get_own_resources(inst->hostView(), &scopeRef, cb, ud, err);
                 },
-                5000
+                std::chrono::milliseconds{5000}
             );
             ownJson.assign(op.text());
         }
@@ -517,14 +518,14 @@ mcp:
         {
             std::string j2;
             if (res3 && res3->get_own_resources) {
-                auto op = agentxx::plugin::tableOpSyncWait(
+                auto op = agentxx::test::tableOpWait(
                     inst->hostView(),
                     nullptr,
                     nullptr,
                     [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                         return res3->get_own_resources(inst->hostView(), &scopeRef, cb, ud, err);
                     },
-                    5000
+                    std::chrono::milliseconds{5000}
                 );
                 j2.assign(op.text());
             }

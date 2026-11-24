@@ -182,8 +182,19 @@ void onChannelEventImpl(RuntimeCtx& ctx, const agentxx::plugin::ChannelEvent& ev
                 ev.interruptId
             ));
             // 提交即返回 (回调在根所属 io 线程上, 不能在这里等结果)
-            agentxx::plugin::respondInterrupt(ctx, ev.channelId, ev.interruptId, R"_({"values":{}})_")
-                .forget();
+            ctx.spawn(
+                [channelId = ev.channelId, interruptId = ev.interruptId](
+                    RuntimeCtx&                  c,
+                    agentxx::plugin::OpCtl&
+                ) -> asio::awaitable<void> {
+                    (void)co_await agentxx::plugin::respondInterruptAsync(
+                        c,
+                        channelId,
+                        interruptId,
+                        R"_({"values":{}})_"
+                    );
+                }
+            );
             break;
         }
         case AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED: {
@@ -208,16 +219,16 @@ void onChannelEventImpl(RuntimeCtx& ctx, const agentxx::plugin::ChannelEvent& ev
 }
 
 /// 给被挂的 agent 注册的工具 (mount 回调里做)
-static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::AgentRef ref) {
+static asio::awaitable<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::AgentRef ref) {
     // 1) 往通道投一条消息 (等同平台收到一条用户消息)
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "example_runtime_say",
         "把一句话投给 example_runtime 插件自己的会话通道, 返回通道 id 与受理结果",
         R"_({"type":"object","properties":{"text":{"type":"string","description":"要投递的消息正文"}},"required":["text"]})_",
         [](RuntimeCtx& c, std::string_view argsJson, agentxx::plugin::OpCtl&)
-            -> pluginxx::Task<std::string> {
+            -> asio::awaitable<std::string> {
             const auto args = [&argsJson]() {
                 try {
                     return utilxx_base::Json::parse(std::string{argsJson});
@@ -233,7 +244,7 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
             if (channelId <= 0) {
                 throw std::runtime_error("会话通道尚未打开 (插件未启动或根挂载失败)");
             }
-            const auto sent = co_await agentxx::plugin::sendText(c, channelId, text);
+            const auto sent = co_await agentxx::plugin::sendTextAsync(c, channelId, text);
             co_return fmt::format(
                 R"_({{"channelId":{},"accepted":{},"rc":{}}})_",
                 channelId,
@@ -244,14 +255,14 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
     );
 
     // 2) 发一条事件 (由 COALESCE 触发器合并后投进通道)
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "example_runtime_ping",
         "发一条 example_runtime 事件, 触发器把窗口内的多条合并成一条投入通道",
         R"_({"type":"object","properties":{"text":{"type":"string","description":"事件正文, 缺省为 ping"}}})_",
         [](RuntimeCtx& c, std::string_view argsJson, agentxx::plugin::OpCtl&)
-            -> pluginxx::Task<std::string> {
+            -> asio::awaitable<std::string> {
             std::string text = "ping";
             try {
                 auto args = utilxx_base::Json::parse(std::string{argsJson});
@@ -267,7 +278,7 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
             utilxx_base::Json payload = utilxx_base::Json::object();
             payload["text"]           = text;
             const auto emitted
-                = co_await agentxx::plugin::emitEvent(c, c.triggerTopic, payload.dump());
+                = co_await agentxx::plugin::emitEventAsync(c, c.triggerTopic, payload.dump());
             co_return fmt::format(
                 R"_({{"topic":"{}","rc":{}}})_",
                 c.triggerTopic,
@@ -277,14 +288,14 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
     );
 
     // 3) 运行时状态 (插件自查用: 根 / 通道 / 触发器 / 定时器一览)
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "example_runtime_status",
         "返回 example_runtime 插件的根、通道、触发器、定时器与最近一轮回答",
         R"_({"type":"object","properties":{}})_",
         [](RuntimeCtx& c, std::string_view, agentxx::plugin::OpCtl&)
-            -> pluginxx::Task<std::string> {
+            -> asio::awaitable<std::string> {
             std::string rootId;
             std::string lastAnswer;
             int64_t     channelId = 0;
@@ -307,7 +318,7 @@ static pluginxx::Task<void> registerHostTools(RuntimeCtx& ctx, agentxx::plugin::
             out["triggerId"]       = c.triggerId;
             out["timerId"]         = c.timerId;
             // 主程序侧的运行时清单: 插件排查"为什么没投递"的第一现场
-            const auto listed = co_await agentxx::plugin::listRuntimeJson(c);
+            const auto listed = co_await agentxx::plugin::listRuntimeJsonAsync(c);
             out["runtime"]    = utilxx_base::Json::parse(
                 listed.ok() ? std::string{listed.text()} : std::string{"{}"}
             );
@@ -364,7 +375,7 @@ static void runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, 
 /// 这一步的顺序是有讲究的: 挂根之后根会异步 init, 通道可以先开 (就绪后自动启动);
 /// 触发器与定时器都要求通道 id 存在, 所以放在开通道之后。
 /// 每一步都是表调用, 因此整段写成协程: 插件执行线程上不阻塞。
-static pluginxx::Task<void>
+static asio::awaitable<void>
     runtimeStartTask(RuntimeCtx& ctx, agentxx::plugin::LifecycleFinisher later) {
     // 参数只在这里读一次 (读配置是表调用): 之后 args() 只看缓存
     ctx.argsJsonCache = co_await ctx.argsJsonAsync();
@@ -377,7 +388,7 @@ static pluginxx::Task<void>
     if (args.contains("mountPlugins") && args["mountPlugins"].is_object()) {
         rootOpt.mountPlugins = args["mountPlugins"].dump();
     }
-    const auto mounted = co_await agentxx::plugin::mountRoot(ctx, rootOpt);
+    const auto mounted = co_await mountRootAsync(ctx, rootOpt);
     if (!mounted.ok() || mounted.text().empty()) {
         later.failed(
             "start: mountRoot failed (see main program log: invalid config or root budget)"
@@ -392,7 +403,7 @@ static pluginxx::Task<void>
     chOpt.rootId    = ctx.rootId;
     chOpt.sessionId = args.value("sessionId", std::string{"example_runtime_demo"});
     chOpt.title     = "example_runtime 示例会话";
-    ctx.channelId   = co_await agentxx::plugin::openChannel(
+    ctx.channelId   = co_await agentxx::plugin::openChannelAsync(
         ctx,
         chOpt,
         [&ctx](const agentxx::plugin::ChannelEvent& ev) { onChannelEventImpl(ctx, ev); }
@@ -415,7 +426,7 @@ static pluginxx::Task<void>
     if (args.contains("triggerMaxQueue") && args["triggerMaxQueue"].is_number_integer()) {
         trigger.maxQueue = args["triggerMaxQueue"].get<int32_t>();
     }
-    const auto triggered = co_await agentxx::plugin::addTrigger(ctx, trigger);
+    const auto triggered = co_await agentxx::plugin::addTriggerAsync(ctx, trigger);
     ctx.triggerId        = triggered.ok() ? triggered.integer(0) : 0;
     if (ctx.triggerId == 0) {
         ctx.log.warn("trigger registration failed; event-driven demo is disabled");
@@ -434,7 +445,7 @@ static pluginxx::Task<void>
         timer.firstDelayMs = timerDelayMs;
         timer.intervalMs   = args.value("timerIntervalMs", int64_t{0});
         timer.policy       = AGENTXX_PLUGIN_TRIGGER_POLICY_DROP_IF_BUSY;
-        const auto added   = co_await agentxx::plugin::addRuntimeTimer(ctx, timer);
+        const auto added   = co_await agentxx::plugin::addRuntimeTimerAsync(ctx, timer);
         ctx.timerId        = added.ok() ? added.integer(0) : 0;
         if (ctx.timerId == 0) {
             ctx.log.warn("timer registration failed");
@@ -457,7 +468,7 @@ static void runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, 
         return;
     }
     auto later = agentxx::plugin::finishLater(notify);
-    ctx.spawn([later](RuntimeCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later](RuntimeCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
         co_await runtimeStartTask(c, later);
         co_return;
     });
@@ -468,21 +479,21 @@ static void runtimeStart(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, 
 ///
 /// 主程序在禁用/卸载时也会按归属整批回收, 所以这里的清理是"自己先收干净";
 /// 全部入口都是幂等的, 重复清理不会出错。
-static pluginxx::Task<void> runtimeStopTask(RuntimeCtx& ctx, agentxx::plugin::LifecycleFinisher later) {
+static asio::awaitable<void> runtimeStopTask(RuntimeCtx& ctx, agentxx::plugin::LifecycleFinisher later) {
     if (ctx.timerId != 0) {
-        co_await agentxx::plugin::removeRuntimeTimer(ctx, ctx.timerId);
+        co_await agentxx::plugin::removeRuntimeTimerAsync(ctx, ctx.timerId);
         ctx.timerId = 0;
     }
     if (ctx.triggerId != 0) {
-        co_await agentxx::plugin::removeTrigger(ctx, ctx.triggerId);
+        co_await agentxx::plugin::removeTriggerAsync(ctx, ctx.triggerId);
         ctx.triggerId = 0;
     }
     if (ctx.channelId != 0) {
-        co_await agentxx::plugin::closeChannel(ctx, ctx.channelId);
+        co_await agentxx::plugin::closeChannelAsync(ctx, ctx.channelId);
         ctx.channelId = 0;
     }
     if (!ctx.rootId.empty()) {
-        co_await agentxx::plugin::unmountRoot(ctx, ctx.rootId);
+        co_await agentxx::plugin::unmountRootAsync(ctx, ctx.rootId);
         ctx.rootId.clear();
     }
     later.ok();
@@ -500,7 +511,7 @@ static void runtimeStop(RuntimeCtx& ctx, const PluginxxOperatorNotify* notify, P
         return;
     }
     auto later = agentxx::plugin::finishLater(notify);
-    ctx.spawn([later](RuntimeCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later](RuntimeCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
         co_await runtimeStopTask(c, later);
         co_return;
     });
@@ -533,7 +544,7 @@ static void* runtimeForAgent(
     auto later = agentxx::plugin::finishLater(notify);
     // 工具注册交给协程: 每条注册“提交 + co_await”, 全部生效后再放行挂载
     const agentxx::plugin::AgentRef agentRef(*spec);
-    ctx.spawn([later, agentRef](RuntimeCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](RuntimeCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
         try {
             co_await registerHostTools(c, agentRef);
             later.ok();

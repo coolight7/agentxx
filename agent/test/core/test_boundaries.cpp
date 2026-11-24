@@ -1385,23 +1385,25 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
 
 /// 规则 16: 插件表调用形态
 ///
-/// 主程序接口表成员全是异步契约, 插件侧只允许两种消费形态:
-/// - **调用即提交**: `xxx(ctx, args)` 返回 `pluginxx::TableOpTicket`, `co_await` 取结果;
-/// - **回调形态**: `tableOpCallback(ctx, start, done)`。
+/// 主程序接口表成员全是异步契约, 插件侧只有两种消费形态:
+/// - **asio 异步操作**: `xxxAsync(...)` 返回 asio 异步操作, 在 `asio::awaitable` 里
+///   `co_await` (工具体 / 挂载事务 / 插件自有 io 线程都用它);
+/// - **回调形态**: `tableOpCallback(ctx, start, done)` (必须在同步函数里发起时用)。
 ///
-/// 阻塞形态 (`tableOpBlocking*` / `invoke_capability_blocking` / `call_tool_blocking`)
-/// 已删除, 再出现就是回退。同步等待原语 `tableOpSyncWait` 只允许出现在插件 SDK
-/// 内部 (它要就地回答同步外部 API), 插件源码里不得再用。
+/// 不需要结果时用两个"提交即返回"的入口: `*NoWait` (直接调 C 入口) 与
+/// `clientTableCall` (client 表)。
 ///
-/// kit 里还有几个用阻塞形态实现的便捷函数 (client 表的 `clientTableOp` /
-/// `clientTableText` / `clientTableHandle`): 它们只在 `create` 这类加载线程上用,
-/// 插件执行线程上会被拒绝。插件日常写法有对应替代 —— 要结果用 `clientTableOpAsync`,
-/// 不要结果用 `clientTableCall` / `*NoWait`, 所以插件源码里不应再出现三个阻塞入口。
+/// 同步、阻塞与自制协程计数形态已全部删除, 再出现就是回退:
+/// - 阻塞包装 (`tableOpBlocking*` / `invoke_capability_blocking` / `call_tool_blocking`);
+/// - 同步等待原语 `tableOpSyncWait` 与它服务的同步桥 (`SyncBridgeCallback`);
+/// - client 表的阻塞入口 (`clientTableOp` / `clientTableText` / `clientTableHandle`);
+/// - 运行时便捷层的 `*Sync` 形态 (`mountRootSync` 等);
+/// - kit 自制协程 (`pluginxx::Task` / `TableOpTicket` / `whenAll` / `tableOp` /
+///   `sleep` / `offload` / `yield` / `invoke_cap` / `capability` 的 ticket 形态与
+///   它们的 awaiter 类型): 插件协程一律是 `asio::awaitable`, 只用 `*Async` 入口。
 ///
-/// 运行时便捷层 (会话运行时与后台任务) 已经拆成“协程原名 + `*Sync` 同步形态”两种;
-/// `*Sync` 只给**确定不在插件执行线程**的位置用 (插件自有 io 线程 / 工作池), 插件源码里
-/// 默认不得出现 —— 新写的代码一律 `co_await`。目前只有 chatbot 的 engine/任务运行时
-/// 注入仍需要同步形态 (它们跑在插件自有 io 线程上), 见下面的白名单。
+/// 原因: create / mount / 工具回调都跑在插件执行线程上, 在那里等表调用会与结果派发
+/// 互等; 要结果就写成协程, 不要结果用提交即返回形态。
 void checkPluginTableCallShape(const fs::path& root, Violations& v) {
     static constexpr std::string_view kForbidden[] = {
         "tableOpBlocking(",
@@ -1409,20 +1411,38 @@ void checkPluginTableCallShape(const fs::path& root, Violations& v) {
         "invoke_capability_blocking",
         "call_tool_blocking",
     };
-    /// 阻塞式 client 表入口 (插件里改用 Async / 提交即返回形态)
+    /// 已删除的 kit 自制协程与它的凭据/awaiter 类型 (插件协程统一为 asio::awaitable)
+    static constexpr std::string_view kKitCoroutineHelpers[] = {
+        "pluginxx::Task<",
+        "pluginxx::TableOpTicket",
+        "pluginxx::whenAll(",
+        "pluginxx::tableOp(",
+        "pluginxx::sleep(",
+        "pluginxx::offload(",
+        "pluginxx::yield(",
+        "pluginxx::invoke_cap(",
+        "pluginxx::capability(",
+        "pluginxx::detail::BridgeRoot",
+        "pluginxx::detail::PromiseBase",
+        "pluginxx::detail::resumePluginCoroutine",
+        "pluginxx::detail::spawnTaskImpl",
+        "pluginxx::detail::SleepTicket",
+        "pluginxx::detail::OffloadTicket",
+        "pluginxx::detail::TableOpState",
+        "pluginxx::detail::InvokeCapAwaiter",
+    };
+    /// 已删除的同步等待原语 (含它的同步桥标记)
+    static constexpr std::string_view kSyncWaitHelpers[] = {
+        "tableOpSyncWait(",
+        "SyncBridgeCallback",
+    };
+    /// 已删除的阻塞式 client 表入口
     static constexpr std::string_view kBlockingClientHelpers[] = {
         "clientTableOp(",
         "clientTableText(",
         "clientTableHandle(",
     };
-    // 同步等待原语与阻塞式 client 表入口: 没有任何插件可以再用 (名单为空)
-    //
-    // create / mount / 工具回调都跑在插件执行线程上, 在那里等表调用会与结果派发
-    // 互等; 要结果就写成协程 (`co_await tableOp`), 不要结果用 `clientTableCall`。
-    // JS 引擎也不再享有豁免 (脚本侧表调用一律返回 Promise)。
-    static constexpr std::array<std::string_view, 0> kSyncWaitAllowed{};
-
-    /// 运行时便捷层的同步形态 (`plugin_kit.h` 里原名 + `Sync` 后缀的那批)
+    /// 已删除的运行时便捷层同步形态 (`plugin_kit.h` 里原名 + `Sync` 后缀的那批)
     static constexpr std::string_view kRuntimeSyncHelpers[] = {
         "mountRootSync(",
         "unmountRootSync(",
@@ -1446,20 +1466,6 @@ void checkPluginTableCallShape(const fs::path& root, Violations& v) {
         "getAsyncWorkJsonSync(",
         "listAsyncWorkJsonSync(",
     };
-    /// `*Sync` 的现有使用点 (都要在非插件执行线程上):
-    /// - chatbot 的 engine / 任务运行时注入跑在自己的 io 线程上 —— 要等结果, 而那里不是插件执行线程;
-    ///   等它的工具体与命令回调也改完协程后整个名单可以清空
-    ///
-    /// 生命周期入口 (`create` / `stop` / `destroy`) 已不再需要同步形态: 关闭中的实例仍受理
-    /// `register_task` / `sleep` / `offload`, 它们的 lease 计入 inflight, 卸载会等清理协程
-    /// 跑完, 因此 stop 里直接写 `finishLater` + `ctx.spawn(...)` + `co_await` 即可
-    /// (示例: `plugins/example_runtime`)。chatbot 的 stop 之所以还在名单里, 是因为它的
-    /// 清理主体要驱动自有 io 线程上的平台层 (`runOnIoBlocking` / `stopIo`), 阻塞点换不换
-    /// 协程都一样, 唯一可换的 `unmountRootSync` 在关闭中只会拿到 `not_found`。
-    /// 新增用法要复核是否真的不在插件执行线程上。
-    static constexpr std::string_view kRuntimeSyncAllowed[] = {
-        "plugins/agentxx_chatbot/",
-    };
 
     std::vector<fs::path> files;
     collectSources(root / "plugins", files);
@@ -1470,70 +1476,23 @@ void checkPluginTableCallShape(const fs::path& root, Violations& v) {
         if (text.empty()) {
             continue;
         }
-        const auto rel      = toGeneric(f.lexically_relative(root));
-        const auto isKit    = rel.rfind("lib/include/agentxx/plugin/api/", 0) == 0;
-        const auto inBridge = std::any_of(
-            std::begin(kSyncWaitAllowed),
-            std::end(kSyncWaitAllowed),
-            [&rel](std::string_view part) {
-                return rel.find(part) != std::string::npos;
-            }
-        );
-
-        if (!isKit) {
-            for (const auto& name : kForbidden) {
+        const auto rel = toGeneric(f.lexically_relative(root));
+        /// 一组名字逐个查, 命中即记一条违规
+        const auto checkNames = [&](const auto& names, std::string_view advice) {
+            for (const auto& name : names) {
                 if (text.find(name) != std::string::npos) {
                     v.push_back(
-                        rel + ": 使用了已删除的阻塞形态 `" + std::string{name}
-                        + "` (改用 `co_await tableOp(...)` 或 tableOpCallback)"
+                        rel + ": 使用了已删除的形态 `" + std::string{name} + "` (" + std::string{advice}
+                        + ")"
                     );
                 }
             }
-        }
-        // 同步等待原语与阻塞式 client 表入口只能用在使用方必须同步拿到结果的地方
-        if (!inBridge) {
-            const auto pos = text.find("tableOpSyncWait(");
-            if (pos != std::string::npos) {
-                if (isKit) {
-                    continue; // kit 自己的实现 (工具权限/语言/工作目录这类同步便捷函数)
-                }
-                const auto line = 1 + static_cast<int>(std::count(
-                                          text.begin(),
-                                          text.begin() + static_cast<long>(pos),
-                                          '\n'
-                                      ));
-                v.push_back(
-                    rel + ":" + std::to_string(line)
-                    + ": `tableOpSyncWait` 只给必须同步回答外部同步 API 的桥用"
-                      " (插件里请 `co_await tableOp(...)`)"
-                );
-            }
-            if (!isKit) {
-                for (const auto& name : kBlockingClientHelpers) {
-                    if (text.find(name) != std::string::npos) {
-                        v.push_back(
-                            rel + ": 使用了阻塞式 client 表入口 `" + std::string{name}
-                            + "` (要结果用 `clientTableOpAsync`, 不要结果用 `clientTableCall`)"
-                        );
-                    }
-                }
-                const auto syncAllowed = std::any_of(
-                    std::begin(kRuntimeSyncAllowed),
-                    std::end(kRuntimeSyncAllowed),
-                    [&rel](std::string_view part) { return rel.find(part) != std::string::npos; }
-                );
-                if (!syncAllowed) {
-                    for (const auto& name : kRuntimeSyncHelpers) {
-                        if (text.find(name) != std::string::npos) {
-                            v.push_back(
-                                rel + ": 使用了运行时同步形态 `" + std::string{name}
-                                + "` (插件执行线程上会与结果派发互等; 写成 `co_await` 同名入口)"
-                            );
-                        }
-                    }
-                }
-            }
-        }
+        };
+        checkNames(kForbidden, "改用 `co_await xxxAsync(...)` 或 tableOpCallback");
+        checkNames(kKitCoroutineHelpers, "插件协程统一用 `asio::awaitable` + `*Async` 入口");
+        checkNames(kSyncWaitHelpers, "要结果就写成协程");
+        checkNames(kBlockingClientHelpers, "要结果用 `clientTableOpAsync`, 不要结果用 `clientTableCall`");
+        checkNames(kRuntimeSyncHelpers, "写成 `co_await` 同名入口");
     }
 }
 

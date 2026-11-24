@@ -158,9 +158,9 @@ static const char* kScreenCaptureDefaultDepict
       "pixel data never enters the conversation.";
 
 /// 注册截图工具 (**协程形态**): schema/提示词读取与工具注册都是“提交 + `co_await`”
-static pluginxx::Task<void>
+static asio::awaitable<void>
     registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, agentxx::plugin::AgentRef ref) {
-    auto schemaBuilder = co_await agentxx::plugin::schemaOf(ctx, "agentxx_screen_capture");
+    auto schemaBuilder = co_await agentxx::plugin::schemaOfAsync(ctx, "agentxx_screen_capture");
     auto schema
         = schemaBuilder
               .enumString(
@@ -191,16 +191,16 @@ static pluginxx::Task<void>
               )
               .build();
 
-    auto        p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_screen_capture");
+    auto        p      = co_await agentxx::plugin::toolPromptOfAsync(ctx, "agentxx_screen_capture");
     std::string depict = p.depict.empty() ? kScreenCaptureDefaultDepict : p.depict;
 
-    co_await agentxx::plugin::tool(
+    co_await agentxx::plugin::toolAsync(
         ctx,
         ref,
         "agentxx_screen_capture",
         depict,
         schema,
-        [](ScreenCapturePluginCtx& c, std::string_view args_json)
+        agentxx::plugin::onWorkerAsync([](ScreenCapturePluginCtx& c, std::string_view args_json)
             -> agentxx::plugin::ToolResult {
             agentxx::plugin::ArgReader args(args_json);
             if (!args.ok()) {
@@ -271,7 +271,7 @@ static pluginxx::Task<void>
                 "unknown command: use capture_all / capture_screen / capture_mouse / "
                 "get_screen_count / start_streaming / stop_streaming"
             );
-        },
+        }),
         0,
         AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY
     );
@@ -300,7 +300,7 @@ static void screenCaptureAgentStart(
         later.provider();
         return;
     }
-    ctx.spawn([later](ScreenCapturePluginCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later](ScreenCapturePluginCtx& c, pluginxx::OpCtl&) -> asio::awaitable<void> {
         const std::string cfgStr = co_await c.configAsync();
         if (!cfgStr.empty() && cfgStr != "{}") {
             try {
@@ -351,7 +351,7 @@ static void* screenCaptureAgentMount(
     // 工具注册交给协程: schema/提示词读取与注册逐条 co_await, 全部生效后再放行挂载
     const agentxx::plugin::AgentRef agentRef(*spec);
     ctx.spawn(
-        [later, agentRef](ScreenCapturePluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        [later, agentRef](ScreenCapturePluginCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
             try {
                 co_await registerScreenCaptureTool(c, agentRef);
                 later.ok();

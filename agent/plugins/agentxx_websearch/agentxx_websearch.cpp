@@ -177,9 +177,9 @@ static HttpResult netHttpExecute(WebsearchPluginCtx& ctx, const HttpRequestSpec&
 /// 两个工具的实现体都是**同步**函数: 网络经主程序 `<应用名>.net` 表的
 /// `http.fetch` (异步受理 + 工作线程上等结果), 因此注册为 `tool` ——
 /// 等待期间只占一个工作线程, 不在主程序 io 线程上阻塞。
-static pluginxx::Task<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRef ref) {
+static asio::awaitable<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRef ref) {
     if (ctx.iface.model && ctx.iface.model->get_config) {
-        auto        cfgRes  = co_await agentxx::plugin::modelConfigJson(ctx, ref.ptr());
+        auto        cfgRes  = co_await agentxx::plugin::modelConfigJsonAsync(ctx, ref.ptr());
         std::string cfgJson = cfgRes.ok() ? std::string{cfgRes.text()} : std::string{};
         if (!cfgJson.empty()) {
             try {
@@ -203,20 +203,20 @@ static pluginxx::Task<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRe
 
     // 1. fetch (fetch 与 fetch_markdown: 由 `format` 选择返回形态)
     auto fetchSchema
-        = (co_await agentxx::plugin::schemaOf(ctx, kNameFetch))
+        = (co_await schemaOfAsync(ctx, kNameFetch))
               .string("url", kFetchUrlDesc, /*required=*/true)
               .enumString("format", kFetchFormatDesc, {"markdown", "raw"}, false, "markdown")
               .number("timeout", kFetchTimeoutDesc, false, 30.0)
               .object("header", kHeaderArgDesc)
               .build();
 
-    co_await tool(
+    co_await toolAsync(
         ctx,
         ref,
         kNameFetch,
         kDepictFetch,
         fetchSchema,
-        [](WebsearchPluginCtx&      c,
+        agentxx::plugin::onWorkerAsync([](WebsearchPluginCtx&      c,
            std::string_view         args_json,
            const PluginxxCancelToken* cancel_token) -> ToolResult {
             if (pluginxx_cancel_is_requested(cancel_token)) {
@@ -231,26 +231,26 @@ static pluginxx::Task<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRe
                 throw CanceledException("web_fetch Canceled");
             }
             return ToolResult::ok(std::move(result));
-        },
+        }),
         0,
         kAutoSummary
     );
 
     // 2. search
     if (ctx.use_model_search || !ctx.search_api_url.empty()) {
-        auto searchSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameSearch))
+        auto searchSchema = (co_await schemaOfAsync(ctx, kNameSearch))
                                 .string("query", kSearchQueryDesc, /*required=*/true)
                                 .number("timeout", kSearchTimeoutDesc, false, 20.0)
                                 .object("header", kHeaderArgDesc)
                                 .build();
 
-        tool(
+        co_await toolAsync(
             ctx,
             ref,
             kNameSearch,
             kDepictSearch,
             searchSchema,
-            [](WebsearchPluginCtx&      c,
+            agentxx::plugin::onWorkerAsync([](WebsearchPluginCtx&      c,
                std::string_view         args_json,
                const PluginxxCancelToken* cancel_token) -> ToolResult {
                 if (pluginxx_cancel_is_requested(cancel_token)) {
@@ -276,7 +276,7 @@ static pluginxx::Task<void> websearchSetupAsync(WebsearchPluginCtx& ctx, ScopeRe
                     throw CanceledException("web_search Canceled");
                 }
                 return ToolResult::ok(std::move(result));
-            },
+            }),
             0,
             kAutoSummary
         );
@@ -318,7 +318,7 @@ static void* websearchMount(
     }
     const AgentRef agentRef(*spec);
     // 注册事务交给协程: 每个注册都是"提交 + co_await", 全部生效后再放行挂载
-    ctx.spawn([later, agentRef](WebsearchPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](WebsearchPluginCtx& c, OpCtl&) -> asio::awaitable<void> {
         try {
             co_await websearchSetupAsync(c, agentRef);
             later.ok();

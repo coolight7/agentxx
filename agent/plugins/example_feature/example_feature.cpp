@@ -80,7 +80,7 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
 /// 挂载事务 (mount): 登记实现行与通知订阅 (**协程形态**)
 /// - `ref` 为本次挂载的 agent 引用, 全部登记都记在该 agent 名下
 /// - 每条登记都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到拒绝原因
-static pluginxx::Task<void>
+static asio::awaitable<void>
     featureAgentSetup(FeatureCtx& ctx, agentxx::plugin::AgentRef ref) {
     using namespace agentxx::plugin;
 
@@ -96,7 +96,7 @@ static pluginxx::Task<void>
     //    - `pointAnswer` 把业务 JSON 包成 `{"value": ...}` 形式 (与早期写法一致),
     //      已经带 `value` / `disable` 的会原样返回
     {
-        auto r = co_await providePoint(
+        auto r = co_await providePointAsync(
             ctx,
             ref,
             "plugin.example_feature.beat",
@@ -125,15 +125,15 @@ static pluginxx::Task<void>
     //    - 协程的返回值就是回答本身, 用 `pointAnswer` 包一层 (与同步形态一致)
     //    - `value` / `disable` 是回答的保留键: 业务数据里要用同名字段时自己包一层
     {
-        auto r = co_await providePoint(
+        auto r = co_await providePointAsync(
             ctx,
             ref,
             "plugin.example_feature.slow",
-            [](FeatureCtx& c, std::string_view call) -> agentxx::plugin::Task<std::string> {
+            [](FeatureCtx& c, std::string_view call) -> asio::awaitable<std::string> {
                 const auto in   = utilxx_base::Json::parse(call);
                 const auto args = in.value<utilxx_base::Json>("args", utilxx_base::Json::object());
                 // 等待 60ms: 这类等待让出驱动序列, 期间 IO 线程可继续处理其他工作
-                co_await sleep(c, 60);
+                co_await sleepAsync(c, 60);
                 auto out       = utilxx_base::Json::object();
                 out["counter"] = ++c.counter;
                 out["input"]   = args.value<int64_t>("input", 1);
@@ -152,7 +152,7 @@ static pluginxx::Task<void>
     //    - 主程序点写全名; 行只对本挂载生效, 优先级默认 0
     //    - 点还没声明 (如裸 PluginManager 环境) 时登记被拒, 记一条日志继续
     {
-        auto r = co_await providePoint(
+        auto r = co_await providePointAsync(
             ctx,
             ref,
             agentxx::plugin::points::ContextCountTokens,
@@ -173,7 +173,7 @@ static pluginxx::Task<void>
     //    - 一个插件可能同时挂在多个 agent 上: 载荷里带 `agentId`, 订阅侧自己过滤
     //    - 订阅跟着实例走: 禁用/卸载时由主程序自动退订
     if (ctx.iface.broadcasts && ctx.iface.broadcasts->subscribe_broadcast) {
-        co_await agentxx::plugin::subscribePluginBroadcast(
+        co_await subscribePluginBroadcastAsync(
             ctx,
             ref.ptr(),
             agentxx::plugin::points::TurnStart,
@@ -244,7 +244,7 @@ static void* featureAgentMount(
     auto later = agentxx::plugin::finishLater(notify);
     // 注册事务交给协程: 实现行/订阅逐条"提交 + co_await", 全部生效后再放行挂载
     const agentxx::plugin::AgentRef agentRef(*spec);
-    ctx.spawn([later, agentRef](FeatureCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](FeatureCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
         try {
             co_await featureAgentSetup(c, agentRef);
             c.log.info("example_feature mounted");

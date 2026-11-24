@@ -60,7 +60,7 @@
 ///
 /// C++ 侧消费形态在 `agentxx/plugin/api/agent_plugin_kit.h` (agent 侧) 与 `client_plugin_kit.h` (client 侧):
 /// `co_await tableOp(ctx, ...)` / `tableOpCallback(ctx, ..., done)` /
-/// `tableOpSyncWait(...)` (只给必须同步回答外部同步 API 的桥用; 在插件执行线程上
+/// `co_await tableOp(...)` (同步等待形态已删除; 本表的结果一律在协程里取)
 /// 它会拒绝等待 —— 完成回调要投回那条线程, 而它正阻塞在那里)。
 #ifndef AGENTXX_PLUGIN_API_H
 #define AGENTXX_PLUGIN_API_H

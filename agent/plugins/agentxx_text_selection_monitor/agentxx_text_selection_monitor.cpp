@@ -458,11 +458,11 @@ static void textSelectionAgentStart(
 }
 
 /// 挂载事务 (**协程形态**): 取工具提示词 + 建 schema + 注册工具
-static pluginxx::Task<void> textSelectionAgentSetup(
+static asio::awaitable<void> textSelectionAgentSetup(
     TextSelectionPluginCtx& ctx,
     agentxx::plugin::AgentRef ref
 ) {
-    auto schemaBuilder = co_await agentxx::plugin::schemaOf(ctx, "agentxx_text_selection_monitor");
+    auto schemaBuilder = co_await schemaOfAsync(ctx, "agentxx_text_selection_monitor");
     auto schema
         = schemaBuilder
               .enumString(
@@ -477,13 +477,13 @@ static pluginxx::Task<void> textSelectionAgentSetup(
               )
               .build();
 
-    co_await tool(
+    co_await toolAsync(
         ctx,
         ref,
         "agentxx_text_selection_monitor",
         "Monitor system-wide text selection events. Supports start, stop, and status query.",
         schema,
-        [](TextSelectionPluginCtx& c, std::string_view args_json) -> agentxx::plugin::ToolResult {
+        agentxx::plugin::onWorkerAsync([](TextSelectionPluginCtx& c, std::string_view args_json) -> agentxx::plugin::ToolResult {
             ArgReader args(args_json);
             auto      command = args.require<std::string>("command");
             if (!args.ok()) {
@@ -513,7 +513,7 @@ static pluginxx::Task<void> textSelectionAgentSetup(
             }
 
             return agentxx::plugin::ToolResult::fail(R"_(unknown command: use start/stop/status)_");
-        }
+        })
     );
     co_return;
 }
@@ -544,7 +544,7 @@ static void* textSelectionAgentMount(
     // 工具注册交给协程: schema/提示词读取与注册逐条 co_await, 全部生效后再放行挂载
     const agentxx::plugin::AgentRef agentRef(*spec);
     ctx.spawn([later, agentRef](TextSelectionPluginCtx& c, agentxx::plugin::OpCtl&)
-                  -> pluginxx::Task<void> {
+                  -> asio::awaitable<void> {
         try {
             co_await textSelectionAgentSetup(c, agentRef);
             later.ok();

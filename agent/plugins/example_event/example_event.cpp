@@ -116,7 +116,7 @@ static void PLUGINXX_CALL onRoundStart(const PluginxxStringView* payload, void* 
 
 /// 挂载事务: 声明频道、发布初始值、订阅频道
 /// 挂载事务: 声明频道、发布初始值、订阅频道 (**协程形态**)
-static pluginxx::Task<void> eventAgentSetup(EventCtx& ctx, EventMountState& state) {
+static asio::awaitable<void> eventAgentSetup(EventCtx& ctx, EventMountState& state) {
     using namespace agentxx::plugin;
     const auto* bc = ctx.iface.broadcasts;
     if (nullptr == bc || nullptr == bc->declare_broadcast || nullptr == bc->publish_broadcast) {
@@ -126,7 +126,7 @@ static pluginxx::Task<void> eventAgentSetup(EventCtx& ctx, EventMountState& stat
 
     // 1. 声明两条自己的频道: 都保留当前值 (后订阅者能立刻拿到最后一条)
     for (const char* id : {"plugin.example_event.build", "plugin.example_event.ready"}) {
-        auto declared = co_await declarePluginBroadcast(ctx, id, false, true);
+        auto declared = co_await declarePluginBroadcastAsync(ctx, id, false, true);
         if (!declared.ok()) {
             throw std::runtime_error{
                 fmt::format(
@@ -142,16 +142,16 @@ static pluginxx::Task<void> eventAgentSetup(EventCtx& ctx, EventMountState& stat
     utilxx_base::Json ready = utilxx_base::Json::object();
     ready["ok"]             = true;
     ready["plugin"]         = "example_event";
-    co_await publishPluginBroadcast(ctx, "plugin.example_event.ready", ready.dump(), false);
+    co_await publishPluginBroadcastAsync(ctx, "plugin.example_event.ready", ready.dump(), false);
     utilxx_base::Json step = utilxx_base::Json::object();
     step["step"]           = 1;
     step["total"]          = 2;
-    co_await publishPluginBroadcast(ctx, "plugin.example_event.build", step.dump(), false);
+    co_await publishPluginBroadcastAsync(ctx, "plugin.example_event.build", step.dump(), false);
     ++ctx.emitted;
 
     // 3. 读当前值: 有当前值的频道可以直接读, 不必等下一次发布
     if (bc->read_broadcast != nullptr) {
-        auto readResult = co_await tableOp(
+        auto readResult = co_await tableOpAsync(
             ctx,
             [&ctx, bc](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
                 -> PluginxxOperatorHandle* {
@@ -167,7 +167,7 @@ static pluginxx::Task<void> eventAgentSetup(EventCtx& ctx, EventMountState& stat
     // 4. 订阅: 自己的进度频道 (带结束回调) + 主程序的轮次通知。
     //    轮次通知属主是主程序, 订阅它不需要先声明。
     if (bc->subscribe_broadcast_ex != nullptr) {
-        auto subResult = co_await subscribePluginBroadcastEx(
+        auto subResult = co_await subscribePluginBroadcastExAsync(
             ctx,
             state.ref.ptr(),
             "plugin.example_event.build",
@@ -185,7 +185,7 @@ static pluginxx::Task<void> eventAgentSetup(EventCtx& ctx, EventMountState& stat
         }
     }
     if (bc->subscribe_broadcast != nullptr) {
-        auto subResult = co_await subscribePluginBroadcast(
+        auto subResult = co_await subscribePluginBroadcastAsync(
             ctx,
             state.ref.ptr(),
             broadcasts::AgentRoundStart,
@@ -285,7 +285,7 @@ static void* eventAgentMount(
         return nullptr;
     }
     auto later = agentxx::plugin::finishLater(notify);
-    ctx.spawn([later, state](EventCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, state](EventCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
         try {
             co_await eventAgentSetup(c, *state);
             c.log.info("example_event mounted");

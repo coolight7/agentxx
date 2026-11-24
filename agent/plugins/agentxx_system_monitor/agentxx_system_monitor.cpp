@@ -228,26 +228,26 @@ struct SysMonCtx : public PluginBase {
 
 /// 挂载事务 (mount 的实际内容); 失败由主程序按拒绝处理并回滚。
 /// - `ref` 为本次挂载的 agent 引用, 工具注册记在该 agent 名下
-static pluginxx::Task<void> sysMonMountSetupAsync(SysMonCtx& ctx, ScopeRef ref) {
+static asio::awaitable<void> sysMonMountSetupAsync(SysMonCtx& ctx, ScopeRef ref) {
     // 1. 工具
-    auto schema = (co_await agentxx::plugin::schemaOf(ctx, "agentxx_get_system_core_info")).build();
-    co_await tool(
+    auto schema = (co_await schemaOfAsync(ctx, "agentxx_get_system_core_info")).build();
+    co_await toolAsync(
          ctx,
          ref,
         "agentxx_get_system_core_info",
         "Get system resource usage: CPU utilization and core count, memory usage, GPU utilization, and GPU memory usage.",
         schema,
-        [](SysMonCtx& c, std::string_view) -> std::string {
+        agentxx::plugin::onWorkerAsync([](SysMonCtx& c, std::string_view) -> std::string {
             auto usage = c.querySync();
             return formatUsageText(usage);
-        }
+        })
     );
 
     co_return;
 }
 
 /// 进程级启动工作: 能力、事件订阅与后台采样任务 (与挂载数无关, **协程形态**)
-static pluginxx::Task<void> sysMonStartSetup(SysMonCtx& ctx) {
+static asio::awaitable<void> sysMonStartSetup(SysMonCtx& ctx) {
     // 2. 能力: agentxx.system_usage —— 读取当前系统负担 (cpu/gpu 占用、内存与显存占用)
     //    - 这个 id 由主程序声明 (agentxx/plugin/api/agentxx_capability_ids.h),
     //      插件只登记实现行
@@ -258,12 +258,12 @@ static pluginxx::Task<void> sysMonStartSetup(SysMonCtx& ctx) {
     //    - 载荷字段见 [usageToJson] (内存与显存都给出可用量与总量)
     //    - 查询要读系统/GPU 计数器 (约 100ms 以上), 交给主程序阻塞池执行,
     //      异步返回: 调用方可以随时调用, 不会占住主程序 IO 线程
-    co_await capability(
+    co_await capabilityAsync(
         ctx,
         agentxx::plugin::capabilities::SystemUsage,
         [](SysMonCtx& c, const PluginxxHost*, std::string_view, std::string_view)
-            -> Task<std::string> {
-            auto usage = co_await offload(c, [&c](const PluginxxCancelToken*) {
+            -> asio::awaitable<std::string> {
+            auto usage = co_await offloadAsync(c, [&c](const PluginxxCancelToken*) {
                 return c.querySync();
             });
             co_return usageToJson(usage);
@@ -272,7 +272,7 @@ static pluginxx::Task<void> sysMonStartSetup(SysMonCtx& ctx) {
 
     // 3. 事件订阅
     if (ctx.iface.broadcasts && ctx.iface.broadcasts->subscribe_broadcast) {
-        co_await agentxx::plugin::subscribePluginBroadcast(
+        co_await subscribePluginBroadcastAsync(
             ctx,
             nullptr, ///< 进程级订阅 (客户端开关事件走主程序总线)
             "agentxx.client.plugin.agentxx_system_monitor.usage_enabled",
@@ -294,7 +294,7 @@ static pluginxx::Task<void> sysMonStartSetup(SysMonCtx& ctx) {
             &ctx
         );
 
-        co_await agentxx::plugin::subscribePluginBroadcast(
+        co_await subscribePluginBroadcastAsync(
             ctx,
             nullptr, ///< 进程级订阅 (客户端接入事件走主程序总线)
             "agentxx.agent.host.client_attached",
@@ -336,10 +336,10 @@ static pluginxx::Task<void> sysMonStartSetup(SysMonCtx& ctx) {
     }
 
     // 4. 后台采样任务
-    ctx.spawn([](SysMonCtx& c, OpCtl ctl) -> Task<void> {
+    ctx.spawn([](SysMonCtx& c, OpCtl ctl) -> asio::awaitable<void> {
         while (!ctl.canceled()) {
             if (c.usageEnabled.load(std::memory_order_relaxed)) {
-                auto usage = co_await offload(c, [&](const PluginxxCancelToken*) {
+                auto usage = co_await offloadAsync(c, [&](const PluginxxCancelToken*) {
                     return c.querySync();
                 });
                 if (ctl.canceled()) {
@@ -353,7 +353,7 @@ static pluginxx::Task<void> sysMonStartSetup(SysMonCtx& ctx) {
                     agentxx::plugin::publishPluginBroadcastNoWait(c.host, c.iface.broadcasts, topicSv, jsonSv);
                 }
             }
-            co_await sleep(c, kUsageIntervalSec * 1000);
+            co_await sleepAsync(c, kUsageIntervalSec * 1000);
         }
     });
 
@@ -380,7 +380,7 @@ static void sysMonStart(
     }
     auto later = finishLater(notify);
     // 能力登记与事件订阅走协程: 全部生效后再报启动完成
-    ctx.spawn([later](SysMonCtx& c, OpCtl&) -> Task<void> {
+    ctx.spawn([later](SysMonCtx& c, OpCtl&) -> asio::awaitable<void> {
         try {
             co_await sysMonStartSetup(c);
             later.ok();
@@ -412,7 +412,7 @@ static void* sysMonMount(
     }
     const AgentRef agentRef(*spec);
     // 注册事务交给协程: 每个注册都是"提交 + co_await", 全部生效后再放行挂载
-    ctx.spawn([later, agentRef](SysMonCtx& c, OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](SysMonCtx& c, OpCtl&) -> asio::awaitable<void> {
         try {
             co_await sysMonMountSetupAsync(c, agentRef);
             later.ok();
@@ -552,7 +552,7 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
 ///
 /// 三条注册都是提交 + `co_await`: 不阻塞插件执行线程, 失败只记日志 (与原同步版同样
 /// 不影响其他展示能力)。
-static pluginxx::Task<void> sysMonClientSetupAsync(SysMonClientCtx& ctx) {
+static asio::awaitable<void> sysMonClientSetupAsync(SysMonClientCtx& ctx) {
     const PluginxxHost* host = ctx.host;
     const auto          ui   = ctx.iface.ui;
     if (!ui) {
@@ -649,7 +649,7 @@ static pluginxx::Task<void> sysMonClientSetupAsync(SysMonClientCtx& ctx) {
                         // 结果到了再交回动作。`notify` 的两个字段按值带走, 回调返回后
                         // 指针本身不再可用。
                         const auto done = *notify;
-                        ctx->spawn([next, done](SysMonClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+                        ctx->spawn([next, done](SysMonClientCtx& c, pluginxx::OpCtl&) -> asio::awaitable<void> {
                             std::string text
                                 = next ? "System resource info: ON" : "System resource info: OFF";
                             const std::string stateStr = co_await c.clientStateAsync();
@@ -713,7 +713,7 @@ static void sysMonClientStart(
     }
     // 注册事务写成协程: 三条注册提交后并发跑, 全部有结果才交回
     auto later = agentxx::plugin::finishLater(notify);
-    ctx.spawn([later](SysMonClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later](SysMonClientCtx& c, pluginxx::OpCtl&) -> asio::awaitable<void> {
         co_await sysMonClientSetupAsync(c);
         later.ok();
         co_return;

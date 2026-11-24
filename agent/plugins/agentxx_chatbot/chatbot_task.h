@@ -18,6 +18,7 @@
 #include "chatbot_core.h"
 #include "chatbot_types.h"
 
+#include "asio/awaitable.hpp"
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -26,6 +27,8 @@
 
 namespace agentxx {
 namespace chatbot {
+
+namespace asio = ::boost::asio;
 
 /// 任务状态 (`queued` → `running` → 终态)
 enum class TaskState : uint8_t {
@@ -80,13 +83,14 @@ struct TaskSubmit {
 };
 
 /// 运行期注入点 (由插件入口实现, 转成主程序 SDK 调用)
+///
+/// 提交与取消是**协程形态**: 调用方 (调度层 / 工具) 都在插件 io 线程上,
+/// 那里只能 `co_await` 表调用。
 struct TaskRuntime {
     /// 提交 → asyncId (空 = 失败, 原因写 `err`)
-    std::function<std::string(const TaskSubmit&, std::string& err)> submit;
+    std::function<asio::awaitable<std::string>(const TaskSubmit&, std::string& err)> submit;
     /// 取消 (返回主程序错误码; 0 = 成功)
-    std::function<int32_t(std::string_view asyncId)> cancel;
-    /// 单条任务 JSON (主程序任务表; 终态取结果正文用; 拿不到返回空串)
-    std::function<std::string(std::string_view asyncId)> resultOf;
+    std::function<asio::awaitable<int32_t>(std::string_view asyncId)> cancel;
 };
 
 /// 提交结果 (给模型/用户看的文本与 id)
@@ -125,19 +129,24 @@ public:
     ///
     /// - 同一会话进行中的条数达到 `maxPendingPerChat` 时直接拒绝 (让模型改用等待)
     /// - 注入点缺失 (老主程序 / 运行时表降级) 时返回可读的失败说明
-    TaskSubmitResult submit(const TaskSubmit& request);
+    asio::awaitable<TaskSubmitResult> submit(TaskSubmit request);
 
     /// 取消
     ///
     /// - `asyncId` 非空: 只取消这一条 (必须属于 `chatKey`)
     /// - `asyncId` 为空: 取消该会话全部进行中的任务
     /// - `return` 给模型/用户看的说明
-    std::string cancel(std::string_view chatKey, std::string_view asyncId);
+    asio::awaitable<std::string> cancel(std::string chatKey, std::string asyncId);
 
     /// 任务事件 (`phase` = `AGENTXX_PLUGIN_ASYNC_WORK_EVT_*`)
     ///
     /// - 只更新状态, 不做任何跨线程动作; 返回 true = 可见状态变了 (入口据此刷面板)
     bool onEvent(std::string_view asyncId, int32_t phase, std::string_view payloadJson);
+
+    /// 补上「结果正文开头」(由入口在终态向主程序任务表要过一次后调用)
+    ///
+    /// 结果正文可能很大, 不在事件载荷里; 拉取是异步的, 因此单独一个入口。
+    void setResultHead(std::string_view asyncId, std::string_view resultText);
 
     /// 本会话的任务 (最近提交的在前)
     std::vector<TaskRecord> listOf(std::string_view chatKey) const;

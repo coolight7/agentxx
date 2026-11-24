@@ -96,16 +96,16 @@ static void multiMountStop(
 
 /// 注册本挂载的两个工具 (**协程形态**)
 /// - 每条注册都是"提交 + `co_await`": 提交就已经生效, 等结果只为了拿到失败原因
-static pluginxx::Task<void>
+static asio::awaitable<void>
     registerMultiMountTools(MultiMountCtx& ctx, std::shared_ptr<MountState> state) {
     // 工具 1: 计数 +1 (计数按挂载隔离)
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         state->ref,
         "multi_mount_incr",
         "Increase this mount's counter and return the new value (example_multi_mount)",
         R"_({"type":"object","properties":{"by":{"type":"integer","description":"increment step, default 1"}}})_",
-        [state](std::string_view argsJson) -> std::string {
+        agentxx::plugin::onWorkerAsync([state](std::string_view argsJson) -> std::string {
             int step = 1;
             try {
                 auto args = utilxx_base::Json::parse(
@@ -124,17 +124,17 @@ static pluginxx::Task<void>
                 state->ref.seq(),
                 state->count
             );
-        }
+        })
     );
 
     // 工具 2: 本挂载的状态 (含 config_json, 用于验证 plugin.mount[].args 覆盖)
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         state->ref,
         "multi_mount_state",
         "Return this mount's agentId, mount sequence, counter and config JSON (example_multi_mount)",
         R"_({"type":"object","properties":{}})_",
-        [state](std::string_view) -> std::string {
+        agentxx::plugin::onWorkerAsync([state](std::string_view) -> std::string {
             return fmt::format(
                 R"_({{"agentId":"{}","seq":{},"count":{},"config":{}}})_",
                 state->ref.id(),
@@ -142,7 +142,7 @@ static pluginxx::Task<void>
                 state->count,
                 state->configJson.empty() ? std::string{"{}"} : state->configJson
             );
-        }
+        })
     );
     co_return;
 }
@@ -188,7 +188,7 @@ static void* multiMountForAgent(
     auto* handle = new std::shared_ptr<MountState>(state);
     auto  later  = agentxx::plugin::finishLater(notify);
     ctx.spawn(
-        [later, handle, state](MultiMountCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        [later, handle, state](MultiMountCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
             try {
                 co_await registerMultiMountTools(c, state);
                 later.ok();

@@ -110,24 +110,24 @@ static void computerUseAgentStart(
 }
 
 /// 挂载事务 (**协程形态**): 先取主程序里的工具提示词, 再注册鼠标/键盘工具
-static pluginxx::Task<void>
+static asio::awaitable<void>
     computerUseAgentSetup(ComputerUsePluginCtx& ctx, agentxx::plugin::AgentRef ref) {
-    auto        p      = co_await agentxx::plugin::toolPromptOf(ctx, "agentxx_ui_control_keyboard_mouse");
+    auto        p      = co_await agentxx::plugin::toolPromptOfAsync(ctx, "agentxx_ui_control_keyboard_mouse");
     std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
 
-    co_await agentxx::plugin::tool(
+    co_await agentxx::plugin::toolAsync(
         ctx,
         ref,
         "agentxx_ui_control_keyboard_mouse",
         depict,
         makeUiControlSchema(),
-        [](ComputerUsePluginCtx&, std::string_view args_json) -> agentxx::plugin::ToolResult {
+        agentxx::plugin::onWorkerAsync([](ComputerUsePluginCtx&, std::string_view args_json) -> agentxx::plugin::ToolResult {
             agentxx::plugin::ArgReader reader(args_json);
             if (reader.hasParseError()) {
                 throw std::runtime_error("invalid args json");
             }
             return uiControlExecute(reader.raw());
-        }
+        })
     );
     co_return;
 }
@@ -158,7 +158,7 @@ static void* computerUseAgentMount(
     // 工具提示词读取与工具注册逐条“提交 + co_await”, 全部生效后再放行挂载
     const agentxx::plugin::AgentRef agentRef(*spec);
     ctx.spawn(
-        [later, agentRef](ComputerUsePluginCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+        [later, agentRef](ComputerUsePluginCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
             try {
                 co_await computerUseAgentSetup(c, agentRef);
                 later.ok();

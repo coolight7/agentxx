@@ -1,5 +1,7 @@
 #include "chatbot_engine.h"
 
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
@@ -26,6 +28,20 @@ constexpr const char* kTruncatedNotice = "…（本条内容过长已截断）";
 
 /// 账号上线后多久仍没收到群全量消息就提示“去开平台权限”
 constexpr int64_t kFullModeHintDelayMs = 180000;
+
+/// 包一层: 协程体的异常在这里记日志, 不让它被 `asio::detached` 默默吞掉
+///
+/// 写成普通函数 (不是 lambda) 才能让帧自己持有入参 —— 项目约定: 不要用内联调用的
+/// lambda 协程作为 enqueue 参数, 帧里只有闭包指针, 闭包可能比协程先死。
+asio::awaitable<void> runLogged(const char* tag, asio::awaitable<void> body) {
+    try {
+        co_await std::move(body);
+    } catch (const std::exception& e) {
+        XX_LOGW("[{}] 调度层协程抛异常: {}", tag, e.what());
+    }
+    co_return;
+}
+
 
 
 /// 小文本文件读取: 成功把内容写进 `out` 并返回 true
@@ -188,11 +204,15 @@ void ChatbotEngine::buildRoutes() {
                      std::string_view personaName,
                      std::string_view sessionId,
                      std::string_view title
-                 ) -> int64_t {
+                 ) -> asio::awaitable<int64_t> {
         if (!runtime_.openChannel) {
-            return 0;
+            co_return 0;
         }
-        return runtime_.openChannel(personaName, sessionId, title);
+        co_return co_await runtime_.openChannel(
+            std::string{personaName},
+            std::string{sessionId},
+            std::string{title}
+        );
     };
     hooks.close = [this](int64_t channelId) {
         if (runtime_.closeChannel) {
@@ -240,6 +260,10 @@ void ChatbotEngine::notifyChanged() {
     if (changeHook_) {
         changeHook_();
     }
+}
+
+void ChatbotEngine::spawn(asio::awaitable<void> work) {
+    asio::co_spawn(ex_, runLogged(kLogTag, std::move(work)), asio::detached);
 }
 
 /* ==================== 平台事件 ==================== */
@@ -406,13 +430,12 @@ bool ChatbotEngine::mergeDuplicateInto(
     return upgraded;
 }
 
-void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
+asio::awaitable<void> ChatbotEngine::onInbound(InboundEvent event) {
     if (stopped_) {
-        return;
+        co_return;
     }
-    InboundEvent event = rawEvent;
     if (event.accountId.empty() || event.chatId.empty()) {
-        return;
+        co_return;
     }
     if (event.timestampMs <= 0) {
         // 平台没给时间 (调试注入也常不填): 用本机时钟顶上, 否则这条消息既不能参与
@@ -450,9 +473,9 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
             // 另一份一定带 @ 语义)。直接丢掉后到的那份会让「该唤醒的没唤醒」,
             // 所以把新信息并进缓冲里那条, 若因此变成「@ 了我」就立刻唤醒。
             if (mergeDuplicateInto(chatKeyText, state, event)) {
-                flush(chatKeyText, "mentioned");
+                co_await flush(chatKeyText, "mentioned");
             }
-            return;
+            co_return;
         }
     }
 
@@ -480,7 +503,7 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
                 chatKeyText
             );
         }
-        return;
+        co_return;
     }
     ++state.counters.routed;
     ++globalCounters_.routed;
@@ -501,8 +524,8 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
     // ---- 关键词命令 (不进聚合缓冲) ----
     const ParsedCommand command = parseCommand(event.text, config_.commands);
     if (command.matched) {
-        if (handleCommand(chatKeyText, event, command)) {
-            return;
+        if (co_await handleCommand(chatKeyText, event, command)) {
+            co_return;
         }
     }
 
@@ -537,21 +560,21 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
             state.items.size(),
             state.chars
         );
-        flush(chatKeyText, "buffer_full");
-        return;
+        co_await flush(chatKeyText, "buffer_full");
+        co_return;
     }
 
     if (mentioned) {
         // 被 @ 立刻唤醒 (不等窗口)
-        flush(chatKeyText, "mentioned");
-        return;
+        co_await flush(chatKeyText, "mentioned");
+        co_return;
     }
     if (mode == ChatMode::Always) {
         // 每来一条重置窗口, 到期唤醒
         const int32_t windowMs = std::max(0, config_.behavior.aggregateWindowMs);
         if (windowMs <= 0) {
-            flush(chatKeyText, "always_immediate");
-            return;
+            co_await flush(chatKeyText, "always_immediate");
+            co_return;
         }
         if (!state.timer) {
             state.timer = std::make_shared<asio::steady_timer>(ex_);
@@ -562,7 +585,7 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
             if (ec || stopped_) {
                 return;
             }
-            flush(chatKeyCopy, "window_expired");
+            spawn(flush(chatKeyCopy, "window_expired"));
         });
     }
     // `mention` 模式下的普通消息: 只进缓冲, 跟下一次被 @ 一起带上去
@@ -800,17 +823,17 @@ std::string ChatbotEngine::assembleInput(
     return input.dump();
 }
 
-void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reason) {
+asio::awaitable<void> ChatbotEngine::flush(std::string chatKeyText, std::string_view reason) {
     if (stopped_) {
-        return;
+        co_return;
     }
     auto sessionIt = sessions_.find(chatKeyText);
     if (sessionIt == sessions_.end()) {
-        return;
+        co_return;
     }
     auto& state = sessionIt->second;
     if (state.items.empty()) {
-        return;
+        co_return;
     }
     if (state.timer) {
         state.timer->cancel();
@@ -822,7 +845,7 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
         state.items.clear();
         state.chars = 0;
         notifyChanged();
-        return;
+        co_return;
     }
 
     // 通道正在跑一轮: **不**攒到 TURN_END, 按 `next-step` 插进本轮 ——
@@ -847,7 +870,7 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
         key
     );
     const int64_t channelId = router_ != nullptr
-                                  ? router_->acquire(key, route, title, ++activitySeq_, err)
+                                  ? co_await router_->acquire(key, route, title, ++activitySeq_, err)
                                   : 0;
     if (channelId <= 0) {
         ++state.counters.failed;
@@ -867,7 +890,7 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
             state.chars = 0;
         }
         notifyChanged();
-        return;
+        co_return;
     }
 
     std::vector<InboundEvent> batch(state.items.begin(), state.items.end());
@@ -892,7 +915,7 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
         running ? "next-step" : "next-turn",
         &hasAttachments
     );
-    int32_t rc = runtime_.sendInput ? runtime_.sendInput(channelId, inputJson) : -1;
+    int32_t rc = runtime_.sendInput ? co_await runtime_.sendInput(channelId, inputJson) : -1;
     if (rc != 0 && hasAttachments) {
         // 附件被拒 (超出主程序的单文件大小/条数上限): 去掉附件重投一次
         // - 主程序对这类输入返回参数错误, 整条输入 (含正文) 都不会进上下文;
@@ -900,7 +923,7 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
         //   知道“收到了什么”。不重试的话现象是“群里发了视频后机器人再也不出声”
         const std::string retryJson = withoutAttachments(inputJson);
         const int32_t     retryRc
-            = runtime_.sendInput ? runtime_.sendInput(channelId, retryJson) : -1;
+            = runtime_.sendInput ? co_await runtime_.sendInput(channelId, retryJson) : -1;
         XX_LOGW(
             "[{}] 会话 '{}' 带附件的输入被拒 (错误码 {}), {} (错误码 {})",
             kLogTag,
@@ -932,7 +955,7 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
             state.stale = true;
             notifyChanged();
         }
-        return;
+        co_return;
     }
     XX_LOGI(
         "[{}] 投递 {} 条消息到会话 '{}' (通道 {}, 原因: {})",
@@ -1002,7 +1025,7 @@ std::map<std::string, std::string, std::less<>> ChatbotEngine::commandVars(
     return vars;
 }
 
-bool ChatbotEngine::handleCommand(
+asio::awaitable<bool> ChatbotEngine::handleCommand(
     const std::string&   chatKeyText,
     const InboundEvent&  event,
     const ParsedCommand& command
@@ -1015,7 +1038,7 @@ bool ChatbotEngine::handleCommand(
         }
     }
     if (def == nullptr) {
-        return false;
+        co_return false;
     }
     auto  vars = commandVars(chatKeyText, event);
     vars["args"] = command.args;
@@ -1043,7 +1066,7 @@ bool ChatbotEngine::handleCommand(
             outbound_->enqueueDirect(key, std::move(message));
         }
         notifyChanged();
-        return true;
+        co_return true;
     }
 
     if (def->mode == CommandMode::Action) {
@@ -1064,13 +1087,13 @@ bool ChatbotEngine::handleCommand(
                 }
             }
             notifyChanged();
-            return true;
+            co_return true;
         }
         if (def->action == "task") {
             // 后台任务: `submit <要做的事>` / `list` / `status [id]` / `cancel [id|all]`
             std::string reply;
             if (runtime_.taskCommand) {
-                reply = runtime_.taskCommand(chatKeyText, command.args);
+                reply = co_await runtime_.taskCommand(chatKeyText, command.args);
             } else {
                 reply = "后台任务不可用 (当前主程序没有 async work 入口)";
             }
@@ -1085,19 +1108,19 @@ bool ChatbotEngine::handleCommand(
                 outbound_->enqueueDirect(key, std::move(message));
             }
             notifyChanged();
-            return true;
+            co_return true;
         }
         // clear (本期未实现: 只提示)
         XX_LOGW("[{}] 命令动作 '{}' 本期未实现", kLogTag, def->action);
         notifyChanged();
-        return true;
+        co_return true;
     }
 
     // model: 把渲染后的提示词作为一条单独输入投给会话 (需要通道)
     const auto route = router_ != nullptr ? router_->route(key) : RouteResult{};
     std::string err;
     const int64_t channelId = router_ != nullptr
-                                  ? router_->acquire(
+                                  ? co_await router_->acquire(
                                         key,
                                         route,
                                         ChatbotRouter::titleOf(event.chatName, key),
@@ -1107,7 +1130,7 @@ bool ChatbotEngine::handleCommand(
                                   : 0;
     if (channelId <= 0) {
         XX_LOGW("[{}] model 命令投递失败: {}", kLogTag, err);
-        return true;
+        co_return true;
     }
     if (router_ != nullptr && router_->isBusy(channelId)) {
         // 正在跑一轮: 这条命令作为下一条输入排队即可 (不打断当前轮)
@@ -1117,7 +1140,7 @@ bool ChatbotEngine::handleCommand(
     input["text"]     = renderTemplate(def->prompt, vars);
     input["delivery"] = "next-turn";
     if (runtime_.sendInput) {
-        const int32_t rc = runtime_.sendInput(channelId, input.dump());
+        const int32_t rc = co_await runtime_.sendInput(channelId, input.dump());
         if (rc != 0) {
             ++state.counters.failed;
             ++globalCounters_.failed;
@@ -1149,7 +1172,7 @@ bool ChatbotEngine::handleCommand(
     commandMessage.timestampMs       = event.timestampMs;
     turn.messages.push_back(std::move(commandMessage));
     notifyChanged();
-    return true;
+    co_return true;
 }
 
 /* ==================== 通道事件 ==================== */
@@ -1167,7 +1190,7 @@ void ChatbotEngine::onChannelReady(int64_t channelId) {
     // 通道就绪时如果有积压, 立刻投 (例如首条消息在 root init 期间到达)
     auto& state = stateOf(chatKey);
     if (!state.items.empty()) {
-        flush(chatKey, "channel_ready");
+        spawn(flush(chatKey, "channel_ready"));
     }
     notifyChanged();
 }
@@ -1236,7 +1259,7 @@ void ChatbotEngine::onChannelTurnEnd(
 
     // 本轮结束时把积压的消息一次性带走 (要求 5 的核心行为)
     if (!state.items.empty()) {
-        flush(chatKey, "turn_end");
+        spawn(flush(chatKey, "turn_end"));
     }
     // 一轮结束: 面板左侧的加载动画停下 (flush 内部也会通知一次, 由入口合并)
     notifyChanged();
@@ -1504,6 +1527,21 @@ void ChatbotEngine::noteAssistantText(std::string_view chatKey, std::string_view
     it->second.turn.lastAssistantText.assign(text);
 }
 
+asio::awaitable<void> ChatbotEngine::sendTaskResultToChannel(int64_t channelId, std::string inputJson) {
+    if (runtime_.sendInput) {
+        const int32_t rc = co_await runtime_.sendInput(channelId, inputJson);
+        if (rc != 0) {
+            XX_LOGW(
+                "[{}] 后台任务结果投递被拒 (通道 {}, 错误码 {})",
+                kLogTag,
+                channelId,
+                rc
+            );
+        }
+    }
+    co_return;
+}
+
 bool ChatbotEngine::deliverTaskResult(std::string_view chatKey, std::string_view text) {
     if (stopped_ || text.empty() || router_ == nullptr || !runtime_.sendInput) {
         return false;
@@ -1516,18 +1554,11 @@ bool ChatbotEngine::deliverTaskResult(std::string_view chatKey, std::string_view
     Json input        = Json::object();
     input["text"]     = std::string{text};
     input["delivery"] = "next-turn";
-    const int32_t rc  = runtime_.sendInput(channelId, input.dump());
-    if (rc != 0) {
-        XX_LOGW(
-            "[{}] 后台任务结果投递被拒 (会话 '{}', 通道 {}, 错误码 {})",
-            kLogTag,
-            chatKey,
-            channelId,
-            rc
-        );
-        return false;
-    }
-    XX_LOGI("[{}] 后台任务结果已投回会话 '{}' (通道 {})", kLogTag, chatKey, channelId);
+    // 投递是异步的: 这里只保证“已交给运行时”, 失败只记日志 (调用方此时已经回到
+    // “不要再用 outbound 发一遍”的判定上, 重发会变成两条)
+    const std::string inputJson = input.dump();
+    spawn(sendTaskResultToChannel(channelId, inputJson));
+    XX_LOGI("[{}] 后台任务结果已交给会话 '{}' (通道 {})", kLogTag, chatKey, channelId);
     notifyChanged();
     return true;
 }

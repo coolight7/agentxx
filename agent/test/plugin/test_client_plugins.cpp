@@ -18,6 +18,7 @@
 /// 29. 接口协商: TUI 主程序声明 ui 表整体 + 全部子能力, 构建产物中的内置插件
 ///     client 侧声明必须全部被满足 (避免启动误报"可选接口不支持")
 #include "agentxx-test/plugin/test_client_plugins.h"
+#include "agentxx-test/plugin/test_table_op.h"
 #include "agentxx-test/test_coro_util.h"
 
 #include "agentxx-client/io/tui/plugin_ui_items.h"
@@ -1370,7 +1371,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         );
         for (int i = 0; i < 3; ++i) {
             subs[i] = broadcasts8
-                          ? agentxx::plugin::subscribePluginBroadcast(
+                          ? agentxx::test::subscribeBroadcastWait(
                                 inst2->hostView(),
                                 broadcasts8,
                                 nullptr,
@@ -1387,7 +1388,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         for (auto* sub : subs) {
             if (broadcasts8 && sub) {
                 XX_TEST_EXPECT_TRUE(
-                    agentxx::plugin::unsubscribePluginBroadcast(
+                    agentxx::plugin::unsubscribePluginBroadcastNoWait(
                         inst2->hostView(),
                         broadcasts8,
                         sub
@@ -1403,7 +1404,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         {
             constexpr std::string_view kTopic = "plugin.agentxx_other.telemetry";
             XX_TEST_EXPECT_FALSE(mgr->broadcasts()->declares(kTopic));
-            auto sub = agentxx::plugin::subscribePluginBroadcast(
+            auto sub = agentxx::test::subscribeBroadcastWait(
                 inst2->hostView(),
                 broadcasts8,
                 nullptr,
@@ -1423,7 +1424,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             co_await drainPlugin(mgr, "example_plugin");
             XX_TEST_EXPECT_EQ(hits.load(), 4);
             XX_TEST_EXPECT_TRUE(
-                agentxx::plugin::unsubscribePluginBroadcast(inst2->hostView(), broadcasts8, sub)
+                agentxx::plugin::unsubscribePluginBroadcastNoWait(inst2->hostView(), broadcasts8, sub)
             );
         }
 
@@ -1661,7 +1662,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 const auto broadcasts11
                     = agentxx::plugin::ClientIfaces::query(okInst->hostView()).broadcasts;
                 auto sub = broadcasts11
-                               ? agentxx::plugin::subscribePluginBroadcast(
+                               ? agentxx::test::subscribeBroadcastWait(
                                      okInst->hostView(),
                                      broadcasts11,
                                      nullptr,
@@ -1677,7 +1678,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(readyPayload.find("agentxx.client.panel") != std::string::npos);
                 if (broadcasts11 && sub) {
                     XX_TEST_EXPECT_TRUE(
-                        agentxx::plugin::unsubscribePluginBroadcast(
+                        agentxx::plugin::unsubscribePluginBroadcastNoWait(
                             okInst->hostView(),
                             broadcasts11,
                             sub
@@ -1845,7 +1846,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto toastBefore = adapter->toastCount();
             mgr->invokeCommand("sysinfo", R"({})");
             co_await drainPlugin(mgr, "agentxx_system_monitor");
-            XX_TEST_EXPECT_TRUE(adapter->toastCount() > toastBefore);
+            // 命令回调是异步操作契约: 插件回传内容前可能还要等一次表调用
+            // (查询服务端插件清单), 因此这里等到 toast 出现, 不假设它已就绪
+            XX_TEST_EXPECT_TRUE(
+                co_await waitUntil([&] { return adapter->toastCount() > toastBefore; }, 5000)
+            );
             XX_TEST_EXPECT_TRUE(
                 adapter->lastToast().find("System resource info") != std::string::npos
             );
@@ -4716,9 +4721,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             asio::detached
         );
 
-        // 主线程驱动 io 事件: 700ms 内让定时器按各自周期触发 (阻塞回调也在此发生)
+        // 主线程驱动 io 事件: 让定时器按各自周期触发 (阻塞回调也在此发生)
+        // 窗口取 1500ms: 首个回调要在插件执行线程上阻塞 370ms, 之后才恢复周期; 机器
+        // 负载高 (并行构建/其它用例) 时 700ms 只够 2~3 次, 断言会随负载抖动
         {
-            const auto deadline = clk::now() + std::chrono::milliseconds{700};
+            const auto deadline = clk::now() + std::chrono::milliseconds{1500};
             while (clk::now() < deadline) {
                 ioT.run_for(std::chrono::milliseconds{20});
             }

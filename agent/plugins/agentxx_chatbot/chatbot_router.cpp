@@ -295,22 +295,22 @@ bool ChatbotRouter::evictLru(std::string_view personaName, std::string& err) {
     return true;
 }
 
-int64_t ChatbotRouter::acquire(
-    const ChatKey&     key,
-    const RouteResult& routeResult,
-    std::string_view   chatTitle,
-    uint64_t           seq,
-    std::string&       err
+asio::awaitable<int64_t> ChatbotRouter::acquire(
+    ChatKey         key,
+    RouteResult     routeResult,
+    std::string     chatTitle,
+    uint64_t        seq,
+    std::string&    err
 ) {
     if (!routeResult.found) {
         err = "该会话不属于任何已配置的人设";
-        return 0;
+        co_return 0;
     }
     const std::string chatKeyText = key.key();
     if (auto it = entries_.find(chatKeyText); it != entries_.end() && it->second.channelId > 0) {
         it->second.lastActiveSeq = seq;
         it->second.mode          = routeResult.mode;
-        return it->second.channelId;
+        co_return it->second.channelId;
     }
     // 额度: 该人设下的活跃通道数已达上限时先回收一条
     while (activeCount(routeResult.personaName)
@@ -320,18 +320,19 @@ int64_t ChatbotRouter::acquire(
             err = "该人设活跃会话已达上限 " + std::to_string(maxChatsPerPersona_) + " 且"
                   + (evictErr.empty() ? std::string{"无法回收"} : evictErr)
                   + " (可调大 behavior.maxChatsPerPersona)";
-            return 0;
+            co_return 0;
         }
     }
     if (!hooks_.open) {
         err = "插件未提供开通道入口";
-        return 0;
+        co_return 0;
     }
     const std::string sessionId = sessionIdOf(routeResult.personaName, key);
-    const int64_t     channelId = hooks_.open(routeResult.personaName, sessionId, chatTitle);
+    const int64_t     channelId
+        = co_await hooks_.open(routeResult.personaName, sessionId, chatTitle);
     if (channelId <= 0) {
         err = "打开会话通道失败 (主程序日志里有原因: 会话被占用或通道预算用尽)";
-        return 0;
+        co_return 0;
     }
     ChannelEntry item;
     item.channelId     = channelId;
@@ -348,7 +349,7 @@ int64_t ChatbotRouter::acquire(
         sessionId,
         routeResult.personaName
     );
-    return channelId;
+    co_return channelId;
 }
 
 } // namespace chatbot

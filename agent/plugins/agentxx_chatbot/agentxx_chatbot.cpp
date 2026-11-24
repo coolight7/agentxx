@@ -127,6 +127,63 @@ struct AccountRuntime {
     ac::PlatformEventSink            sink;
 };
 
+/// 把“投递后不关心结果”的表调用包成 void 协程 (失败只记日志)
+///
+/// `what` 只用于日志 (例如 `cancel` / `close_channel`)。
+/// 写成普通函数而不是 lambda: 协程帧要自己持有入参。
+template<typename T>
+asio::awaitable<void> detachedLog(std::string_view what, asio::awaitable<T> call) {
+    try {
+        auto r = co_await std::move(call);
+        if (!r.ok()) {
+            XX_LOGW(
+                "[{}] {} 失败: {}",
+                kLogTag,
+                std::string{what},
+                std::string{r.text()}
+            );
+        }
+    } catch (const std::exception& e) {
+        XX_LOGW("[{}] {} 抛异常: {}", kLogTag, std::string{what}, e.what());
+    }
+    co_return;
+}
+
+/// 在插件 io 线程上跑一段协程的完成状态 (发起方与协程体共用)
+struct IoCoroutineRunState {
+    std::mutex              mutex;
+    std::condition_variable cv;
+    bool                    done = false;
+    bool                    ran  = false;
+};
+
+/// 协程体包装: 帧自己持有 `fn` / `state`
+///
+/// 不用内联 lambda 调用作 enqueue 参数: lambda 协程帧只存闭包指针, 闭包可能比协程先死。
+template<typename Fn>
+asio::awaitable<void> runIoCoroutineBody(
+    std::shared_ptr<IoCoroutineRunState> state,
+    std::shared_ptr<Fn>                  fn
+) {
+    {
+        std::lock_guard lock(state->mutex);
+        state->ran = true;
+    }
+    try {
+        co_await (*fn)();
+    } catch (const std::exception& e) {
+        XX_LOGE("[chatbot] 插件 io 协程抛异常: {}", e.what());
+    } catch (...) {
+        XX_LOGE("[chatbot] 插件 io 协程抛未知异常");
+    }
+    {
+        std::lock_guard lock(state->mutex);
+        state->done = true;
+    }
+    state->cv.notify_all();
+    co_return;
+}
+
 /// 插件实例上下文
 struct ChatbotCtx : public PluginBase {
     /// 插件自己的 io 线程 (平台网络 + 调度状态都在这条线程上)
@@ -294,6 +351,36 @@ struct ChatbotCtx : public PluginBase {
             return;
         }
         asio::post(*io, std::forward<Fn>(fn));
+    }
+
+    /// 在插件 io 线程上跑一段**协程**并等它结束 (只给工作池/加载线程用)
+    ///
+    /// 与 [runOnIoBlocking] 同一套语义, 区别是工作体本身是 `asio::awaitable`:
+    /// 需要等表结果的业务 (开通道 / 投输入 / 后台任务) 只能在 io 线程上 `co_await`。
+    /// 调用方必须在非 io 线程上 (工作池线程可以阻塞等, 插件执行线程不能)。
+    template<typename Fn>
+    bool runOnIoCoroutine(Fn&& fn, std::chrono::milliseconds timeout = std::chrono::seconds{25}) {
+        if (!io || ioStopped.load(std::memory_order_acquire)) {
+            return false;
+        }
+        auto state = std::make_shared<IoCoroutineRunState>();
+        auto body  = std::make_shared<std::decay_t<Fn>>(std::forward<Fn>(fn));
+        asio::co_spawn(*io, runIoCoroutineBody(state, body), asio::detached);
+        std::unique_lock lock(state->mutex);
+        if (!state->cv.wait_for(lock, timeout, [&state]() {
+                return state->done;
+            })) {
+            return false;
+        }
+        return state->ran;
+    }
+
+    /// 在插件 io 线程上起一段协程 (不等结果; 异常只记日志)
+    void spawnIo(asio::awaitable<void> work) {
+        if (!io || ioStopped.load(std::memory_order_acquire)) {
+            return;
+        }
+        asio::co_spawn(*io, std::move(work), asio::detached);
     }
 
     /// 在插件 io 线程上执行**并等待结果** (工具用; 带超时, 不无限等)
@@ -658,31 +745,36 @@ const char* kDebugPlatformSchema = R"JSON({
 
 /// 在插件 io 线程上跑一个工具工作体, 拿回结果串
 ///
-/// 为什么要绕这一层: 工具工作体要跳到插件 io 线程执行, 而 `args` / `tid` 只是主程序在
-/// 这次调用里给的视图, 调用方栈上的 `result` / `error` 也只在调用方等待期间有效。
-/// 一旦 `runOnIoBlocking` 超时返回, 调用方就收摊了, 已排队的 lambda 再去读那些内存
-/// 就是悬空读 (实测: 超时后执行到工具体时读到垃圾长度, ASan 报
-/// `allocation-size-too-big`; 写回结果则往已释放的栈上写)。
-/// 因此输入拷一份、输出放堆上, 超时后也不会跳崩。
+/// 为什么要绕这一层: 工具工作体要跳到插件 io 线程执行 (那里的状态不加锁), 而
+/// 工作体本身是 `asio::awaitable` (开通道/投输入/查任务都要等表结果, 在 io 线程上
+/// 只能 `co_await`)。工具入口 (= 工作池线程) 用 [ChatbotCtx::runOnIoCoroutine]
+/// 等它跑完。
+///
+/// `args` / `tid` 只是主程序在这次调用里给的视图, 一旦超时返回, 调用方就收摊了 ——
+/// 已排队的协程再去读那些内存就是悬空读 (实测: 超时后执行到工具体时读到垃圾长度,
+/// ASan 报 `allocation-size-too-big`)。因此输入拷一份、输出放堆上。
 ///
 /// - `args`:
 ///     - [c] 插件上下文
 ///     - [args] / [tid] 主程序给的参数与通道 id (两者都会被拷贝一份)
-///     - [body] 工作体: `(tid, args) -> 结果串`; 抛出的异常会转成工具错误
+///     - [body] 工作体: `(tid, args) -> awaitable<结果串>`; 抛出的异常会转成工具错误
 /// - `return` 工具结果串
-/// - 相关: [ChatbotCtx::runOnIoBlocking]
+/// - 相关: [ChatbotCtx::runOnIoCoroutine]
 template<typename Fn>
 std::string
     runToolOnIo(ChatbotCtx& c, std::string_view args, std::string_view tid, Fn&& body) {
     auto in = std::make_shared<std::pair<std::string, std::string>>(args, tid);
     auto out = std::make_shared<std::pair<std::string, std::string>>();
-    const bool ok = c.runOnIoBlocking([in, out, body = std::forward<Fn>(body)]() mutable {
-        try {
-            out->first = body(in->second, in->first);
-        } catch (const std::exception& e) {
-            out->second = e.what();
+    const bool ok = c.runOnIoCoroutine(
+        [in, out, body = std::forward<Fn>(body)]() -> asio::awaitable<void> {
+            try {
+                out->first = co_await body(in->second, in->first);
+            } catch (const std::exception& e) {
+                out->second = e.what();
+            }
+            co_return;
         }
-    });
+    );
     if (!ok) {
         throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
     }
@@ -692,19 +784,21 @@ std::string
     return std::move(out->first);
 }
 
-/// 给一个 agent 注册 `chatbot_*` 工具 (7 个 + 调试工具)
+/// 给一个 agent 注册 `chatbot_*` 工具 (6 个 + 调试工具)
 ///
-/// 工作体**统一写成同步体** (注册入口仍是 `tool`): 它们都要 `runOnIoBlocking` 等
-/// 插件 io 线程的结果, 而插件 io 线程反过来也会找主程序 IO 线程 (开通道 / 投输入 /
-/// 要面板驱动票)。同步体跑在工作池线程上, 两边就只是等, 不会互相堵死 ——
-/// 在插件执行线程上就地跑则会互等, 实测表现为
-/// "Plugin operation `chatbot_status` start blocked IO for over 100ms", 极端情况一直
-/// 卡到 25 秒工具超时 (调用方看到 "chatbot 插件未就绪")。
+/// 两层结构 (缺一不可):
+/// - 外层工作体是阻塞函数, 用 `agentxx::plugin::onWorkerAsync(...)` 包起来 -> 跑在工作池
+///   线程上, 插件执行线程不被占住;
+/// - 内层工作体是 `asio::awaitable`, 经 [runToolOnIo] 在插件 io 线程上跑 (调度状态
+///   与平台都只在那条线程上)。两边只是互相等, 不会互锁 ——
+///   在插件执行线程上就地跑则会互等, 实测表现为
+///   "Plugin operation `chatbot_status` start blocked IO for over 100ms", 极端情况一直
+///   卡到 25 秒工具超时 (调用方看到 "chatbot 插件未就绪")。
 ///
 /// 内部把编译期已知的处理函数包成 lambda, 这样 SDK 不需要知道 `ChatbotToolDeps` 的类型。
 /// 注册 6 个 chatbot_* 工具 (**协程形态**)
 /// - 每个注册都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到失败原因
-pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
+asio::awaitable<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
     const auto deps = &ctx.toolDeps;
 
     auto sendMessage = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
@@ -716,8 +810,8 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
             c,
             args,
             tid,
-            [deps, wait](std::string_view t, std::string_view a) {
-                return ac::toolSendMessage(*deps, t, a, wait);
+            [deps, wait](std::string_view t, std::string_view a) -> asio::awaitable<std::string> {
+                co_return ac::toolSendMessage(*deps, t, a, wait);
             }
         );
         const int32_t waitMs = deps->engine != nullptr
@@ -727,30 +821,30 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
     };
 
     auto history = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
-            return ac::toolHistory(*deps, t, a);
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) -> asio::awaitable<std::string> {
+            co_return ac::toolHistory(*deps, t, a);
         });
     };
 
     auto chatInfo = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
-            return ac::toolChatInfo(*deps, t, a);
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) -> asio::awaitable<std::string> {
+            co_return ac::toolChatInfo(*deps, t, a);
         });
     };
 
     auto status = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
-            return ac::toolStatus(*deps, t, a);
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) -> asio::awaitable<std::string> {
+            co_return ac::toolStatus(*deps, t, a);
         });
     };
 
     auto setMode = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
-            return ac::toolSetMode(*deps, t, a);
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) -> asio::awaitable<std::string> {
+            co_return ac::toolSetMode(*deps, t, a);
         });
     };
 
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "chatbot_send_message",
@@ -759,60 +853,60 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
         "没被调用的正文可能被插件兜底当成回复发出去。"
         "一次可以调用多次 (不同话题分别回), 也可以用 replyTo 引用某条消息。",
         kSendMessageSchema,
-        sendMessage
+        agentxx::plugin::onWorkerAsync(sendMessage)
     );
 
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "chatbot_chat_info",
         "查看当前会话的信息: 平台、账号、群/私聊 id、归属人设、触发模式、通道状态与计数。",
         kChatInfoSchema,
-        [chatInfo](ChatbotCtx& c, std::string_view args, std::string_view tid) {
+        agentxx::plugin::onWorkerAsync([chatInfo](ChatbotCtx& c, std::string_view args, std::string_view tid) {
             return chatInfo(c, args, tid);
-        }
+        })
     );
 
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "chatbot_history",
         "取当前会话最近 N 条原始消息 (含没有投给你的那些), 用来回看更早的聊天记录。",
         kHistorySchema,
-        [history](ChatbotCtx& c, std::string_view args, std::string_view tid) {
+        agentxx::plugin::onWorkerAsync([history](ChatbotCtx& c, std::string_view args, std::string_view tid) {
             return history(c, args, tid);
-        }
+        })
     );
 
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "chatbot_status",
         "查看 chatbot 插件的全局状态: 各账号连接情况、每个人设的活跃会话数、收发计数。",
         kStatusSchema,
-        [status](ChatbotCtx& c, std::string_view args, std::string_view tid) {
+        agentxx::plugin::onWorkerAsync([status](ChatbotCtx& c, std::string_view args, std::string_view tid) {
             return status(c, args, tid);
-        }
+        })
     );
 
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "chatbot_set_mode",
         "把当前会话的触发模式改成 mention(只处理 @ 到我的消息) / always(任何新消息都处理) / off(不处理)。"
         "运行期生效, 不写回配置文件。",
         kSetModeSchema,
-        [setMode](ChatbotCtx& c, std::string_view args, std::string_view tid) {
+        agentxx::plugin::onWorkerAsync([setMode](ChatbotCtx& c, std::string_view args, std::string_view tid) {
             return setMode(c, args, tid);
-        }
+        })
     );
 
     auto recall = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
-            return ac::toolRecallMessage(*deps, t, a);
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) -> asio::awaitable<std::string> {
+            co_return ac::toolRecallMessage(*deps, t, a);
         });
     };
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "chatbot_recall_message",
@@ -820,15 +914,15 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
         "用户说\"撤回刚才那条\"用 target=\"-1\"; 说\"倒数第二条\"用 target=\"-2\"; "
         "说\"最后两条都撤\"用 count=2。发错了、说重复了、内容不合适时用它。",
         kRecallMessageSchema,
-        recall
+        agentxx::plugin::onWorkerAsync(recall)
     );
 
     auto task = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
-            return ac::toolTask(*deps, t, a);
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) -> asio::awaitable<std::string> {
+            co_return co_await ac::toolTask(*deps, t, a);
         });
     };
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "chatbot_task",
@@ -838,7 +932,7 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
         "op=submit 提交 (返回任务 id) / status 查进度 / cancel 取消 / list 列本会话的任务。\n"
         "一句话就能答完的事不要用后台任务, 直接做完再回。",
         kTaskSchema,
-        task
+        agentxx::plugin::onWorkerAsync(task)
     );
 
     // 调试工具只在 `behavior.debugTools` 打开时注册 (测试与本地演示用)
@@ -846,48 +940,48 @@ pluginxx::Task<void> registerToolsOn(ChatbotCtx& ctx, AgentRef ref) {
         co_return;
     }
     auto debugInject = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        return runToolOnIo(c, args, tid, [deps](std::string_view, std::string_view a) {
-            return ac::toolDebugInject(*deps, a);
+        return runToolOnIo(c, args, tid, [deps](std::string_view, std::string_view a) -> asio::awaitable<std::string> {
+            co_return co_await ac::toolDebugInject(*deps, a);
         });
     };
     auto debugOutbox = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        return runToolOnIo(c, args, tid, [deps](std::string_view, std::string_view a) {
-            return ac::toolDebugOutbox(*deps, a);
+        return runToolOnIo(c, args, tid, [deps](std::string_view, std::string_view a) -> asio::awaitable<std::string> {
+            co_return ac::toolDebugOutbox(*deps, a);
         });
     };
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "chatbot_debug_inject",
         "调试用: 直接向调度层投一条假平台消息 (不经过任何真实平台连接)。"
         "只在 behavior.debugTools 打开时注册, 生产环境不会出现。",
         kDebugInjectSchema,
-        debugInject
+        agentxx::plugin::onWorkerAsync(debugInject)
     );
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "chatbot_debug_outbox",
         "调试用: 回看假平台收到的出站消息 (真平台不记录, 返回空表)。",
         kDebugOutboxSchema,
-        [debugOutbox](ChatbotCtx& c, std::string_view args, std::string_view tid) {
+        agentxx::plugin::onWorkerAsync([debugOutbox](ChatbotCtx& c, std::string_view args, std::string_view tid) {
             return debugOutbox(c, args, tid);
-        }
+        })
     );
 
     auto debugPlatform = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        return runToolOnIo(c, args, tid, [deps](std::string_view, std::string_view a) {
-            return ac::toolDebugPlatform(*deps, a);
+        return runToolOnIo(c, args, tid, [deps](std::string_view, std::string_view a) -> asio::awaitable<std::string> {
+            co_return ac::toolDebugPlatform(*deps, a);
         });
     };
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
         ctx,
         ref,
         "chatbot_debug_platform",
         "调试用: 拨假平台的开关 (op=expire_passive 让被动回复按 msg_id 过期失败)。"
         "只在 behavior.debugTools 打开时注册, 生产环境不会出现。",
         kDebugPlatformSchema,
-        debugPlatform
+        agentxx::plugin::onWorkerAsync(debugPlatform)
     );
     co_return;
 }
@@ -1037,7 +1131,7 @@ Json personaMountPlugins(const ac::PersonaConfig& persona) {
 ///
 /// - 客户端插件请求重发快照 (client → agent, 见 [kPanelRefreshTopic]);
 /// - 主程序有客户端接入/重连: 新来的客户端立刻拿到一份当前状态。
-pluginxx::Task<void> subscribePanelEvents(ChatbotCtx& ctx) {
+asio::awaitable<void> subscribePanelEvents(ChatbotCtx& ctx) {
     if (!ctx.iface.broadcasts || !ctx.host) {
         co_return;
     }
@@ -1052,7 +1146,7 @@ pluginxx::Task<void> subscribePanelEvents(ChatbotCtx& ctx) {
         });
     };
     for (const char* topic : {kPanelRefreshTopic, kClientAttachedTopic}) {
-        auto subResult = co_await agentxx::plugin::subscribePluginBroadcast(
+        auto subResult = co_await subscribePluginBroadcastAsync(
             ctx,
             nullptr,
             topic,
@@ -1184,6 +1278,22 @@ void deliverTaskOutcome(ChatbotCtx& ctx, const ac::TaskRecord& record) {
 }
 
 /// 任务事件处理 (插件 io 线程)
+/// 把任务结果正文开头拉回来写进业务记录 (终态时调用; 拉到写进记录, 不影响会话)
+asio::awaitable<void> fillTaskResultHead(ChatbotCtx& ctx, std::string asyncId) {
+    auto r = co_await agentxx::plugin::getAsyncWorkJsonAsync(ctx, asyncId);
+    if (!r.ok() || r.text().empty()) {
+        co_return;
+    }
+    try {
+        const auto entry = Json::parse(std::string{r.text()});
+        ctx.tasks.setResultHead(asyncId, entry.value("result", std::string{}));
+    } catch (const std::exception&) {
+        // 任务记录读不到就当没有正文 (会话里仍然有完整结果)
+    }
+    ctx.panelChanged();
+    co_return;
+}
+
 void handleTaskEvent(
     ChatbotCtx&        ctx,
     int32_t            phase,
@@ -1201,6 +1311,10 @@ void handleTaskEvent(
     if (terminal) {
         if (const auto* record = ctx.tasks.recordOf(asyncId); record != nullptr) {
             deliverTaskOutcome(ctx, *record);
+            // 结果正文不在事件载荷里: 异步要一次补上 (只影响面板/状态文本里的摘要)
+            if (record->state == ac::TaskState::Done) {
+                ctx.spawnIo(fillTaskResultHead(ctx, asyncId));
+            }
         }
     }
     ctx.panelChanged();
@@ -1237,14 +1351,18 @@ void PLUGINXX_CALL onChatbotAsyncWorkEvent(
     });
 }
 
-/// 建后台任务的注入点 (提交/取消/记录回查都转成 SDK 调用)
+/// 后台任务的注入点 (提交/取消/记录回查都转成 SDK 调用)
+///
+/// 需要结果的两个入口是**协程形态**: 它们由调度层在插件 io 线程上 `co_await`,
+/// 那里不能同步等表结果 (会堵住整条 io 线程, 平台与面板都跟着停)。
 ac::TaskRuntime makeTaskRuntime(ChatbotCtx& ctx) {
     ac::TaskRuntime runtime;
-    runtime.submit = [&ctx](const ac::TaskSubmit& request, std::string& err) -> std::string {
+    runtime.submit = [&ctx](const ac::TaskSubmit& request, std::string& err)
+        -> asio::awaitable<std::string> {
         const ac::PersonaConfig* persona = ctx.config.findPersona(request.persona);
         if (persona == nullptr) {
             err = "找不到人设配置 '" + request.persona + "'";
-            return {};
+            co_return std::string{};
         }
         const ac::ChatKey key       = ac::parseChatKey(request.chatKey);
         const std::string sessionId = ctx.router.sessionIdOf(persona->name, key);
@@ -1263,32 +1381,33 @@ ac::TaskRuntime makeTaskRuntime(ChatbotCtx& ctx) {
         opt.onEvent         = &onChatbotAsyncWorkEvent;
         opt.userData        = &ctx;
 
-        int32_t    code = 0;
-        const auto asyncId = agentxx::plugin::submitAsyncWorkSync(ctx, opt, &code);
-        if (asyncId.empty()) {
-            err = code == AGENTXX_RESULT_ERR_UNSUPPORTED
-                      ? std::string{"当前主程序不支持后台任务 (运行时表没有 submit_async_work)"}
-                      : fmt::format("主程序拒绝提交 (错误码 {})", code);
+        auto r = co_await agentxx::plugin::submitAsyncWorkAsync(ctx, opt);
+        if (!r.ok() || r.text().empty()) {
+            err = (r.accepted() && !r.text().empty())
+                      ? "主程序拒绝提交: " + std::string{r.text()}
+                      : std::string{"当前主程序不支持后台任务 (运行时表没有 submit_async_work)"};
+            co_return std::string{};
         }
-        return asyncId;
+        co_return std::string{r.text()};
     };
-    runtime.cancel = [&ctx](std::string_view asyncId) {
-        return agentxx::plugin::cancelAsyncWorkSync(ctx, asyncId);
-    };
-    runtime.resultOf = [&ctx](std::string_view asyncId) {
-        return agentxx::plugin::getAsyncWorkJsonSync(ctx, asyncId);
+    runtime.cancel = [&ctx](std::string_view asyncId) -> asio::awaitable<int32_t> {
+        auto r = co_await agentxx::plugin::cancelAsyncWorkAsync(ctx, std::string{asyncId});
+        co_return r.ok() ? 0 : static_cast<int32_t>(-1);
     };
     return runtime;
 }
 
 /// `/agentxx-cmd task <submit|list|status|cancel> [参数]` 的实现
-std::string runTaskCommand(ChatbotCtx& ctx, std::string_view chatKey, std::string_view args) {
+///
+/// 协程形态: `submit` / `cancel` 要等表结果 (后台任务表)。
+asio::awaitable<std::string>
+    runTaskCommand(ChatbotCtx& ctx, std::string_view chatKey, std::string_view args) {
     const std::string usage
         = "用法: /agentxx-cmd task submit <要做的事> | list | status [任务id] | cancel "
           "[任务id|all]";
     const std::string text = ac::trimCopy(args);
     if (text.empty()) {
-        return usage;
+        co_return usage;
     }
     size_t      split = text.find(' ');
     std::string op    = split == std::string::npos ? text : text.substr(0, split);
@@ -1297,19 +1416,19 @@ std::string runTaskCommand(ChatbotCtx& ctx, std::string_view chatKey, std::strin
     op = lowerText(std::move(op));
 
     if (op == "list" || op == "ls") {
-        return ctx.tasks.listText(chatKey);
+        co_return ctx.tasks.listText(chatKey);
     }
     if (op == "status" || op == "show") {
-        return ctx.tasks.statusText(chatKey, body);
+        co_return ctx.tasks.statusText(chatKey, body);
     }
     if (op == "cancel" || op == "kill") {
         // 不给 id 或给 all = 取消本会话全部
         const std::string id = (body == "all" || body == "*") ? std::string{} : body;
-        return ctx.tasks.cancel(chatKey, id);
+        co_return co_await ctx.tasks.cancel(std::string{chatKey}, id);
     }
     if (op == "submit" || op == "run" || op == "add") {
         if (body.empty()) {
-            return "要提交什么? 写成 `/agentxx-cmd task submit <要做的事>`";
+            co_return "要提交什么? 写成 `/agentxx-cmd task submit <要做的事>`";
         }
         const ac::ChatKey key   = ac::parseChatKey(std::string{chatKey});
         const auto        route = ctx.router.route(key);
@@ -1317,20 +1436,21 @@ std::string runTaskCommand(ChatbotCtx& ctx, std::string_view chatKey, std::strin
         request.chatKey = std::string{chatKey};
         request.persona = route.personaName;
         request.prompt  = body;
-        const auto result = ctx.tasks.submit(request);
+        const auto result = co_await ctx.tasks.submit(request);
         if (!result.ok) {
-            return result.message;
+            co_return result.message;
         }
         std::string title;
         if (const auto* record = ctx.tasks.recordOf(result.asyncId); record != nullptr) {
             title = record->title;
         }
         XX_LOGI("[{}] 命令受理后台任务 {} (会话 '{}')", kLogTag, result.asyncId, chatKey);
-        return "已受理后台任务 " + result.asyncId + (title.empty() ? "" : " (" + title + ")")
-               + "\n跑完我会把结果发出来; 查进度用 `/agentxx-cmd task status " + result.asyncId
-               + "`。";
+        co_return "已受理后台任务 " + result.asyncId
+                  + (title.empty() ? "" : " (" + title + ")")
+                  + "\n跑完我会把结果发出来; 查进度用 `/agentxx-cmd task status "
+                  + result.asyncId + "`。";
     }
-    return usage;
+    co_return usage;
 }
 
 /// 面板「后台任务」段的数据 (最多几条: 窄栏放不下更多)
@@ -1362,9 +1482,11 @@ std::vector<ac::PanelTaskView> panelTaskViewsOf(const ac::ChatbotTaskManager& ta
 /* ==================== 生命周期 ==================== */
 
 /// 进程级启动主体 (实例参数与配置文件路径已取到): 校验配置 → 挂人设根 → 起平台连接
+/// 进程级启动主体 (实例参数与配置文件路径已取到): 校验配置 → 挂人设根 → 起平台连接
 ///
 /// - 失败时把原因写进 `errorOut` 并返回 false; 本函数内已起的线程与已挂的根会自行回滚
-bool chatbotStartBody(
+/// - 协程形态: 挂根是表调用, 在插件执行线程上要 `co_await` (凭据形态)
+asio::awaitable<bool> chatbotStartBody(
     ChatbotCtx&        ctx,
     std::string        argsJson,
     const std::string& configPath,
@@ -1385,7 +1507,7 @@ bool chatbotStartBody(
             );
             ctx.log.error(message);
             errorOut = message;
-            return false;
+            co_return false;
         }
     }
     ac::ChatbotConfig config;
@@ -1395,7 +1517,7 @@ bool chatbotStartBody(
             = fmt::format("start: 配置错误 {}: {}", configErr.where, configErr.message);
         ctx.log.error(message);
         errorOut = message;
-        return false;
+        co_return false;
     }
     // 根预算: 主程序侧上限由运行时表把关 (超出时 mountRoot 会返回失败), 这里用 8 作为
     // 缺省的保守值参与校验 (AgentHost::Config::maxRoots 的默认值)
@@ -1404,11 +1526,11 @@ bool chatbotStartBody(
             = fmt::format("start: 配置错误 {}: {}", configErr.where, configErr.message);
         ctx.log.error(message);
         errorOut = message;
-        return false;
+        co_return false;
     }
     // 主程序配置 (dataDir 等) 必须在填本实例的 `config` 成员**之前**取:
     // 成员名 `config` 会遮蔽基类的 `config()` 方法, 所以这里用限定调用
-    const std::string mainConfigJson = ctx.PluginBase::config();
+    const std::string mainConfigJson = co_await ctx.configAsync();
     ctx.config                       = std::move(config);
 
     // ---- 2. 校验通过: 起插件 io 线程 + 初始化调度层 ----
@@ -1427,7 +1549,7 @@ bool chatbotStartBody(
         ctx.log.error(message);
         errorOut = message;
         ctx.stopIo();
-        return false;
+        co_return false;
     }
     const auto dataDir = [&mainConfigJson]() {
         try {
@@ -1472,7 +1594,7 @@ bool chatbotStartBody(
         if (!mountOk) {
             errorOut = "start: 插件 io 线程启动失败";
             ctx.stopIo();
-            return false;
+            co_return false;
         }
     }
 
@@ -1490,11 +1612,12 @@ bool chatbotStartBody(
             ctx.log.error(message);
             errorOut = message;
             ctx.stopIo();
-            return false;
+            co_return false;
         }
         runtime->sink.onInbound = [&ctx](ac::InboundEvent event) {
-            // 平台回调已经在插件 io 线程上 (平台对象由本线程驱动)
-            ctx.engine.onInbound(event);
+            // 平台回调已经在插件 io 线程上 (平台对象由本线程驱动); 调度层入口是协程
+            // (里面要等表结果), 所以这里起一段协程而不是同步调用
+            ctx.spawnIo(ctx.engine.onInbound(event));
         };
         runtime->sink.onStateChanged
             = [&ctx, accountId = account.id](ac::PlatformState state, std::string reason) {
@@ -1542,7 +1665,13 @@ bool chatbotStartBody(
         }
         rootOpt.includeCreator = true;
 
-        std::string rootId  = agentxx::plugin::mountRootSync(ctx, rootOpt);
+        std::string rootId;
+        {
+            auto r = co_await mountRootAsync(ctx, rootOpt);
+            if (r.ok()) {
+                rootId.assign(r.text());
+            }
+        }
         if (rootId.empty()) {
             const auto message = fmt::format(
                 "start: 人设 '{}' 的根挂载失败 (见主程序日志: 配置非法或根预算用尽)",
@@ -1552,7 +1681,7 @@ bool chatbotStartBody(
             errorOut = message;
             // 回滚已挂的根与平台
             for (auto& entry : ctx.personaRoots) {
-                agentxx::plugin::unmountRootSync(ctx, entry.second);
+                co_await agentxx::plugin::unmountRootAsync(ctx, entry.second);
             }
             ctx.personaRoots.clear();
             ctx.runOnIoBlocking([&]() {
@@ -1570,7 +1699,7 @@ bool chatbotStartBody(
                 std::lock_guard lock(ctx.accountsMutex);
                 ctx.accounts.clear();
             }
-            return false;
+            co_return false;
         }
         ctx.personaRoots[persona.name] = rootId;
         ctx.log.info(fmt::format("人设 '{}' 的根已挂载: {}", persona.name, rootId));
@@ -1585,54 +1714,65 @@ bool chatbotStartBody(
     // ---- 6. 调度层初始化 (注入运行时入口) ----
     ctx.runOnIoBlocking([&]() {
         ac::ChatbotEngine::Runtime runtime;
-        runtime.sendInput = [&ctx](int64_t channelId, std::string_view inputJson) -> int32_t {
-            return agentxx::plugin::sendInputSync(ctx, channelId, inputJson);
+        // 需要结果的入口全是协程形态: 它们在插件 io 线程上 `co_await` 表调用
+        runtime.sendInput = [&ctx](int64_t channelId, std::string inputJson)
+            -> asio::awaitable<int32_t> {
+            auto r = co_await agentxx::plugin::sendInputAsync(ctx, channelId, std::move(inputJson));
+            co_return r.ok() ? 0 : static_cast<int32_t>(-1);
         };
+        // 返回 void 的入口: 投递后立即返回, 失败只记日志
         runtime.cancel = [&ctx](int64_t channelId) {
-            agentxx::plugin::cancelChannelSync(ctx, channelId);
+            ctx.spawnIo(detachedLog("cancel", agentxx::plugin::cancelChannelAsync(ctx, channelId)));
         };
         runtime.respondInterrupt
-            = [&ctx](int64_t channelId, int64_t interruptId, std::string_view values) {
-                  agentxx::plugin::respondInterruptSync(ctx, channelId, interruptId, values);
+            = [&ctx](int64_t channelId, int64_t interruptId, std::string values) {
+                  ctx.spawnIo(detachedLog(
+                      "respond_interrupt",
+                      agentxx::plugin::respondInterruptAsync(
+                          ctx,
+                          channelId,
+                          interruptId,
+                          std::move(values)
+                      )
+                  ));
               };
-        runtime.channelState = [&ctx](int64_t channelId) {
-            return agentxx::plugin::channelStateJsonSync(ctx, channelId);
-        };
-        runtime.runtimeList = [&ctx]() {
-            return agentxx::plugin::listRuntimeJsonSync(ctx);
-        };
         runtime.openChannel = [&ctx](
-                                  std::string_view personaName,
-                                  std::string_view sessionId,
-                                  std::string_view title
-                              ) -> int64_t {
+                                  std::string personaName,
+                                  std::string sessionId,
+                                  std::string title
+                              ) -> asio::awaitable<int64_t> {
             std::string rootId;
             {
                 std::lock_guard lock(ctx.personaRootsMutex);
-                auto            it = ctx.personaRoots.find(std::string{personaName});
+                auto            it = ctx.personaRoots.find(personaName);
                 if (it == ctx.personaRoots.end()) {
-                    return 0;
+                    co_return 0;
                 }
                 rootId = it->second;
             }
             agentxx::plugin::ChannelOptions channelOpt;
             channelOpt.rootId    = rootId;
-            channelOpt.sessionId = std::string{sessionId};
-            channelOpt.title     = std::string{title};
-            return agentxx::plugin::openChannelSync(ctx, channelOpt, [&ctx](const ChannelEvent& ev) {
-                onChannelEventImpl(ctx, ev);
-            });
+            channelOpt.sessionId = std::move(sessionId);
+            channelOpt.title     = std::move(title);
+            co_return co_await agentxx::plugin::openChannelAsync(
+                ctx,
+                std::move(channelOpt),
+                [&ctx](const ChannelEvent& ev) {
+                    onChannelEventImpl(ctx, ev);
+                }
+            );
         };
         runtime.closeChannel = [&ctx](int64_t channelId) {
-            agentxx::plugin::closeChannelSync(ctx, channelId);
+            ctx.spawnIo(detachedLog("close_channel", agentxx::plugin::closeChannelAsync(ctx, channelId)));
         };
         runtime.downloadAttachment = [&ctx](const std::string& accountId, ac::MediaRef& ref) {
             if (auto* platform = ctx.platformOf(accountId); platform != nullptr) {
                 platform->downloadAttachment(accountId, ref);
             }
         };
-        runtime.taskCommand = [&ctx](std::string_view chatKey, std::string_view args) {
-            return runTaskCommand(ctx, chatKey, args);
+        runtime.taskCommand = [&ctx](std::string chatKey, std::string args)
+            -> asio::awaitable<std::string> {
+            co_return co_await runTaskCommand(ctx, chatKey, args);
         };
         ctx.engine.init(
             ctx.io->get_executor(),
@@ -1664,15 +1804,14 @@ bool chatbotStartBody(
         ac::timezoneLabel(ctx.config.behavior.timezoneSpec, ac::systemNowMs()),
         ctx.config.behavior.timezone
     ));
-    return true;
+    co_return true;
 }
 
 /// 进程级启动: 取实例参数与配置文件路径 (表调用) → 跑启动主体 → 订阅面板事件
 ///
-/// 取参数与订阅面板事件靠协程串起来; 启动主体本身是**同步**的 —— 它要经由平台层与
-/// 调度层的自有 io 线程做大量 `runOnIoBlocking` 交互, 期间不能挂起, 其中的人设根
-/// 挂载/回滚用同步形态 (`mountRootSync` / `unmountRootSync`, 同步桥在插件执行线程上
-/// 就地唤醒)。
+/// 全部是一条插件协程: 取参数/订阅面板事件与本轮新增的 `mountRoot` 都是表调用,
+/// 在插件执行线程上只能 `co_await`。启动主体里的阻塞点仍是 `runOnIoBlocking`
+/// (驱动自有 io 线程的平台层)。
 void chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify || !notify->done) {
         PluginString::set(ctx.host, error, "start: notify required");
@@ -1686,13 +1825,13 @@ void chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
     if (!later.active()) {
         return;
     }
-    ctx.spawn([later](ChatbotCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later](ChatbotCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
         try {
             // 实例参数与配置文件路径在实例生命周期内不变
             std::string argsJson   = co_await c.argsJsonAsync();
             std::string configPath = co_await c.configPathAsync();
             std::string message;
-            if (!chatbotStartBody(c, std::move(argsJson), configPath, message)) {
+            if (!co_await chatbotStartBody(c, std::move(argsJson), configPath, message)) {
                 later.failed(message);
                 co_return;
             }
@@ -1707,75 +1846,93 @@ void chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
     later.provider();
 }
 
-/// 进程级停止: 停平台 → 关通道 → 卸根 (逆序、幂等)
+/// 停平台 / 关通道 / 卸根 / 停线程 / 收驱动票: 真实的清理主体 (协程)
 ///
-/// 这里保持**同步**形态 (与 `example_runtime` 的 `runtimeStop` 不同): 清理主体要驱动
-/// 自有 io 线程上的平台层 (`runOnIoBlocking` 停连接/关通道、`stopIo` 停线程), 这些调用
-/// 必须在本函数返回前全部跑完才安全, 写不写协程都不改变阻塞点; 唯一能换成 `co_await`
-/// 的只有 `unmountRootSync`, 而关闭中的根早被主程序按 owner 摘掉, 同步形态拿到的
-/// `not_found` 与异步形态等价。所以 `boundaries` 的白名单里保留本文件。
-void chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    if (ctx.started.exchange(false, std::memory_order_acq_rel)) {
+/// 阻塞点与以前一致 (`runOnIoBlocking` 驱动自有 io 线程), 只是卸根那条表调用
+/// 改成 `co_await` —— 同步形态已经删除。
+asio::awaitable<void> chatbotStopBody(
+    ChatbotCtx&                         c,
+    agentxx::plugin::LifecycleFinisher later
+) {
+    if (c.started.exchange(false, std::memory_order_acq_rel)) {
         // 1. 停平台连接 (不再收新消息)
-        ctx.runOnIoBlocking([&]() {
+        c.runOnIoBlocking([&c]() {
             // 面板刷新节拍先停: 停止后不再推快照
-            if (ctx.panelTimer) {
-                ctx.panelTimer->cancel();
+            if (c.panelTimer) {
+                c.panelTimer->cancel();
             }
-            ctx.panelLoopActive = false;
-            for (auto& [id, runtime] : ctx.accounts) {
+            c.panelLoopActive = false;
+            for (auto& [id, runtime] : c.accounts) {
                 if (runtime && runtime->platform) {
                     runtime->platform->stop();
                 }
             }
-            ctx.outbound.shutdown();
-            ctx.engine.shutdown();
+            c.outbound.shutdown();
+            c.engine.shutdown();
             // 任务记录清空: 未完成的任务由主程序按 owner 回收, 这里只丢业务字段
-            ctx.tasks.clear();
+            c.tasks.clear();
         });
         // 2. 关全部通道
         size_t closed = 0;
-        ctx.runOnIoBlocking([&]() {
-            closed = ctx.router.releaseAll("plugin_stopped");
+        c.runOnIoBlocking([&c, &closed]() {
+            closed = c.router.releaseAll("plugin_stopped");
         });
-        // 3. 卸根 (逆序)
+        // 3. 卸根 (逆序; 异步完成)
         std::map<std::string, std::string, std::less<>> roots;
         {
-            std::lock_guard lock(ctx.personaRootsMutex);
-            roots = ctx.personaRoots;
-            ctx.personaRoots.clear();
+            std::lock_guard lock(c.personaRootsMutex);
+            roots = c.personaRoots;
+            c.personaRoots.clear();
         }
         for (auto it = roots.rbegin(); it != roots.rend(); ++it) {
-            agentxx::plugin::unmountRootSync(ctx, it->second);
+            co_await agentxx::plugin::unmountRootAsync(c, it->second);
         }
         // 4. 先停 io 线程: 停完就不会再有平台回调 / 挂起的协程恢复
-        ctx.stopIo();
+        c.stopIo();
         // 5. 再清账号对象 (平台析构会 abort 挂起的收包)
         //    以前是在 io 线程上 clear: 析构返回后该线程仍会继续派发已排队的 handler,
         //    挂起的 connect()/doSend() 协程若在那时恢复, 碰到的是已释放的平台对象
         {
-            std::lock_guard lock(ctx.accountsMutex);
-            ctx.accounts.clear();
+            std::lock_guard lock(c.accountsMutex);
+            c.accounts.clear();
         }
         // 6. 面板定时器同样带着 io 的 executor: 停完线程就放掉
         //    (下次 start 会换新的 io_context, 留着它就是指着旧的那个)
-        ctx.panelTimer.reset();
-        ctx.log.info(fmt::format("已停止 (关闭 {} 个通道, 卸载 {} 个人设根)", closed, roots.size())
-        );
+        c.panelTimer.reset();
+        c.log.info(fmt::format("已停止 (关闭 {} 个通道, 卸载 {} 个人设根)", closed, roots.size()));
     }
     // 幂等: 上面已停过 (未启动时也走到这里, io 为空则直接返回)
-    ctx.stopIo();
+    c.stopIo();
     // 面板驱动票收尾: 取消还没跑的票 (之后回调不会再落到本实例上)
-    if (auto* driver = ctx.panelOutbox.driver.exchange(nullptr); driver != nullptr) {
-        if (ctx.iface.scheduler && ctx.iface.scheduler->cancel_driver) {
-            ctx.iface.scheduler->cancel_driver(driver);
+    if (auto* driver = c.panelOutbox.driver.exchange(nullptr); driver != nullptr) {
+        if (c.iface.scheduler && c.iface.scheduler->cancel_driver) {
+            c.iface.scheduler->cancel_driver(driver);
         }
     }
-    ctx.panelOutbox.driverPending.store(false, std::memory_order_release);
-    if (notify && notify->done) {
-        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    c.panelOutbox.driverPending.store(false, std::memory_order_release);
+    later.ok();
+    co_return;
+}
+
+/// 进程级停止: 停平台 → 关通道 → 卸根 (逆序、幂等)
+///
+/// 入口立刻返回 (`finishLater`), 清理在插件执行线程上继续跑; 框架在实例处于
+/// Closing 时仍受理表调用, 并把这条任务的 lease 计入 inflight, 卸载会等它跑完。
+void chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+    if (!notify || !notify->done) {
+        PluginString::set(ctx.host, error, "stop: notify required");
+        return;
     }
-    return;
+    auto later = agentxx::plugin::finishLater(notify);
+    if (!later.active()) {
+        // 主程序不要求通知: 同步把 io 线程收掉即可 (句柄为 NULL, 不再回调)
+        ctx.stopIo();
+        return;
+    }
+    ctx.spawn([later](ChatbotCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
+        co_await chatbotStopBody(c, later);
+        co_return;
+    });
 }
 
 /// 每个 agent 一份: 只对**人设 root** 注册工具
@@ -1829,7 +1986,7 @@ void* chatbotForAgent(
         // 工具注册交给协程: 每条注册“提交 + co_await”, 全部生效后再放行挂载
         const AgentRef agentRef(*spec);
         ctx.spawn([later, agentRef, agentId, isPersonaRoot](ChatbotCtx& c, agentxx::plugin::OpCtl&)
-                      -> pluginxx::Task<void> {
+                      -> asio::awaitable<void> {
             try {
                 co_await registerToolsOn(c, agentRef);
                 c.log.info(fmt::format(

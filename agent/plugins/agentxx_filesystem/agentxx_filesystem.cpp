@@ -8,14 +8,19 @@
 ///   时回退同步实现, 改注册同步体 (`tool`, offload 工作线程);
 ///   可用性判断统一走 `utilxx_base::isAsyncFileIoSupported()`;
 /// - `list` / `glob` / `grep`: 目录遍历 + 全文件扫描 + 正则/编码转换, 这是 CPU/阻塞
-///   工作而非异步 IO, 放进受控轮询只会阻塞主程序 IO 线程, 因此保持同步体 (`tool`)。
+///   工作而非异步 IO, 因此把阻塞段 ``co_await offloadAsync`` 交给工作池;
+///   权限复核 (路径逐项查询) 是表调用, 只能写在协程里, 所以体是 asio 协程
+///   (两段式: 先记候选路径 → 查权限 → 带着结果跑真正的工作, 见
+///   [runWithPathPermissions])。
 #include "agentxx_fs_plugin.h"
 #include "asio/awaitable.hpp"
 #include "filesystem_impl.h"
 #include "fmt/format.h"
 #include "utilxx_base/system.h"
 #include <algorithm>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using namespace agentxx_fs_plugin;
@@ -217,66 +222,144 @@ constexpr int32_t kWriteFlags = kRepeatCheck;
 
 struct FsPluginCtx : public PluginBase {};
 
-/// 构造按模式参数展开后的路径权限过滤器 (读作用域; 见 filesystem_impl.h 的 PathFilterFn)
-/// - 已明确允许(Allow)才保留; 被拒绝(Deny)与未获批准(Ask)一律不进入结果 (fail-closed)
-/// - 主程序未加载权限中间件时查询不可用, 过滤器返回空标记 → 工具跳过过滤 (保持原行为)
-static PathFilterFn makeReadPathFilter(
-    FsPluginCtx&     ctx,
-    const ScopeRef&  ref,
-    std::string_view sessionId
+/// 候选路径记录器: 权限复核的第 1 段 (阻塞枚举) 用它把枚举出的路径记下来
+///
+/// 阻塞体里做不了表调用 (权限查询只有协程形态), 所以模式类工具分两段做:
+/// 1. 先用"记下路径 + 全部判为拒绝"的过滤器跑一遍体: 体在权限过滤这一步就结束
+///    (输出为空, 不会真的去读文件/输出条目), 只留下候选路径表;
+/// 2. 协程里查这些路径的权限, 再用查到的结果当过滤器跑第二遍 (真正的工作)。
+///
+/// [capacity] 是安全上限: 枚举量异常大时记满就抛 [CollectEnoughPaths] 中止第 1 段,
+/// 调用方退回"不做逐项复核"(与查询不可用同一种降级), 避免为了复核把整棵树读进内存。
+struct CollectEnoughPaths {};
+
+class PathRecorder {
+public:
+
+    /// 过滤器 (记录 + 全部拒绝)
+    PathFilterFn filter() {
+        return [this](const std::vector<std::string>& batch) {
+            if (paths.size() + batch.size() > capacity) {
+                throw CollectEnoughPaths{};
+            }
+            paths.insert(paths.end(), batch.begin(), batch.end());
+            // 全部判为拒绝: 体在权限过滤这一步结束, 不做真正的文件读取
+            return std::vector<uint8_t>(batch.size(), 0);
+        };
+    }
+
+    std::vector<std::string> paths;
+    size_t                   capacity = 8192;
+};
+
+/// 用已查到的判定结果构造过滤器 (第 2 段用)
+/// - 表里没有的路径按拒绝处理 (fail-closed)
+inline PathFilterFn makeDecidedPathFilter(
+    std::vector<std::string> paths,
+    std::vector<uint8_t>     allowed
 ) {
-    return [&ctx, ref, sid = std::string{sessionId}](const std::vector<std::string>& paths) {
-        return agentxx::plugin::filterPathPermissions(
-            ctx,
-            ref,
-            agentxx::plugin::PermissionScope::Read,
-            sid,
-            paths
-        );
+    auto decisions = std::make_shared<std::unordered_map<std::string, uint8_t>>();
+    decisions->reserve(paths.size());
+    for (size_t i = 0; i < paths.size() && i < allowed.size(); ++i) {
+        decisions->insert_or_assign(std::move(paths[i]), allowed[i]);
+    }
+    return [decisions](const std::vector<std::string>& batch) {
+        std::vector<uint8_t> out;
+        out.reserve(batch.size());
+        for (const auto& path : batch) {
+            auto it = decisions->find(path);
+            out.push_back(it == decisions->end() ? uint8_t{0} : it->second);
+        }
+        return out;
     };
 }
 
-/// 目标路径的写权限复核 (move/copy 的 `dst` 同样是写入目标)
+/// 目标路径的写权限复核 (**协程形态**): 允许时返回空串, 否则返回拒绝原因
 /// - 声明的权限目标只能给一个参数, 所以 `dst` 在工具内用只读三态查询判定
 ///   (Deny/Ask 都不执行): 避免把文件写到被规则拒绝的目录里
 /// - 主程序未加载权限中间件时查询不可用 (返回空), 此时跳过复核保持原行为
-static bool destinationAllowed(
-    FsPluginCtx&       ctx,
-    const ScopeRef&    ref,
-    std::string_view   sessionId,
-    std::string_view   workDir,
-    const std::string& dst,
-    std::string&       reasonOut
+static asio::awaitable<std::string> destinationProblem(
+    FsPluginCtx&      ctx,
+    ScopeRef          ref,
+    std::string       sessionId,
+    std::string       workDir,
+    std::string       dst
 ) {
-    auto dstAbs    = agentxx_fs_plugin::detail::wsAbs(std::string{workDir}, dst);
-    auto decisions = agentxx::plugin::checkPathDecisions(
+    auto dstAbs    = agentxx_fs_plugin::detail::wsAbs(workDir, dst);
+    auto decisions = co_await agentxx::plugin::checkPathDecisionsAsync(
         ctx,
         ref,
         agentxx::plugin::PermissionScope::Write,
-        sessionId,
+        std::move(sessionId),
         std::vector<std::string>{std::move(dstAbs)}
     );
     if (decisions.size() != 1 || decisions.front() == agentxx::plugin::PathDecision::Allow) {
-        return true;
+        co_return std::string{};
     }
-    reasonOut = fmt::format(
+    co_return fmt::format(
         "destination path is not permitted by the current rules: {}. Choose a destination that is "
         "allowed (for example inside the working directory), or ask the user to allow it first.",
         dst
     );
-    return false;
+}
+
+/// 模式类工具的路径权限复核 (**两段式**; 阻塞体与表调用的分工见 [PathRecorder])
+///
+/// - `run` 是阻塞工具体: `(const PathFilterFn&) -> ToolResult`, 由本函数跑两遍;
+/// - 查询不可用 (长度不符) 或候选太多时退回"不做逐项复核", 与原来"查询不可用就
+///   跳过过滤"的降级行为一致。
+template<typename Ctx, typename RunFn>
+static asio::awaitable<ToolResult>
+    runWithPathPermissions(Ctx& ctx, ScopeRef ref, std::string sessionId, RunFn run) {
+    PathRecorder recorder;
+    bool         tooManyPaths = false;
+    try {
+        (void)co_await agentxx::plugin::offloadAsync(ctx, [&] {
+            return run(recorder.filter());
+        });
+    } catch (const CollectEnoughPaths&) {
+        tooManyPaths = true;
+    }
+    if (tooManyPaths || recorder.paths.empty()) {
+        // 候选太多 (放弃逐项复核) 或枚举阶段就结束了 (参数错误 / 没有候选):
+        // 不过滤再跑一遍拿到同样的结果
+        if (tooManyPaths) {
+            XX_LOGW("filesystem: too many candidate paths, per-path permission filtering skipped");
+        }
+        co_return co_await agentxx::plugin::offloadAsync(ctx, [&] {
+            return run(PathFilterFn{});
+        });
+    }
+    auto allowed = co_await agentxx::plugin::filterPathPermissionsAsync(
+        ctx,
+        ref,
+        agentxx::plugin::PermissionScope::Read,
+        std::move(sessionId),
+        recorder.paths
+    );
+    if (allowed.size() != recorder.paths.size()) {
+        // 主程序未加载权限中间件或调用失败: 跳过过滤, 保持原行为
+        XX_LOGW("filesystem: path permission query unavailable, path filtering skipped");
+        co_return co_await agentxx::plugin::offloadAsync(ctx, [&] {
+            return run(PathFilterFn{});
+        });
+    }
+    auto filter = makeDecidedPathFilter(std::move(recorder.paths), std::move(allowed));
+    co_return co_await agentxx::plugin::offloadAsync(ctx, [&] {
+        return run(filter);
+    });
 }
 
 /// 注册事务 (挂载的实际内容); 失败由主程序按拒绝处理并回滚。
 /// - `ref` 为本次挂载的 agent 引用, 工具注册与权限声明都记在该 agent 名下
-static pluginxx::Task<void> fsSetupAsync(FsPluginCtx& ctx, ScopeRef ref) {
+static asio::awaitable<void> fsSetupAsync(FsPluginCtx& ctx, ScopeRef ref) {
     // 说明: 每个工具注册后立即声明其权限限制 (目标参数 `path`, 读/写作用域),
     // 具体判定 (白/黑名单、permission.mode、记住的选择、工作区隔离) 由主程序
     // 权限中间件执行; 未声明的工具不参与权限判定 (直接放行)
 
     // 1. List
     auto listSchema
-        = (co_await agentxx::plugin::schemaOf(ctx, kNameList))
+        = (co_await schemaOfAsync(ctx, kNameList))
               .string("path", kPathDescList, /*required=*/true)
               .boolean(
                   "recursive",
@@ -302,7 +385,7 @@ static pluginxx::Task<void> fsSetupAsync(FsPluginCtx& ctx, ScopeRef ref) {
               .number("timeout", kTimeoutDesc, false, 60.0)
               .build();
 
-    co_await tool(
+    co_await toolAsync(
          ctx,
          ref,
         kNameList,
@@ -312,19 +395,30 @@ static pluginxx::Task<void> fsSetupAsync(FsPluginCtx& ctx, ScopeRef ref) {
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
-           const PluginxxCancelToken* cancel) {
+           const PluginxxCancelToken* cancel) -> asio::awaitable<ToolResult> {
             ArgReader args(args_json);
             auto      path = args.require<std::string>("path");
             if (!args.ok()) {
-                return ToolResult::fail(args.errorMessage());
+                co_return ToolResult::fail(args.errorMessage());
             }
-            return fileListExecute(
-                args.raw(),
-                std::string(workDir),
-                [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
-                },
-                makeReadPathFilter(c, ref, tid)
+            std::string workDirStr(workDir);
+            std::string tidStr(tid);
+            auto        token = cancel;
+            co_return co_await runWithPathPermissions(
+                c,
+                ref,
+                tidStr,
+                [&args, &c, ref, token, tidStr, workDirStr](const PathFilterFn& filter) {
+                    return fileListExecute(
+                        args.raw(),
+                        workDirStr,
+                        [&c, ref, token, tidStr] {
+                            return pluginxx_cancel_is_requested(token) != 0
+                                   || c.sessionCanceled(ref.ptr(), tidStr);
+                        },
+                        filter
+                    );
+                }
             );
         },
         0,
@@ -332,11 +426,11 @@ static pluginxx::Task<void> fsSetupAsync(FsPluginCtx& ctx, ScopeRef ref) {
     );
     // 列表按读取类工具处理: 声明 `path` (可为通配模式) 决定是否询问一次;
     // 列出的条目 (含 recursive 逐层展开结果) 在工具内逐项复核权限后才输出
-    co_await registerReadPathPermission(ctx, ref, kNameList, "path");
+    co_await registerReadPathPermissionAsync(ctx, ref, kNameList, "path");
 
     // 2. Read
     auto readSchema
-        = (co_await agentxx::plugin::schemaOf(ctx, kNameRead))
+        = (co_await schemaOfAsync(ctx, kNameRead))
               .string("path", kPathDesc, /*required=*/true)
               .integer(
                   "offset",
@@ -352,7 +446,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
               .build();
 
     if (utilxx_base::isAsyncFileIoSupported()) {
-        tool(
+        co_await toolAsync(
              ctx,
              ref,
             kNameRead,
@@ -376,13 +470,13 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             kReadFlags
         );
     } else {
-        tool(
+        co_await toolAsync(
              ctx,
              ref,
             kNameRead,
             kDepictRead,
             readSchema,
-            [ref](FsPluginCtx&               c,
+            agentxx::plugin::onWorkerAsync([ref](FsPluginCtx&               c,
                std::string_view           args_json,
                std::string_view           tid,
                std::string_view           workDir,
@@ -395,20 +489,20 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 return fileReadExecute(args.raw(), std::string(workDir), [&] {
                     return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
                 });
-            },
+            }),
             0,
             kReadFlags
         );
     }
-    co_await registerReadPathPermission(ctx, ref, kNameRead, "path");
+    co_await registerReadPathPermissionAsync(ctx, ref, kNameRead, "path");
 
     // 2.1 Read Media
     auto readMediaSchema
-        = (co_await agentxx::plugin::schemaOf(ctx, kNameReadMedia))
+        = (co_await schemaOfAsync(ctx, kNameReadMedia))
               .string("path", kPathDescMedia, /*required=*/true)
               .build();
 
-    co_await tool(
+    co_await toolAsync(
         ctx,
         ref,
         kNameReadMedia,
@@ -418,24 +512,31 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
-           const PluginxxCancelToken* cancel) {
+           const PluginxxCancelToken* cancel) -> asio::awaitable<ToolResult> {
             ArgReader args(args_json);
             auto      path = args.require<std::string>("path");
             if (!args.ok()) {
-                return ToolResult::fail(args.errorMessage());
+                co_return ToolResult::fail(args.errorMessage());
             }
-            return fileReadMediaExecute(args.raw(), std::string(workDir), [&] {
-                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+            std::string workDirStr(workDir);
+            std::string tidStr(tid);
+            auto        token = cancel;
+            // 读文件 + 编码是阻塞工作, 交给工作池; 返回值带附件 (多模态)
+            co_return co_await agentxx::plugin::offloadAsync(c, [&] {
+                return fileReadMediaExecute(args.raw(), workDirStr, [&c, ref, token, tidStr] {
+                    return pluginxx_cancel_is_requested(token) != 0
+                           || c.sessionCanceled(ref.ptr(), tidStr);
+                });
             });
         },
         0,
         kReadOnlyFlags
     );
-    co_await registerReadPathPermission(ctx, ref, kNameReadMedia, "path");
+    co_await registerReadPathPermissionAsync(ctx, ref, kNameReadMedia, "path");
 
     // 3. Write
     auto writeSchema
-        = (co_await agentxx::plugin::schemaOf(ctx, kNameWrite))
+        = (co_await schemaOfAsync(ctx, kNameWrite))
               .string(
                   "path",
                   "Path to the target file. Relative paths are resolved against the current working directory; `~` expands to the home directory.",
@@ -446,7 +547,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
               .build();
 
     if (utilxx_base::isAsyncFileIoSupported()) {
-        tool(
+        co_await toolAsync(
              ctx,
              ref,
             kNameWrite,
@@ -470,13 +571,13 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             kWriteFlags
         );
     } else {
-        tool(
+        co_await toolAsync(
              ctx,
              ref,
             kNameWrite,
             kDepictWrite,
             writeSchema,
-            [ref](FsPluginCtx&               c,
+            agentxx::plugin::onWorkerAsync([ref](FsPluginCtx&               c,
                std::string_view           args_json,
                std::string_view           tid,
                std::string_view           workDir,
@@ -490,19 +591,19 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 return fileWriteExecute(args.raw(), std::string(workDir), [&] {
                     return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
                 });
-            },
+            }),
             0,
             kWriteFlags
         );
     }
-    co_await registerWritePathPermission(ctx, ref, kNameWrite, "path");
+    co_await registerWritePathPermissionAsync(ctx, ref, kNameWrite, "path");
 
     // 4. Edit
     // 两种写法: 多段 `edits: [{old_str,new_str}, ...]` (推荐, 一次改多处) 与
     // 单段 `old_str`/`new_str` (兼容旧写法); 两处同时给出时工具报错。
     // 每段只替换第一处匹配 (要改多处就写多段)
     auto editSchema
-        = (co_await agentxx::plugin::schemaOf(ctx, kNameEdit))
+        = (co_await schemaOfAsync(ctx, kNameEdit))
               .string(
                   "path",
                   "Path to the text file. Relative paths are resolved against the current working directory; `~` expands to the home directory.",
@@ -526,7 +627,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
               .build();
 
     if (utilxx_base::isAsyncFileIoSupported()) {
-        tool(
+        co_await toolAsync(
              ctx,
              ref,
             kNameEdit,
@@ -547,13 +648,13 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             }
         );
     } else {
-        tool(
+        co_await toolAsync(
              ctx,
              ref,
             kNameEdit,
             kDepictEdit,
             editSchema,
-            [ref](FsPluginCtx&               c,
+            agentxx::plugin::onWorkerAsync([ref](FsPluginCtx&               c,
                std::string_view           args_json,
                std::string_view           tid,
                std::string_view           workDir,
@@ -566,17 +667,17 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 return fileEditExecute(args.raw(), std::string(workDir), [&] {
                     return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
                 });
-            }
+            })
         );
     }
-    co_await registerWritePathPermission(ctx, ref, kNameEdit, "path");
+    co_await registerWritePathPermissionAsync(ctx, ref, kNameEdit, "path");
 
     // 5. Glob
     // 权限限制: 先按 `file_patterns` (数组) 声明读权限 —— 这决定"是否询问用户一次"
     // (目标是模式表达的扫描起点); 模式实际展开出的路径在工具内用
     // makeReadPathFilter 逐项复核 (拒绝/未获批准的路径不进入结果), 防止
     // `**` 之类模式绕过针对子目录的拒绝规则
-    auto globSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameGlob))
+    auto globSchema = (co_await schemaOfAsync(ctx, kNameGlob))
                           .stringArray(
                               "file_patterns",
                               kGlobFilePatternsDesc,
@@ -590,7 +691,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                           .number("timeout", kTimeoutDesc, false, 60.0)
                           .build();
 
-    co_await tool(
+    co_await toolAsync(
          ctx,
          ref,
         kNameGlob,
@@ -600,28 +701,39 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
-           const PluginxxCancelToken* cancel) {
+           const PluginxxCancelToken* cancel) -> asio::awaitable<ToolResult> {
             ArgReader args(args_json);
             auto      patterns = args.require<std::vector<std::string>>("file_patterns");
             if (!args.ok()) {
-                return ToolResult::fail(args.errorMessage());
+                co_return ToolResult::fail(args.errorMessage());
             }
-            return fileGlobExecute(
-                args.raw(),
-                std::string(workDir),
-                [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
-                },
-                makeReadPathFilter(c, ref, tid)
+            std::string workDirStr(workDir);
+            std::string tidStr(tid);
+            auto        token = cancel;
+            co_return co_await runWithPathPermissions(
+                c,
+                ref,
+                tidStr,
+                [&args, &c, ref, token, tidStr, workDirStr](const PathFilterFn& filter) {
+                    return fileGlobExecute(
+                        args.raw(),
+                        workDirStr,
+                        [&c, ref, token, tidStr] {
+                            return pluginxx_cancel_is_requested(token) != 0
+                                   || c.sessionCanceled(ref.ptr(), tidStr);
+                        },
+                        filter
+                    );
+                }
             );
         },
         0,
         kReadOnlyFlags
     );
-    co_await registerReadPathPermission(ctx, ref, kNameGlob, "file_patterns");
+    co_await registerReadPathPermissionAsync(ctx, ref, kNameGlob, "file_patterns");
 
     // 6. Grep
-    auto grepSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameGrep))
+    auto grepSchema = (co_await schemaOfAsync(ctx, kNameGrep))
                           .stringArray(
                               "file_patterns",
                               kGrepFilePatternsDesc,
@@ -645,7 +757,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                           .number("timeout", kTimeoutDesc, false, 60.0)
                           .build();
 
-    co_await tool(
+    co_await toolAsync(
          ctx,
          ref,
         kNameGrep,
@@ -655,19 +767,30 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
-           const PluginxxCancelToken* cancel) {
+           const PluginxxCancelToken* cancel) -> asio::awaitable<ToolResult> {
             ArgReader args(args_json);
             auto      patterns = args.require<std::vector<std::string>>("file_patterns");
             if (!args.ok()) {
-                return ToolResult::fail(args.errorMessage());
+                co_return ToolResult::fail(args.errorMessage());
             }
-            return fileGrepExecute(
-                args.raw(),
-                std::string(workDir),
-                [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
-                },
-                makeReadPathFilter(c, ref, tid)
+            std::string workDirStr(workDir);
+            std::string tidStr(tid);
+            auto        token = cancel;
+            co_return co_await runWithPathPermissions(
+                c,
+                ref,
+                tidStr,
+                [&args, &c, ref, token, tidStr, workDirStr](const PathFilterFn& filter) {
+                    return fileGrepExecute(
+                        args.raw(),
+                        workDirStr,
+                        [&c, ref, token, tidStr] {
+                            return pluginxx_cancel_is_requested(token) != 0
+                                   || c.sessionCanceled(ref.ptr(), tidStr);
+                        },
+                        filter
+                    );
+                }
             );
         },
         0,
@@ -675,16 +798,16 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     );
     // 权限限制: 同 glob —— 按 `file_patterns` (数组) 声明读权限决定是否询问,
     // 扫描出的文件在工具内逐项复核后才读取 (被拒/未获批准的文件不读)
-    co_await registerReadPathPermission(ctx, ref, kNameGrep, "file_patterns");
+    co_await registerReadPathPermissionAsync(ctx, ref, kNameGrep, "file_patterns");
 
     // 7. Move
-    auto moveSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameMove))
+    auto moveSchema = (co_await schemaOfAsync(ctx, kNameMove))
                           .string("src", kMoveSrcDesc, /*required=*/true)
                           .string("dst", kMoveDstDesc, /*required=*/true)
                           .boolean("overwrite", kReplaceOverwriteDesc, false, false)
                           .build();
 
-    co_await tool(
+    co_await toolAsync(
          ctx,
          ref,
         kNameMove,
@@ -694,36 +817,42 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
-           const PluginxxCancelToken* cancel) {
+           const PluginxxCancelToken* cancel) -> asio::awaitable<ToolResult> {
             ArgReader args(args_json);
             auto      src = args.require<std::string>("src");
             auto      dst = args.require<std::string>("dst");
             if (!args.ok()) {
-                return ToolResult::fail(args.errorMessage());
+                co_return ToolResult::fail(args.errorMessage());
             }
-            std::string reason;
-            if (false == destinationAllowed(c, ref, tid, workDir, dst, reason)) {
-                return ToolResult::fail(std::move(reason));
+            std::string workDirStr(workDir);
+            std::string tidStr(tid);
+            auto        problem = co_await destinationProblem(c, ref, tidStr, workDirStr, dst);
+            if (!problem.empty()) {
+                co_return ToolResult::fail(std::move(problem));
             }
-            return fileMoveExecute(args.raw(), std::string(workDir), [&] {
-                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+            auto token = cancel;
+            co_return co_await agentxx::plugin::offloadAsync(c, [&] {
+                return fileMoveExecute(args.raw(), workDirStr, [&c, ref, token, tidStr] {
+                    return pluginxx_cancel_is_requested(token) != 0
+                           || c.sessionCanceled(ref.ptr(), tidStr);
+                });
             });
         },
         0,
         kWriteFlags
     );
     // 权限限制: 声明 `src` (被移动的路径) 为写入目标决定是否询问一次;
-    // `dst` 在工具内用只读查询复核 (见 destinationAllowed)
-    co_await registerWritePathPermission(ctx, ref, kNameMove, "src");
+    // `dst` 在工具内用只读查询复核 (见 destinationProblem)
+    co_await registerWritePathPermissionAsync(ctx, ref, kNameMove, "src");
 
     // 8. Copy
-    auto copySchema = (co_await agentxx::plugin::schemaOf(ctx, kNameCopy))
+    auto copySchema = (co_await schemaOfAsync(ctx, kNameCopy))
                           .string("src", kCopySrcDesc, /*required=*/true)
                           .string("dst", kCopyDstDesc, /*required=*/true)
                           .boolean("overwrite", kReplaceOverwriteDesc, false, false)
                           .build();
 
-    co_await tool(
+    co_await toolAsync(
          ctx,
          ref,
         kNameCopy,
@@ -733,40 +862,46 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
-           const PluginxxCancelToken* cancel) {
+           const PluginxxCancelToken* cancel) -> asio::awaitable<ToolResult> {
             ArgReader args(args_json);
             auto      src = args.require<std::string>("src");
             auto      dst = args.require<std::string>("dst");
             if (!args.ok()) {
-                return ToolResult::fail(args.errorMessage());
+                co_return ToolResult::fail(args.errorMessage());
             }
-            std::string reason;
-            if (false == destinationAllowed(c, ref, tid, workDir, dst, reason)) {
-                return ToolResult::fail(std::move(reason));
+            std::string workDirStr(workDir);
+            std::string tidStr(tid);
+            auto        problem = co_await destinationProblem(c, ref, tidStr, workDirStr, dst);
+            if (!problem.empty()) {
+                co_return ToolResult::fail(std::move(problem));
             }
-            return fileCopyExecute(args.raw(), std::string(workDir), [&] {
-                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
+            auto token = cancel;
+            co_return co_await agentxx::plugin::offloadAsync(c, [&] {
+                return fileCopyExecute(args.raw(), workDirStr, [&c, ref, token, tidStr] {
+                    return pluginxx_cancel_is_requested(token) != 0
+                           || c.sessionCanceled(ref.ptr(), tidStr);
+                });
             });
         },
         0,
         kWriteFlags
     );
     // 权限限制: 同 move
-    co_await registerWritePathPermission(ctx, ref, kNameCopy, "src");
+    co_await registerWritePathPermissionAsync(ctx, ref, kNameCopy, "src");
 
     // 9. Remove
-    auto removeSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameRemove))
+    auto removeSchema = (co_await schemaOfAsync(ctx, kNameRemove))
                             .string("path", kRemovePathDesc, /*required=*/true)
                             .boolean("recursive", kRemoveRecursiveDesc, false, false)
                             .build();
 
-    co_await tool(
+    co_await toolAsync(
          ctx,
          ref,
         kNameRemove,
         kDepictRemove,
         removeSchema,
-        [ref](FsPluginCtx&               c,
+        agentxx::plugin::onWorkerAsync([ref](FsPluginCtx&               c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -779,12 +914,12 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             return fileRemoveExecute(args.raw(), std::string(workDir), [&] {
                 return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
             });
-        },
+        }),
         0,
         kWriteFlags
     );
     // 删除是写操作: 声明 `path` 为写入目标 (同 write/edit)
-    co_await registerWritePathPermission(ctx, ref, kNameRemove, "path");
+    co_await registerWritePathPermissionAsync(ctx, ref, kNameRemove, "path");
 
     co_return;
 }
@@ -822,7 +957,7 @@ static void* fsMount(
     }
     const AgentRef agentRef(*spec);
     // 注册事务交给协程: 每个工具/权限都是"提交 + co_await", 全部生效后再放行挂载
-    ctx.spawn([later, agentRef](FsPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](FsPluginCtx& c, OpCtl&) -> asio::awaitable<void> {
         try {
             co_await fsSetupAsync(c, agentRef);
             later.ok();

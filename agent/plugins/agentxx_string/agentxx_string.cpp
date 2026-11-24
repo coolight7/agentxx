@@ -39,19 +39,19 @@ constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
 struct StringPluginCtx : public PluginBase {};
 
 /// 注册事务 (mount 的实际内容; 每个 agent 各自一份)。
-static pluginxx::Task<void> stringSetupAsync(StringPluginCtx& ctx, ScopeRef ref) {
+static asio::awaitable<void> stringSetupAsync(StringPluginCtx& ctx, ScopeRef ref) {
     // 1. html_to_markdown
-    auto html2mdSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameHtml2Md))
+    auto html2mdSchema = (co_await agentxx::plugin::schemaOfAsync(ctx, kNameHtml2Md))
                              .string("content", "The HTML string to convert.", /*required=*/true)
                              .build();
 
-    co_await tool(
+    co_await toolAsync(
         ctx,
         ref,
         kNameHtml2Md,
         kDepictHtml2Md,
         html2mdSchema,
-        [](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
+        agentxx::plugin::onWorkerAsync([](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CanceledException("html2markdown Canceled");
             }
@@ -61,13 +61,13 @@ static pluginxx::Task<void> stringSetupAsync(StringPluginCtx& ctx, ScopeRef ref)
                 throw agentxx::plugin::CanceledException("html2markdown Canceled");
             }
             return out;
-        },
+        }),
         0,
         kAutoSummary | kRepeatCheck
     );
 
     // 2. regexp
-    auto regexpSchema = (co_await agentxx::plugin::schemaOf(ctx, kNameRegexp))
+    auto regexpSchema = (co_await agentxx::plugin::schemaOfAsync(ctx, kNameRegexp))
                             .string("content", "The input text to operate on.", /*required=*/true)
                             .stringArray(
                                 "exps",
@@ -84,13 +84,13 @@ static pluginxx::Task<void> stringSetupAsync(StringPluginCtx& ctx, ScopeRef ref)
                             .boolean("ignore_case", kIgnoreCaseDesc, false, false)
                             .build();
 
-    co_await tool(
+    co_await toolAsync(
         ctx,
         ref,
         kNameRegexp,
         kDepictRegexp,
         regexpSchema,
-        [](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
+        agentxx::plugin::onWorkerAsync([](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CanceledException("regexp Canceled");
             }
@@ -100,7 +100,7 @@ static pluginxx::Task<void> stringSetupAsync(StringPluginCtx& ctx, ScopeRef ref)
                 throw agentxx::plugin::CanceledException("regexp Canceled");
             }
             return out;
-        },
+        }),
         0,
         kAutoSummary
     );
@@ -134,7 +134,7 @@ static void* stringMount(
     }
     const AgentRef agentRef(*spec);
     // 注册事务交给协程: 每个注册都是"提交 + co_await", 全部生效后再放行挂载
-    ctx.spawn([later, agentRef](StringPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](StringPluginCtx& c, OpCtl&) -> asio::awaitable<void> {
         try {
             co_await stringSetupAsync(c, agentRef);
             later.ok();

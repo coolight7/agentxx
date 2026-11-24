@@ -13,12 +13,15 @@
 #include "chatbot_config.h"
 #include "chatbot_types.h"
 
+#include "asio/awaitable.hpp"
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace asio = ::boost::asio;
 
 namespace agentxx {
 namespace chatbot {
@@ -43,10 +46,14 @@ public:
     /// 运行时回调 (由调度层提供; 转发到 `agentxx.agent.runtime` 的 SDK 调用)
     struct Hooks {
         /// 打开一个会话通道; 失败返回 0
-        std::function<int64_t(std::string_view personaName, std::string_view sessionId,
-                              std::string_view title)>
+        ///
+        /// 协程形态: 开通道是一次表调用, 本层的调用方 (调度层) 也在插件 io 线程上
+        /// 跑 asio 协程, 所以这里直接 `co_await` (不再用同步等待)。
+        std::function<asio::awaitable<int64_t>(std::string_view personaName,
+                                               std::string_view sessionId,
+                                               std::string_view title)>
             open;
-        /// 关闭一个通道 (幂等)
+        /// 关闭一个通道 (幂等; 实施方投递后立即返回, 不等结果)
         std::function<void(int64_t channelId)> close;
     };
 
@@ -61,10 +68,14 @@ public:
     /// - `seq`: 单调递增的活动序号 (LRU 依据)
     /// - `err`: 失败原因 (达上限且无法回收 / 开通道被拒)
     /// - `return` 通道 id; 0 = 失败
-    int64_t acquire(
-        const ChatKey&      key,
-        const RouteResult&  route,
-        std::string_view    chatTitle,
+    ///
+    /// 协程形态: 懒创建要开通道 (一次表调用), 调用方在插件 io 线程上 `co_await`。
+    /// `key` / `route` / `chatTitle` **按值**: 本函数在开通道处挂起, 参数要在
+    /// 恢复之后继续用, 而协程帧里的引用不会把调用方的对象留住。
+    asio::awaitable<int64_t> acquire(
+        ChatKey             key,
+        RouteResult         route,
+        std::string         chatTitle,
         uint64_t            seq,
         std::string&        err
     );

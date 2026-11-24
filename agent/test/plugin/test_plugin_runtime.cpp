@@ -1,4 +1,5 @@
 #include "agentxx-test/plugin/test_plugin_runtime.h"
+#include "agentxx-test/plugin/test_table_op.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
@@ -463,21 +464,57 @@ void PLUGINXX_CALL lifecycleCreateHook(
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error
 ) {
-    auto  fail  = [&](std::string_view msg) {
-        hostMemorySetString(error, msg);
-        PluginxxStringView sv{msg.data(), static_cast<uint64_t>(msg.size())};
-        notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &sv);
-    };
+    // 失败原因走 notify 的 payload (ABI 约定), 这个出参只在同步失败时才用
+    (void)error;
     auto& probe = *static_cast<LifecycleProbe*>(*plugin_ctx);
     ++probe.starts;
-    if (probe.tools && probe.host) {
-        // 表成员是异步契约; 探针挂在插件执行线程上跑, 工具注册的工作体在主程序 io 上,
-        // 完成回调是同步桥 (就地在 io 调用) —— 真等不会自己等自己
-        auto res = pluginxx::tableOpSyncWait(
+
+    // 注册一律“提交 + 完成回调里收口”: 这个入口跑在插件执行线程上, 在那里同步等表结果
+    // 就是自己等自己 (完成回调要投回这条线程)。与真实插件的 `finishLater` 同一个意思 ——
+    // notify 可以从任意线程、在所有表调用结束后回答。
+    struct StartPending {
+        /// 按值存: 回答时可能已经在另一个线程, 借用指针不再可靠
+        PluginxxOperatorNotify notify{};
+        int                     remaining = 0;
+        bool                    failStart = false;
+    };
+    auto pending = std::make_shared<StartPending>();
+    pending->notify    = *notify;
+    pending->failStart = probe.failStart;
+
+    const bool wantTool = probe.tools != nullptr && probe.host != nullptr;
+    const bool wantGraph
+        = probe.graph != nullptr && probe.host != nullptr
+          && probe.graph->register_node_type != nullptr;
+    pending->remaining = (wantTool ? 1 : 0) + (wantGraph ? 1 : 0);
+
+    auto finish = [pending]() {
+        if (--pending->remaining > 0) {
+            return;
+        }
+        auto& out = pending->notify;
+        if (pending->failStart) {
+            // 事务中途失败: 主程序必须撤销这次已生效的注册（部分注册回滚）。
+            // 失败原因按 ABI 约定放在 payload 里。
+            static constexpr std::string_view kRefused = "start refused by probe";
+            PluginxxStringView                sv{kRefused.data(), kRefused.size()};
+            out.done(out.host_ud, PLUGINXX_OPERATOR_FAILED, &sv);
+            return;
+        }
+        out.done(out.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    };
+
+    if (pending->remaining == 0) {
+        // 没有要登记的东西: 直接收口
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+        return;
+    }
+    if (wantTool) {
+        agentxx::test::tableOpSubmit(
             probe.host,
             probe.cancel,
             probe.scheduler,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            [&probe](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return probe.tools->register_tool(
                     probe.host,
                     &probe.ref,
@@ -487,21 +524,22 @@ void PLUGINXX_CALL lifecycleCreateHook(
                     err
                 );
             },
-            0,
-            pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
+            [&probe, finish](pluginxx::detail::TableOpResult r) {
+                probe.partialRegistration = r.ok();
+                finish();
+            }
         );
-        probe.partialRegistration = res.ok();
     }
-    if (probe.graph && probe.host && probe.graph->register_node_type) {
+    if (wantGraph) {
         AgentxxPluginGraphNodeTypeSpec gspec{};
-        gspec.type       = agentxx::plugin::PluginStringView::fromCstr("probe_graph_type");
-        gspec.run_start  = &probeGraphRunStart;
-        gspec.user_data  = &probe;
-        auto gop = pluginxx::tableOpSyncWait(
+        gspec.type      = agentxx::plugin::PluginStringView::fromCstr("probe_graph_type");
+        gspec.run_start = &probeGraphRunStart;
+        gspec.user_data = &probe;
+        agentxx::test::tableOpSubmit(
             probe.host,
             probe.cancel,
             probe.scheduler,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            [&probe, gspec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return probe.graph->register_node_type(
                     probe.host,
                     &probe.ref,
@@ -511,43 +549,42 @@ void PLUGINXX_CALL lifecycleCreateHook(
                     err
                 );
             },
-            0,
-            pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
+            [&probe, finish](pluginxx::detail::TableOpResult r) {
+                probe.partialGraphRegistration = r.ok();
+                finish();
+            }
         );
-        probe.partialGraphRegistration = gop.ok();
     }
-    if (probe.failStart) {
-        // 事务中途失败：主程序必须撤销这次已生效的注册（部分注册回滚）。
-        fail("start refused by probe");
-        return;
-    }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
 }
 
 void PLUGINXX_CALL
     lifecycleStopHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
     auto& probe = *static_cast<LifecycleProbe*>(ud);
     ++probe.stops;
-    if (probe.tools && probe.host) {
-        pluginxx::tableOpSyncWait(
-            probe.host,
-            probe.cancel,
-            probe.scheduler,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return probe.tools->unregister_tool(
-                    probe.host,
-                    &probe.ref,
-                    &probe.spec.name,
-                    cb,
-                    ud,
-                    err
-                );
-            },
-            0,
-            pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
-        );
+    // 同样不在这里等: 注销完成后回答 notify (notify 按值存一份, 回调可能在另一条线程)
+    const PluginxxOperatorNotify notifyCopy = *notify;
+    if (!probe.tools || !probe.host) {
+        notifyCopy.done(notifyCopy.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+        return;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    agentxx::test::tableOpSubmit(
+        probe.host,
+        probe.cancel,
+        probe.scheduler,
+        [&probe](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return probe.tools->unregister_tool(
+                probe.host,
+                &probe.ref,
+                &probe.spec.name,
+                cb,
+                ud,
+                err
+            );
+        },
+        [notifyCopy](pluginxx::detail::TableOpResult) {
+            notifyCopy.done(notifyCopy.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+        }
+    );
 }
 } // namespace
 
@@ -1767,7 +1804,7 @@ TestResult testPluginRuntime() {
 
         // config.get_plugin_args 是异步操作契约: 受理 + 完成回调, 这里阻塞等结果
         auto argsOf = [&](const PluginxxHost* target) {
-            return pluginxx::tableOpSyncWait(
+            return agentxx::test::tableOpWait(
                 target,
                 ifaces.cancel,
                 ifaces.scheduler,
@@ -2116,7 +2153,7 @@ TestResult testPluginRuntime() {
         std::thread pluginThread([host, ifaces, spec, entered, rcPromise, ref] {
             entered->set_value();
             // 表成员是异步契约: 工作线程上用阻塞形态等结果 (入口拒绝或受理后失败)
-            auto res = pluginxx::tableOpSyncWait(
+            auto res = agentxx::test::tableOpWait(
                 host,
                 ifaces.cancel,
                 ifaces.scheduler,
@@ -2521,7 +2558,7 @@ TestResult testPluginRuntime() {
         };
         // 表成员是异步操作契约: 用例在主程序 IO 线程上, 主程序内联完成, 不产生等待
         auto broadcastOp = [&](auto&& start) {
-            return pluginxx::tableOpSyncWait(
+            return agentxx::test::tableOpWait(
                 host,
                 ifaces.cancel,
                 ifaces.scheduler,

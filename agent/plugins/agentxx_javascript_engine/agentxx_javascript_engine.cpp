@@ -525,10 +525,10 @@ struct JsTableResult {
 
 /// 一次表调用的回调上下文 (交给主程序的 `user_data`)
 ///
-/// 主程序可能对 `user_data` 按指针读标记 (见 `pluginxx::isSyncBridgeCallback`),
+/// 主程序不读 `user_data` 的内容 (只按原样透传),
 /// 所以**不能**把序号直接当指针传 ———— 这里的每个令牌都是一块真实内存,
 /// 由完成回调释放 (主程序丢掉回调时它会泄漏一块 24 字节的内存, 与 kit 的
-/// `SyncBridgeCallback` 同一约定)。
+/// `tableOpCallback` 同一约定)。
 struct JsBridgeToken {
     JsEngine* engine = nullptr;
     uint64_t  id     = 0; ///< 在飞表里的键

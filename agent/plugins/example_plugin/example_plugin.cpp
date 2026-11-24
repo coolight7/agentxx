@@ -4,8 +4,8 @@
 /// 1. 工具注册:
 ///    - example_echo (同步体, 工作池线程上跑; 返回字符串 = 永远成功)
 ///    - example_fail_demo (返回 ToolResult 的对照: 失败靠状态, 不靠抛异常或文本前缀)
-///    - example_caller (锚定 Task 协程, 经 call_tool 异步互调)
-///    - example_sleep (锚定 Task 协程, 经 co_await sleep 精确唤醒)
+///    - example_caller (asio 协程体, 经 callToolAsync 异步互调)
+///    - example_sleep (asio 协程体, 经 co_await sleepAsync 精确唤醒)
 ///    - example_bridge (协程驱动桥样例: 主程序 timer + 主程序回调两个真实唤醒源)
 ///    - example_polled_timer (受控轮询样例: 插件本地 reactor 上的 asio steady_timer)
 /// 2. 通知: agent_start 通知点
@@ -163,22 +163,22 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
 /// 挂载事务 (mount): 工具/通知/订阅/能力/提示词 (**协程形态**)
 /// - `ref` 为本次挂载的 agent 引用, 全部登记都记在该 agent 名下
 /// - 每条登记都是“提交 + `co_await`”: 提交就已经生效, 等结果只为了拿到失败原因
-static pluginxx::Task<void>
+static asio::awaitable<void>
     exampleAgentSetup(AgentCtx& ctx, agentxx::plugin::AgentRef ref) {
     // 1.1 echo: 最简单的同步体工具
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
          ctx,
          ref,
         "example_echo",
         "Echo the input arguments back as JSON (example plugin tool).",
         R"_({"type":"object","properties":{},"additionalProperties":true})_",
-        [](AgentCtx& c, std::string_view args, std::string_view tid) -> std::string {
+        agentxx::plugin::onWorkerAsync([](AgentCtx& c, std::string_view args, std::string_view tid) -> std::string {
             return fmt::format(
                 R"_({{"echo": {},"sessionId": {}}})_",
                 args.empty() ? "{}" : args,
                 c.jsonEscape(tid)
             );
-        }
+        })
     );
 
     // 1.1b fail_demo: 返回带状态的结果 (ToolResult)
@@ -186,13 +186,13 @@ static pluginxx::Task<void>
     //   不加 `[Error: ...]` 前缀 (主程序统一排版)
     // - `ToolResult::ok(文本)` 与直接返回字符串等价
     // - 与 example_echo 对照: 一个返回字符串 (永远成功), 一个能表达失败
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
          ctx,
          ref,
         "example_fail_demo",
         "Demonstrate returning a failed tool result without throwing (pass fail=true).",
         R"_({"type":"object","properties":{"fail":{"type":"boolean"}}})_",
-        [](std::string_view args) -> agentxx::plugin::ToolResult {
+        agentxx::plugin::onWorkerAsync([](std::string_view args) -> agentxx::plugin::ToolResult {
             const bool shouldFail = args.find("\"fail\":true") != std::string_view::npos
                                     || args.find("\"fail\": true") != std::string_view::npos;
             if (shouldFail) {
@@ -201,19 +201,19 @@ static pluginxx::Task<void>
                 );
             }
             return agentxx::plugin::ToolResult::ok(R"_({"ok":true})_");
-        }
+        })
     );
 
-    // 1.2 caller: 锚定 Task 协程互调工具 (tool + call_tool)
-    co_await agentxx::plugin::tool(
+    // 1.2 caller: 协程体互调工具 (toolAsync + callToolAsync)
+    co_await toolAsync(
          ctx,
          ref,
         "example_caller",
         "Call example_echo via call_tool to demonstrate plugin interop.",
         R"_({"type":"object","properties":{},"additionalProperties":true})_",
         [ref](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
-        ) -> agentxx::plugin::Task<std::string> {
-            std::string resp = co_await agentxx::plugin::call_tool(
+        ) -> asio::awaitable<std::string> {
+            std::string resp = co_await callToolAsync(
                 c,
                 ref,
                 "example_echo",
@@ -224,15 +224,15 @@ static pluginxx::Task<void>
         }
     );
 
-    // 1.3 sleeper: 锚定 Task 协程 sleep 工具 (tool + sleep)
-    co_await agentxx::plugin::tool(
+    // 1.3 sleeper: 协程体 sleep 工具 (toolAsync + sleepAsync)
+    co_await toolAsync(
          ctx,
          ref,
         "example_sleep",
         "Sleep duration_ms milliseconds then return (slow plugin tool).",
         R"_({"type":"object","properties":{"durationMs":{"type":"integer"}}})_",
         [ref](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
-        ) -> agentxx::plugin::Task<std::string> {
+        ) -> asio::awaitable<std::string> {
             int ms = 200;
             try {
                 auto j = utilxx_base::Json::parse(args);
@@ -241,7 +241,7 @@ static pluginxx::Task<void>
                 }
             } catch (...) {
             }
-            co_await agentxx::plugin::sleep(c, ms > 0 ? ms : 0);
+            co_await sleepAsync(c, ms > 0 ? ms : 0);
             ctl.throw_if_canceled();
             co_return fmt::format(R"_({{"slept_ms": {}}})_", ms);
         }
@@ -250,18 +250,18 @@ static pluginxx::Task<void>
     // 1.4 bridge: 协程驱动桥诊断 (plugin.md 样例)
     //
     // 这个工具演示驱动桥的两个"真实唤醒源":
-    //   1. 主程序已有 scheduler timer 回调 (`co_await sleep`) —— 到期时 adapter 只把
+    //   1. 主程序已有 scheduler timer 回调 (`co_await sleepAsync`) —— 到期时 adapter 只把
     //      continuation 投递到本地执行器并唤醒, 下一步由下一次 host driver 推进;
-    //   2. 主程序回调式异步接口 (`co_await call_tool`) —— 完成回调同样不重入插件协程。
+    //   2. 主程序回调式异步接口 (`co_await callToolAsync`) —— 完成回调同样不重入插件协程。
     // 因此这里的循环既不是轮询、也不占用额外线程: 每一步都对应一次主程序驱动。
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
          ctx,
          ref,
         "example_bridge",
         "Report coroutine bridge diagnostics (driver tickets/steps, host IO thread).",
         R"_({"type":"object","properties":{"ticks":{"type":"integer"}}})_",
         [ref](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
-        ) -> agentxx::plugin::Task<std::string> {
+        ) -> asio::awaitable<std::string> {
             int ticks = 1;
             try {
                 auto j = utilxx_base::Json::parse(args);
@@ -280,11 +280,11 @@ static pluginxx::Task<void>
             bool  onIoAtStart = bridge->onHostIoThread();
             for (int i = 0; i < ticks; ++i) {
                 // 主程序计时器适配: 到期 -> 投递 continuation + wake -> 下一次 driver 恢复
-                co_await agentxx::plugin::sleep(c, 1);
+                co_await sleepAsync(c, 1);
                 ctl.throw_if_canceled();
             }
             // 主程序回调式互调: 完成回调同样只投递 + 唤醒
-            std::string echo = co_await agentxx::plugin::call_tool(
+            std::string echo = co_await callToolAsync(
                 c,
                 ref,
                 "example_echo",
@@ -301,16 +301,16 @@ static pluginxx::Task<void>
         }
     );
 
-    // 1.5 polled_timer: asio 协程体样例 (`tool` 的 awaitable 形态)
+    // 1.5 polled_timer: 受控轮询样例 (toolAsync 的协程体)
     //
     // 业务体是 `asio::awaitable`, 等待的是**插件本地 reactor** 上的 `steady_timer`:
     // 这类等待没有"主程序可见唤醒源", 因此由桥以受控轮询推进 ——
     // - 有未完成的 polled 操作时才申请驱动请求 (空闲零开销);
     // - 有进展立刻续下一次请求, 无进展退避 10ms, 突发 256 步后强制让出;
-    // - 主程序不提供 `scheduler.request_driver`/`scheduler.sleep` 时自动降级为
-    //   offload 工作线程 + 局部 io_context 跑完 (行为对业务体透明)。
+    // - 主程序必须提供 `scheduler.request_driver`/`scheduler.sleep`: 驱动请求失败时
+    //   该根按 FAILED 终结并记日志 (插件侧不需要为此改代码)。
     // 返回的 pumpOnStart 证明该协程确实以"受控轮询根"身份运行。
-    co_await agentxx::plugin::tool(
+    co_await toolAsync(
          ctx,
          ref,
         "example_polled_timer",
@@ -377,7 +377,7 @@ static pluginxx::Task<void>
     // 2. 通知型功能埋点: 插件"想知道某个点发生了"就订阅同名广播频道
     //    (已经不再有"处理器登记"这回事; 序号已换成点 id)
     {
-        co_await agentxx::plugin::subscribePluginBroadcast(
+        co_await subscribePluginBroadcastAsync(
             ctx,
             ref.ptr(),
             agentxx::plugin::points::ToolEnd,
@@ -388,8 +388,8 @@ static pluginxx::Task<void>
     // 3. 事件订阅 (读侧可跨族, 但必须是全名)
     //    自己的频道要先声明再订阅 (声明是显式动作; 主程序频道由主程序声明)
     const char* demoChannel = "plugin.example_plugin.demo";
-    co_await agentxx::plugin::declarePluginBroadcast(ctx, demoChannel);
-    co_await agentxx::plugin::subscribePluginBroadcast(
+    co_await declarePluginBroadcastAsync(ctx, demoChannel);
+    co_await subscribePluginBroadcastAsync(
         ctx,
         ref.ptr(),
         demoChannel,
@@ -397,7 +397,7 @@ static pluginxx::Task<void>
         &ctx
     );
     // client 插件上行: client 侧自己的族 `agentxx.client.plugin.<插件名>.<事件>`
-    co_await agentxx::plugin::subscribePluginBroadcast(
+    co_await subscribePluginBroadcastAsync(
         ctx,
         ref.ptr(),
         "agentxx.client.plugin.example_plugin.hello",
@@ -419,7 +419,7 @@ static pluginxx::Task<void>
         spec.run_start   = &on_demo_capability;
         // 作用域: 挂载引用 = 这一行只对该作用域生效 (空 = 进程级)
         // 表成员是异步契约: 登记结论只有结果里有 (失败不影响挂载, 只记日志)
-        auto capResult = co_await agentxx::plugin::tableOp(
+        auto capResult = co_await tableOpAsync(
             ctx,
             [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return ctx.iface.capabilities->register_capability(
@@ -444,12 +444,12 @@ static pluginxx::Task<void>
 
     // 5. 提示词读写
     if (ctx.iface.prompt && ctx.iface.prompt->get_prompt && ctx.iface.prompt->set_prompt) {
-        auto promptResult = co_await agentxx::plugin::promptJson(ctx, ref.ptr());
+        auto promptResult = co_await agentxx::plugin::promptJsonAsync(ctx, ref.ptr());
         if (promptResult.ok() && !promptResult.text().empty()) {
             if (promptResult.text().find("\"example_echo\"") == std::string_view::npos) {
                 const char* promptJson
                     = R"_({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})_";
-                co_await agentxx::plugin::setPromptJson(ctx, ref.ptr(), promptJson);
+                co_await agentxx::plugin::setPromptJsonAsync(ctx, ref.ptr(), promptJson);
             }
         }
     }
@@ -503,7 +503,7 @@ static void* exampleAgentMount(
     auto later = agentxx::plugin::finishLater(notify);
     // 注册事务交给协程: 工具/订阅/能力/提示词逐条"提交 + co_await", 全部生效后再放行挂载
     const agentxx::plugin::AgentRef agentRef(*spec);
-    ctx.spawn([later, agentRef](AgentCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](AgentCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
         try {
             co_await exampleAgentSetup(c, agentRef);
             later.ok();
@@ -734,7 +734,7 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
 ///
 /// 跑在插件执行线程上 (`exampleClientStart` 里 `ctx.spawn`), 每条注册都是
 /// `co_await clientTableOpAsync(...)`: 提交后不再阻塞线程, 完成经同步桥就地唤醒。
-static pluginxx::Task<void> exampleClientSetupAsync(ClientCtx& ctx) {
+static asio::awaitable<void> exampleClientSetupAsync(ClientCtx& ctx) {
     const PluginxxHost* host = ctx.host;
     const auto          ui   = ctx.iface.ui;
     ctx.ui                   = ui;
@@ -901,7 +901,7 @@ static void exampleClientStart(
     }
     // 注册事务写成协程: 每条注册都是提交 + co_await, 全部生效后才交回成功
     auto later = agentxx::plugin::finishLater(notify);
-    ctx.spawn([later](ClientCtx& c, pluginxx::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later](ClientCtx& c, pluginxx::OpCtl&) -> asio::awaitable<void> {
         try {
             co_await exampleClientSetupAsync(c);
         } catch (const std::exception& e) {

@@ -218,169 +218,6 @@ inline NetResult netSubmit(
     return netSubmit(ctx.host, ctx.iface.net, op, argsJson);
 }
 
-namespace detail {
-
-/// 一次网络调用的状态 (堆上持有: 完成回调与 awaiter 各持一份 shared_ptr)
-struct NetAsyncState {
-    const PluginxxHost*     host = nullptr;
-    const PluginxxNetIface* net  = nullptr;
-    pluginxx::detail::PollOneBridge* bridge = nullptr; ///< 协程驱动桥 (可空)
-
-    std::string op;
-    std::string argsJson;
-
-    int32_t     code     = PLUGINXX_RESULT_ERR_STATE; ///< 受理结果 (默认值 = 没有网络能力)
-    std::string accepted;                              ///< 受理时写出的 JSON (失败原因)
-    int64_t     requestId = 0;
-
-    int32_t     doneStatus = PLUGINXX_OPERATOR_OK; ///< 完成通知的状态
-    std::string payload;                           ///< 完成通知的载荷 (结果 JSON)
-
-    void* coroAddr = nullptr;
-
-    /// 0 = 未开始, 1 = 调用中, 2 = 已挂起, 3 = 已完成 (完成回调先到)
-    std::atomic<uint32_t> state{0};
-};
-
-/// `co_await netCall(ctx, op, args)` 的 awaiter
-///
-/// 与 `co_await invoke_cap(...)` 同一套挂起协议: 完成回调不直接恢复插件协程,
-/// 而是交给协程驱动桥 (见 `pluginxx::resumePluginCoroutine`)。
-struct NetAsyncAwaiter {
-    std::shared_ptr<NetAsyncState> st;
-
-    NetAsyncAwaiter(
-        const PluginxxHost*              host,
-        const PluginxxNetIface*          net,
-        std::string_view                 in_op,
-        std::string_view                 in_args,
-        pluginxx::detail::PollOneBridge* in_bridge = nullptr
-    ) :
-        st(std::make_shared<NetAsyncState>()) {
-        st->host     = host;
-        st->net      = net;
-        st->bridge   = in_bridge;
-        st->op       = std::string{in_op};
-        st->argsJson = std::string{in_args};
-    }
-
-    bool await_ready() const noexcept {
-        return !st || !st->net || !st->net->call;
-    }
-
-    template<typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> h) {
-        st->coroAddr = h.address();
-        st->state.store(1, std::memory_order_release);
-
-        auto* holder = new std::shared_ptr<NetAsyncState>(st);
-        PluginxxOperatorCallback cb
-            = [](void* ud, int32_t done_status, const PluginxxStringView* payload) {
-            auto* hp = static_cast<std::shared_ptr<NetAsyncState>*>(ud);
-            auto  s  = *hp;
-            delete hp;
-
-            s->doneStatus = done_status;
-            if (payload && payload->data && payload->size > 0) {
-                s->payload.assign(payload->data, static_cast<size_t>(payload->size));
-            }
-
-            uint32_t expected = 1;
-            if (s->state.compare_exchange_strong(
-                    expected,
-                    3,
-                    std::memory_order_acq_rel
-                )) {
-                return; // 还没挂起就先完成了: 由 await_suspend 的后续判断接着走
-            }
-
-            auto handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
-            handle.promise().clear_outstanding();
-            pluginxx::detail::resumePluginCoroutine(s->bridge, handle);
-        };
-
-        const auto     opSv   = PluginStringView::from(st->op.data(), st->op.size());
-        const auto     argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
-        PluginxxString err{nullptr, 0};
-        auto*          handle = st->net->call(
-            st->host,
-            &opSv,
-            &argsSv,
-            &st->requestId,
-            cb,
-            holder,
-            &err
-        );
-        if (handle == nullptr) {
-            // 未受理: 没有完成回调, 原因在 err 里
-            delete holder;
-            st->code = PLUGINXX_RESULT_ERR_STATE;
-            if (err.data) {
-                st->accepted.assign(err.data, static_cast<size_t>(err.size));
-                PluginString::free(st->host, &err);
-            }
-            st->state.store(3, std::memory_order_release);
-            return false;
-        }
-        st->code = PLUGINXX_RESULT_OK;
-
-        uint32_t expected = 1;
-        if (st->state.compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
-            h.promise().set_outstanding([st = this->st]() {
-                if (st->net && st->net->cancel && st->requestId != 0) {
-                    PluginxxString ignored{nullptr, 0};
-                    st->net->cancel(st->host, st->requestId, &ignored);
-                    if (ignored.data) {
-                        PluginString::free(st->host, &ignored);
-                    }
-                }
-            });
-            return true;
-        }
-        return false;
-    }
-
-    NetResult await_resume() {
-        NetResult result;
-        if (!st) {
-            return result;
-        }
-        if (st->code != PLUGINXX_RESULT_OK) {
-            result.code = st->code;
-            result.json = st->accepted;
-            return result;
-        }
-        result.code = PLUGINXX_RESULT_OK;
-        if (st->doneStatus == PLUGINXX_OPERATOR_OK) {
-            result.json = st->payload;
-            return result;
-        }
-        if (st->doneStatus == PLUGINXX_OPERATOR_CANCELED) {
-            result.json = "{\"ok\":false,\"error\":\"canceled\"}";
-            return result;
-        }
-        // 失败时主程序给的载荷本身就是错误 JSON; 没有就补一个
-        result.json = st->payload.empty() ? "{\"ok\":false,\"error\":\"failed\"}" : st->payload;
-        return result;
-    }
-};
-
-} // namespace detail
-
-/// 一次网络操作 (`co_await` 拿结果)
-///
-/// - 结果**恰好一次**; 协程被取消时请求随之取消, 拿到的结果里 `ok == false`、
-///   `error == "canceled"`;
-/// - 主程序没提供网络能力 / 未受理时 [NetResult::code] 非 OK, `json` 是原因;
-/// - 只想"提交出去"（不等结果）用 [netSubmit]。
-template<typename Ctx>
-inline detail::NetAsyncAwaiter netCall(
-    const Ctx&       ctx,
-    std::string_view op,
-    std::string_view argsJson = "{}"
-) {
-    return detail::NetAsyncAwaiter{ctx.host, ctx.iface.net, op, argsJson, &ctx.bridge()};
-}
 
 /// HTTP 请求参数 (`http.fetch` / `http.download` 的入参; 只有 url 必填)
 ///
@@ -476,43 +313,6 @@ inline std::string NetHttpOptions::toArgsJson(std::string_view url) const {
     args["maxRedirects"]    = static_cast<int64_t>(maxRedirects < 0 ? 0 : maxRedirects);
     args["tlsVerify"]       = tlsVerify;
     return args.dump();
-}
-
-/// `co_await netFetch(ctx, url, options)` —— HTTP 请求并等最终结果
-///
-/// 结果 JSON: `{ok, url, status, statusText, headers, contentType, body, bodyBytes,
-/// truncated, redirects, elapsedMs}`; 失败是 `{ok:false, error, message}`。
-template<typename Ctx>
-inline detail::NetAsyncAwaiter netFetch(
-    const Ctx&           ctx,
-    std::string_view     url,
-    const NetHttpOptions& options = {}
-) {
-    return netCall(ctx, pluginxx::net_op::httpFetch, options.toArgsJson(url));
-}
-
-/// `co_await netDownload(ctx, url, fileName)` —— 下载到插件数据目录
-///
-/// 落盘位置 `<data_dir>/<插件 id>/data/downloads/<fileName>` (不给文件名时按 URL 推);
-/// 结果 JSON 带 `path` / `bytes`。
-template<typename Ctx>
-inline detail::NetAsyncAwaiter netDownload(
-    const Ctx&        ctx,
-    std::string_view  url,
-    std::string_view  fileName = {},
-    NetHttpOptions    options  = {}
-) {
-    options.method = "GET";
-    std::string argsJson = options.toArgsJson(url);
-    if (!fileName.empty()) {
-        try {
-            auto args = utilxx_base::Json::parse(argsJson);
-            args["fileName"] = std::string{fileName};
-            argsJson         = args.dump();
-        } catch (...) {
-        }
-    }
-    return netCall(ctx, pluginxx::net_op::httpDownload, argsJson);
 }
 
 /** ---------- 给自带 io_context 的插件: asio 异步形态 ---------- */
@@ -760,39 +560,6 @@ inline NetResult netWsClose(
     return netSubmit(host, net, pluginxx::net_op::wsClose, json);
 }
 
-/// 起一个 HTTP 服务 (`host` 缺省 `127.0.0.1`; 只有回环才能不暴露)
-///
-/// 要拿到监听地址 (尤其 `port = 0` 的临时端口), 所以是 `co_await` 形态:
-/// `const auto served = co_await netHttpServe(ctx, 0);` → `{ok, id, host, port, url}`;
-/// 收到请求时 `http.request` 事件到达, 用 [netHttpRespond] 作答 (不答 = 客户端等到超时)。
-inline detail::NetAsyncAwaiter netHttpServe(
-    const PluginxxHost*              host,
-    const PluginxxNetIface*          net,
-    int32_t                          port,
-    std::string_view                 listenHost = "127.0.0.1",
-    pluginxx::detail::PollOneBridge* bridge     = nullptr
-) {
-    utilxx_base::Json args = utilxx_base::Json::object();
-    args["host"]           = std::string{listenHost};
-    args["port"]           = static_cast<int64_t>(port);
-    return detail::NetAsyncAwaiter{
-        host,
-        net,
-        pluginxx::net_op::httpServe,
-        args.dump(),
-        bridge
-    };
-}
-
-template<typename Ctx>
-inline detail::NetAsyncAwaiter netHttpServe(
-    const Ctx&       ctx,
-    int32_t          port,
-    std::string_view listenHost = "127.0.0.1"
-) {
-    return netHttpServe(ctx.host, ctx.iface.net, port, listenHost, &ctx.bridge());
-}
-
 /// 回答一条 `http.request` 事件 (**提交即返回**)
 inline NetResult netHttpRespond(
     const PluginxxHost*     host,
@@ -819,23 +586,6 @@ inline NetResult netHttpRespond(
     }
     const std::string json = args.dump();
     return netSubmit(host, net, pluginxx::net_op::httpRespond, json);
-}
-
-/// 网络现状快照 (服务 / 连接 / 计数器; 排查问题用)
-///
-/// 快照要跑一遍网络服务才知道内容, 所以是 `co_await` 形态:
-/// `const auto info = co_await netInfo(ctx);`
-inline detail::NetAsyncAwaiter netInfo(
-    const PluginxxHost*              host,
-    const PluginxxNetIface*          net,
-    pluginxx::detail::PollOneBridge* bridge = nullptr
-) {
-    return detail::NetAsyncAwaiter{host, net, pluginxx::net_op::info, "{}", bridge};
-}
-
-template<typename Ctx>
-inline detail::NetAsyncAwaiter netInfo(const Ctx& ctx) {
-    return netInfo(ctx.host, ctx.iface.net, &ctx.bridge());
 }
 
 /* ==================== 提示词描述解析结构 ==================== */
@@ -1110,83 +860,6 @@ inline ToolPromptText parseToolPromptJson(std::string_view json) {
     return res;
 }
 
-namespace detail {
-
-/// 工具提示词描述的协程等待器 (见 [toolPromptOf])
-struct ToolPromptAwaiter {
-    pluginxx::TableOpTicket ticket;
-
-    bool await_ready() const noexcept {
-        return ticket.done();
-    }
-
-    template<typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> h) {
-        return ticket.await_suspend(h);
-    }
-
-    ToolPromptText await_resume() {
-        auto r = ticket.await_resume();
-        return parseToolPromptJson(r.ok() ? r.text() : std::string_view{});
-    }
-};
-
-/// 工具模式构建器的协程等待器 (见 [schemaOf])
-struct ToolSchemaAwaiter {
-    ToolPromptAwaiter prompt;
-
-    bool await_ready() const noexcept {
-        return prompt.await_ready();
-    }
-
-    template<typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> h) {
-        return prompt.await_suspend(h);
-    }
-
-    ToolSchemaBuilder await_resume() {
-        return ToolSchemaBuilder(prompt.await_resume());
-    }
-};
-
-} // namespace detail
-
-/// 取本插件工具提示词描述 (**协程形态**)
-///
-/// 与 [PluginBase::toolPrompt] 的同步形态等价, 只是走"调用即提交":
-/// ```cpp
-/// auto p = co_await agentxx::plugin::toolPromptOf(ctx, "my_tool");
-/// std::string depict = p.depict.empty() ? kDefaultDepict : p.depict;
-/// ```
-/// 主程序未提供 `agentxx.agent.prompt` 表或查询失败时得到空描述 (不抛异常)。
-template<typename Ctx>
-inline detail::ToolPromptAwaiter toolPromptOf(const Ctx& ctx, std::string_view tool) {
-    auto name = std::string{tool};
-    return detail::ToolPromptAwaiter{
-        pluginxx::tableOp(
-            ctx,
-            [&ctx, name](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-                -> PluginxxOperatorHandle* {
-                if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->get_tool_prompt) {
-                    return nullptr;
-                }
-                auto v = PluginStringView::from(name.data(), name.size());
-                return ctx.iface.prompt->get_tool_prompt(ctx.host, &v, cb, ud, err);
-            }
-        )
-    };
-}
-
-/// 声明式模式构建器 (**协程形态**, 先取主程序里本工具的提示词再建模式)
-///
-/// ```cpp
-/// auto b = co_await agentxx::plugin::schemaOf(ctx, "my_tool");
-/// auto schema = b.string("path", kPathArgDesc, /*required=*/true).build();
-/// ```
-template<typename Ctx>
-inline detail::ToolSchemaAwaiter schemaOf(const Ctx& ctx, std::string_view tool) {
-    return detail::ToolSchemaAwaiter{toolPromptOf(ctx, tool)};
-}
 
 /* ==================== 插件实例上下文基类 (agentxx 业务扩展) ==================== */
 
@@ -1201,101 +874,14 @@ inline detail::ToolSchemaAwaiter schemaOf(const Ctx& ctx, std::string_view tool)
 class PluginBase : public pluginxx::PluginBaseT<AgentIfaces> {
 public:
 
-    /// 主程序配置 JSON (**协程形态**; 插件执行线程上用这个, 得到 `{}` 表失败)
-    pluginxx::Task<std::string> configAsync() const {
-        if (!host || !iface.config || !iface.config->get_config) {
-            co_return std::string{"{}"};
-        }
-        auto r = co_await pluginxx::tableOp(
-            *this,
-            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return iface.config->get_config(host, cb, ud, err);
-            }
-        );
-        co_return r.ok() ? std::string{r.text()} : std::string{"{}"};
-    }
+    // 配置 / 参数 / 配置路径 / 语言类协程入口由基类
+    // [pluginxx::PluginBaseT] 提供 (它已统一改成 asio 协程形态)。
 
-    /// 实例参数 JSON (**协程形态**)
-    pluginxx::Task<std::string> argsJsonAsync() const {
-        if (!host || !iface.config || !iface.config->get_plugin_args) {
-            co_return std::string{"{}"};
-        }
-        auto r = co_await pluginxx::tableOp(
-            *this,
-            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return iface.config->get_plugin_args(host, cb, ud, err);
-            }
-        );
-        co_return r.ok() ? std::string{r.text()} : std::string{"{}"};
-    }
-
-    /// 实例配置文件路径 (**协程形态**; 未配置时为空串)
-    pluginxx::Task<std::string> configPathAsync() const {
-        if (!host || !iface.config || !iface.config->get_plugin_config_path) {
-            co_return std::string{};
-        }
-        auto r = co_await pluginxx::tableOp(
-            *this,
-            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return iface.config->get_plugin_config_path(host, cb, ud, err);
-            }
-        );
-        co_return r.ok() ? std::string{r.text()} : std::string{};
-    }
-
-    /// 当前语言代码 (**协程形态**; 未取到时为 `en`)
-    pluginxx::Task<std::string> languageAsync() const {
-        if (!host || !iface.config || !iface.config->get_language) {
-            co_return std::string{"en"};
-        }
-        auto r = co_await pluginxx::tableOp(
-            *this,
-            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return iface.config->get_language(host, cb, ud, err);
-            }
-        );
-        co_return (r.ok() && !r.text().empty()) ? std::string{r.text()} : std::string{"en"};
-    }
-
-    /// 写入会话共享存储 (经主程序 agentxx.agent.session 接口表; 返回新条目 id, 失败 -1)
+    /// 写入会话共享存储 (**协程形态**; `co_await` 后取 `.text()` 读 id)
     ///
-    /// - **只给必须当场拿到 id 又不能写成协程的调用点**; 协程里请用下面的
-    ///   `addShareStore(ctx, ...)` 形态;
-    /// - 同步工具体跑在工作线程池上, 默认就能等 (不占插件线程);
-    /// - `allowOnPluginThread = true` 允许在插件执行线程上等一次 io 往返 —— 只给
-    ///   受控轮询工具体 (`asio::awaitable`): kit 的 ticket awaiter 依赖自有 promise,
-    ///   那里无法 `co_await` 表调用, 而输出超限时要拿 id 才能写提示。安全性靠
-    ///   “工作体只在主程序 io 上执行” (`add_share_store` 就是), 代价是该端插件
-    ///   线程被占住一个往返。
-    int64_t addShareStore(
-        const ScopeRef&    agent,
-        PluginxxStringView tid,
-        std::string_view   content,
-        bool               allowOnPluginThread = false
-    ) const {
-        if (!host || !iface.session || !iface.session->add_share_store) {
-            return -1;
-        }
-        auto ref  = agent.raw();
-        auto text = std::string{content};
-        auto out  = tableOpSyncWait(
-            *this,
-            [this, &ref, &tid, &text](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                auto contentSv = PluginStringView::from(text.data(), text.size());
-                return iface.session->add_share_store(host, &ref, &tid, &contentSv, cb, ud, err);
-            },
-            /*timeoutMs=*/0,
-            allowOnPluginThread ? pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
-                                : pluginxx::SyncWaitThreadPolicy::refuseOnPluginThread
-        );
-        return out.ok() ? out.integer(-1) : int64_t{-1};
-    }
-
-    /// 写入会话共享存储 (**协程形态**; `co_await` 后取 `.integer(-1)` 读 id)
-    ///
-    /// 与同步形态同名: 第一个参数是插件实例上下文 (推带驱动桥), 返回 ticket。
+    /// 第一个参数是插件实例上下文 (带驱动桥), 返回 asio 协程操作。
     template<typename Ctx>
-    auto addShareStore(
+    asio::awaitable<pluginxx::TableOpResult> addShareStore(
         Ctx&               ctx,
         const ScopeRef&    agent,
         PluginxxStringView tid,
@@ -1304,55 +890,54 @@ public:
         auto ref  = agent;
         auto key  = PluginStringView::from(tid.data, tid.size);
         auto text = std::string{content};
-        return tableOp(ctx, [this, ref, key, text](auto cb, auto ud, auto err) {
-            auto r  = ref.raw();
-            auto sv = PluginStringView::from(text.data(), text.size());
-            return iface.session->add_share_store(host, &r, &key, &sv, cb, ud, err);
-        });
-    }
-
-    int64_t addShareStore(
-        const ScopeRef&  agent,
-        std::string_view tid,
-        std::string_view content,
-        bool             allowOnPluginThread = false
-    ) const {
-        return addShareStore(
-            agent,
-            PluginStringView::from(tid.data(), tid.size()),
-            content,
-            allowOnPluginThread
+        co_return co_await asyncTableOp(
+            ctx,
+            co_await asio::this_coro::executor,
+            [this, ref, key, text](auto cb, auto ud, auto err) {
+                auto r  = ref.raw();
+                auto sv = PluginStringView::from(text.data(), text.size());
+                return iface.session->add_share_store(host, &r, &key, &sv, cb, ud, err);
+            }
         );
     }
 
     /// 会话生效的工作目录 (**协程形态**)
     template<typename Ctx>
-    auto workDir(Ctx& ctx, const ScopeRef& agent, std::string_view key = {}) const {
+    asio::awaitable<pluginxx::TableOpResult>
+        workDir(Ctx& ctx, const ScopeRef& agent, std::string_view key = {}) const {
         auto ref = agent;
         auto k   = std::string{key};
-        return tableOp(ctx, [this, ref, k](auto cb, auto ud, auto err) {
-            auto r  = ref.raw();
-            auto sv = PluginStringView::from(k.data(), k.size());
-            return iface.session->get_session_work_dir(host, &r, &sv, cb, ud, err);
-        });
+        co_return co_await asyncTableOp(
+            ctx,
+            co_await asio::this_coro::executor,
+            [this, ref, k](auto cb, auto ud, auto err) {
+                auto r  = ref.raw();
+                auto sv = PluginStringView::from(k.data(), k.size());
+                return iface.session->get_session_work_dir(host, &r, &sv, cb, ud, err);
+            }
+        );
     }
 
     /// 读取会话 LLM 上下文 (**协程形态**: `co_await` 后 `.text()` 是 JSON 数组文本)
     template<typename Ctx>
-    pluginxx::TableOpTicket getSessionMessages(
+    asio::awaitable<pluginxx::TableOpResult> getSessionMessages(
         const Ctx&       ctx,
         const ScopeRef&  agent,
         std::string_view tid
     ) const {
         auto ref   = agent;
         auto tidSv = PluginStringView::from(tid.data(), tid.size());
-        return tableOp(ctx, [this, ref, tidSv](auto cb, auto ud, auto err) {
-            auto r = ref.raw();
-            if (!host || !iface.context || !iface.context->get_messages) {
-                return static_cast<PluginxxOperatorHandle*>(nullptr);
+        co_return co_await asyncTableOp(
+            ctx,
+            co_await asio::this_coro::executor,
+            [this, ref, tidSv](auto cb, auto ud, auto err) {
+                auto r = ref.raw();
+                if (!host || !iface.context || !iface.context->get_messages) {
+                    return static_cast<PluginxxOperatorHandle*>(nullptr);
+                }
+                return iface.context->get_messages(host, &r, &tidSv, cb, ud, err);
             }
-            return iface.context->get_messages(host, &r, &tidSv, cb, ud, err);
-        });
+        );
     }
 
     /// 会话当前轮次是否已取消 (经主程序 agentxx.agent.session 接口表)
@@ -1380,20 +965,24 @@ public:
 
     /// 会话 LLM 上下文条数 (**协程形态**: `co_await` 后 `.integer(-1)`)
     template<typename Ctx>
-    pluginxx::TableOpTicket sessionMessagesCount(
+    asio::awaitable<pluginxx::TableOpResult> sessionMessagesCount(
         const Ctx&       ctx,
         const ScopeRef&  agent,
         std::string_view tid
     ) const {
         auto ref   = agent;
         auto tidSv = PluginStringView::from(tid.data(), tid.size());
-        return tableOp(ctx, [this, ref, tidSv](auto cb, auto ud, auto err) {
-            auto r = ref.raw();
-            if (!host || !iface.context || !iface.context->messages_count) {
-                return static_cast<PluginxxOperatorHandle*>(nullptr);
+        co_return co_await asyncTableOp(
+            ctx,
+            co_await asio::this_coro::executor,
+            [this, ref, tidSv](auto cb, auto ud, auto err) {
+                auto r = ref.raw();
+                if (!host || !iface.context || !iface.context->messages_count) {
+                    return static_cast<PluginxxOperatorHandle*>(nullptr);
+                }
+                return iface.context->messages_count(host, &r, &tidSv, cb, ud, err);
             }
-            return iface.context->messages_count(host, &r, &tidSv, cb, ud, err);
-        });
+        );
     }
 
 public:
@@ -1422,18 +1011,33 @@ public:
     /// 业务初始化 (**协程**; create 事务在 `attachHost` 之后 await 它): 订阅会话轮次
     /// 开始广播, 自动为当前会话重置实例级取消登记
     /// (主程序下发 cancel 时已通过 execute_cancel 写入 CancelRegistry)
-    pluginxx::Task<void> onHostReady() override {
+    asio::awaitable<void> onHostReady() override {
         if (!iface.broadcasts || !iface.broadcasts->subscribe_broadcast) {
             co_return;
         }
         // 订阅主程序总线 (基类不知道 agent 引用, 会话事件一并到达);
-        // 协程形态拿到句柄: 插件执行线程上不能同步等表
-        auto result = co_await subscribePluginBroadcast(
+        // 协程形态拿到句柄: 插件执行线程上不能同步等表。
+        // 这里直接走 framework 的表调用入口 (本类不是模板, 定义点之前拿不到
+        // 文件后面的 `subscribePluginBroadcastAsync`)。
+        auto result = co_await pluginxx::asyncTableOp(
             *this,
-            nullptr,
-            "agentxx.agent.round.start",
-            &PluginBase::onRoundStartEvent,
-            this
+            co_await asio::this_coro::executor,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+                -> PluginxxOperatorHandle* {
+            static constexpr std::string_view kChannel = "agentxx.agent.round.start";
+            auto idSv = PluginStringView::from(kChannel.data(), kChannel.size());
+            return iface.broadcasts->subscribe_broadcast(
+                host,
+                nullptr,
+                &idSv,
+                &PluginBase::onRoundStartEvent,
+                this,
+                nullptr,
+                cb,
+                ud,
+                err
+            );
+        }
         );
         roundStartSub_ = subscriptionOf(result);
         if (!roundStartSub_) {
@@ -1541,371 +1145,6 @@ private:
 
     std::map<std::string, std::unique_ptr<T>, std::less<>> items_;
 };
-
-/* ==================== 业务表便捷入口 (协程形态) ====================
- *
- * 每个阻塞形态 `xxxBound` 都有一条同名协程形态 `xxx(ctx, ...)`:
- * **调用即提交**并返回 `pluginxx::TableOpTicket`, `co_await` 它拿
- * `pluginxx::TableOpResult` (`ok()` / `text()` / `integer()` / `flag()`)。
- * 主程序不支持该能力时 ticket 就是"未受理"(`accepted() == false`), 不会挂起。
- */
-
-/// 读当前完整提示词 JSON (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket promptJson(const Ctx& ctx, const PluginxxScopeRef* agent) {
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->get_prompt) {
-                return nullptr;
-            }
-            return ctx.iface.prompt->get_prompt(ctx.host, agent, cb, ud, err);
-        }
-    );
-}
-
-/// 写回本插件贡献的提示词段 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket setPromptJson(
-    const Ctx&              ctx,
-    const PluginxxScopeRef* agent,
-    std::string_view        json
-) {
-    auto text = std::string{json};
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, agent, text](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->set_prompt) {
-                return nullptr;
-            }
-            auto sv = PluginStringView::from(text.data(), text.size());
-            return ctx.iface.prompt->set_prompt(ctx.host, agent, &sv, cb, ud, err);
-        }
-    );
-}
-
-/// 读该 agent 的主模型及关联配置 JSON (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket modelConfigJson(const Ctx& ctx, const PluginxxScopeRef* agent) {
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (!ctx.host || !ctx.iface.model || !ctx.iface.model->get_config) {
-                return nullptr;
-            }
-            return ctx.iface.model->get_config(ctx.host, agent, cb, ud, err);
-        }
-    );
-}
-
-/// 读该 agent 当前执行图 JSON 定义 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket graphJson(const Ctx& ctx, const PluginxxScopeRef* agent) {
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (!ctx.host || !ctx.iface.graph || !ctx.iface.graph->get_graph_json) {
-                return nullptr;
-            }
-            return ctx.iface.graph->get_graph_json(ctx.host, agent, cb, ud, err);
-        }
-    );
-}
-
-/// 当前执行图名称 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket graphName(const Ctx& ctx, const PluginxxScopeRef* agent) {
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (!ctx.host || !ctx.iface.graph || !ctx.iface.graph->get_graph_name) {
-                return nullptr;
-            }
-            return ctx.iface.graph->get_graph_name(ctx.host, agent, cb, ud, err);
-        }
-    );
-}
-
-/// 写回执行图 JSON 定义 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket setGraphJson(
-    const Ctx&              ctx,
-    const PluginxxScopeRef* agent,
-    std::string_view        json
-) {
-    auto text = std::string{json};
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, agent, text](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (!ctx.host || !ctx.iface.graph || !ctx.iface.graph->set_graph_json) {
-                return nullptr;
-            }
-            auto sv = PluginStringView::from(text.data(), text.size());
-            return ctx.iface.graph->set_graph_json(ctx.host, agent, &sv, cb, ud, err);
-        }
-    );
-}
-
-/// 本插件向该 agent 贡献的资源清单 JSON (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket ownResourcesJson(const Ctx& ctx, const PluginxxScopeRef* agent) {
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->get_own_resources) {
-                return nullptr;
-            }
-            return ctx.iface.resources->get_own_resources(ctx.host, agent, cb, ud, err);
-        }
-    );
-}
-
-/// 资源登记/注销的协程形态公共实现 (单个字符串入参)
-template<typename Ctx, typename StartFn>
-inline pluginxx::TableOpTicket
-    resourceOpAsync(const Ctx& ctx, std::string_view arg, StartFn&& start) {
-    auto text = std::string{arg};
-    return pluginxx::tableOp(
-        ctx,
-        [text = std::move(text), start = std::forward<StartFn>(start)](
-            PluginxxOperatorCallback cb,
-            void*                    ud,
-            PluginxxString*          err
-        ) -> PluginxxOperatorHandle* {
-            auto view = PluginStringView::from(text.data(), text.size());
-            return start(view, cb, ud, err);
-        }
-    );
-}
-
-/// 登记技能目录 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket registerSkillDir(
-    const Ctx&              ctx,
-    const PluginxxScopeRef* agent,
-    std::string_view        path
-) {
-    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->register_skill_dir) {
-        return {};
-    }
-    return resourceOpAsync(ctx, path, [&ctx, agent](
-                                          PluginxxStringView        view,
-                                          PluginxxOperatorCallback cb,
-                                          void*                    ud,
-                                          PluginxxString*          err
-                                      ) {
-        return ctx.iface.resources->register_skill_dir(ctx.host, agent, &view, cb, ud, err);
-    });
-}
-
-/// 撤销技能目录 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket unregisterSkillDir(
-    const Ctx&              ctx,
-    const PluginxxScopeRef* agent,
-    std::string_view        path
-) {
-    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->unregister_skill_dir) {
-        return {};
-    }
-    return resourceOpAsync(ctx, path, [&ctx, agent](
-                                          PluginxxStringView        view,
-                                          PluginxxOperatorCallback cb,
-                                          void*                    ud,
-                                          PluginxxString*          err
-                                      ) {
-        return ctx.iface.resources->unregister_skill_dir(ctx.host, agent, &view, cb, ud, err);
-    });
-}
-
-/// 登记记忆文件 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket registerMemoryFile(
-    const Ctx&              ctx,
-    const PluginxxScopeRef* agent,
-    std::string_view        path
-) {
-    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->register_memory_file) {
-        return {};
-    }
-    return resourceOpAsync(ctx, path, [&ctx, agent](
-                                          PluginxxStringView        view,
-                                          PluginxxOperatorCallback cb,
-                                          void*                    ud,
-                                          PluginxxString*          err
-                                      ) {
-        return ctx.iface.resources->register_memory_file(ctx.host, agent, &view, cb, ud, err);
-    });
-}
-
-/// 撤销记忆文件 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket unregisterMemoryFile(
-    const Ctx&              ctx,
-    const PluginxxScopeRef* agent,
-    std::string_view        path
-) {
-    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->unregister_memory_file) {
-        return {};
-    }
-    return resourceOpAsync(ctx, path, [&ctx, agent](
-                                          PluginxxStringView        view,
-                                          PluginxxOperatorCallback cb,
-                                          void*                    ud,
-                                          PluginxxString*          err
-                                      ) {
-        return ctx.iface.resources->unregister_memory_file(ctx.host, agent, &view, cb, ud, err);
-    });
-}
-
-/// 登记 MCP 服务器 (**协程形态**; 完成时已握手)
-template<typename Ctx>
-inline pluginxx::TableOpTicket registerMcpServer(
-    const Ctx&              ctx,
-    const PluginxxScopeRef* agent,
-    std::string_view        specJson
-) {
-    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->register_mcp_server) {
-        return {};
-    }
-    return resourceOpAsync(ctx, specJson, [&ctx, agent](
-                                              PluginxxStringView        view,
-                                              PluginxxOperatorCallback cb,
-                                              void*                    ud,
-                                              PluginxxString*          err
-                                          ) {
-        return ctx.iface.resources->register_mcp_server(ctx.host, agent, &view, cb, ud, err);
-    });
-}
-
-/// 撤销 MCP 服务器 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket unregisterMcpServer(
-    const Ctx&              ctx,
-    const PluginxxScopeRef* agent,
-    std::string_view        nameSpace
-) {
-    if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->unregister_mcp_server) {
-        return {};
-    }
-    return resourceOpAsync(ctx, nameSpace, [&ctx, agent](
-                                               PluginxxStringView        view,
-                                               PluginxxOperatorCallback cb,
-                                               void*                    ud,
-                                               PluginxxString*          err
-                                           ) {
-        return ctx.iface.resources->unregister_mcp_server(ctx.host, agent, &view, cb, ud, err);
-    });
-}
-
-/// 全部挂载的摘要 JSON 数组 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket listMounts(const Ctx& ctx) {
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->list) {
-                return nullptr;
-            }
-            return ctx.iface.mount->list(ctx.host, cb, ud, err);
-        }
-    );
-}
-
-/// 按 agentId 查一个挂载的摘要 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket mountInfoOf(const Ctx& ctx, std::string_view agentId) {
-    auto idText = std::string{agentId};
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, idText](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->get) {
-                return nullptr;
-            }
-            auto idSv = PluginStringView::from(idText.data(), idText.size());
-            return ctx.iface.mount->get(ctx.host, &idSv, cb, ud, err);
-        }
-    );
-}
-
-namespace detail {
-
-/// runtime 表的同步形态 (阻塞): 只关心成败
-///
-/// 表成员是异步契约; 这里的便捷层给生命周期与工具体里的同步写法用。
-/// `runtime` 表的工作体在主程序 io 上 (注册/改配置), 完成回调是同步桥 ——
-/// 就地在 io 上调用, 因此插件执行线程上真等不会自己等自己。
-template<typename Ctx, typename StartFn>
-inline int32_t runtimeCall(const Ctx& ctx, StartFn&& start) {
-    auto res = pluginxx::tableOpSyncWait(
-        ctx.host,
-        ctx.iface.cancel,
-        ctx.iface.scheduler,
-        std::forward<StartFn>(start),
-        0,
-        pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
-    );
-    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
-}
-
-/// runtime 表的同步形态: 结果正文 (JSON 或句柄 id 文本) 一起给回
-template<typename Ctx, typename StartFn>
-inline int32_t runtimeCallText(const Ctx& ctx, StartFn&& start, std::string& out) {
-    auto res = pluginxx::tableOpSyncWait(
-        ctx.host,
-        ctx.iface.cancel,
-        ctx.iface.scheduler,
-        std::forward<StartFn>(start),
-        0,
-        pluginxx::SyncWaitThreadPolicy::allowOnPluginThread
-    );
-    if (!res.ok()) {
-        return AGENTXX_RESULT_ERR_INTERNAL;
-    }
-    out.assign(res.text());
-    return AGENTXX_RESULT_OK;
-}
-
-/// runtime 表的同步形态: 句柄 id (完成时 `payload` 是十进制文本)
-template<typename Ctx, typename StartFn>
-inline int32_t runtimeCallId(const Ctx& ctx, StartFn&& start, int64_t& outId) {
-    std::string text;
-    const auto  rc = runtimeCallText(ctx, std::forward<StartFn>(start), text);
-    if (rc != AGENTXX_RESULT_OK) {
-        return rc;
-    }
-    int64_t id = 0;
-    for (char c : text) {
-        if (c >= '0' && c <= '9') {
-            id = id * 10 + (c - '0');
-        }
-    }
-    outId = id;
-    return AGENTXX_RESULT_OK;
-}
-
-/// runtime 表的同步形态: 结果正文直接给回 (失败 = 空串)
-template<typename Host, typename CancelIface, typename SchedulerIface, typename StartFn>
-inline std::string takeRuntimeText(
-    Host               host,
-    CancelIface        cancel,
-    SchedulerIface     scheduler,
-    StartFn&&          start
-) {
-    auto res = pluginxx::tableOpSyncWait(host, cancel, scheduler, std::forward<StartFn>(start));
-    return res.ok() ? std::string(res.text()) : std::string{};
-}
-
-} // namespace detail
 
 /* ==================== 会话运行时 (agentxx.agent.runtime) ====================
  *
@@ -2018,26 +1257,28 @@ inline void PLUGINXX_CALL
 
 } // namespace detail
 
-/// 挂载一个根 (**协程形态**; `co_await` 后 `.ok()` 判成败, `.text()` = 根 id)
+/// 挂载一个根 (**asio 形态**: `co_await` 后 `.ok()` 判成败, `.text()` = 根 id)
 ///
-/// - **只能在 `start` 里调用**: 在 `mount` 回调里调用会被拒 (否则每个 agent 再建一根)
-/// - 返回 id 时 init 尚未完成; 就绪前开的通道会排队, 就绪后自动继续
-/// - 插件执行线程上用这个; 自有线程/工作池线程上才用 [mountRootSync]
+/// 与 [mountRoot] 同语义, 只是提交与等待都走 asio 协程。
 template<typename Ctx>
-inline pluginxx::TableOpTicket mountRoot(Ctx& ctx, const MountRootOptions& opt) {
+inline asio::awaitable<pluginxx::TableOpResult>
+    mountRootAsync(Ctx& ctx, const MountRootOptions& opt) {
     if (!hasRuntime(ctx)) {
-        return {};
+        pluginxx::TableOpResult r;
+        r.startError = "plugin runtime iface unavailable";
+        co_return r;
     }
     auto       name       = std::string{opt.name};
     auto       mountList  = std::string{opt.mountPlugins};
     auto       configJson = opt.config.is_null() ? std::string{"{}"} : opt.config.dump();
     const bool include    = opt.includeCreator;
-    return pluginxx::tableOp(
+    co_return co_await pluginxx::asyncTableOp(
         ctx,
+        co_await asio::this_coro::executor,
         [&ctx,
-         name        = std::move(name),
-         mountList   = std::move(mountList),
-         configJson  = std::move(configJson),
+         name       = std::move(name),
+         mountList  = std::move(mountList),
+         configJson = std::move(configJson),
          include](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
             -> PluginxxOperatorHandle* {
             AgentxxPluginMountRootSpec spec{};
@@ -2051,41 +1292,43 @@ inline pluginxx::TableOpTicket mountRoot(Ctx& ctx, const MountRootOptions& opt) 
     );
 }
 
-/// 挂载一个根 (同步形态; 返回根 id, 失败返回空串)
-///
-/// 只给**不在插件执行线程**上的代码用 (插件自有线程 / 工作池线程); 插件执行线程上真等
-/// 会自己等自己, 那种位置用 [mountRoot] + `co_await`。
-template<typename Ctx>
-inline std::string mountRootSync(Ctx& ctx, const MountRootOptions& opt) {
-    if (!hasRuntime(ctx)) {
-        return {};
-    }
-    auto configJson = opt.config.is_null() ? std::string{"{}"} : opt.config.dump();
-    AgentxxPluginMountRootSpec spec{};
-    spec.struct_size     = sizeof(AgentxxPluginMountRootSpec);
-    spec.name            = PluginStringView::from(opt.name);
-    spec.config_json     = PluginStringView::from(configJson);
-    spec.mount_plugins   = PluginStringView::from(opt.mountPlugins);
-    spec.include_creator = opt.includeCreator ? 1 : 0;
-    std::string rootId;
-    const auto  rc = detail::runtimeCallText(
-        ctx,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ctx.iface.runtime->mount_root(ctx.host, &spec, cb, ud, err);
-        },
-        rootId
-    );
-    return rc == AGENTXX_RESULT_OK ? rootId : std::string{};
+namespace detail {
+
+/// 未受理的运行时表调用结果 (运行时会话的 asio 形态用)
+inline pluginxx::TableOpResult runtimeTableOpUnsupported() {
+    pluginxx::TableOpResult r;
+    r.startError = "plugin runtime iface unavailable";
+    return r;
 }
 
-/// 卸载一个根 (其下通道先全部关闭; **协程形态**)
+/// asio 形态的运行时表调用 (取当前协程执行器后提交)
+///
+/// 与文件后面 `detail::tableOpAwaitAsync` 同一套做法; 这里的副本是因为本段的
+/// 位置更靠前 (模板体里的限定名在定义点就要能看到)。
+template<typename Ctx, typename StartFn>
+inline asio::awaitable<pluginxx::TableOpResult>
+    runtimeTableOpAwaitAsync(Ctx& ctx, StartFn start) {
+    co_return co_await pluginxx::detail::tableOpAwaitAsyncSlot(ctx, std::move(start));
+}
+
+} // namespace detail
+
+
+/* ---- 运行时会话通道的 asio 形态 ----
+ *
+ * 与上面的 ticket 形态一一对应: `co_await` 直接拿 `pluginxx::TableOpResult`。
+ * 给工具体、`start` 事务这类 `asio::awaitable` 协程用。
+ */
+
+/// 卸载一个根 (asio 形态)
 template<typename Ctx>
-inline pluginxx::TableOpTicket unmountRoot(Ctx& ctx, std::string_view rootId) {
+inline asio::awaitable<pluginxx::TableOpResult>
+    unmountRootAsync(Ctx& ctx, std::string_view rootId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->unmount_root || rootId.empty()) {
-        return {};
+        co_return detail::runtimeTableOpUnsupported();
     }
     auto id = std::string{rootId};
-    return pluginxx::tableOp(
+    co_return co_await detail::runtimeTableOpAwaitAsync(
         ctx,
         [&ctx, id = std::move(id)](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
             -> PluginxxOperatorHandle* {
@@ -2095,171 +1338,9 @@ inline pluginxx::TableOpTicket unmountRoot(Ctx& ctx, std::string_view rootId) {
     );
 }
 
-/// 卸载一个根 (同步形态; 见 [mountRootSync] 的线程限制)
+/// 投递一段文本 (asio 形态; `delivery` 空 = next-turn)
 template<typename Ctx>
-inline int32_t unmountRootSync(Ctx& ctx, std::string_view rootId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->unmount_root || rootId.empty()) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    auto idSv = PluginStringView::from(rootId);
-    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ctx.iface.runtime->unmount_root(ctx.host, &idSv, cb, ud, err);
-    });
-}
-
-/// 打开一个会话通道 (**协程形态**: `co_await` 后是通道 id, 失败 0)
-///
-/// - `onEvent` 在该根所属 io 线程上调用, **必须快速返回** (整个进程的会话都在这条线程);
-/// - 通道关闭时最后一条事件必为 `AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED`, 之后不再回调;
-/// - 同一个 (会话存储根, sessionId) 在同进程内只能有一个通道, 撞了返回 0 (日志给出原因);
-/// - 返回 `Task` 而不是 ticket: 事件回调的转接对象要由协程帧保活到受理成功。
-template<typename Ctx, typename Fn>
-inline pluginxx::Task<int64_t> openChannel(Ctx& ctx, const ChannelOptions& opt, Fn&& onEvent) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->open_channel || opt.rootId.empty()) {
-        co_return 0;
-    }
-    auto shim = std::make_unique<detail::RuntimeChannelShim>();
-    shim->fn  = std::make_shared<const std::function<void(const ChannelEvent&)>>(
-        std::function<void(const ChannelEvent&)>(std::forward<Fn>(onEvent))
-    );
-    auto rootId    = std::string{opt.rootId};
-    auto sessionId = std::string{opt.sessionId};
-    auto title     = std::string{opt.title};
-    auto model     = std::string{opt.model};
-    AgentxxPluginChannelSpec spec{};
-    spec.struct_size          = sizeof(AgentxxPluginChannelSpec);
-    spec.root_id              = PluginStringView::from(rootId);
-    spec.session_id           = PluginStringView::from(sessionId);
-    spec.title                = PluginStringView::from(title);
-    spec.model                = PluginStringView::from(model);
-    spec.max_queue            = opt.maxQueue;
-    spec.interrupt_timeout_ms = static_cast<int64_t>(opt.interruptTimeout.count());
-    spec.on_event             = &detail::runtimeChannelEventThunk;
-    spec.user_data            = shim.get();
-    auto r = co_await pluginxx::tableOp(
-        ctx,
-        [&ctx, &spec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            return ctx.iface.runtime->open_channel(ctx.host, &spec, cb, ud, err);
-        }
-    );
-    const int64_t channelId = r.ok() ? r.integer(0) : 0;
-    if (channelId <= 0) {
-        co_return 0;
-    }
-    ctx.runtimeChannelShims[channelId] = std::move(shim);
-    co_return channelId;
-}
-
-/// 打开一个会话通道 (同步形态; 返回通道 id, 失败 0)
-///
-/// 只给**不在插件执行线程**上的代码用 (插件自有线程 / 工作池线程)。
-template<typename Ctx, typename Fn>
-inline int64_t openChannelSync(Ctx& ctx, const ChannelOptions& opt, Fn&& onEvent) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->open_channel || opt.rootId.empty()) {
-        return 0;
-    }
-    auto shim = std::make_unique<detail::RuntimeChannelShim>();
-    shim->fn  = std::make_shared<const std::function<void(const ChannelEvent&)>>(
-        std::function<void(const ChannelEvent&)>(std::forward<Fn>(onEvent))
-    );
-    AgentxxPluginChannelSpec spec{};
-    spec.struct_size         = sizeof(AgentxxPluginChannelSpec);
-    spec.root_id             = PluginStringView::from(opt.rootId);
-    spec.session_id          = PluginStringView::from(opt.sessionId);
-    spec.title               = PluginStringView::from(opt.title);
-    spec.model               = PluginStringView::from(opt.model);
-    spec.max_queue           = opt.maxQueue;
-    spec.interrupt_timeout_ms = static_cast<int64_t>(opt.interruptTimeout.count());
-    spec.on_event            = &detail::runtimeChannelEventThunk;
-    spec.user_data           = shim.get();
-    int64_t    channelId = 0;
-    const auto rc        = detail::runtimeCallId(
-        ctx,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ctx.iface.runtime->open_channel(ctx.host, &spec, cb, ud, err);
-        },
-        channelId
-    );
-    if (rc != AGENTXX_RESULT_OK || channelId <= 0) {
-        return 0;
-    }
-    ctx.runtimeChannelShims[channelId] = std::move(shim);
-    return channelId;
-}
-
-/// 关闭一个通道 (**协程形态**; 结果经最后一条 `CLOSED` 事件体现)
-template<typename Ctx>
-inline pluginxx::Task<void> closeChannel(Ctx& ctx, int64_t channelId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->close_channel || channelId <= 0) {
-        co_return;
-    }
-    auto r = co_await pluginxx::tableOp(
-        ctx,
-        [&ctx, channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            return ctx.iface.runtime->close_channel(ctx.host, channelId, cb, ud, err);
-        }
-    );
-    if (r.ok()) {
-        // 通道已废弃: 回调转接对象随之释放 (主程序保证此后不再回调)
-        ctx.runtimeChannelShims.erase(channelId);
-    }
-    co_return;
-}
-
-/// 关闭一个通道 (同步形态)
-template<typename Ctx>
-inline int32_t closeChannelSync(Ctx& ctx, int64_t channelId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->close_channel || channelId <= 0) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    const auto rc = detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud,
-                                                 PluginxxString* err) {
-        return ctx.iface.runtime->close_channel(ctx.host, channelId, cb, ud, err);
-    });
-    // 通道已废弃: 回调转接对象随之释放 (主程序保证此后不再回调)
-    ctx.runtimeChannelShims.erase(channelId);
-    return rc;
-}
-
-/// 投递一条输入 (`{"text": ...}` / `{"attachments": [...]}` / `delivery`; **协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket sendInput(Ctx& ctx, int64_t channelId, std::string_view inputJson) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->send_input || channelId <= 0) {
-        return {};
-    }
-    auto input = std::string{inputJson};
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, channelId, input = std::move(input)](
-            PluginxxOperatorCallback cb,
-            void*                    ud,
-            PluginxxString*          err
-        ) -> PluginxxOperatorHandle* {
-            auto jsonSv = PluginStringView::from(input);
-            return ctx.iface.runtime->send_input(ctx.host, channelId, &jsonSv, cb, ud, err);
-        }
-    );
-}
-
-/// 投递一条输入 (同步形态; 见 [mountRootSync] 的线程限制)
-template<typename Ctx>
-inline int32_t sendInputSync(Ctx& ctx, int64_t channelId, std::string_view inputJson) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->send_input || channelId <= 0) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    auto jsonSv = PluginStringView::from(inputJson);
-    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ctx.iface.runtime->send_input(ctx.host, channelId, &jsonSv, cb, ud, err);
-    });
-}
-
-/// 投递一段文本 (**协程形态**; `delivery` 空 = next-turn)
-///
-/// 构造输入 JSON 后直接提交, 因此本身不需要协程。
-template<typename Ctx>
-inline pluginxx::TableOpTicket sendText(
+inline asio::awaitable<pluginxx::TableOpResult> sendTextAsync(
     Ctx&             ctx,
     int64_t          channelId,
     std::string_view text,
@@ -2270,189 +1351,38 @@ inline pluginxx::TableOpTicket sendText(
     if (!delivery.empty()) {
         input["delivery"] = std::string{delivery};
     }
-    return sendInput(ctx, channelId, input.dump());
+    co_return co_await sendInputAsync(ctx, channelId, input.dump());
 }
 
-/// 投递一段文本 (同步形态)
+/// 切换通道所用模型 (asio 形态)
 template<typename Ctx>
-inline int32_t sendTextSync(
-    Ctx&             ctx,
-    int64_t          channelId,
-    std::string_view text,
-    std::string_view delivery = {}
-) {
-    utilxx_base::Json input = utilxx_base::Json::object();
-    input["text"]           = std::string{text};
-    if (!delivery.empty()) {
-        input["delivery"] = std::string{delivery};
-    }
-    return sendInputSync(ctx, channelId, input.dump());
-}
-
-/// 取消通道当前轮次 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket cancelChannel(Ctx& ctx, int64_t channelId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel || channelId <= 0) {
-        return {};
-    }
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            return ctx.iface.runtime->cancel(ctx.host, channelId, cb, ud, err);
-        }
-    );
-}
-
-/// 取消通道当前轮次 (同步形态)
-template<typename Ctx>
-inline int32_t cancelChannelSync(Ctx& ctx, int64_t channelId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel || channelId <= 0) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ctx.iface.runtime->cancel(ctx.host, channelId, cb, ud, err);
-    });
-}
-
-/// 切换通道的模型 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket selectChannelModel(
-    Ctx&             ctx,
-    int64_t          channelId,
-    std::string_view model
-) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->select_model || channelId <= 0 || model.empty()) {
-        return {};
+inline asio::awaitable<pluginxx::TableOpResult>
+    selectChannelModelAsync(Ctx& ctx, int64_t channelId, std::string_view model) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->select_model || channelId <= 0) {
+        co_return detail::runtimeTableOpUnsupported();
     }
     auto name = std::string{model};
-    return pluginxx::tableOp(
+    co_return co_await detail::runtimeTableOpAwaitAsync(
         ctx,
         [&ctx, channelId, name = std::move(name)](
             PluginxxOperatorCallback cb,
             void*                    ud,
             PluginxxString*          err
         ) -> PluginxxOperatorHandle* {
-            auto modelSv = PluginStringView::from(name);
-            return ctx.iface.runtime->select_model(ctx.host, channelId, &modelSv, cb, ud, err);
+            auto nameSv = PluginStringView::from(name);
+            return ctx.iface.runtime->select_model(ctx.host, channelId, &nameSv, cb, ud, err);
         }
     );
 }
 
-/// 切换通道的模型 (同步形态)
+/// 通道会话的 LLM 上下文 (asio 形态; 正文是 JSON 数组文本)
 template<typename Ctx>
-inline int32_t selectChannelModelSync(Ctx& ctx, int64_t channelId, std::string_view model) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->select_model || channelId <= 0 || model.empty()) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    auto modelSv = PluginStringView::from(model);
-    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ctx.iface.runtime->select_model(ctx.host, channelId, &modelSv, cb, ud, err);
-    });
-}
-
-/// 应答一个中断询问 (**协程形态**; 值对象形态 `{"values":{...}}`, 空对象 = 取消)
-template<typename Ctx>
-inline pluginxx::TableOpTicket respondInterrupt(
-    Ctx&             ctx,
-    int64_t          channelId,
-    int64_t          interruptId,
-    std::string_view valuesJson
-) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->respond_interrupt || channelId <= 0
-        || interruptId <= 0) {
-        return {};
-    }
-    auto values = std::string{valuesJson};
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, channelId, interruptId, values = std::move(values)](
-            PluginxxOperatorCallback cb,
-            void*                    ud,
-            PluginxxString*          err
-        ) -> PluginxxOperatorHandle* {
-            auto valuesSv = PluginStringView::from(values);
-            return ctx.iface.runtime->respond_interrupt(
-                ctx.host,
-                channelId,
-                interruptId,
-                &valuesSv,
-                cb,
-                ud,
-                err
-            );
-        }
-    );
-}
-
-/// 应答一个中断询问 (同步形态)
-template<typename Ctx>
-inline int32_t respondInterruptSync(
-    Ctx&             ctx,
-    int64_t          channelId,
-    int64_t          interruptId,
-    std::string_view valuesJson
-) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->respond_interrupt || channelId <= 0
-        || interruptId <= 0) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    auto valuesSv = PluginStringView::from(valuesJson);
-    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ctx.iface.runtime->respond_interrupt(
-            ctx.host,
-            channelId,
-            interruptId,
-            &valuesSv,
-            cb,
-            ud,
-            err
-        );
-    });
-}
-
-/// 通道状态 JSON (不含消息正文; **协程形态**: `co_await` 后 `.text()` 是 JSON)
-template<typename Ctx>
-inline pluginxx::TableOpTicket channelStateJson(Ctx& ctx, int64_t channelId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->get_channel_state || channelId <= 0) {
-        return {};
-    }
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            return ctx.iface.runtime->get_channel_state(ctx.host, channelId, cb, ud, err);
-        }
-    );
-}
-
-/// 通道状态 JSON (同步形态; 失败返回空串)
-template<typename Ctx>
-inline std::string channelStateJsonSync(Ctx& ctx, int64_t channelId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->get_channel_state || channelId <= 0) {
-        return {};
-    }
-    std::string text;
-    if (detail::runtimeCallText(
-            ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ctx.iface.runtime->get_channel_state(ctx.host, channelId, cb, ud, err);
-            },
-            text
-        )
-        != AGENTXX_RESULT_OK) {
-        return {};
-    }
-    return text;
-}
-
-/// 通道会话的 LLM 上下文 (JSON 数组文本; **协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket channelContextMessages(Ctx& ctx, int64_t channelId) {
+inline asio::awaitable<pluginxx::TableOpResult>
+    channelContextMessagesAsync(Ctx& ctx, int64_t channelId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->get_context_messages || channelId <= 0) {
-        return {};
+        co_return detail::runtimeTableOpUnsupported();
     }
-    return pluginxx::tableOp(
+    co_return co_await detail::runtimeTableOpAwaitAsync(
         ctx,
         [&ctx, channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
             -> PluginxxOperatorHandle* {
@@ -2461,77 +1391,17 @@ inline pluginxx::TableOpTicket channelContextMessages(Ctx& ctx, int64_t channelI
     );
 }
 
-/// 通道会话的 LLM 上下文 (同步形态; 失败返回空串)
+/// 登记触发器 (asio 形态; `.integer()` 是触发器 id, 失败 0)
 template<typename Ctx>
-inline std::string channelContextMessagesSync(Ctx& ctx, int64_t channelId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->get_context_messages || channelId <= 0) {
-        return {};
-    }
-    std::string text;
-    if (detail::runtimeCallText(
-            ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ctx.iface.runtime->get_context_messages(
-                    ctx.host,
-                    channelId,
-                    cb,
-                    ud,
-                    err
-                );
-            },
-            text
-        )
-        != AGENTXX_RESULT_OK) {
-        return {};
-    }
-    return text;
-}
-
-/// 运行时清单 JSON (**协程形态**: `{roots:[{rootId,name,ready,configSummary,channels}],triggers,timers}`)
-template<typename Ctx>
-inline pluginxx::TableOpTicket listRuntimeJson(Ctx& ctx) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->list_runtime) {
-        return {};
-    }
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
-            -> PluginxxOperatorHandle* {
-            return ctx.iface.runtime->list_runtime(ctx.host, cb, ud, err);
-        }
-    );
-}
-
-/// 运行时清单 JSON (同步形态; 失败返回 `{}`)
-template<typename Ctx>
-inline std::string listRuntimeJsonSync(Ctx& ctx) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->list_runtime) {
-        return "{}";
-    }
-    std::string text;
-    if (detail::runtimeCallText(
-            ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ctx.iface.runtime->list_runtime(ctx.host, cb, ud, err);
-            },
-            text
-        )
-        != AGENTXX_RESULT_OK) {
-        return "{}";
-    }
-    return text;
-}
-
-/// 登记触发器 (**协程形态**: `co_await` 后 `.integer()` 是触发器 id, 失败 0)
-template<typename Ctx>
-inline pluginxx::TableOpTicket addTrigger(Ctx& ctx, const TriggerOptions& opt) {
+inline asio::awaitable<pluginxx::TableOpResult>
+    addTriggerAsync(Ctx& ctx, const TriggerOptions& opt) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->register_trigger || opt.topic.empty()
         || opt.channelId <= 0) {
-        return {};
+        co_return detail::runtimeTableOpUnsupported();
     }
     auto topic    = std::string{opt.topic};
     auto delivery = std::string{opt.delivery};
-    return pluginxx::tableOp(
+    co_return co_await detail::runtimeTableOpAwaitAsync(
         ctx,
         [&ctx,
          topic    = std::move(topic),
@@ -2554,42 +1424,14 @@ inline pluginxx::TableOpTicket addTrigger(Ctx& ctx, const TriggerOptions& opt) {
     );
 }
 
-/// 登记触发器 (同步形态; 返回触发器 id, 失败 0)
+/// 注销触发器 (asio 形态)
 template<typename Ctx>
-inline int64_t addTriggerSync(Ctx& ctx, const TriggerOptions& opt) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->register_trigger || opt.topic.empty()
-        || opt.channelId <= 0) {
-        return 0;
-    }
-    AgentxxPluginTriggerSpec spec{};
-    spec.struct_size = sizeof(AgentxxPluginTriggerSpec);
-    spec.policy      = opt.policy;
-    spec.debounce_ms = opt.debounceMs;
-    spec.max_queue   = opt.maxQueue;
-    spec.topic       = PluginStringView::from(opt.topic);
-    spec.channel_id  = opt.channelId;
-    spec.delivery    = PluginStringView::from(opt.delivery);
-    int64_t id = 0;
-    if (detail::runtimeCallId(
-            ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ctx.iface.runtime->register_trigger(ctx.host, &spec, cb, ud, err);
-            },
-            id
-        )
-        != AGENTXX_RESULT_OK) {
-        return 0;
-    }
-    return id;
-}
-
-/// 注销触发器 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket removeTrigger(Ctx& ctx, int64_t triggerId) {
+inline asio::awaitable<pluginxx::TableOpResult>
+    removeTriggerAsync(Ctx& ctx, int64_t triggerId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_trigger || triggerId <= 0) {
-        return {};
+        co_return detail::runtimeTableOpUnsupported();
     }
-    return pluginxx::tableOp(
+    co_return co_await detail::runtimeTableOpAwaitAsync(
         ctx,
         [&ctx, triggerId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
             -> PluginxxOperatorHandle* {
@@ -2598,32 +1440,19 @@ inline pluginxx::TableOpTicket removeTrigger(Ctx& ctx, int64_t triggerId) {
     );
 }
 
-/// 注销触发器 (同步形态)
+/// 发一条事件 (asio 形态; 写侧只能落在 `plugin.<名字>.*` 下)
 template<typename Ctx>
-inline int32_t removeTriggerSync(Ctx& ctx, int64_t triggerId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_trigger || triggerId <= 0) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ctx.iface.runtime->unregister_trigger(ctx.host, triggerId, cb, ud, err);
-    });
-}
-
-/// 发一条事件 (**协程形态**; 写侧只能落在插件族 `plugin.<名字>.*` 下)
-/// - 主题必须写全名并落在插件族里: `plugin.<名字>.<事件>` (不限定插件名, 建议用自己的)
-/// - 写侧不允许跨族: 内置主题 (`agentxx.*`) 只由主程序发布
-template<typename Ctx>
-inline pluginxx::TableOpTicket emitEvent(
+inline asio::awaitable<pluginxx::TableOpResult> emitEventAsync(
     Ctx&             ctx,
     std::string_view topic,
     std::string_view payloadJson = {}
 ) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->emit_event || topic.empty()) {
-        return {};
+        co_return detail::runtimeTableOpUnsupported();
     }
     auto topicText   = std::string{topic};
     auto payloadText = std::string{payloadJson};
-    return pluginxx::tableOp(
+    co_return co_await detail::runtimeTableOpAwaitAsync(
         ctx,
         [&ctx, topicText = std::move(topicText), payloadText = std::move(payloadText)](
             PluginxxOperatorCallback cb,
@@ -2637,28 +1466,16 @@ inline pluginxx::TableOpTicket emitEvent(
     );
 }
 
-/// 发一条事件 (同步形态)
+/// 登记定时器 (asio 形态; `.integer()` 是定时器 id, 失败 0)
 template<typename Ctx>
-inline int32_t emitEventSync(Ctx& ctx, std::string_view topic, std::string_view payloadJson = {}) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->emit_event || topic.empty()) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    auto topicSv = PluginStringView::from(topic);
-    auto paySv   = PluginStringView::from(payloadJson);
-    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ctx.iface.runtime->emit_event(ctx.host, &topicSv, &paySv, cb, ud, err);
-    });
-}
-
-/// 登记定时器 (**协程形态**: `.integer()` 是定时器 id, 失败 0)
-template<typename Ctx>
-inline pluginxx::TableOpTicket addRuntimeTimer(Ctx& ctx, const RuntimeTimerOptions& opt) {
+inline asio::awaitable<pluginxx::TableOpResult>
+    addRuntimeTimerAsync(Ctx& ctx, const RuntimeTimerOptions& opt) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->register_timer || opt.channelId <= 0
         || opt.inputJson.empty() || opt.firstDelayMs < 0 || opt.intervalMs < 0) {
-        return {};
+        co_return detail::runtimeTableOpUnsupported();
     }
     auto input = std::string{opt.inputJson};
-    return pluginxx::tableOp(
+    co_return co_await detail::runtimeTableOpAwaitAsync(
         ctx,
         [&ctx,
          input    = std::move(input),
@@ -2679,41 +1496,14 @@ inline pluginxx::TableOpTicket addRuntimeTimer(Ctx& ctx, const RuntimeTimerOptio
     );
 }
 
-/// 登记定时器 (同步形态; 返回定时器 id, 失败 0)
+/// 注销定时器 (asio 形态)
 template<typename Ctx>
-inline int64_t addRuntimeTimerSync(Ctx& ctx, const RuntimeTimerOptions& opt) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->register_timer || opt.channelId <= 0
-        || opt.inputJson.empty() || opt.firstDelayMs < 0 || opt.intervalMs < 0) {
-        return 0;
-    }
-    AgentxxPluginTimerSpec spec{};
-    spec.struct_size    = sizeof(AgentxxPluginTimerSpec);
-    spec.policy         = opt.policy;
-    spec.channel_id     = opt.channelId;
-    spec.first_delay_ms = opt.firstDelayMs;
-    spec.interval_ms    = opt.intervalMs;
-    spec.input_json     = PluginStringView::from(opt.inputJson);
-    int64_t id = 0;
-    if (detail::runtimeCallId(
-            ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ctx.iface.runtime->register_timer(ctx.host, &spec, cb, ud, err);
-            },
-            id
-        )
-        != AGENTXX_RESULT_OK) {
-        return 0;
-    }
-    return id;
-}
-
-/// 注销定时器 (**协程形态**)
-template<typename Ctx>
-inline pluginxx::TableOpTicket removeRuntimeTimer(Ctx& ctx, int64_t timerId) {
+inline asio::awaitable<pluginxx::TableOpResult>
+    removeRuntimeTimerAsync(Ctx& ctx, int64_t timerId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_timer || timerId <= 0) {
-        return {};
+        co_return detail::runtimeTableOpUnsupported();
     }
-    return pluginxx::tableOp(
+    co_return co_await detail::runtimeTableOpAwaitAsync(
         ctx,
         [&ctx, timerId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
             -> PluginxxOperatorHandle* {
@@ -2722,16 +1512,7 @@ inline pluginxx::TableOpTicket removeRuntimeTimer(Ctx& ctx, int64_t timerId) {
     );
 }
 
-/// 注销定时器 (同步形态)
-template<typename Ctx>
-inline int32_t removeRuntimeTimerSync(Ctx& ctx, int64_t timerId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_timer || timerId <= 0) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ctx.iface.runtime->unregister_timer(ctx.host, timerId, cb, ud, err);
-    });
-}
+
 
 
 /* ==================== 后台任务 (async work) ====================
@@ -2901,18 +1682,332 @@ inline void fillAsyncWorkSpec(const AsyncWorkSpecKeep& keep, AgentxxPluginAsyncW
 
 } // namespace detail
 
-/// 提交一个后台任务 (**协程形态**: `co_await` 后 `.ok()`, `.text()` = `asyncId`)
+
+
+/* ==================== 业务表便捷入口 (asio 形态) ====================
+ *
+ * 每个入口都是 `asio::awaitable`: 调用方在自己的协程里 `co_await` 它, 得到
+ * `pluginxx::TableOpResult` (`ok()` / `text()` / `integer()` / `flag()`)。
+ * 主程序不支持该能力时 `accepted() == false` 且 `startError` 有原因, 不会挂起。
+ *
+ * - 只能在 **asio 协程**里 `co_await` (插件执行线程上不能等表, 要结果就写协程);
+ * - 这些入口本身是协程, **提交发生在开始 `co_await` 的那一刻** (不是调用那一行),
+ *   因此想让几条调用并行, 需要用 `asio::co_spawn` 显式开协程。
+ *
+ * 文本参数一律**按值** (`std::string`): `asio::awaitable` 的帧只会在参数上做复制,
+ * 引用/视图形式在“发起后不立即 `co_await`”时 (例如 `spawnIo` 交给另一个执行器)
+ * 会指向已释放的对象。调用方可以直接传临时量。
+ *
+ * 返回 `asio::awaitable<...>` (执行器是默认的 `asio::any_io_executor`): 调用方那个
+ * 协程用的也得是它 (asio 只允许 co_await 执行器相同的 awaitable)。
+ */
+
+namespace detail {
+
+/// 未受理的结果 (主程序没有这张表 / 参数不全): `accepted()` 为 false
+inline pluginxx::TableOpResult tableOpUnsupported() {
+    pluginxx::TableOpResult r;
+    r.startError = "plugin table call was not accepted";
+    return r;
+}
+
+} // namespace detail
+
+/// 表调用的 asio 形态 (通用入口; 用法与 [pluginxx::tableOp] 相同, 返回 awaitable)
 ///
-/// - 只校验参数, 不因额度/排队被拒 (额度只影响何时起跑)
-/// - 受理不代表任务成功: 结果发到 `agentxx.agent.async.done` (或 `onEvent`)
+/// 注意: 本函数是协程, 真正提交发生在开始 `co_await` 时 (不是调用这一行)。
+template<typename Ctx, typename StartFn>
+inline asio::awaitable<pluginxx::TableOpResult> tableOpAsync(Ctx& ctx, StartFn start) {
+    co_return co_await pluginxx::detail::tableOpAwaitAsyncSlot(ctx, std::move(start));
+}
+
+/// 写入会话共享存储 (asio 形态; 结果是新条目 id, 失败 -1)
+///
+/// - 主程序没有这张表时 `co_return -1`;
+/// - `tid` / `content` 按值: 本协程帧自己持有一份, 调用方可以直接传临时量。
 template<typename Ctx>
-inline pluginxx::TableOpTicket submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt) {
+inline asio::awaitable<int64_t>
+    addShareStoreAsync(Ctx& ctx, const ScopeRef& agent, std::string tid, std::string content) {
+    if (!ctx.host || !ctx.iface.session || !ctx.iface.session->add_share_store) {
+        co_return int64_t{-1};
+    }
+    auto ex{co_await asio::this_coro::executor};
+    auto r = co_await pluginxx::asyncTableOp(
+        ctx,
+        ex,
+        [&ctx, agent, tid = std::move(tid), content = std::move(content)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            auto ref  = agent.raw();
+            auto key  = PluginStringView::from(tid);
+            auto text = PluginStringView::from(content);
+            return ctx.iface.session->add_share_store(ctx.host, &ref, &key, &text, cb, ud, err);
+        }
+    );
+    co_return r.ok() ? r.integer(-1) : int64_t{-1};
+}
+
+/// 把阻塞工作交给主程序工作池 (asio 形态; 完成后回到本协程的执行器)
+///
+/// `work` 可以不带参数, 也可以接 `const PluginxxCancelToken*` (取消请求来了只会
+/// 置标记, 由工作体自己配合处理):
+///
+/// ```cpp
+/// auto collected = co_await agentxx::plugin::offloadAsync(c, [&] {
+///     return collectExpensivePaths();   // 目录遍历 / 全文件扫描
+/// });
+/// ```
+///
+/// - 没有可用工作池时抛 `runtime_error` (与 `pluginxx::offload` 一致);
+/// - 工作体抛出的异常原样重抛到 `co_await` 处, 取消抛 `pluginxx::CanceledException`。
+/// offload 工作体的结果类型 (工作体可以不带参数, 也可以收取消令牌)
+/// - 两条 `invoke_result` 只能取一条: 用特化而不是 `conditional_t`, 后者的两个分支
+///   都会被实例化 (带令牌的 lambda 拿零参形式是非良构)
+template<typename WorkFn, bool WithToken>
+struct OffloadAsyncTraits;
+
+template<typename WorkFn>
+struct OffloadAsyncTraits<WorkFn, false> {
+    using Result = std::decay_t<std::invoke_result_t<WorkFn&>>;
+};
+
+template<typename WorkFn>
+struct OffloadAsyncTraits<WorkFn, true> {
+    using Result = std::decay_t<std::invoke_result_t<WorkFn&, const PluginxxCancelToken*>>;
+};
+
+template<typename WorkFn>
+using OffloadAsyncResult = typename OffloadAsyncTraits<
+    WorkFn,
+    std::is_invocable_v<WorkFn&, const PluginxxCancelToken*>>::Result;
+
+template<typename Ctx, typename WorkFn>
+inline asio::awaitable<OffloadAsyncResult<WorkFn>>
+    offloadAsync(Ctx& ctx, WorkFn work) {
+    using ResultT = OffloadAsyncResult<WorkFn>;
+    auto ex{co_await asio::this_coro::executor};
+    auto outcome = co_await pluginxx::asyncOffload(
+        ctx,
+        ex,
+        [work = std::move(work)](const PluginxxCancelToken* token) mutable -> ResultT {
+            if constexpr (std::is_invocable_v<WorkFn&, const PluginxxCancelToken*>) {
+                return work(token);
+            } else {
+                (void)token;
+                return work();
+            }
+        }
+    );
+    if (!outcome.startError.empty()) {
+        throw std::runtime_error(outcome.startError);
+    }
+    if (outcome.workError) {
+        std::rethrow_exception(outcome.workError);
+    }
+    if (outcome.status == PLUGINXX_OPERATOR_CANCELED) {
+        throw pluginxx::CanceledException(
+            outcome.error.empty() ? "offload canceled" : outcome.error
+        );
+    }
+    if (outcome.status == PLUGINXX_OPERATOR_FAILED) {
+        throw std::runtime_error(outcome.error.empty() ? "offload failed" : outcome.error);
+    }
+    if constexpr (std::is_void_v<ResultT>) {
+        co_return;
+    } else {
+        co_return outcome.value ? std::move(*outcome.value) : ResultT{};
+    }
+}
+
+/// 打开一个会话通道 (asio 形态; 结果是通道 id, 失败 0)
+///
+/// 事件回调的转接对象由本协程帧保活到受理成功, 受理后登记到 `ctx.runtimeChannelShims`
+/// (关闭通道时摘除)。
+template<typename Ctx, typename Fn>
+inline asio::awaitable<int64_t> openChannelAsync(Ctx& ctx, ChannelOptions opt, Fn onEvent) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->open_channel || opt.rootId.empty()) {
+        co_return 0;
+    }
+    auto ex{co_await asio::this_coro::executor};
+    auto shim = std::make_unique<detail::RuntimeChannelShim>();
+    shim->fn  = std::make_shared<const std::function<void(const ChannelEvent&)>>(
+        std::function<void(const ChannelEvent&)>(std::forward<Fn>(onEvent))
+    );
+    auto rootId    = std::string{opt.rootId};
+    auto sessionId = std::string{opt.sessionId};
+    auto title     = std::string{opt.title};
+    auto model     = std::string{opt.model};
+    AgentxxPluginChannelSpec spec{};
+    spec.struct_size          = sizeof(AgentxxPluginChannelSpec);
+    spec.root_id              = PluginStringView::from(rootId);
+    spec.session_id           = PluginStringView::from(sessionId);
+    spec.title                = PluginStringView::from(title);
+    spec.model                = PluginStringView::from(model);
+    spec.max_queue            = opt.maxQueue;
+    spec.interrupt_timeout_ms = static_cast<int64_t>(opt.interruptTimeout.count());
+    spec.on_event             = &detail::runtimeChannelEventThunk;
+    spec.user_data            = shim.get();
+    auto r = co_await pluginxx::asyncTableOp(
+        ctx,
+        ex,
+        [&ctx, &spec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->open_channel(ctx.host, &spec, cb, ud, err);
+        }
+    );
+    const int64_t channelId = r.ok() ? r.integer(0) : 0;
+    if (channelId <= 0) {
+        co_return 0;
+    }
+    ctx.runtimeChannelShims[channelId] = std::move(shim);
+    co_return channelId;
+}
+
+/// 关闭一个通道 (asio 形态; 结果经最后一条 `CLOSED` 事件体现)
+///
+/// 受理成功后摘掉事件转接对象 (此后主程序不再回调它)。
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> closeChannelAsync(Ctx& ctx, int64_t channelId) {
+    auto ex{co_await asio::this_coro::executor};
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->close_channel || channelId <= 0) {
+        co_return detail::tableOpUnsupported();
+    }
+    auto r = co_await pluginxx::asyncTableOp(
+        ctx,
+        ex,
+        [&ctx, channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->close_channel(ctx.host, channelId, cb, ud, err);
+        }
+    );
+    if (r.ok()) {
+        ctx.runtimeChannelShims.erase(channelId);
+    }
+    co_return r;
+}
+
+/// 投递一条输入 (asio 形态; `.ok()` = 已受理)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult>
+    sendInputAsync(Ctx& ctx, int64_t channelId, std::string inputJson) {
+    auto ex{co_await asio::this_coro::executor};
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->send_input || channelId <= 0) {
+        co_return detail::tableOpUnsupported();
+    }
+    co_return co_await pluginxx::asyncTableOp(
+        ctx,
+        ex,
+        [&ctx, channelId, input = std::move(inputJson)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            auto jsonSv = PluginStringView::from(input);
+            return ctx.iface.runtime->send_input(ctx.host, channelId, &jsonSv, cb, ud, err);
+        }
+    );
+}
+
+/// 取消通道当前轮次 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> cancelChannelAsync(Ctx& ctx, int64_t channelId) {
+    auto ex{co_await asio::this_coro::executor};
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel || channelId <= 0) {
+        co_return detail::tableOpUnsupported();
+    }
+    co_return co_await pluginxx::asyncTableOp(
+        ctx,
+        ex,
+        [&ctx, channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->cancel(ctx.host, channelId, cb, ud, err);
+        }
+    );
+}
+
+/// 应答一个中断 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> respondInterruptAsync(
+    Ctx&             ctx,
+    int64_t          channelId,
+    int64_t          interruptId,
+    std::string      valuesJson
+) {
+    auto ex{co_await asio::this_coro::executor};
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->respond_interrupt || channelId <= 0) {
+        co_return detail::tableOpUnsupported();
+    }
+    co_return co_await pluginxx::asyncTableOp(
+        ctx,
+        ex,
+        [&ctx, channelId, interruptId, values = std::move(valuesJson)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            auto valuesSv = PluginStringView::from(values);
+            return ctx.iface.runtime->respond_interrupt(
+                ctx.host,
+                channelId,
+                interruptId,
+                &valuesSv,
+                cb,
+                ud,
+                err
+            );
+        }
+    );
+}
+
+/// 通道状态 JSON (asio 形态; `.text()` 是 JSON)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult>
+    channelStateJsonAsync(Ctx& ctx, int64_t channelId) {
+    auto ex{co_await asio::this_coro::executor};
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->get_channel_state || channelId <= 0) {
+        co_return detail::tableOpUnsupported();
+    }
+    co_return co_await pluginxx::asyncTableOp(
+        ctx,
+        ex,
+        [&ctx, channelId](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->get_channel_state(ctx.host, channelId, cb, ud, err);
+        }
+    );
+}
+
+/// 运行时清单 JSON (asio 形态; `.text()` 是 JSON)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> listRuntimeJsonAsync(Ctx& ctx) {
+    auto ex{co_await asio::this_coro::executor};
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->list_runtime) {
+        co_return detail::tableOpUnsupported();
+    }
+    co_return co_await pluginxx::asyncTableOp(
+        ctx,
+        ex,
+        [&ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            return ctx.iface.runtime->list_runtime(ctx.host, cb, ud, err);
+        }
+    );
+}
+
+/// 提交一个后台任务 (asio 形态; `.text()` = `asyncId`)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult>
+    submitAsyncWorkAsync(Ctx& ctx, AsyncWorkOptions opt) {
+    auto ex{co_await asio::this_coro::executor};
     if (!hasRuntime(ctx) || !ctx.iface.runtime->submit_async_work) {
-        return {};
+        co_return detail::tableOpUnsupported();
     }
     auto keep = detail::keepAsyncWorkOptions(opt);
-    return pluginxx::tableOp(
+    co_return co_await pluginxx::asyncTableOp(
         ctx,
+        ex,
         [&ctx, keep = std::move(keep)](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
             -> PluginxxOperatorHandle* {
             AgentxxPluginAsyncWorkSpec spec{};
@@ -2922,44 +2017,18 @@ inline pluginxx::TableOpTicket submitAsyncWork(Ctx& ctx, const AsyncWorkOptions&
     );
 }
 
-/// 提交一个后台任务 (同步形态); 返回 `asyncId` (失败返回空串)
-///
-/// - `outCode` 非空时写入返回码 (`agentxx_result.h` 的 `AGENTXX_RESULT_*`), 便于区分"不支持"与"参数错"
+/// 取消一条后台任务 (asio 形态)
 template<typename Ctx>
-inline std::string submitAsyncWorkSync(Ctx& ctx, const AsyncWorkOptions& opt, int32_t* outCode = nullptr) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->submit_async_work) {
-        if (outCode != nullptr) {
-            *outCode = AGENTXX_RESULT_ERR_UNSUPPORTED;
-        }
-        return {};
-    }
-    const auto  keep = detail::keepAsyncWorkOptions(opt);
-    std::string payload;
-    const auto  rc = detail::runtimeCallText(
-        ctx,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            AgentxxPluginAsyncWorkSpec spec{};
-            detail::fillAsyncWorkSpec(keep, spec);
-            return ctx.iface.runtime->submit_async_work(ctx.host, &spec, cb, ud, err);
-        },
-        payload
-    );
-    if (outCode != nullptr) {
-        *outCode = rc;
-    }
-    return payload;
-}
-
-/// 取消一条后台任务 (**协程形态**; 只能取消本实例提交的)
-template<typename Ctx>
-inline pluginxx::TableOpTicket cancelAsyncWork(Ctx& ctx, std::string_view asyncId) {
+inline asio::awaitable<pluginxx::TableOpResult>
+    cancelAsyncWorkAsync(Ctx& ctx, std::string asyncId) {
+    auto ex{co_await asio::this_coro::executor};
     if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel_async_work || asyncId.empty()) {
-        return {};
+        co_return detail::tableOpUnsupported();
     }
-    auto id = std::string{asyncId};
-    return pluginxx::tableOp(
+    co_return co_await pluginxx::asyncTableOp(
         ctx,
-        [&ctx, id = std::move(id)](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+        ex,
+        [&ctx, id = std::move(asyncId)](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
             -> PluginxxOperatorHandle* {
             auto idSv = PluginStringView::from(id);
             return ctx.iface.runtime->cancel_async_work(ctx.host, &idSv, cb, ud, err);
@@ -2967,87 +2036,24 @@ inline pluginxx::TableOpTicket cancelAsyncWork(Ctx& ctx, std::string_view asyncI
     );
 }
 
-/// 取消一条后台任务 (同步形态)
+/// 单条后台任务 JSON (asio 形态; `.text()` 是 JSON)
 template<typename Ctx>
-inline int32_t cancelAsyncWorkSync(Ctx& ctx, std::string_view asyncId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel_async_work || asyncId.empty()) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    auto id = PluginStringView::from(asyncId.data(), asyncId.size());
-    return detail::runtimeCall(ctx, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ctx.iface.runtime->cancel_async_work(ctx.host, &id, cb, ud, err);
-    });
-}
-
-/// 单条任务 JSON (**协程形态**: `.text()` 是 JSON)
-template<typename Ctx>
-inline pluginxx::TableOpTicket getAsyncWorkJson(Ctx& ctx, std::string_view asyncId) {
+inline asio::awaitable<pluginxx::TableOpResult>
+    getAsyncWorkJsonAsync(Ctx& ctx, std::string asyncId) {
+    auto ex{co_await asio::this_coro::executor};
     if (!hasRuntime(ctx) || !ctx.iface.runtime->get_async_work || asyncId.empty()) {
-        return {};
+        co_return detail::tableOpUnsupported();
     }
-    auto id = std::string{asyncId};
-    return pluginxx::tableOp(
+    co_return co_await pluginxx::asyncTableOp(
         ctx,
-        [&ctx, id = std::move(id)](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+        ex,
+        [&ctx, id = std::move(asyncId)](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
             -> PluginxxOperatorHandle* {
             auto idSv = PluginStringView::from(id);
             return ctx.iface.runtime->get_async_work(ctx.host, &idSv, cb, ud, err);
         }
     );
 }
-
-/// 单条任务 JSON (同步形态; 不存在或不是本实例提交的返回空串)
-template<typename Ctx>
-inline std::string getAsyncWorkJsonSync(Ctx& ctx, std::string_view asyncId) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->get_async_work || asyncId.empty()) {
-        return {};
-    }
-    auto id = PluginStringView::from(asyncId.data(), asyncId.size());
-    return detail::takeRuntimeText(ctx.host, ctx.iface.cancel, ctx.iface.scheduler, [&](
-                                                                                       PluginxxOperatorCallback cb,
-                                                                                       void* ud,
-                                                                                       PluginxxString* err
-                                                                                   ) {
-        return ctx.iface.runtime->get_async_work(ctx.host, &id, cb, ud, err);
-    });
-}
-
-/// 任务清单 JSON (**协程形态**: 数组文本)
-template<typename Ctx>
-inline pluginxx::TableOpTicket listAsyncWorkJson(Ctx& ctx, std::string_view sessionId = {}) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->list_async_work) {
-        return {};
-    }
-    auto session = std::string{sessionId};
-    return pluginxx::tableOp(
-        ctx,
-        [&ctx, session = std::move(session)](
-            PluginxxOperatorCallback cb,
-            void*                    ud,
-            PluginxxString*          err
-        ) -> PluginxxOperatorHandle* {
-            auto idSv = PluginStringView::from(session);
-            return ctx.iface.runtime->list_async_work(ctx.host, &idSv, cb, ud, err);
-        }
-    );
-}
-
-/// 任务清单 JSON (同步形态; `sessionId` 空 = 本实例提交的全部)
-template<typename Ctx>
-inline std::string listAsyncWorkJsonSync(Ctx& ctx, std::string_view sessionId = {}) {
-    if (!hasRuntime(ctx) || !ctx.iface.runtime->list_async_work) {
-        return {};
-    }
-    auto session = PluginStringView::from(sessionId.data(), sessionId.size());
-    return detail::takeRuntimeText(ctx.host, ctx.iface.cancel, ctx.iface.scheduler, [&](
-                                                                                       PluginxxOperatorCallback cb,
-                                                                                       void* ud,
-                                                                                       PluginxxString* err
-                                                                                   ) {
-        return ctx.iface.runtime->list_async_work(ctx.host, &session, cb, ud, err);
-    });
-}
-
 
 namespace detail {
 
@@ -3106,208 +2112,593 @@ inline RootRequest graphNodeRootRequest(
     return req;
 }
 
-struct CallToolState {
-    const PluginxxHost*            host  = nullptr;
-    const AgentxxPluginToolsIface* tools = nullptr;
-    /// 目标 agent 引用 (值类型: 自己持有 id 字符串, 调用时再取借用视图)
-    ScopeRef agent{};
-    /// 取消句柄用的表 (操作取消统一收拢到 `pluginxx.cancel`)
-    const PluginxxCancelIface* cancel = nullptr;
-    /// 协程驱动桥 (可空): 完成回调经它投递 continuation 并唤醒 driver。
-    PollOneBridge*            bridge = nullptr;
-    std::string               name;
-    std::string               argsJson;
-    std::string               sessionId;
-    PluginxxOperatorHandle*   opHandle = nullptr;
-    int32_t                   status   = PLUGINXX_OPERATOR_OK;
-    /// 结果正文 (原样字节)
-    std::string               result;
-    /// 结果元数据 JSON (无元数据为空)
-    std::string               metadata;
-    std::string               startError;
-    std::atomic<AwaiterState> state{AwaiterState::INIT};
-    void*                     coroAddr = nullptr;
-};
-
-/// 插件互调等待器
-/// - `WithResult` = false: 只取正文 (`call_tool`, 保持既有调用点源代码兼容)
-/// - `WithResult` = true: 取完整 `ToolResult` (`call_tool_result`, 含多模态附件)
-template<bool WithResult>
-struct CallToolAwaiter {
-    std::shared_ptr<CallToolState> st;
-
-    CallToolAwaiter(
-        const PluginxxHost*            in_host,
-        const AgentxxPluginToolsIface* in_tools,
-        std::string_view               in_name,
-        std::string_view               in_args,
-        std::string_view               in_tid,
-        PollOneBridge*                 in_bridge = nullptr,
-        ScopeRef                       in_agent  = {},
-        const PluginxxCancelIface*     in_cancel = nullptr
-    ) :
-        st(std::make_shared<CallToolState>()) {
-        st->host      = in_host;
-        st->tools     = in_tools;
-        st->name      = std::string(in_name);
-        st->argsJson  = std::string(in_args);
-        st->sessionId = std::string(in_tid);
-        st->bridge    = in_bridge;
-        st->agent     = std::move(in_agent);
-        st->cancel    = in_cancel;
-    }
-
-    bool await_ready() const noexcept {
-        return !st || !st->tools || !st->tools->call_tool;
-    }
-
-    template<typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> h) {
-        st->coroAddr = h.address();
-        st->state.store(AwaiterState::CALLING, std::memory_order_release);
-
-        auto*          holder = new std::shared_ptr<CallToolState>(st);
-        PluginxxString err{nullptr, 0};
-        auto           nameSv = PluginStringView::from(st->name.data(), st->name.size());
-        auto           argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
-        auto           tidSv  = PluginStringView::from(st->sessionId.data(), st->sessionId.size());
-
-        st->opHandle = st->tools->call_tool(
-            st->host,
-            st->agent.ptr(),
-            &nameSv,
-            &argsSv,
-            &tidSv,
-            [](void* ud, int32_t cbSt, const PluginxxStringView* res, const PluginxxStringView* meta) {
-                auto* hp = static_cast<std::shared_ptr<CallToolState>*>(ud);
-                auto  s  = *hp;
-                delete hp;
-
-                s->status = cbSt;
-                if (res && res->data && res->size > 0) {
-                    s->result.assign(res->data, static_cast<size_t>(res->size));
-                }
-                if (meta && meta->data && meta->size > 0) {
-                    s->metadata.assign(meta->data, static_cast<size_t>(meta->size));
-                }
-
-                auto expected = AwaiterState::CALLING;
-                if (s->state.compare_exchange_strong(
-                        expected,
-                        AwaiterState::COMPLETED,
-                        std::memory_order_acq_rel
-                    )) {
-                    return;
-                }
-
-                auto handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
-                handle.promise().clear_outstanding();
-
-                // 桥接路径不在主程序回调栈内恢复插件协程 (见 [resumePluginCoroutine])。
-                resumePluginCoroutine(s->bridge, handle);
-            },
-            holder,
-            &err
-        );
-
-        if (!st->opHandle) {
-            delete holder;
-            if (err.data) {
-                st->startError.assign(err.data, static_cast<size_t>(err.size));
-                PluginString::free(st->host, &err);
-            }
-            return false;
-        }
-
-        auto expected = AwaiterState::CALLING;
-        if (st->state.compare_exchange_strong(
-                expected,
-                AwaiterState::SUSPENDED,
-                std::memory_order_acq_rel
-            )) {
-            h.promise().set_outstanding([st = this->st]() {
-                if (st->cancel && st->cancel->op_cancel && st->opHandle) {
-                    st->cancel->op_cancel(st->opHandle);
-                }
-            });
-            return true;
-        }
-
-        return false;
-    }
-
-    /// 取正文 (`from_result` = false) 或完整结果 (`from_result` = true)
-    /// - 取消: 抛 `CanceledException` (取消是控制流, 不是工具结果)
-    /// - 启动被拒: 抛 `std::runtime_error` (没拿到操作句柄)
-    /// - 失败: `call_tool` 抛 `std::runtime_error`; `call_tool_result` 返回
-    ///   `ToolStatus::Failed` 的结果 (调用方自己看状态)
-    using ResultType = std::conditional_t<WithResult, ToolResult, std::string>;
-
-    ResultType await_resume() {
-        if (!st->startError.empty()) {
-            throw std::runtime_error("call_tool start failed: " + st->startError);
-        }
-        if (st->status == PLUGINXX_OPERATOR_CANCELED) {
-            throw CanceledException(st->result.empty() ? "call_tool Canceled" : st->result);
-        }
-        if (st->status != PLUGINXX_OPERATOR_OK) {
-            if constexpr (WithResult) {
-                return ToolResult::fromParts(std::move(st->result), ToolStatus::Failed, {});
-            } else {
-                throw std::runtime_error(st->result.empty() ? "call_tool failed" : st->result);
-            }
-        }
-        if constexpr (WithResult) {
-            return ToolResult::fromParts(std::move(st->result), ToolStatus::Ok, st->metadata);
-        } else {
-            return std::move(st->result);
-        }
-    }
-};
 } // namespace detail
 
-/// 插件互调: 调用本 agent 工具表里的一个工具, 只取结果正文
-/// - 失败/取消抛异常 (与旧用法一致); 需要附件或
-///   自己处理失败时用 [call_tool_result]
-inline detail::CallToolAwaiter<false> call_tool(
-    const PluginBase& ctx,
-    const ScopeRef&   agent,
-    std::string_view  name,
-    std::string_view  argsJson,
-    std::string_view  sessionId = {}
+namespace detail {
+
+/// `call_tool` 表调用的元数据槽 + 回调适配体
+///
+/// 工具表的完成回调是四参 (状态/正文/元数据), 而 asio 表调用只给一段正文,
+/// 所以元数据在这里单独存到调用方的 `shared_ptr<string>` 里。
+struct CallToolMetaCarrier {
+    PluginxxOperatorCallback     cb = nullptr;
+    void*                        ud = nullptr;
+    std::shared_ptr<std::string> meta;
+};
+
+/// 四参完成回调 → 表调用回调 (元数据先写槽, 再交回正文)
+inline void PLUGINXX_CALL callToolFourArgToTableOp(
+    void*                     ud,
+    int32_t                   status,
+    const PluginxxStringView* result,
+    const PluginxxStringView* payload
 ) {
-    return detail::CallToolAwaiter<false>{
-        ctx.host,
-        ctx.iface.tools,
-        name,
-        argsJson,
-        sessionId,
-        &ctx.bridge(),
-        agent,
-        ctx.iface.cancel
-    };
+    auto* carrier   = static_cast<CallToolMetaCarrier*>(ud);
+    auto  cb        = carrier->cb;
+    void* cbUd      = carrier->ud;
+    auto  meta      = carrier->meta;
+    delete carrier;
+    if (meta && payload && payload->data && payload->size > 0) {
+        meta->assign(payload->data, static_cast<size_t>(payload->size));
+    }
+    if (cb) {
+        cb(cbUd, status, result);
+    }
 }
 
-/// 插件互调: 取完整 `ToolResult` (状态位 + 正文 + 多模态附件)
-/// - 附件就在返回值的 `attachments` 里, 可以直接转交给自己的工具结果
-/// - 取消仍抛 `CanceledException`; 工具失败**不抛**, 看 `status`
-inline detail::CallToolAwaiter<true> call_tool_result(
-    const PluginBase& ctx,
-    const ScopeRef&   agent,
-    std::string_view  name,
-    std::string_view  argsJson,
-    std::string_view  sessionId = {}
+} // namespace detail
+
+/// 插件互调 (**asio 形态**): 取完整 `ToolResult`
+///
+/// 与 [callToolResultAsync] 同一份语义, 只是等待方式是 asio 协程:
+/// - 取消抛 `CanceledException`;
+/// - 启动被拒抛 `std::runtime_error`;
+/// - 工具失败不抛, 看返回值的 `status`。
+template<typename Ctx>
+inline asio::awaitable<ToolResult> callToolResultAsync(
+    const Ctx&       ctx,
+    const ScopeRef&  agent,
+    std::string_view name,
+    std::string_view argsJson,
+    std::string_view sessionId = {}
 ) {
-    return detail::CallToolAwaiter<true>{
-        ctx.host,
-        ctx.iface.tools,
-        name,
-        argsJson,
-        sessionId,
-        &ctx.bridge(),
-        agent,
-        ctx.iface.cancel
-    };
+    if (!ctx.iface.tools || !ctx.iface.tools->call_tool) {
+        throw std::runtime_error("call_tool: tools iface unavailable");
+    }
+    // 入参按值进协程帧: 调用方可以传临时量
+    auto nm   = std::string{name};
+    auto args = std::string{argsJson};
+    auto tid  = std::string{sessionId};
+    auto meta = std::make_shared<std::string>();
+    auto ref  = agent;
+
+    auto r = co_await pluginxx::asyncTableOp(
+        ctx,
+        co_await asio::this_coro::executor,
+        [&ctx, ref, nm, args, tid, meta](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            auto* carrier = new detail::CallToolMetaCarrier{cb, ud, meta};
+            auto  nameSv  = PluginStringView::from(nm.data(), nm.size());
+            auto  argsSv  = PluginStringView::from(args.data(), args.size());
+            auto  tidSv   = PluginStringView::from(tid.data(), tid.size());
+            auto  r       = ref.raw();
+            auto* op      = ctx.iface.tools->call_tool(
+                ctx.host,
+                &r,
+                &nameSv,
+                &argsSv,
+                &tidSv,
+                &detail::callToolFourArgToTableOp,
+                carrier,
+                err
+            );
+            if (!op) {
+                delete carrier;
+            }
+            return op;
+        }
+    );
+
+    if (!r.startError.empty()) {
+        throw std::runtime_error("call_tool start failed: " + r.startError);
+    }
+    if (r.status == PLUGINXX_OPERATOR_CANCELED) {
+        throw CanceledException(r.text().empty() ? "call_tool canceled" : std::string{r.text()});
+    }
+    if (r.status != PLUGINXX_OPERATOR_OK) {
+        co_return ToolResult::fromParts(std::string{r.text()}, ToolStatus::Failed, {});
+    }
+    co_return ToolResult::fromParts(std::string{r.text()}, ToolStatus::Ok, std::move(*meta));
+}
+
+/// 插件互调 (**asio 形态**): 只取结果正文
+///
+/// 与 [callToolResultAsync] 同语义: 失败/取消抛异常; 要自己处理失败用
+/// [callToolResultAsync]。
+template<typename Ctx>
+inline asio::awaitable<std::string> callToolAsync(
+    const Ctx&       ctx,
+    const ScopeRef&  agent,
+    std::string_view name,
+    std::string_view argsJson,
+    std::string_view sessionId = {}
+) {
+    auto r = co_await callToolResultAsync(ctx, agent, name, argsJson, sessionId);
+    if (r.status != ToolStatus::Ok) {
+        throw std::runtime_error(r.text.empty() ? "call_tool failed" : r.text);
+    }
+    co_return std::move(r.text);
+}
+
+/* ---- 业务表便捷入口的 asio 形态 ----
+ *
+ * 这一节是业务表的唯一形态: 给 `asio::awaitable` 协程 (工具体 / 挂载事务 /
+ * 插件自有 io 线程) 用。结果仍是 `pluginxx::TableOpResult` (业务失败不抛异常)。
+ */
+
+namespace detail {
+
+/// 取当前协程的执行器后提交一次表调用 (asio 形态的公共部分)
+template<typename Ctx, typename StartFn>
+inline asio::awaitable<pluginxx::TableOpResult> tableOpAwaitAsync(Ctx& ctx, StartFn start) {
+    co_return co_await pluginxx::detail::tableOpAwaitAsyncSlot(ctx, std::move(start));
+}
+
+} // namespace detail
+
+/// 读当前完整提示词 JSON (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult>
+    promptJsonAsync(Ctx& ctx, const PluginxxScopeRef* agent) {
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->get_prompt) {
+                return nullptr;
+            }
+            return ctx.iface.prompt->get_prompt(ctx.host, agent, cb, ud, err);
+        }
+    );
+}
+
+/// 写回本插件贡献的提示词段 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> setPromptJsonAsync(
+    Ctx&                    ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        json
+) {
+    auto text = std::string{json};
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, agent, text = std::move(text)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->set_prompt) {
+                return nullptr;
+            }
+            auto sv = PluginStringView::from(text.data(), text.size());
+            return ctx.iface.prompt->set_prompt(ctx.host, agent, &sv, cb, ud, err);
+        }
+    );
+}
+
+/// 读该 agent 的主模型及关联配置 JSON (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult>
+    modelConfigJsonAsync(Ctx& ctx, const PluginxxScopeRef* agent) {
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.model || !ctx.iface.model->get_config) {
+                return nullptr;
+            }
+            return ctx.iface.model->get_config(ctx.host, agent, cb, ud, err);
+        }
+    );
+}
+
+/// 读该 agent 当前执行图 JSON 定义 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult>
+    graphJsonAsync(Ctx& ctx, const PluginxxScopeRef* agent) {
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.graph || !ctx.iface.graph->get_graph_json) {
+                return nullptr;
+            }
+            return ctx.iface.graph->get_graph_json(ctx.host, agent, cb, ud, err);
+        }
+    );
+}
+
+/// 当前执行图名称 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult>
+    graphNameAsync(Ctx& ctx, const PluginxxScopeRef* agent) {
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.graph || !ctx.iface.graph->get_graph_name) {
+                return nullptr;
+            }
+            return ctx.iface.graph->get_graph_name(ctx.host, agent, cb, ud, err);
+        }
+    );
+}
+
+/// 写回执行图 JSON 定义 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> setGraphJsonAsync(
+    Ctx&                    ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        json
+) {
+    auto text = std::string{json};
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, agent, text = std::move(text)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.graph || !ctx.iface.graph->set_graph_json) {
+                return nullptr;
+            }
+            auto sv = PluginStringView::from(text.data(), text.size());
+            return ctx.iface.graph->set_graph_json(ctx.host, agent, &sv, cb, ud, err);
+        }
+    );
+}
+
+/// 本插件向该 agent 贡献的资源清单 JSON (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult>
+    ownResourcesJsonAsync(Ctx& ctx, const PluginxxScopeRef* agent) {
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, agent](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->get_own_resources) {
+                return nullptr;
+            }
+            return ctx.iface.resources->get_own_resources(ctx.host, agent, cb, ud, err);
+        }
+    );
+}
+
+/// 资源登记/注销的 asio 形态公共实现 (单个字符串入参)
+template<typename Ctx, typename StartFn>
+inline asio::awaitable<pluginxx::TableOpResult>
+    resourceOpAwaitAsync(Ctx& ctx, std::string_view arg, StartFn start) {
+    auto text = std::string{arg};
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, text = std::move(text), start = std::move(start)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            auto view = PluginStringView::from(text.data(), text.size());
+            return start(view, cb, ud, err);
+        }
+    );
+}
+
+/// 登记技能目录 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> registerSkillDirAsync(
+    Ctx&                    ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    co_return co_await resourceOpAwaitAsync(
+        ctx,
+        path,
+        [&ctx, agent](PluginxxStringView view, PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->register_skill_dir) {
+                return nullptr;
+            }
+            return ctx.iface.resources->register_skill_dir(ctx.host, agent, &view, cb, ud, err);
+        }
+    );
+}
+
+/// 撤销技能目录 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> unregisterSkillDirAsync(
+    Ctx&                    ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    co_return co_await resourceOpAwaitAsync(
+        ctx,
+        path,
+        [&ctx, agent](PluginxxStringView view, PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->unregister_skill_dir) {
+                return nullptr;
+            }
+            return ctx.iface.resources->unregister_skill_dir(ctx.host, agent, &view, cb, ud, err);
+        }
+    );
+}
+
+/// 登记记忆文件 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> registerMemoryFileAsync(
+    Ctx&                    ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    co_return co_await resourceOpAwaitAsync(
+        ctx,
+        path,
+        [&ctx, agent](PluginxxStringView view, PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->register_memory_file) {
+                return nullptr;
+            }
+            return ctx.iface.resources->register_memory_file(ctx.host, agent, &view, cb, ud, err);
+        }
+    );
+}
+
+/// 撤销记忆文件 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> unregisterMemoryFileAsync(
+    Ctx&                    ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        path
+) {
+    co_return co_await resourceOpAwaitAsync(
+        ctx,
+        path,
+        [&ctx, agent](PluginxxStringView view, PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->unregister_memory_file) {
+                return nullptr;
+            }
+            return ctx.iface.resources->unregister_memory_file(ctx.host, agent, &view, cb, ud, err);
+        }
+    );
+}
+
+/// 登记 MCP 服务器 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> registerMcpServerAsync(
+    Ctx&                    ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        specJson
+) {
+    co_return co_await resourceOpAwaitAsync(
+        ctx,
+        specJson,
+        [&ctx, agent](PluginxxStringView view, PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->register_mcp_server) {
+                return nullptr;
+            }
+            return ctx.iface.resources->register_mcp_server(ctx.host, agent, &view, cb, ud, err);
+        }
+    );
+}
+
+/// 撤销 MCP 服务器 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> unregisterMcpServerAsync(
+    Ctx&                    ctx,
+    const PluginxxScopeRef* agent,
+    std::string_view        nameSpace
+) {
+    co_return co_await resourceOpAwaitAsync(
+        ctx,
+        nameSpace,
+        [&ctx, agent](PluginxxStringView view, PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.resources || !ctx.iface.resources->unregister_mcp_server) {
+                return nullptr;
+            }
+            return ctx.iface.resources->unregister_mcp_server(ctx.host, agent, &view, cb, ud, err);
+        }
+    );
+}
+
+/// 全部挂载的摘要 JSON 数组 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> listMountsAsync(Ctx& ctx) {
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->list) {
+                return nullptr;
+            }
+            return ctx.iface.mount->list(ctx.host, cb, ud, err);
+        }
+    );
+}
+
+/// 按 agentId 查一个挂载的摘要 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult>
+    mountInfoOfAsync(Ctx& ctx, std::string_view agentId) {
+    auto idText = std::string{agentId};
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, idText = std::move(idText)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->get) {
+                return nullptr;
+            }
+            auto idSv = PluginStringView::from(idText.data(), idText.size());
+            return ctx.iface.mount->get(ctx.host, &idSv, cb, ud, err);
+        }
+    );
+}
+
+/// 工具提示词描述 (asio 形态; 用法同 [toolPromptOf])
+template<typename Ctx>
+inline asio::awaitable<ToolPromptText> toolPromptOfAsync(Ctx& ctx, std::string_view tool) {
+    auto name = std::string{tool};
+    auto r    = co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, name = std::move(name)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->get_tool_prompt) {
+                return nullptr;
+            }
+            auto v = PluginStringView::from(name.data(), name.size());
+            return ctx.iface.prompt->get_tool_prompt(ctx.host, &v, cb, ud, err);
+        }
+    );
+    co_return parseToolPromptJson(r.ok() ? r.text() : std::string_view{});
+}
+
+/// 声明式模式构建器 (asio 形态; 用法同 [schemaOf])
+template<typename Ctx>
+inline asio::awaitable<ToolSchemaBuilder> schemaOfAsync(Ctx& ctx, std::string_view tool) {
+    co_return ToolSchemaBuilder{co_await toolPromptOfAsync(ctx, tool)};
+}
+
+/* ---- 广播 (agent 侧 kit 的 asio 形态) ---- */
+
+/// 声明一条广播频道 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> declarePluginBroadcastAsync(
+    Ctx&             ctx,
+    std::string_view id,
+    bool             anyonePublish = false,
+    bool             cacheLatest   = true
+) {
+    auto text = std::string{id};
+    const bool anyone = anyonePublish;
+    const bool cache  = cacheLatest;
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, text = std::move(text), anyone, cache](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            if (text.empty() || !ctx.host || !ctx.iface.broadcasts
+                || !ctx.iface.broadcasts->declare_broadcast) {
+                return nullptr;
+            }
+            const std::string decl = "{\"id\":\"" + text + "\",\"cache\":\""
+                                     + (cache ? "latest" : "none") + "\",\"publish\":\""
+                                     + (anyone ? "anyone" : "owner") + "\"}";
+            auto declSv = PluginStringView::from(decl.data(), decl.size());
+            return ctx.iface.broadcasts->declare_broadcast(ctx.host, &declSv, cb, ud, err);
+        }
+    );
+}
+
+/// 发布一条广播 (asio 形态; 发布前先补声明)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> publishPluginBroadcastAsync(
+    Ctx&             ctx,
+    std::string_view id,
+    std::string_view payload,
+    bool             anyonePublish = false
+) {
+    auto idText      = std::string{id};
+    auto payloadText = std::string{payload};
+    co_await declarePluginBroadcastAsync(ctx, idText, anyonePublish);
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, idText = std::move(idText), payloadText = std::move(payloadText)](
+            PluginxxOperatorCallback cb,
+            void*                    ud,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            if (idText.empty() || !ctx.host || !ctx.iface.broadcasts
+                || !ctx.iface.broadcasts->publish_broadcast) {
+                return nullptr;
+            }
+            auto idSv      = PluginStringView::from(idText.data(), idText.size());
+            auto payloadSv = PluginStringView::from(payloadText.data(), payloadText.size());
+            return ctx.iface.broadcasts->publish_broadcast(
+                ctx.host,
+                &idSv,
+                &payloadSv,
+                cb,
+                ud,
+                err
+            );
+        }
+    );
+}
+
+/// 订阅一条广播 (asio 形态; 结果正文是句柄的十进制文本, 用 [subscriptionOf] 转回)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult> subscribePluginBroadcastAsync(
+    Ctx&                    ctx,
+    const PluginxxScopeRef* scope,
+    std::string_view        id,
+    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
+    void*                   ud
+) {
+    auto text = std::string{id};
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, scope, text = std::move(text), handler, ud](
+            PluginxxOperatorCallback cb,
+            void*                    opUd,
+            PluginxxString*          err
+        ) -> PluginxxOperatorHandle* {
+            if (text.empty() || !handler || !ctx.host || !ctx.iface.broadcasts
+                || !ctx.iface.broadcasts->subscribe_broadcast) {
+                return nullptr;
+            }
+            auto idSv = PluginStringView::from(text.data(), text.size());
+            return ctx.iface.broadcasts->subscribe_broadcast(
+                ctx.host,
+                scope,
+                &idSv,
+                handler,
+                ud,
+                nullptr,
+                cb,
+                opUd,
+                err
+            );
+        }
+    );
+}
+
+/// 撤销一条广播订阅 (asio 形态)
+template<typename Ctx>
+inline asio::awaitable<pluginxx::TableOpResult>
+    unsubscribePluginBroadcastAsync(Ctx& ctx, PluginxxSubscription* sub) {
+    co_return co_await detail::tableOpAwaitAsync(
+        ctx,
+        [&ctx, sub](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            if (sub == nullptr || !ctx.host || !ctx.iface.broadcasts
+                || !ctx.iface.broadcasts->unsubscribe_broadcast) {
+                return nullptr;
+            }
+            return ctx.iface.broadcasts->unsubscribe_broadcast(ctx.host, sub, cb, ud, err);
+        }
+    );
 }
 
 /* ==================== 功能埋点 (实现行 = 能力行) ====================
@@ -3371,23 +2762,12 @@ struct PointImplAdapter {
 
 } // namespace detail
 
-/// 为一个功能埋点登记一行实现 (实现行 = 能力行, **调用即提交**)
+/// 为一个功能埋点登记一行实现 (**asio 形态**: `co_await` 得到登记结果)
 ///
-/// - 主程序点写全名 (`agentxx.agent.point.*` 等), 自己的点写 `plugin.<插件名>.*`;
-/// - `fn` 收 `(ctx, 载荷 JSON)` (也可以只收载荷), 可返回字符串 (同步, 必须快速返回)
-///   或 `Task<T>` (异步), 返回值就是结果正文; 想显式置空 (`禁用该点`) 就回 `{"disable":true}`;
-/// - 行跟着**挂载**走: 禁用/卸载时由主程序按挂载记录撤销, 不必自己反注册。
-///
-/// - `args`:
-///     - [ctx] plugin 上下文
-///     - [ref] 本次挂载的 agent 引用 (行只对这个 agent 生效)
-///     - [pointId] 功能埋点 id
-///     - [fn] 实现体
-///     - [opts] 顺序与耗时声明
-///
-/// - `return` 表调用凭据 ([pluginxx::tableOp]): `co_await` 它才拿 `<是否受理, 状态, 原因>`
+/// 与 [providePoint] 参数一致, 只是登记与等待都用 asio 协程:
+/// 实现体可以写 `asio::awaitable<T>` (异步) 或直接返回字符串 (同步)。
 template<typename Ctx, typename Fn>
-inline pluginxx::TableOpTicket providePoint(
+inline asio::awaitable<pluginxx::TableOpResult> providePointAsync(
     Ctx&                    ctx,
     const ScopeRef&         ref,
     std::string_view        pointId,
@@ -3402,9 +2782,8 @@ inline pluginxx::TableOpTicket providePoint(
     cap.priority  = opts.priority;
     cap.timeoutMs = opts.timeoutMs;
     cap.ownerTag  = opts.ownerTag;
-    // 空的引用 = 进程级行 (对所有 agent 生效); 有引用时只对这个挂载生效
-    cap.scope = ref.empty() ? nullptr : ref.ptr();
-    return pluginxx::capability(
+    cap.scope     = ref.empty() ? nullptr : ref.ptr();
+    co_return co_await pluginxx::capabilityAsync(
         ctx,
         pointId,
         detail::PointImplAdapter<Ctx, std::decay_t<Fn>>{std::forward<Fn>(fn)},
@@ -3465,7 +2844,7 @@ inline int32_t toolStatusOfOperator(ToolStatus status) noexcept {
 
 /// 只有正文的单段通知器 (插件框架的根只能传一段)
 ///
-/// 用到它的地方: Task 型工具 (`tool`) —— 业务体只能给正文, 元数据恒空。
+/// 用到它的地方: 只要正文的根 (受控轮询工具的失败/取消路径)。
 /// 这里只用主程序写进通知器里的函数指针与 `host_ud`, 不引用主程序符号
 /// (插件不链接 libagentxx)。
 inline PluginxxOperatorNotify textOnlyNotify(const AgentxxPluginToolNotify& tool) noexcept {
@@ -3477,19 +2856,89 @@ inline PluginxxOperatorNotify frameNotify(const AgentxxPluginToolNotify& tool) n
     return PluginxxOperatorNotify{tool.done_frame, tool.host_ud};
 }
 
-/// 工具注册的"调用即提交"形态 (返回 ticket, 由调用方 `co_await`)
+/// 返回值是否 `asio::awaitable<T>` (asio 协程体)
+template<typename T>
+struct IsAwaitableToolResult : std::false_type {};
+
+template<typename T>
+struct IsAwaitableToolResult<asio::awaitable<T>> : std::true_type {};
+
+/// 工具体的可调用形状 (按顺序试第一个成立的; 与旧同步体一致, 便于逐个迁移)
 ///
-/// 提交完就返回, 注册是否生效由 `co_await` 的结果说了算 —— 生命周期里
-/// "登记完再放行"的顺序靠 await 完再 `later.ok()` 保证。
-/// `co_await` 的结果说了算 —— 生命周期里"登记完再放行"的顺序靠 await 完再
-/// `later.ok()` 保证。
+/// 1. `(Ctx&, args, OpCtl&)` / `(Ctx&, args, OpCtl)`;
+/// 2. `(Ctx&, args, tid, workDir, 取消令牌)`;
+/// 3. `(Ctx&, args, tid, 取消令牌)`;
+/// 4. `(Ctx&, args, tid, workDir)`;
+/// 5. `(Ctx&, args, 取消令牌)`;
+/// 6. `(args, 取消令牌)`;
+/// 7. `(Ctx&, args, tid)`;
+/// 8. `(Ctx&, args)`;
+/// 9. `(args)`。
+///
+/// 返回类型原样转发: `asio::awaitable<T>` (asio 协程体)。
+template<typename Fn, typename Ctx>
+inline decltype(auto) invokeToolBody(
+    Fn&                        fn,
+    Ctx&                       ctx,
+    std::string_view           args,
+    std::string_view           tid,
+    std::string_view           workDir,
+    OpCtl&                     ctl,
+    const PluginxxCancelToken* token
+) {
+    if constexpr (std::is_invocable_v<Fn&, Ctx&, std::string_view, OpCtl&>) {
+        return fn(ctx, args, ctl);
+    } else if constexpr (std::is_invocable_v<Fn&, Ctx&, std::string_view, OpCtl>) {
+        return fn(ctx, args, ctl);
+    } else if constexpr (std::is_invocable_v<
+                             Fn&,
+                             Ctx&,
+                             std::string_view,
+                             std::string_view,
+                             std::string_view,
+                             const PluginxxCancelToken*>) {
+        return fn(ctx, args, tid, workDir, token);
+    } else if constexpr (std::is_invocable_v<
+                             Fn&,
+                             Ctx&,
+                             std::string_view,
+                             std::string_view,
+                             const PluginxxCancelToken*>) {
+        return fn(ctx, args, tid, token);
+    } else if constexpr (std::is_invocable_v<
+                             Fn&,
+                             Ctx&,
+                             std::string_view,
+                             std::string_view,
+                             std::string_view>) {
+        return fn(ctx, args, tid, workDir);
+    } else if constexpr (std::is_invocable_v<
+                             Fn&,
+                             Ctx&,
+                             std::string_view,
+                             const PluginxxCancelToken*>) {
+        return fn(ctx, args, token);
+    } else if constexpr (std::is_invocable_v<Fn&, std::string_view, const PluginxxCancelToken*>) {
+        return fn(args, token);
+    } else if constexpr (std::is_invocable_v<Fn&, Ctx&, std::string_view, std::string_view>) {
+        return fn(ctx, args, tid);
+    } else if constexpr (std::is_invocable_v<Fn&, Ctx&, std::string_view>) {
+        return fn(ctx, args);
+    } else {
+        return fn(args);
+    }
+}
+
+/// 工具注册的底层入口 (与 [toolAsync] 共用同一份 spec, 结果经 asio 协程交回)
 template<typename Ctx>
-inline pluginxx::TableOpTicket
-    registerToolTicket(const Ctx& ctx, const ScopeRef& agent, const AgentxxPluginToolSpec& spec) {
-    auto ref = agent;
-    return pluginxx::tableOp(
+inline asio::awaitable<pluginxx::TableOpResult> registerToolAwaitable(
+    Ctx&                          ctx,
+    const ScopeRef&               agent,
+    const AgentxxPluginToolSpec&  spec
+) {
+    co_return co_await tableOpAwaitAsync(
         ctx,
-        [&ctx, ref, spec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+        [&ctx, ref = agent, spec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
             -> PluginxxOperatorHandle* {
             if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
                 return nullptr;
@@ -3500,533 +2949,7 @@ inline pluginxx::TableOpTicket
     );
 }
 
-/// 工具体的形态 (由"体怎么跑"决定; 对插件作者都只是同一个 [tool])
-///
-/// - `Task`: `pluginxx::Task<T>` 协程体, 可 `co_await` kit 原语
-///   (`sleep` / `offload` / `call_tool` / `invoke_cap`), 挂起期间不占线程;
-/// - `Awaitable`: `asio::awaitable<T>` 协程体, 等 asio 原生 I/O (管道 / 文件 / 定时器);
-/// - `Sync`: 普通函数体, 在工作池线程上执行, 可以阻塞 (文件 IO / 子进程 / 目录扫描)。
-enum class ToolBodyKind { Task, Awaitable, Sync };
 
-/// 返回值是否 `pluginxx::Task<T>` (kit 协程体)
-template<typename T>
-struct IsTaskToolResult : std::false_type {};
-
-template<typename T>
-struct IsTaskToolResult<pluginxx::Task<T>> : std::true_type {};
-
-/// 返回值是否 `asio::awaitable<T>` (asio 协程体)
-template<typename T>
-struct IsAwaitableToolResult : std::false_type {};
-
-template<typename T>
-struct IsAwaitableToolResult<asio::awaitable<T>> : std::true_type {};
-
-/// 判定工具体的形态
-///
-/// kit 协程体的第三个参数两种写法都支持 (`OpCtl` 按值 / `OpCtl&` 按引用), 两个都要试一次;
-/// 其余判据只看"能这样调用且返回该协程类型", 对不上的一律按同步体处理, 因此写错
-/// 返回类型的协程体不会被悄悄当成协程跑, 而是落进同步体分支在编译期报错。
-template<typename Fn, typename Ctx>
-constexpr ToolBodyKind toolBodyKindOf() noexcept {
-    using FnType = std::decay_t<Fn>;
-    if constexpr (std::is_invocable_v<FnType&, Ctx&, std::string_view, OpCtl&>) {
-        if constexpr (IsTaskToolResult<
-                          std::invoke_result_t<FnType&, Ctx&, std::string_view, OpCtl&>>::value) {
-            return ToolBodyKind::Task;
-        }
-    } else if constexpr (std::is_invocable_v<FnType&, Ctx&, std::string_view, OpCtl>) {
-        if constexpr (IsTaskToolResult<
-                          std::invoke_result_t<FnType&, Ctx&, std::string_view, OpCtl>>::value) {
-            return ToolBodyKind::Task;
-        }
-    }
-    if constexpr (std::is_invocable_v<
-                      FnType&,
-                      Ctx&,
-                      std::string_view,
-                      std::string_view,
-                      std::string_view,
-                      const PluginxxCancelToken*>) {
-        if constexpr (IsAwaitableToolResult<
-                          std::invoke_result_t<
-                              FnType&,
-                              Ctx&,
-                              std::string_view,
-                              std::string_view,
-                              std::string_view,
-                              const PluginxxCancelToken*>>::value) {
-            return ToolBodyKind::Awaitable;
-        }
-    }
-    return ToolBodyKind::Sync;
-}
-
-/// 注册 kit 协程体工具 (`pluginxx::Task<T>` 体)
-///
-/// 体随注册信息一起保存, 每次调用新建一条 Job 保存参数/取消令牌/结果;
-/// 首步由主程序的协程驱动推进, 挂起后不占线程 (等的是 kit 原语的回调)。
-template<typename Ctx, typename TaskFn>
-inline pluginxx::TableOpTicket registerToolWithTaskBody(
-    Ctx&             ctx,
-    const ScopeRef&  agent,
-    std::string_view name,
-    std::string_view depict,
-    std::string_view schema,
-    TaskFn&&         fn,
-    int64_t          default_timeout_ms = 0,
-    int32_t          flags              = 0
-) {
-    auto& storage = ctx.storage_;
-    // 工具描述用插件自己的字面量: 注册时不再回读主程序的提示词表 —— 那是一次表调用,
-    // 插件执行线程上不允许等它 (协作方式: 需要按表里的文本注册就先 co_await
-    // toolPromptOf, 再把取到的描述传进来)
-    std::string finalDepict(depict);
-    storage.push_back(std::move(finalDepict));
-    storage.push_back(std::string(schema));
-
-    struct ToolShim {
-        Ctx*                               ctx = nullptr;
-        ScopeRef                           agent;
-        std::decay_t<TaskFn>               fn;
-        std::shared_ptr<std::atomic<bool>> cancelFlag;
-    };
-
-    auto shim = ctx.storeShim(std::make_unique<ToolShim>(ToolShim{
-        &ctx,
-        agent,
-        std::forward<TaskFn>(fn),
-        std::make_shared<std::atomic<bool>>(false)
-    }));
-
-    struct Job {
-        ToolShim*                          shim;
-        std::shared_ptr<std::atomic<bool>> cancelFlag;
-        void*                              coroAddr = nullptr;
-        /// 拥有 args/session/tool_call_id：业务协程可能挂起后继续读取这些视图
-        /// 因此它们必须比 start 调用活得久。
-        detail::RootRequest request;
-        /// OpCtl 同样必须由 Job 拥有：业务协程以引用接收它，挂起后仍会读取
-        /// （例如 ctl.throw_if_canceled()），放在 start 栈上会悬垂。
-        OpCtl ctl;
-        /// 两段结果: Task 型工具只能给正文, 元数据对主程序恒为空
-        AgentxxPluginToolNotify notify{nullptr, nullptr};
-    };
-
-    AgentxxPluginToolSpec spec{};
-    // 跨边界结构体长度: 0 = 基线布局; 这里按当前布局填写 (见 plugin_spec.h)
-    spec.struct_size = sizeof(AgentxxPluginToolSpec);
-    spec.name        = PluginStringView::from(name.data(), name.size());
-    spec.description = PluginStringView::from(
-        storage[storage.size() - 2].data(),
-        storage[storage.size() - 2].size()
-    );
-    spec.parameters_json    = PluginStringView::from(storage.back().data(), storage.back().size());
-    spec.user_data          = shim;
-    spec.default_timeout_ms = default_timeout_ms;
-    spec.flags              = flags;
-
-    spec.execute_start = [](void*                          user_data,
-                            const PluginxxStringView*      args_json,
-                            const PluginxxStringView*      thread_id,
-                            const PluginxxStringView*      tool_call_id,
-                            const AgentxxPluginToolNotify* notify,
-                            PluginxxString*                error_out) -> void* {
-        auto* shim = static_cast<ToolShim*>(user_data);
-        (void)error_out;
-        // 先建立拥有型 Request，再把视图交给业务代码：协程挂起期间 args/
-        // session/tool_call_id 由 Job 持有，不再指向主程序借用缓冲区。
-        auto request = detail::toolRootRequest(
-            shim && shim->ctx ? shim->ctx->host : nullptr,
-            args_json,
-            thread_id,
-            tool_call_id
-        );
-        CancelRegistry* cancelReg = nullptr;
-        if (shim->ctx) {
-            cancelReg = &shim->ctx->cancelRegistry;
-        }
-        auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-        // 新操作开始先清掉上一次会话取消留下的标记
-        if (cancelReg && !request.scopeKey.empty()) {
-            cancelReg->clearCanceled(request.scopeKey);
-        }
-
-        OpCtl ctl{cancelFlag, cancelReg, request.scopeKey, shim->agent};
-
-        auto* job = new Job{shim, cancelFlag, nullptr, std::move(request), std::move(ctl)};
-
-        auto task = shim->fn(*shim->ctx, job->request.args(), job->ctl);
-        if (!task.handle_) {
-            delete job;
-            return nullptr;
-        }
-
-        auto h        = task.handle_;
-        task.handle_  = nullptr;
-        auto& p       = h.promise();
-        job->notify      = notify ? *notify : AgentxxPluginToolNotify{nullptr, nullptr};
-        p.notify_        = detail::textOnlyNotify(job->notify);
-        p.host_       = shim->ctx->host;
-        p.cancelFlag_ = cancelFlag;
-
-        job->coroAddr = h.address();
-
-        // 根的首步由 host driver 推进 (不在 execute_start 里同步跑插件协程,
-        // 因此不会有 completion 重入, 也不会占住主程序 IO 线程)。
-        detail::startBridgedRoot(shim->ctx->bridge(), p.notify_, h, [job] {
-            delete job;
-        });
-        return job;
-    };
-
-    spec.execute_cancel = [](void* user_data, void* op) {
-        (void)user_data;
-        if (!op) {
-            return;
-        }
-        auto* job = static_cast<Job*>(op);
-        if (job->cancelFlag) {
-            job->cancelFlag->store(true, std::memory_order_release);
-        }
-        if (job->shim && job->shim->ctx && !job->request.scopeKey.empty()) {
-            job->shim->ctx->cancelRegistry.cancel(job->request.scopeKey);
-        }
-        if (job->coroAddr) {
-            auto handle
-                = std::coroutine_handle<detail::PromiseBase<void>>::from_address(job->coroAddr);
-            handle.promise().cancel_outstanding();
-        }
-    };
-
-    return detail::registerToolTicket(ctx, agent, spec);
-}
-
-/// 注册同步体工具 (体在工作池线程上执行, 可以阻塞)
-///
-/// 支持的体签名 (按此顺序匹配第一个成立的):
-/// - `(Ctx&, args, tid, workDir, const PluginxxCancelToken*)`
-/// - `(Ctx&, args, tid, const PluginxxCancelToken*)`
-/// - `(Ctx&, args, tid, workDir)`
-/// - `(Ctx&, args, const PluginxxCancelToken*)`
-/// - `(args, const PluginxxCancelToken*)`
-/// - `(Ctx&, args, tid)`
-/// - `(Ctx&, args)`
-/// - `(args)`
-///
-/// 返回 `std::string` 表示成功, 返回 `ToolResult` 可以表达失败/取消与附件。
-template<typename Ctx, typename BlockFn>
-inline pluginxx::TableOpTicket registerToolWithSyncBody(
-    Ctx&             ctx,
-    const ScopeRef&  agent,
-    std::string_view name,
-    std::string_view depict,
-    std::string_view schema,
-    BlockFn&&        fn,
-    int64_t          default_timeout_ms = 0,
-    int32_t          flags              = 0
-) {
-    auto& storage = ctx.storage_;
-    // 工具描述用插件自己的字面量: 注册时不再回读主程序的提示词表 —— 那是一次表调用,
-    // 插件执行线程上不允许等它 (协作方式: 需要按表里的文本注册就先 co_await
-    // toolPromptOf, 再把取到的描述传进来)
-    std::string finalDepict(depict);
-    storage.push_back(std::move(finalDepict));
-    storage.push_back(std::string(schema));
-
-    struct BlockShim {
-        Ctx*                  ctx = nullptr;
-        ScopeRef              agent;
-        std::decay_t<BlockFn> fn;
-    };
-
-    auto shim = ctx.storeShim(
-        std::make_unique<BlockShim>(BlockShim{&ctx, agent, std::forward<BlockFn>(fn)})
-    );
-
-    struct Job {
-        BlockShim*                 shim = nullptr;
-        AgentxxPluginToolNotify   notify{};
-        std::string                args;
-        std::string                tid;
-        std::string                tcid;
-        std::string                workDir;
-        /// 实现体返回的正文
-        std::string                resultText;
-        /// 实现体返回的元数据 JSON (无元数据为空)
-        std::string                resultMetadata;
-        /// 实现体返回的终态 (返回 `std::string` 时为 `Ok`)
-        ToolStatus                 resultStatus = ToolStatus::Ok;
-        std::string                errorPayload;
-        bool                       isCanceled   = false;
-        PluginxxOperatorHandle*    offloadHandle = nullptr;
-    };
-
-    AgentxxPluginToolSpec spec{};
-    // 跨边界结构体长度: 0 = 基线布局; 这里按当前布局填写 (见 plugin_spec.h)
-    spec.struct_size = sizeof(AgentxxPluginToolSpec);
-    spec.name        = PluginStringView::from(name.data(), name.size());
-    spec.description = PluginStringView::from(
-        storage[storage.size() - 2].data(),
-        storage[storage.size() - 2].size()
-    );
-    spec.parameters_json    = PluginStringView::from(storage.back().data(), storage.back().size());
-    spec.user_data          = shim;
-    spec.default_timeout_ms = default_timeout_ms;
-    spec.flags              = flags;
-
-    spec.execute_start_invoke = [](void*                          user_data,
-                                    const AgentxxPluginToolInvoke* invoke,
-                                    PluginxxString*                error_out) -> void* {
-        auto* shim = static_cast<BlockShim*>(user_data);
-        (void)error_out;
-        const auto* args_json    = invoke ? invoke->args_json : nullptr;
-        const auto* thread_id    = invoke ? invoke->session_id : nullptr;
-        const auto* tool_call_id = invoke ? invoke->tool_call_id : nullptr;
-        const auto* work_dir     = invoke ? invoke->work_dir : nullptr;
-        const auto* notify       = invoke ? invoke->notify : nullptr;
-        std::string tidStr(
-            thread_id && thread_id->data ? thread_id->data : "",
-            thread_id ? static_cast<size_t>(thread_id->size) : 0
-        );
-        // 会话工作目录由主程序随调用带入 (不再为它查表: 那会占住插件执行线程)
-        std::string workDirCache(
-            work_dir && work_dir->data ? work_dir->data : "",
-            work_dir ? static_cast<size_t>(work_dir->size) : 0
-        );
-        if (shim && shim->ctx && !tidStr.empty()) {
-            // 新操作开始先清掉上一次会话取消留下的标记: 该标记只对取消发生时正在跑
-            // 的操作有效, 残留会让该会话之后的所有调用都被当成已取消
-            shim->ctx->cancelRegistry.clearCanceled(tidStr);
-        }
-        auto* job = new Job{
-            .shim   = shim,
-            .notify = notify ? *notify : AgentxxPluginToolNotify{nullptr, nullptr},
-            .args   = std::string(
-                args_json && args_json->data ? args_json->data : "{}",
-                args_json ? static_cast<size_t>(args_json->size) : 0
-            ),
-            .tid  = std::move(tidStr),
-            .tcid = std::string(
-                tool_call_id && tool_call_id->data ? tool_call_id->data : "",
-                tool_call_id ? static_cast<size_t>(tool_call_id->size) : 0
-            ),
-            .workDir       = std::move(workDirCache),
-            .errorPayload  = {},
-            .isCanceled    = false
-        };
-
-        PluginxxString scheduleError{};
-        if (shim && shim->ctx && shim->ctx->iface.scheduler
-            && shim->ctx->iface.scheduler->offload) {
-            job->offloadHandle = shim->ctx->iface.scheduler->offload(
-                shim->ctx->host,
-                [](void* ud, const PluginxxCancelToken* token, PluginxxString* err_out) -> void* {
-                    (void)err_out;
-                    // 插件工具不接受取消令牌时该参数无人读取, 显式置空避免 C4100
-                    (void)token;
-                    auto* j = static_cast<Job*>(ud);
-                    try {
-                        // 实现体返回 `std::string` (成功) 或 `ToolResult` (带状态/附件)
-                        if constexpr (std::is_invocable_v<
-                                          BlockFn,
-                                          Ctx&,
-                                          std::string_view,
-                                          std::string_view,
-                                          std::string_view,
-                                          const PluginxxCancelToken*>) {
-                            detail::toolBodyResultTo(
-                                j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir, token),
-                                j->resultText,
-                                j->resultMetadata,
-                                j->resultStatus
-                            );
-                        } else if constexpr (std::is_invocable_v<
-                                                 BlockFn,
-                                                 Ctx&,
-                                                 std::string_view,
-                                                 std::string_view,
-                                                 const PluginxxCancelToken*>) {
-                            detail::toolBodyResultTo(
-                                j->shim->fn(*j->shim->ctx, j->args, j->tid, token),
-                                j->resultText,
-                                j->resultMetadata,
-                                j->resultStatus
-                            );
-                        } else if constexpr (std::is_invocable_v<
-                                                 BlockFn,
-                                                 Ctx&,
-                                                 std::string_view,
-                                                 std::string_view,
-                                                 std::string_view>) {
-                            detail::toolBodyResultTo(
-                                j->shim->fn(*j->shim->ctx, j->args, j->tid, j->workDir),
-                                j->resultText,
-                                j->resultMetadata,
-                                j->resultStatus
-                            );
-                        } else if constexpr (std::is_invocable_v<
-                                                 BlockFn,
-                                                 Ctx&,
-                                                 std::string_view,
-                                                 const PluginxxCancelToken*>) {
-                            detail::toolBodyResultTo(
-                                j->shim->fn(*j->shim->ctx, j->args, token),
-                                j->resultText,
-                                j->resultMetadata,
-                                j->resultStatus
-                            );
-                        } else if constexpr (std::is_invocable_v<
-                                                 BlockFn,
-                                                 std::string_view,
-                                                 const PluginxxCancelToken*>) {
-                            detail::toolBodyResultTo(
-                                j->shim->fn(j->args, token),
-                                j->resultText,
-                                j->resultMetadata,
-                                j->resultStatus
-                            );
-                        } else if constexpr (std::is_invocable_v<
-                                                 BlockFn,
-                                                 Ctx&,
-                                                 std::string_view,
-                                                 std::string_view>) {
-                            detail::toolBodyResultTo(
-                                j->shim->fn(*j->shim->ctx, j->args, j->tid),
-                                j->resultText,
-                                j->resultMetadata,
-                                j->resultStatus
-                            );
-                        } else if constexpr (std::is_invocable_v<BlockFn, Ctx&, std::string_view>) {
-                            detail::toolBodyResultTo(
-                                j->shim->fn(*j->shim->ctx, j->args),
-                                j->resultText,
-                                j->resultMetadata,
-                                j->resultStatus
-                            );
-                        } else {
-                            detail::toolBodyResultTo(
-                                j->shim->fn(j->args),
-                                j->resultText,
-                                j->resultMetadata,
-                                j->resultStatus
-                            );
-                        }
-                    } catch (const CanceledException& e) {
-                        j->isCanceled   = true;
-                        j->errorPayload = e.what();
-                    } catch (const std::exception& e) {
-                        j->errorPayload = e.what();
-                    } catch (...) {
-                        j->errorPayload = "unknown blocking tool error";
-                    }
-                    return nullptr;
-                },
-                [](void* ud, int32_t status, void* res, const PluginxxStringView* err) {
-                    (void)res;
-                    auto*              j          = static_cast<Job*>(ud);
-                    int32_t            st         = status;
-                    PluginxxStringView resultText = PluginStringView::from(nullptr, 0);
-                    PluginxxStringView metadata   = PluginStringView::from(nullptr, 0);
-
-                    if (!PluginStringView::empty(err)) {
-                        st         = PLUGINXX_OPERATOR_FAILED;
-                        resultText = *err;
-                    } else if (!j->errorPayload.empty()) {
-                        if (j->isCanceled) {
-                            st = PLUGINXX_OPERATOR_CANCELED;
-                        } else {
-                            st = PLUGINXX_OPERATOR_FAILED;
-                        }
-                        resultText = PluginStringView::from(
-                            j->errorPayload.data(),
-                            j->errorPayload.size()
-                        );
-                    } else if (j->resultStatus != ToolStatus::Ok) {
-                        // 实现体返回了 `ToolResult`: 终态与两段照搬 (失败/取消)
-                        st         = detail::toolStatusOfOperator(j->resultStatus);
-                        resultText = PluginStringView::from(
-                            j->resultText.data(),
-                            j->resultText.size()
-                        );
-                        metadata = PluginStringView::from(
-                            j->resultMetadata.data(),
-                            j->resultMetadata.size()
-                        );
-                    } else if (st == PLUGINXX_OPERATOR_CANCELED || j->isCanceled) {
-                        st = PLUGINXX_OPERATOR_CANCELED;
-                    } else {
-                        st         = PLUGINXX_OPERATOR_OK;
-                        resultText = PluginStringView::from(
-                            j->resultText.data(),
-                            j->resultText.size()
-                        );
-                        metadata = PluginStringView::from(
-                            j->resultMetadata.data(),
-                            j->resultMetadata.size()
-                        );
-                    }
-
-                    if (j->notify.done) {
-                        j->notify.done(j->notify.host_ud, st, &resultText, &metadata);
-                    }
-                    // OpCore::onEndpointDone 先在当前调用内线性化
-                    // completionSubmitted_，因此 notify.done 返回后，主程序
-                    // cancel 入口不会再把这个 provider handle 交回插件。
-                    // 这使得 Job 可以在这里直接回收，不依赖第二个异步
-                    // post，也不会留下自引用控制块泄漏。
-                    delete j;
-                },
-                job,
-                &scheduleError
-            );
-            if (!job->offloadHandle) {
-                if (scheduleError.data) {
-                    if (error_out) {
-                        *error_out    = scheduleError;
-                        scheduleError = {};
-                    } else {
-                        PluginString::free(shim->ctx->host, &scheduleError);
-                    }
-                } else if (error_out) {
-                    *error_out = PluginString::fromCstr(
-                        shim->ctx->host,
-                        "tool: scheduler offload rejected"
-                    );
-                }
-                delete job;
-                return nullptr;
-            }
-        } else {
-            if (error_out && shim && shim->ctx) {
-                *error_out = PluginString::fromCstr(
-                    shim->ctx->host,
-                    "tool: scheduler offload unavailable"
-                );
-            }
-            delete job;
-            return nullptr;
-        }
-        return job;
-    };
-
-    spec.execute_cancel = [](void* user_data, void* op) {
-        (void)user_data;
-        if (!op) {
-            return;
-        }
-        auto* job = static_cast<Job*>(op);
-        if (job->offloadHandle && job->shim && job->shim->ctx && job->shim->ctx->iface.cancel
-            && job->shim->ctx->iface.cancel->op_cancel) {
-            job->shim->ctx->iface.cancel->op_cancel(job->offloadHandle);
-        }
-        if (job->shim && job->shim->ctx && !job->tid.empty()) {
-            job->shim->ctx->cancelRegistry.cancel(job->tid);
-        }
-    };
-
-    return detail::registerToolTicket(ctx, agent, spec);
-}
 
 
 /* ==================== 受控轮询实现 (tool 的 asio 协程体走这条) ====================
@@ -4042,10 +2965,10 @@ inline pluginxx::TableOpTicket registerToolWithSyncBody(
  * - 连续有进展超过 `PollOneBridge::kPollBurstMax` 步 → 强制让出一次, 交给主程序;
  * - **没有未完成的 polled 操作时不申请请求、不建定时器** (空闲零开销)。
  *
- * 业务签名与同步体的 5 参数形态一致 (只把返回值换成 `asio::awaitable<std::string>`
+ * 业务签名固定为 5 参数形态 (返回 `asio::awaitable<std::string>`
  * 或 `asio::awaitable<ToolResult>` —— 后者可以返回失败/取消):
  * ```cpp
- * tool(ctx, ref, name, depict, schema,
+ * co_await toolAsync(ctx, ref, name, depict, schema,
  *     [](Ctx& c, std::string_view args, std::string_view tid, std::string_view workDir,
  *        const PluginxxCancelToken* cancel) -> asio::awaitable<std::string> {
  *         ArgReader reader(args);
@@ -4055,11 +2978,10 @@ inline pluginxx::TableOpTicket registerToolWithSyncBody(
  *
  * 约束 (与实现一起遵守):
  * - **不要**在 polled 协程里做重 CPU/阻塞工作: 它运行在主程序 IO 线程上
- *   (目录遍历 / 全文件扫描 / 向量相似度这类继续用同步体);
- * - **不要**在 polled 协程里 `co_await` kit 的 `Task` 型原语 (`sleep`/`call_tool`/
- *   `invoke_cap`): 它们的 awaiter 依赖 kit 自有 promise 接口, 而这里是
- *   `asio::awaitable`。需要等待时用 asio 原生 `steady_timer` (pump 下可用) 或经
- *   `bridge().local_executor()` 投递后续步骤;
+ *   (目录遍历 / 全文件扫描 / 向量相似度这类用 `onWorkerAsync` 包一层, 交给工作池);
+ * - **不要**在 polled 协程里同步等任何东西 (表调用一律 `co_await` 本节后面的
+ *   asio 形态入口); 需要等一段时间时用 asio 原生 `steady_timer` (pump 下可用),
+ *   或经 `bridge().local_executor()` 投递后续步骤;
  */
 
 /// 受控轮询工具的 Job 侧取消查询 (kit 自造的会话级令牌, 不是主程序 token):
@@ -4075,7 +2997,7 @@ inline int32_t PLUGINXX_CALL polledJobTokenIsRequestedAbi(const PluginxxCancelTo
 ///
 /// - 异常映射: `CanceledException` → Canceled, 其它异常 → FAILED;
 /// - 业务体正常返回但期间已请求取消 → Canceled (payload 为空, 与
-///   同步体的取消语义一致);
+///   kit 协程体的取消语义一致);
 /// - 本协程自身不决定"由谁上报/释放 Job": 由 [runPolledPumpJob] 收尾。
 template<typename Job>
 inline asio::awaitable<void> runPolledToolBody(Job* job) {
@@ -4083,11 +3005,16 @@ inline asio::awaitable<void> runPolledToolBody(Job* job) {
         if (job->Canceled()) {
             throw CanceledException("polled tool Canceled before execution");
         }
-        auto bodyResult = co_await job->shim->fn(
+        // 业务体按可调用形状分发 (与 kit 协程体一致): 拿得到 OpCtl / 会话键 / 工作目录
+        // 与取消令牌, 也允许只收其中一部分。
+        OpCtl bodyCtl{job->cancelFlag, &job->shim->ctx->cancelRegistry, job->tid, job->shim->agent};
+        auto  bodyResult = co_await detail::invokeToolBody(
+            job->shim->fn,
             *job->shim->ctx,
             job->args,
             job->tid,
             job->workDir,
+            bodyCtl,
             &job->token
         );
         // 实现体返回 `std::string` (成功) 或 `ToolResult` (带状态/附件)
@@ -4102,6 +3029,17 @@ inline asio::awaitable<void> runPolledToolBody(Job* job) {
     } catch (const CanceledException& e) {
         job->status  = PLUGINXX_OPERATOR_CANCELED;
         job->payload = e.what();
+    } catch (const boost::system::system_error& e) {
+        // 协程被取消时, 业务体里正在等的 asio 操作会以 `operation_aborted` 结束。
+        // 这是取消而不是失败 (业务体不捕获也能得到 CANCELED 终态)。
+        if (e.code() == asio::error::operation_aborted) {
+            job->status = PLUGINXX_OPERATOR_CANCELED;
+            job->payload.clear();
+            job->resultMetadata.clear();
+        } else {
+            job->status  = PLUGINXX_OPERATOR_FAILED;
+            job->payload = e.what();
+        }
     } catch (const std::exception& e) {
         job->status  = PLUGINXX_OPERATOR_FAILED;
         job->payload = e.what();
@@ -4120,9 +3058,18 @@ inline asio::awaitable<void> runPolledToolBody(Job* job) {
 /// 上报终态并回收 Job (泵路径下 Job 由本协程回收)。
 ///
 /// 停止/关闭路径 (桥 `stop` → [PollOneBridge::failAllPolledRoots]) 可能先一步
-/// 认领完成权并回收 Job: 那时 `claimFinish()` 返回 false, 本协程只做退出。
+/// 认领完成权: 那时 `claimFinish()` 返回 false, 本协程只做退出。
+///
+/// Job 与取消信号**按值进帧**: 两者都可能被清理路径提前释放, 而帧恢复后还要读它们
+/// (以及 asio 结算内层等待时要清一次取消槽), 只存指针就是 use-after-free。
 template<typename Job>
-inline asio::awaitable<void> runPolledPumpJob(Job* job) {
+inline asio::awaitable<void> runPolledPumpJob(
+    std::shared_ptr<Job>                       jobKeep,
+    std::shared_ptr<asio::cancellation_signal> signal
+) {
+    // `signal` 只为在帧里持一份: 协程的取消槽指向该信号内部, 见上面的说明。
+    (void)signal;
+    Job* job = jobKeep.get();
     co_await runPolledToolBody(job);
     // 先取本地副本: 收尾 (cleanup) 会释放 Job 本身。
     auto          root    = job->root;
@@ -4145,13 +3092,13 @@ inline asio::awaitable<void> runPolledPumpJob(Job* job) {
     root->runCleanup();
 }
 
-/// 注册 asio 协程体工具 (`asio::awaitable<T>` 体)
+/// 注册 asio 协程体工具 (`asio::awaitable<T>` 体) —— 所有工具都走这一条
 ///
-/// 只给必须等内核就绪对象的工具用 (子进程管道 / 异步文件 IO): 这类等待没有
+/// 业务体等的是内核就绪对象时 (子进程管道 / 异步文件 IO / 本地 timer): 这类等待没有
 /// 主程序可见的唤醒源, 由桥以受控轮询推进 (有操作在跑才申请驱动、空闲零开销)。
-/// 其余场景用同步体或 kit 协程体。
+/// 纯阻塞工作 (文件读写 / 目录扫描 / 子进程等) 写 `onWorkerAsync` 包装的体, 交给工作池。
 template<typename Ctx, typename PolledFn>
-inline pluginxx::TableOpTicket registerToolWithAwaitableBody(
+inline AgentxxPluginToolSpec buildToolSpecWithAwaitableBody(
     Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view name,
@@ -4163,16 +3110,17 @@ inline pluginxx::TableOpTicket registerToolWithAwaitableBody(
 ) {
     using PolledFnType = std::decay_t<PolledFn>;
     static_assert(
-        std::is_invocable_v<
-            PolledFnType,
-            Ctx&,
-            std::string_view,
-            std::string_view,
-            std::string_view,
-            const PluginxxCancelToken*>,
-        "asio 协程体工具的签名必须是 (Ctx&, std::string_view args, std::string_view tid, "
-        "std::string_view workDir, const PluginxxCancelToken*) -> "
-        "asio::awaitable<std::string or ToolResult>"
+        detail::IsAwaitableToolResult<std::decay_t<decltype(detail::invokeToolBody(
+            std::declval<PolledFnType&>(),
+            std::declval<Ctx&>(),
+            std::string_view{},
+            std::string_view{},
+            std::string_view{},
+            std::declval<OpCtl&>(),
+            std::declval<const PluginxxCancelToken*>()
+        ))>>::value,
+        "asio 协程体工具必须返回 asio::awaitable<std::string> 或 "
+        "asio::awaitable<ToolResult> (阻塞工作写 onWorkerAsync)"
     );
 
     auto& storage = ctx.storage_;
@@ -4202,6 +3150,9 @@ inline pluginxx::TableOpTicket registerToolWithAwaitableBody(
         std::shared_ptr<detail::PolledRoot> root;
         /// 两段结果的通知器 + 元数据 (根只能传单段, 两段在收尾时拼成帧)
         AgentxxPluginToolNotify notify{nullptr, nullptr};
+        /// 取消信号: 主程序取消 (execute_cancel) 时触发, 把正在等的表调用撤掉
+        std::shared_ptr<asio::cancellation_signal> cancelSignal
+            = std::make_shared<asio::cancellation_signal>();
         /// 业务体返回的元数据 JSON (无元数据为空)
         std::string            resultMetadata;
         detail::RootRequest                 request;
@@ -4272,7 +3223,11 @@ inline pluginxx::TableOpTicket registerToolWithAwaitableBody(
             c.cancelRegistry.clearCanceled(request.scopeKey);
         }
 
-        auto* job        = new Job();
+        // Job 由协程帧与本次调用共同持有: 清理路径 (停止/关闭) 可能在业务协程仍挂起时
+        // 执行 cleanup, 之后协程恢复还要读 Job 里的结果, 直接 delete 就是
+        // use-after-free。这里改为共享持有, 最后一个持有者释放。
+        auto  jobKeep    = std::shared_ptr<Job>(new Job());
+        auto* job        = jobKeep.get();
         job->shim        = s;
         job->notify      = notify ? *notify : AgentxxPluginToolNotify{nullptr, nullptr};
         job->request     = std::move(request);
@@ -4288,11 +3243,9 @@ inline pluginxx::TableOpTicket registerToolWithAwaitableBody(
         job->token      = PluginxxCancelToken{kTokenIsRequested, job};
         {
             // 补充回收: 停止/关闭路径 (failAllPolledRoots) 会执行它; 正常完成时
-            // 由各自的上报方先执行, 这里保持幂等。
-            auto* jobPtr = job;
-            job->root->setCleanup([jobPtr] {
-                delete jobPtr;
-            });
+            // 由各自的上报方先执行, 这里保持幂等。Job 的真正释放交给持有者
+            // (协程帧 / [execute_start_invoke] 的局部变量), 这里只做标记。
+            job->root->setCleanup([] {});
         }
 
         auto* bridge = &c.bridge();
@@ -4301,7 +3254,12 @@ inline pluginxx::TableOpTicket registerToolWithAwaitableBody(
         try {
             // 业务协程跑在**桥的本地执行器**上: 它的 socket/管道/文件等待因此
             // 注册到桥的 reactor, 由受控轮询推进 (首步恒异步, 不在本调用内执行)。
-            asio::co_spawn(bridge->local_executor(), detail::runPolledPumpJob(job), asio::detached);
+            asio::co_spawn(
+                bridge->local_executor(),
+                detail::runPolledPumpJob(jobKeep, job->cancelSignal),
+                // 取消信号接到业务协程的取消槽: 业务体里正在等的表调用被 op_cancel 掉
+                asio::bind_cancellation_slot(job->cancelSignal->slot(), asio::detached)
+            );
         } catch (...) {
             // 首步都无法排队: 按**拒绝**处理 (未产生任何主程序可见副作用),
             // 回收 Job 并返回 NULL + error。
@@ -4334,6 +3292,10 @@ inline pluginxx::TableOpTicket registerToolWithAwaitableBody(
             if (!job->tid.empty()) {
                 job->shim->ctx->cancelRegistry.cancel(job->tid);
             }
+            // 把业务协程正在等的表调用撤掉 (否则 60s 计时器这类等待会拖住关闭)
+            if (job->cancelSignal) {
+                job->cancelSignal->emit(asio::cancellation_type::terminal);
+            }
             // 取消尚未触发的退避定时器, 让插件立刻得到一次驱动 (不必等满一个退避间隔),
             // 从而尽快在阶段边界看到取消并结束根。
             if (job->bridge) {
@@ -4342,32 +3304,100 @@ inline pluginxx::TableOpTicket registerToolWithAwaitableBody(
         }
     };
 
-    return detail::registerToolTicket(ctx, agent, spec);
+    return spec;
 }
 
-} // namespace detail
+/// 注册 asio 协程体工具 (asio 形态: 注册请求本身也用 `co_await` 等)
+template<typename Ctx, typename AwaitFn>
+inline asio::awaitable<pluginxx::TableOpResult> registerToolWithAwaitableBodyAsync(
+    Ctx&             ctx,
+    const ScopeRef&  agent,
+    std::string_view name,
+    std::string_view depict,
+    std::string_view schema,
+    AwaitFn&&        fn,
+    int64_t          default_timeout_ms = 0,
+    int32_t          flags              = 0
+) {
+    co_return co_await detail::registerToolAwaitable(
+        ctx,
+        agent,
+        detail::buildToolSpecWithAwaitableBody(
+            ctx,
+            agent,
+            name,
+            depict,
+            schema,
+            std::forward<AwaitFn>(fn),
+            default_timeout_ms,
+            flags
+        )
+    );
+}
 
-/// 注册插件工具 (**唯一入口**: 按实现体的形态选跑法)
+
+} // namespace detail
+/// 把阻塞函数包成 asio 协程体 (**阻塞工作的唯一写法**)
 ///
-/// 三种写法都对同一件事 —— "调用时跑一段插件代码, 把结果交回主程序":
-/// - `pluginxx::Task<T>` 体: `(Ctx&, args, OpCtl)`, 协程里 `co_await` kit 原语;
-///   阻塞段写 `co_await pluginxx::offload(ex, ...)`, 延迟写 `co_await pluginxx::sleep(c, ms)`;
-/// - `asio::awaitable<T>` 体: `(Ctx&, args, tid, workDir, 取消令牌)`, 只给必须等
-///   内核就绪对象的工具用 (子进程管道 / 异步文件 IO);
-/// - 同步体: 上面 8 种签名之一 (见 [detail::registerToolWithSyncBody]),
-///   在工作池线程上跑, 可以直接阻塞。
+/// 工具体只有协程这一种执行模型。需要同步阻塞的活 (文件 IO / 子进程 / 目录扫描)
+/// 传给本函数, 它把调用包进 `co_await offloadAsync(...)`: 工作体在主程序工作池
+/// 线程上跑, 插件执行线程与 asio 协程都不被占住。
 ///
-/// `T` 可以是 `std::string` / `std::string_view` / `ToolResult`: 直接返回字符串
-/// 等于成功, 要表达失败或带附件时返回 `ToolResult`。
+/// - 可调用形状与 [toolAsync] 支持的一致 (`(Ctx&, args, tid, workDir, 取消令牌)` 等);
+/// - 工作体里**不要**改只有插件执行线程能改的实例状态 (它在工作池线程上跑);
+/// - 工作体里不要做表调用 (阻塞体没有协程帧): 要用表结果就把工作体写成协程体;
+/// - 取消: 外层取消令牌原样交给工作体 (`pluginxx_cancel_is_requested`)。
 ///
-/// 线程: 三种体都不在插件执行线程上跑 (协程体挂起后不占线程, 同步体在工作池上),
-/// 因此插件执行线程上的派发、其它插件的回调不会被一次工具调用挡住。
+/// ```cpp
+/// co_await toolAsync(ctx, ref, name, depict, schema,
+///     agentxx::plugin::onWorkerAsync([](FsPluginCtx& c, std::string_view args) {
+///         return doBlockingWork(args);   // 原样写阻塞代码
+///     }));
+/// ```
+template<typename BlockFn>
+auto onWorkerAsync(BlockFn&& fn) {
+    using FnType = std::decay_t<BlockFn>;
+    return [fn = FnType(std::forward<BlockFn>(fn))](
+               auto&                      c,
+               std::string_view           args,
+               std::string_view           tid,
+               std::string_view           workDir,
+               const PluginxxCancelToken* token
+           ) -> asio::awaitable<
+               std::decay_t<decltype(detail::invokeToolBody(
+                   std::declval<FnType&>(),
+                   std::declval<decltype(c)&>(),
+                   std::string_view{},
+                   std::string_view{},
+                   std::string_view{},
+                   std::declval<OpCtl&>(),
+                   std::declval<const PluginxxCancelToken*>()
+               ))>> {
+        using Result = std::decay_t<decltype(detail::invokeToolBody(
+            fn,
+            c,
+            args,
+            tid,
+            workDir,
+            std::declval<OpCtl&>(),
+            token
+        ))>;
+        co_return co_await offloadAsync(c, [&](const PluginxxCancelToken* t) -> Result {
+            // 阻塞形状的体不拿 OpCtl (那是协程体的取消入口), 这里给一个空对象占位
+            OpCtl ctl{};
+            return detail::invokeToolBody(fn, c, args, tid, workDir, ctl, token ? token : t);
+        });
+    };
+}
+
+
+/// 注册一个工具 (**唯一入口**: 注册请求与等待都用 asio 异步操作)
 ///
-/// - `default_timeout_ms` 主程序侧单次调用超时 (0 = 用配置默认值)
-/// - `flags` 预留位 (`AGENTXX_PLUGIN_TOOL_FLAG_*`)
-/// - `return` 注册 ticket (调用即提交, `co_await` 后看 `.ok()`)
+/// 工具体只接受 `asio::awaitable<T>` (T 为 `std::string` / `std::string_view` /
+/// `ToolResult`); 阻塞工作写 `onWorkerAsync(...)` 包一层。结果是
+/// `pluginxx::TableOpResult` (业务失败不抛异常)。
 template<typename Ctx, typename ToolFn>
-inline pluginxx::TableOpTicket tool(
+inline asio::awaitable<pluginxx::TableOpResult> toolAsync(
     Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view name,
@@ -4377,49 +3407,23 @@ inline pluginxx::TableOpTicket tool(
     int64_t          default_timeout_ms = 0,
     int32_t          flags              = 0
 ) {
-    constexpr auto kind = detail::toolBodyKindOf<ToolFn, Ctx>();
-    if constexpr (kind == detail::ToolBodyKind::Task) {
-        return detail::registerToolWithTaskBody(
-            ctx,
-            agent,
-            name,
-            depict,
-            schema,
-            std::forward<ToolFn>(fn),
-            default_timeout_ms,
-            flags
-        );
-    } else if constexpr (kind == detail::ToolBodyKind::Awaitable) {
-        return detail::registerToolWithAwaitableBody(
-            ctx,
-            agent,
-            name,
-            depict,
-            schema,
-            std::forward<ToolFn>(fn),
-            default_timeout_ms,
-            flags
-        );
-    } else {
-        return detail::registerToolWithSyncBody(
-            ctx,
-            agent,
-            name,
-            depict,
-            schema,
-            std::forward<ToolFn>(fn),
-            default_timeout_ms,
-            flags
-        );
-    }
+    co_return co_await detail::registerToolWithAwaitableBodyAsync(
+        ctx,
+        agent,
+        name,
+        depict,
+        schema,
+        std::forward<ToolFn>(fn),
+        default_timeout_ms,
+        flags
+    );
 }
-
 
 namespace detail {
 
 /// 按可调用性选择图节点业务签名：fn(ctx, request, ctl) / fn(ctx, request)。
 /// 返回类型原样转发：快同步节点返回 `std::string`（节点输出 JSON），
-/// 锚定协程节点返回 `Task<T>`（同上，result 为节点输出 JSON）。
+/// 锚定协程节点返回 `asio::awaitable<T>`（同上，result 为节点输出 JSON）。
 template<typename NodeFn, typename Ctx>
 inline decltype(auto) invokeGraphNode(NodeFn& fn, Ctx& ctx, const RootRequest& req, OpCtl ctl) {
     if constexpr (std::is_invocable_v<NodeFn, Ctx&, const RootRequest&, OpCtl>) {
@@ -4446,45 +3450,31 @@ inline std::string_view nodeStateOf(const RootRequest& req) noexcept {
     return req.extra(detail::kGraphNodeStateKey);
 }
 
-/// 注册插件自定义图节点类型（统一 root adapter）。
-///
-/// 与 tool/point/capability 使用同一套生命周期与完成协议：
-/// - 输入（node/config/state/thread_id）由 [RootRequest] 拥有，跨挂起点有效；
-/// - 返回 `std::string`：快同步节点，调用返回即完成（异常 → FAILED）；
-/// - 返回 `Task<std::string>`：锚定协程节点，主程序获得可取消的 provider 句柄，
-///   完成通知在协程真正结束后 exactly-once 发出；
-/// - `run_cancel` 置取消标志并取消嵌套 awaiter。
-///
-/// `return`: 表调用凭据 ([pluginxx::tableOp]): `co_await` 它才拿"是否受理 + 登记成败"
-/// (类型名冲突或主程序不支持都体现在结果里, 不会抛异常)
+namespace detail {
+
+/// 图节点实现的上下文绑定 (跨边界 user_data)
 template<typename Ctx, typename NodeFn>
-inline pluginxx::TableOpTicket graph_node(
+struct GraphNodeShim {
+    Ctx*                 ctx = nullptr;
+    ScopeRef             agent;
+    std::decay_t<NodeFn> fn;
+};
+
+/// 造一个图节点类型登记的跨边界 spec (`run_start` / `run_cancel` 已绑定)
+///
+/// 业务体两种: 同步字符串 (快节点)、`asio::awaitable<T>`。
+template<typename Ctx, typename NodeFn>
+inline AgentxxPluginGraphNodeTypeSpec buildGraphNodeSpec(
     Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view type,
     std::string_view configSchema,
     NodeFn&&         fn
 ) {
-    if (!ctx.iface.graph || !ctx.iface.graph->register_node_type) {
-        return pluginxx::TableOpTicket{};
-    }
-
-    struct NodeShim {
-        Ctx*                 ctx = nullptr;
-        ScopeRef             agent;
-        std::decay_t<NodeFn> fn;
-    };
-
-    /// 异步节点的 provider 句柄：拥有输入 Request，由 promise.opCleanup_ 回收。
-    struct NodeJob {
-        NodeShim*                          shim = nullptr;
-        std::shared_ptr<std::atomic<bool>> cancelFlag;
-        void*                              coroAddr = nullptr;
-        detail::RootRequest                request;
-    };
+    using Shim = GraphNodeShim<Ctx, NodeFn>;
 
     auto shim = ctx.storeShim(
-        std::make_unique<NodeShim>(NodeShim{&ctx, agent, std::forward<NodeFn>(fn)})
+        std::make_unique<Shim>(Shim{&ctx, agent, std::forward<NodeFn>(fn)})
     );
 
     AgentxxPluginGraphNodeTypeSpec spec{};
@@ -4500,66 +3490,90 @@ inline pluginxx::TableOpTicket graph_node(
                         const PluginxxStringView*     thread_id,
                         const PluginxxOperatorNotify* notify,
                         PluginxxString*               error_out) -> void* {
-        auto* shim = static_cast<NodeShim*>(user_data);
+        auto* s = static_cast<Shim*>(user_data);
         (void)error_out;
-        if (!shim || !shim->ctx) {
-            detail::CompletionGuard guard(notify);
+        if (!s || !s->ctx) {
+            CompletionGuard guard(notify);
             guard.failed("graph node context released");
             return nullptr;
         }
-        // 输入纳入拥有型 Request：快同步节点在调用期间有效，异步节点由 Job
+        // 输入纳入拥有型 Request: 快同步节点在调用期间有效, 异步节点由根
         // 持有到协程真正结束。
-        auto request = detail::graphNodeRootRequest(
-            shim->ctx->host,
+        auto request = graphNodeRootRequest(
+            s->ctx->host,
             node_name,
             config_json,
             state_json,
             thread_id
         );
         auto  cancelFlag = std::make_shared<std::atomic<bool>>(false);
-        OpCtl ctl{cancelFlag, &shim->ctx->cancelRegistry, request.scopeKey, shim->agent};
+        OpCtl ctl{cancelFlag, &s->ctx->cancelRegistry, request.scopeKey, s->agent};
 
-        using NodeRet = decltype(detail::invokeGraphNode(shim->fn, *shim->ctx, request, ctl));
+        using NodeRet = decltype(invokeGraphNode(s->fn, *s->ctx, request, ctl));
         if constexpr (std::is_void_v<NodeRet> || std::is_convertible_v<NodeRet, std::string_view>) {
             /// 快同步节点：调用返回即完成；异常统一映射为终态。
-            detail::CompletionGuard guard(notify);
+            CompletionGuard guard(notify);
             try {
                 if constexpr (std::is_void_v<NodeRet>) {
-                    detail::invokeGraphNode(shim->fn, *shim->ctx, request, std::move(ctl));
+                    invokeGraphNode(s->fn, *s->ctx, request, std::move(ctl));
                     guard.ok();
                 } else {
-                    guard.ok(detail::invokeGraphNode(shim->fn, *shim->ctx, request, std::move(ctl))
-                    );
+                    guard.ok(invokeGraphNode(s->fn, *s->ctx, request, std::move(ctl)));
                 }
             } catch (...) {
                 guard.fromCurrentException();
             }
             return nullptr;
+        } else if constexpr (pluginxx::detail::IsPluginAwaitable<NodeRet>::value) {
+            /// asio 协程节点: 起一条 provider 根; 入参与 OpCtl 由根保活。
+            struct Hold {
+                RootRequest req;
+                OpCtl       ctl;
+            };
+            auto hold  = std::make_shared<Hold>();
+            hold->req  = std::move(request);
+            hold->ctl  = std::move(ctl);
+            auto pr    = pluginxx::detail::startProviderRoot(
+                s->ctx->bridge(),
+                notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr},
+                [s, hold](std::shared_ptr<pluginxx::detail::ProviderRoot> root) -> NodeRet {
+                    root->keepAlive = hold;
+                    return invokeGraphNode(s->fn, *s->ctx, hold->req, hold->ctl);
+                },
+                [](auto&& value) {
+                    using ValueT = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_void_v<ValueT>) {
+                        return std::make_pair(int32_t{PLUGINXX_OPERATOR_OK}, std::string{});
+                    } else {
+                        return std::make_pair(
+                            int32_t{PLUGINXX_OPERATOR_OK},
+                            std::string{value}
+                        );
+                    }
+                },
+                [](std::exception_ptr ep) {
+                    std::string why;
+                    try {
+                        std::rethrow_exception(ep);
+                    } catch (const std::exception& e) {
+                        why = e.what();
+                    } catch (...) {
+                        why = "graph node threw a non-standard exception";
+                    }
+                    return std::make_pair(int32_t{PLUGINXX_OPERATOR_FAILED}, why);
+                }
+            );
+            return pr.get();
         } else {
-            /// Task<T> 节点：由 promise 在协程结束后完成通知，
-            /// 返回 Job 作为主程序可取消的 provider 句柄。
-            auto* job = new NodeJob{shim, std::move(cancelFlag), nullptr, std::move(request)};
-            auto task = detail::invokeGraphNode(shim->fn, *shim->ctx, job->request, std::move(ctl));
-            if (!task.handle_) {
-                delete job;
-                detail::CompletionGuard guard(notify);
-                guard.failed("graph node returned an empty task");
-                return nullptr;
-            }
-            auto h        = task.handle_;
-            task.handle_  = nullptr;
-            auto& p       = h.promise();
-            p.notify_     = notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr};
-            p.host_       = job->request.host;
-            p.cancelFlag_ = job->cancelFlag;
-            job->coroAddr = h.address();
-
-            // 根的首步由 host driver 推进 (不在 start 里同步跑插件协程,
-            // 因此没有 completion 重入, 也不占住主程序 IO 线程)。
-            detail::startBridgedRoot(shim->ctx->bridge(), p.notify_, h, [job] {
-                delete job;
-            });
-            return job;
+            /// 返回类型对不上: 同步节点给 `std::string`, 异步节点给 `asio::awaitable`
+            static_assert(
+                pluginxx::detail::IsPluginAwaitable<NodeRet>::value,
+                "graph_node(): 节点体必须返回 std::string (同步) 或 "
+                "asio::awaitable<std::string> (异步)"
+            );
+            CompletionGuard guard(notify);
+            guard.failed("graph node returned an unsupported type");
+            return nullptr;
         }
     };
 
@@ -4568,21 +3582,40 @@ inline pluginxx::TableOpTicket graph_node(
         if (!op) {
             return;
         }
-        auto* job = static_cast<NodeJob*>(op);
-        if (job->cancelFlag) {
-            job->cancelFlag->store(true, std::memory_order_release);
-        }
-        if (job->coroAddr) {
-            auto handle
-                = std::coroutine_handle<detail::PromiseBase<void>>::from_address(job->coroAddr);
-            handle.promise().cancel_outstanding();
-        }
+        static_cast<pluginxx::detail::CancelableProvider*>(op)->requestCancel();
     };
+    return spec;
+}
 
-    auto ref = agent;
-    // 表成员是异步契约: 提交即开始; 主程序在 IO 线程上内联执行, 返回时已登记
-    return pluginxx::tableOp(
+} // namespace detail
+
+/// 注册插件自定义图节点类型 (**唯一入口**: 登记请求与等待都用 asio 异步操作)
+///
+/// 节点体返回 `std::string` (同步) 或 `asio::awaitable<std::string>` (异步)。
+template<typename Ctx, typename NodeFn>
+inline asio::awaitable<pluginxx::TableOpResult> graphNodeAsync(
+    Ctx&             ctx,
+    const ScopeRef&  agent,
+    std::string_view type,
+    std::string_view configSchema,
+    NodeFn&&         fn
+) {
+    if (!ctx.iface.graph || !ctx.iface.graph->register_node_type) {
+        pluginxx::TableOpResult r;
+        r.startError = "plugin graph iface unavailable";
+        co_return r;
+    }
+    const auto spec = detail::buildGraphNodeSpec(
         ctx,
+        agent,
+        type,
+        configSchema,
+        std::forward<NodeFn>(fn)
+    );
+    auto ref = agent;
+    co_return co_await pluginxx::asyncTableOp(
+        ctx,
+        co_await asio::this_coro::executor,
         [&ctx, ref, spec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
             -> PluginxxOperatorHandle* {
             auto r = ref.raw();
@@ -4590,6 +3623,7 @@ inline pluginxx::TableOpTicket graph_node(
         }
     );
 }
+
 /* ==================== 工具权限声明 ====================
  *
  * 工具权限限制由工具来源方 (插件) 在注册工具后声明: 声明"哪些参数是受约束
@@ -4598,8 +3632,8 @@ inline pluginxx::TableOpTicket graph_node(
  * 不参与判定。
  *
  * 典型用法 (文件系统类工具):
- *     tool(ctx, ref, "my_read", depict, schema, fn);
- *     registerReadPathPermission(ctx, "my_read", "path");
+ *     co_await toolAsync(ctx, ref, "my_read", depict, schema, fn);
+ *     co_await registerReadPathPermissionAsync(ctx, ref, "my_read", "path");
  *
  * 权限声明属于附加能力: 主程序未加载权限中间件时返回非 0, 插件可忽略 (工具
  * 照常可用, 只是不参与权限判定)。
@@ -4629,17 +3663,17 @@ struct ToolPermissionSpec {
     std::string_view category{}; ///< 权限分类文本 (空 = 按作用域生成)
 };
 
-/// 声明工具权限 (**协程形态**: 调用即提交, `co_await` 后看 `.ok()`)
-///
-/// 工具注册后调用; 主程序未加载权限中间件时 ticket 是"未受理"(工具照常可用)。
+/* ---- 工具权限声明 (asio 形态) ---- */
+
+/// 声明一条工具权限 (asio 形态)
 template<typename Ctx>
-inline pluginxx::TableOpTicket registerToolPermission(
-    const Ctx&                ctx,
+inline asio::awaitable<pluginxx::TableOpResult> registerToolPermissionAsync(
+    Ctx&                      ctx,
     const ScopeRef&           agent,
     const ToolPermissionSpec& spec
 ) {
     if (spec.toolName.empty()) {
-        return {};
+        co_return detail::tableOpUnsupported();
     }
     AgentxxPluginToolPermissionSpec abiSpec{};
     abiSpec.tool_name   = PluginStringView::from(spec.toolName);
@@ -4648,7 +3682,7 @@ inline pluginxx::TableOpTicket registerToolPermission(
     abiSpec.target_arg  = PluginStringView::from(spec.targetArg);
     abiSpec.struct_size = sizeof(AgentxxPluginToolPermissionSpec);
     abiSpec.category    = PluginStringView::from(spec.category);
-    return pluginxx::tableOp(
+    co_return co_await detail::tableOpAwaitAsync(
         ctx,
         [&ctx, agent, abiSpec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
             -> PluginxxOperatorHandle* {
@@ -4669,13 +3703,10 @@ inline pluginxx::TableOpTicket registerToolPermission(
     );
 }
 
-/// 便捷: 声明"路径参数 + 读作用域" (**协程形态**; 读取类工具, 目标参数值为路径)
-/// - 参数值为字符串数组时自动逐项判定 (如 `file_patterns`), 无需额外设置
-/// - 模式/前缀类参数 (glob 表达式) 建议配合 checkPathDecisions/filterPathPermissions
-///   在工具内对展开出的实际路径逐项复核 (见"路径权限查询"一节)
+/// 声明"路径参数 + 读作用域" (asio 形态)
 template<typename Ctx>
-inline pluginxx::TableOpTicket registerReadPathPermission(
-    const Ctx&       ctx,
+inline asio::awaitable<pluginxx::TableOpResult> registerReadPathPermissionAsync(
+    Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view toolName,
     std::string_view pathArg
@@ -4685,13 +3716,13 @@ inline pluginxx::TableOpTicket registerReadPathPermission(
     spec.scope     = PermissionScope::Read;
     spec.target    = PermissionTarget::Path;
     spec.targetArg = pathArg;
-    return registerToolPermission(ctx, agent, spec);
+    co_return co_await registerToolPermissionAsync(ctx, agent, spec);
 }
 
-/// 便捷: 声明"路径参数 + 写作用域" (**协程形态**; 写入/编辑类工具, 目标参数值为路径)
+/// 声明"路径参数 + 写作用域" (asio 形态)
 template<typename Ctx>
-inline pluginxx::TableOpTicket registerWritePathPermission(
-    const Ctx&       ctx,
+inline asio::awaitable<pluginxx::TableOpResult> registerWritePathPermissionAsync(
+    Ctx&             ctx,
     const ScopeRef&  agent,
     std::string_view toolName,
     std::string_view pathArg
@@ -4701,8 +3732,9 @@ inline pluginxx::TableOpTicket registerWritePathPermission(
     spec.scope     = PermissionScope::Write;
     spec.target    = PermissionTarget::Path;
     spec.targetArg = pathArg;
-    return registerToolPermission(ctx, agent, spec);
+    co_return co_await registerToolPermissionAsync(ctx, agent, spec);
 }
+
 
 /// 撤销工具权限声明 (工具注销/插件禁用卸载时由主程序自动撤销, 一般无需手动调用)
 template<typename Ctx>
@@ -4737,52 +3769,59 @@ enum class PathDecision : int32_t {
     Ask   = AGENTXX_PLUGIN_PERMISSION_DECISION_ASK,   ///< 未获批准 (本查询不询问)
 };
 
-/// 批量查询路径权限 (三态; 不发起询问/不产生中断)
-/// - 入参 [paths] 建议为绝对路径 (相对路径按会话工作目录解析)
-/// - `return` 与 [paths] 等长的判定数组; 主程序不支持或调用失败时返回**空数组**
-///   (调用方应跳过过滤按原行为处理, 而不是把路径当成拒绝)
-inline std::vector<PathDecision> checkPathDecisions(
-    const PluginxxHost*                 host,
-    const AgentxxPluginPermissionIface* iface,
-    const PluginxxScopeRef*             agent,
-    PermissionScope                     scope,
-    std::string_view                    sessionId,
-    const std::vector<std::string>&     paths
+/* ---- 路径权限查询的协程形态 (asio) ----
+ *
+ * 阻塞体不能做表调用 (表调用只有协程形态), 所以模式类工具与写复核都要写成
+ * `asio::awaitable` 体: 阻塞的枚举/文件操作经 `offloadAsync` 交给工作池,
+ * 权限查询本身在协程里 `co_await` 下面这两个入口。
+ */
+
+/// 批量查询路径权限 (**协程形态**; 不发起询问/不产生中断; 失败返回空数组)
+template<typename Ctx>
+inline asio::awaitable<std::vector<PathDecision>> checkPathDecisionsAsync(
+    Ctx&                     ctx,
+    ScopeRef                 agent,
+    PermissionScope          scope,
+    std::string              sessionId,
+    std::vector<std::string> paths
 ) {
     // 单次批量上限与主程序一致 (见 plugin_manager_vtable.cpp); 超出由调用方分批
     constexpr size_t kMaxBatch = 16384;
-    if (!host || !iface || !iface->check_paths || paths.empty() || paths.size() > kMaxBatch) {
-        return {};
+    if (!ctx.host || !ctx.iface.permission || !ctx.iface.permission->check_paths || paths.empty()
+        || paths.size() > kMaxBatch) {
+        co_return std::vector<PathDecision>{};
     }
-    std::vector<PluginxxStringView> views;
-    views.reserve(paths.size());
-    for (const auto& path : paths) {
-        views.push_back(PluginStringView::from(path));
-    }
-    AgentxxPluginPermissionPathQuery query{};
-    query.struct_size = sizeof(AgentxxPluginPermissionPathQuery);
-    query.scope       = static_cast<int32_t>(scope);
-    query.path_count  = static_cast<int32_t>(views.size());
-    query.session_id  = PluginStringView::from(sessionId);
-    query.paths       = views.data();
-
-    std::vector<PathDecision> out;
-    // 表成员是异步契约: 这里没有实例上下文可查 cancel/scheduler, 直接等完成
-    // (调用方本来就在主程序 IO 线程时是内联完成, 不会真等)
-    auto res = pluginxx::tableOpSyncWait(
-        host,
-        nullptr,
-        nullptr,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface->check_paths(host, agent, &query, cb, ud, err);
+    const size_t expected = paths.size();
+    auto         r        = co_await tableOpAsync(
+        ctx,
+        [&ctx,
+         agent     = std::move(agent),
+         scope,
+         sessionId = std::move(sessionId),
+         paths     = std::move(paths)](PluginxxOperatorCallback cb, void* ud, PluginxxString* err)
+            -> PluginxxOperatorHandle* {
+            auto                            ref = agent.raw();
+            std::vector<PluginxxStringView> views;
+            views.reserve(paths.size());
+            for (const auto& path : paths) {
+                views.push_back(PluginStringView::from(path));
+            }
+            AgentxxPluginPermissionPathQuery query{};
+            query.struct_size = sizeof(AgentxxPluginPermissionPathQuery);
+            query.scope       = static_cast<int32_t>(scope);
+            query.path_count  = static_cast<int32_t>(views.size());
+            query.session_id  = PluginStringView::from(sessionId);
+            query.paths       = views.data();
+            return ctx.iface.permission->check_paths(ctx.host, &ref, &query, cb, ud, err);
         }
     );
-    if (!res.ok()) {
-        return out;
+    std::vector<PathDecision> out;
+    if (!r.ok()) {
+        co_return out;
     }
     // 完成时 payload 是判定数组的 JSON 文本 (与入参 paths 等长、顺序一致)
     try {
-        auto arr = utilxx_base::Json::parse(std::string(res.text()));
+        auto arr = utilxx_base::Json::parse(std::string(r.text()));
         if (arr.is_array()) {
             out.reserve(arr.size());
             for (const auto& item : arr) {
@@ -4792,61 +3831,30 @@ inline std::vector<PathDecision> checkPathDecisions(
             }
         }
     } catch (...) {
-        return {};
+        co_return std::vector<PathDecision>{};
     }
-    if (out.size() != views.size()) {
-        return {};
+    if (out.size() != expected) {
+        co_return std::vector<PathDecision>{};
     }
-    return out;
+    co_return out;
 }
 
-/// 同上 (从插件实例上下文取主程序与接口表)
+/// 批量**过滤**路径 (asio 形态): 返回与 [paths] 等长的标记数组 (1 = 已明确允许)
+///
+/// - Deny 与 Ask 都标记为不可访问 (fail-closed);
+/// - 主程序不支持查询时返回空数组, 调用方应跳过过滤;
+/// - 内部按 [batchSize] 分批 (默认 512 项) 并对相同路径去重。
 template<typename Ctx>
-inline std::vector<PathDecision> checkPathDecisions(
-    const Ctx&                      ctx,
-    const ScopeRef&                 agent,
-    PermissionScope                 scope,
-    std::string_view                sessionId,
-    const std::vector<std::string>& paths
+inline asio::awaitable<std::vector<uint8_t>> filterPathPermissionsAsync(
+    Ctx&                     ctx,
+    ScopeRef                 agent,
+    PermissionScope          scope,
+    std::string              sessionId,
+    std::vector<std::string> paths,
+    size_t                   batchSize = 512
 ) {
-    auto ref = agent.raw();
-    return checkPathDecisions(ctx.host, ctx.iface.permission, &ref, scope, sessionId, paths);
-}
-
-/// 单路径权限查询 (便捷; 内部走批量接口)
-/// - 查询不可用或失败时返回 [PathDecision::Ask] (调用方按未获批准处理)
-template<typename Ctx>
-inline PathDecision checkPathDecision(
-    const Ctx&       ctx,
-    const ScopeRef&  agent,
-    std::string_view path,
-    PermissionScope  scope,
-    std::string_view sessionId = {}
-) {
-    std::vector<std::string> paths{std::string{path}};
-    auto                     decisions = checkPathDecisions(ctx, agent, scope, sessionId, paths);
-    if (decisions.size() != 1) {
-        return PathDecision::Ask;
-    }
-    return decisions.front();
-}
-
-/// 批量过滤路径 (工具内使用): 返回与 [paths] 等长的标记数组 (1 = 已明确允许)
-/// - Deny 与 Ask 都标记为不可访问 (fail-closed: 未获批准的范围不进入结果)
-/// - 主程序不支持查询时返回**空数组**, 调用方应跳过过滤 (保持原行为)
-/// - 内部按 [batchSize] 分批调用主程序 (默认 512 项, 避免长占主程序 io 线程),
-///   并对相同路径去重后查询
-inline std::vector<uint8_t> filterPathPermissions(
-    const PluginxxHost*                 host,
-    const AgentxxPluginPermissionIface* iface,
-    const PluginxxScopeRef*             agent,
-    PermissionScope                     scope,
-    std::string_view                    sessionId,
-    const std::vector<std::string>&     paths,
-    size_t                              batchSize = 512
-) {
-    if (!host || !iface || !iface->check_paths || paths.empty()) {
-        return {};
+    if (!ctx.host || !ctx.iface.permission || !ctx.iface.permission->check_paths || paths.empty()) {
+        co_return std::vector<uint8_t>{};
     }
     if (batchSize == 0) {
         batchSize = 512;
@@ -4856,22 +3864,22 @@ inline std::vector<uint8_t> filterPathPermissions(
     std::vector<std::string>                 pending;
     std::vector<size_t>                      pendingIndex;
 
-    auto flush = [&]() -> bool {
+    auto flush = [&]() -> asio::awaitable<bool> {
         if (pending.empty()) {
-            return true;
+            co_return true;
         }
-        auto decisions = checkPathDecisions(host, iface, agent, scope, sessionId, pending);
-        if (decisions.size() != pending.size()) {
-            return false; // 查询失败: 交由调用方跳过过滤
+        auto batch = co_await checkPathDecisionsAsync(ctx, agent, scope, sessionId, pending);
+        if (batch.size() != pending.size()) {
+            co_return false; // 查询失败: 交由调用方跳过过滤
         }
-        for (size_t i = 0; i < decisions.size(); ++i) {
-            const uint8_t ok         = decisions[i] == PathDecision::Allow ? 1 : 0;
+        for (size_t i = 0; i < batch.size(); ++i) {
+            const uint8_t ok         = batch[i] == PathDecision::Allow ? 1 : 0;
             allowed[pendingIndex[i]] = ok;
             queried.insert_or_assign(pending[i], ok);
         }
         pending.clear();
         pendingIndex.clear();
-        return true;
+        co_return true;
     };
 
     for (size_t i = 0; i < paths.size(); ++i) {
@@ -4882,36 +3890,16 @@ inline std::vector<uint8_t> filterPathPermissions(
         }
         pending.push_back(paths[i]);
         pendingIndex.push_back(i);
-        if (pending.size() >= batchSize && !flush()) {
-            return {};
+        if (pending.size() >= batchSize) {
+            if (!co_await flush()) {
+                co_return std::vector<uint8_t>{};
+            }
         }
     }
-    if (!flush()) {
-        return {};
+    if (!co_await flush()) {
+        co_return std::vector<uint8_t>{};
     }
-    return allowed;
-}
-
-/// 同上 (从插件实例上下文取主程序与接口表)
-template<typename Ctx>
-inline std::vector<uint8_t> filterPathPermissions(
-    const Ctx&                      ctx,
-    const ScopeRef&                 agent,
-    PermissionScope                 scope,
-    std::string_view                sessionId,
-    const std::vector<std::string>& paths,
-    size_t                          batchSize = 512
-) {
-    auto ref = agent.raw();
-    return filterPathPermissions(
-        ctx.host,
-        ctx.iface.permission,
-        &ref,
-        scope,
-        sessionId,
-        paths,
-        batchSize
-    );
+    co_return allowed;
 }
 
 

@@ -54,13 +54,13 @@ struct UncensoredCtx : public agentxx::plugin::PluginBase {
 /// 参数 (yaml `plugin.list[].args`, 主程序不解析字段语义, 原样传给插件):
 /// - `text`: 注入文本 (空串视为未配置)
 /// - `key`:  附加段键名 (空串视为未配置)
-pluginxx::Task<void> readArgsAsync(UncensoredCtx& ctx) {
+asio::awaitable<void> readArgsAsync(UncensoredCtx& ctx) {
     const PluginxxHost* host = ctx.host;
     if (!host || !ctx.iface.config || !ctx.iface.config->get_plugin_args) {
         co_return;
     }
     // 表成员是异步操作契约: 提交 + co_await (插件执行线程上不能同步等)
-    auto r = co_await pluginxx::tableOp(
+    auto r = co_await agentxx::plugin::tableOpAsync(
         ctx,
         [host, &ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
             return ctx.iface.config->get_plugin_args(host, cb, ud, err);
@@ -85,7 +85,7 @@ pluginxx::Task<void> readArgsAsync(UncensoredCtx& ctx) {
 
 /// 挂载事务 (mount 的实际内容): 为**该 agent** 注入一段附加系统提示词
 /// - **协程形态**: 提示词写入是“提交 + `co_await`”, 没写成就是挂载失败
-static pluginxx::Task<void>
+static asio::awaitable<void>
     uncensoredSetup(UncensoredCtx& ctx, agentxx::plugin::AgentRef ref) {
     using namespace agentxx::plugin;
 
@@ -104,7 +104,7 @@ static pluginxx::Task<void>
     payload["appendSystemPrompts"] = std::move(append);
 
     const std::string js = payload.dump();
-    auto              wr = co_await setPromptJson(ctx, ref.ptr(), js);
+    auto              wr = co_await setPromptJsonAsync(ctx, ref.ptr(), js);
     if (!wr.ok()) {
         throw std::runtime_error{
             prefix + "set_prompt(appendSystemPrompts) rejected by host: "
@@ -189,7 +189,7 @@ static void* uncensoredAgentMount(
     auto later = agentxx::plugin::finishLater(notify);
     // 提示词注入交给协程: 写成了才放行挂载
     const agentxx::plugin::AgentRef agentRef(*spec);
-    ctx.spawn([later, agentRef](UncensoredCtx& c, agentxx::plugin::OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](UncensoredCtx& c, agentxx::plugin::OpCtl&) -> asio::awaitable<void> {
         try {
             co_await uncensoredSetup(c, agentRef);
             later.ok();

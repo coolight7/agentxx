@@ -77,33 +77,13 @@ struct ClientIfaces {
 
 /* ==================== client 表便捷调用 (插件侧) ====================
  *
- * client 侧六张表也是异步契约。插件侧按“要不要结果”选三种写法:
+ * client 侧六张表也是异步契约。插件侧按“要不要结果”选两种写法:
  * - **不要结果** (toast / 更新面板 / 打开 overlay …): 传 `cb = nullptr` 提交,
  *   调用即返回, 任何线程都不等 (`*NoWait` 系列与 [clientTableCall]);
- * - **要结果, 且在协程里**: `co_await clientTableOpAsync(ctx, ...)` 或下面的
- *   `*Async` 便捷入口;
- * - **要结果, 但不在协程里** (`create` 这类加载线程上的一次性查询): [clientTableOp]
- *   用阻塞形态。它**不允许**在插件执行线程上等 —— 插件线程与主程序 io 线程是两条
- *   线程, 等待会把它卡住 (见 `pluginxx::SyncWaitThreadPolicy`), 该调用直接失败并
- *   带上原因文本。
+ * - **要结果**: `co_await clientTableOpAsync(ctx, ...)` 或下面的 `*Async` 便捷入口;
+ *   没有同步形态 —— 等结果必须先写成协程 (插件执行线程与 client io 线程是两条线程,
+ *   在那里同步等会把它卡住)。
  */
-
-/// client 表调用 (阻塞形态; 插件执行线程上直接失败)
-///
-/// 只在确实无法写成协程的地方用 (`create` 里的实例级查询), 插件执行线程上会被拒绝。
-template<typename StartFn>
-inline pluginxx::detail::TableOpResult clientTableOp(
-    const PluginxxHost*        host,
-    const ClientIfaces&        iface,
-    StartFn&&                  start
-) {
-    return pluginxx::tableOpSyncWait(
-        host,
-        iface.cancel,
-        iface.scheduler,
-        std::forward<StartFn>(start)
-    );
-}
 
 /// client 表调用 (**提交即返回**): 只要发起, 不要结果, 任何线程都不等
 ///
@@ -118,10 +98,23 @@ inline bool clientTableCall(const PluginxxHost* host, const ClientIfaces&, Start
     return handle != nullptr;
 }
 
-/// client 表调用 (**协程形态**): 提交即开始, `co_await` 拿结果
+namespace detail {
+
+/// 取当前协程执行器后提交一次 client 表调用 (asio 形态的公共部分)
 ///
-/// 与 [clientTableOp] 的区别: 不阻塞调用方线程。插件把注册事务写成协程时用它
-/// (`start` 入口先 `finishLater(notify)` 再 `ctx.spawn(...)`):
+/// client 表全部是异步操作契约: 提交即开始, 结果经 `asio::post` 回到本协程的执行器。
+template<typename Ctx, typename StartFn>
+inline asio::awaitable<pluginxx::TableOpResult>
+    clientTableAwaitAsync(const Ctx& ctx, StartFn start) {
+    co_return co_await pluginxx::detail::tableOpAwaitAsyncSlot(ctx, std::move(start));
+}
+
+} // namespace detail
+
+/// client 表调用 (**asio 协程形态**): `co_await` 拿结果
+///
+/// 插件把注册事务写成 `asio::awaitable` 协程时用它 (`start` 入口先 `finishLater(notify)`
+/// 再 `ctx.spawn(...)`):
 ///
 /// ```cpp
 /// auto r = co_await clientTableOpAsync(ctx, [&](auto cb, auto ud, auto err) {
@@ -130,11 +123,11 @@ inline bool clientTableCall(const PluginxxHost* host, const ClientIfaces&, Start
 /// auto* handle = clientHandleOf<AgentxxStatusItem>(r);
 /// ```
 ///
-/// - `ctx` 是插件上下文 (`host` / `iface.cancel` / `bridge()` 由 kit 的 `tableOp` 取);
-/// - 也可以先攒几条再 `co_await whenAll(...)` 一次收齐, 或 `.forget()` 丢掉结果。
+/// - 结果是 `pluginxx::TableOpResult`: 业务失败不抛异常, 看 `ok()` / `text()`;
+/// - 提交发生在开始 `co_await` 时; 想并行提交用 `asio::co_spawn` 显式开协程。
 template<typename Ctx, typename StartFn>
-inline pluginxx::TableOpTicket clientTableOpAsync(const Ctx& ctx, StartFn&& start) {
-    return pluginxx::tableOp(ctx, std::forward<StartFn>(start));
+inline asio::awaitable<pluginxx::TableOpResult> clientTableOpAsync(const Ctx& ctx, StartFn&& start) {
+    co_return co_await detail::clientTableAwaitAsync(ctx, std::forward<StartFn>(start));
 }
 
 /// 从句柄类表结果里取句柄 (失败 / 未受理 → nullptr)
@@ -145,30 +138,6 @@ inline Handle* clientHandleOf(const pluginxx::detail::TableOpResult& result) {
     return result.ok() ? agentxx::plugin::clientHandleFromText<Handle>(result.text()) : nullptr;
 }
 
-/// client 表查询: 只取结果正文 (失败 / 未受理 = 空串)
-template<typename StartFn>
-inline std::string clientTableText(
-    const PluginxxHost* host,
-    const ClientIfaces& iface,
-    StartFn&&           start
-) {
-    auto res = clientTableOp(host, iface, std::forward<StartFn>(start));
-    return res.ok() ? std::string(res.text()) : std::string{};
-}
-
-/// client 表注册: 从结果正文取句柄 (`payload` = 地址十进制文本)
-template<typename Handle, typename StartFn>
-inline Handle* clientTableHandle(
-    const PluginxxHost* host,
-    const ClientIfaces& iface,
-    StartFn&&           start
-) {
-    auto res = clientTableOp(host, iface, std::forward<StartFn>(start));
-    if (!res.ok()) {
-        return nullptr;
-    }
-    return agentxx::plugin::clientHandleFromText<Handle>(res.text());
-}
 
 /// 表调用结果 → 旧状态码 (只区分“成功”与“没成功”)
 inline int32_t tableStatus(const pluginxx::detail::TableOpResult& res) {
@@ -182,28 +151,32 @@ inline int32_t tableStatus(const pluginxx::detail::TableOpResult& res) {
  * 等到完成。事件回调这类不能写成协程的地方都能直接调。
  */
 
-/// 注册状态栏项 (空 id / 主程序不支持时返回 nullptr)
-inline AgentxxStatusItem* clientRegisterStatusItem(
-    const PluginxxHost*        host,
-    const AgentxxClientUiIface* ui,
-    std::string_view           id,
-    std::string_view           initialJson,
-    int32_t                    align = 0,
-    int32_t                    order = 0
+/// 注册状态栏项 (**协程形态**; 空 id / 主程序不支持时返回 nullptr)
+template<typename Ctx>
+inline asio::awaitable<AgentxxStatusItem*> clientRegisterStatusItemAsync(
+    Ctx&         ctx,
+    std::string  id,
+    std::string  initialJson,
+    int32_t      align = 0,
+    int32_t      order = 0
 ) {
-    if (!host || !ui || !ui->register_status_item || id.empty()) {
-        return nullptr;
+    const auto* ui = ctx.iface.ui;
+    if (!ctx.host || !ui || !ui->register_status_item || id.empty()) {
+        co_return nullptr;
     }
-    const auto iface  = ClientIfaces::query(host);
-    auto       idSv   = PluginStringView::from(id.data(), id.size());
-    auto       jsonSv = PluginStringView::from(initialJson.data(), initialJson.size());
-    return clientTableHandle<AgentxxStatusItem>(
-        host,
-        iface,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->register_status_item(host, &idSv, &jsonSv, align, order, cb, ud, err);
+    auto idSv   = PluginStringView::from(id);
+    auto jsonSv = PluginStringView::from(initialJson);
+    auto r      = co_await detail::clientTableAwaitAsync(
+        ctx,
+        [&ctx, ui, &idSv, &jsonSv, align, order](
+                                                 PluginxxOperatorCallback cb,
+                                                 void*                    ud,
+                                                 PluginxxString*          err
+                                             ) {
+            return ui->register_status_item(ctx.host, &idSv, &jsonSv, align, order, cb, ud, err);
         }
     );
+    co_return clientHandleOf<AgentxxStatusItem>(r);
 }
 
 /// 更新状态栏项文本; 返回 0 成功
@@ -236,26 +209,26 @@ inline void clientUnregisterStatusItem(
     ui->unregister_status_item(host, item, nullptr, nullptr, nullptr);
 }
 
-/// 注册侧边栏面板
-inline AgentxxPanel* clientRegisterPanel(
-    const PluginxxHost*        host,
-    const AgentxxClientUiIface* ui,
-    std::string_view           id,
-    std::string_view           propsJson
+/// 注册侧边栏面板 (**协程形态**)
+template<typename Ctx>
+inline asio::awaitable<AgentxxPanel*> clientRegisterPanelAsync(
+    Ctx&        ctx,
+    std::string id,
+    std::string propsJson
 ) {
-    if (!host || !ui || !ui->register_panel || id.empty()) {
-        return nullptr;
+    const auto* ui = ctx.iface.ui;
+    if (!ctx.host || !ui || !ui->register_panel || id.empty()) {
+        co_return nullptr;
     }
-    const auto iface = ClientIfaces::query(host);
-    auto       idSv  = PluginStringView::from(id.data(), id.size());
-    auto       props = PluginStringView::from(propsJson.data(), propsJson.size());
-    return clientTableHandle<AgentxxPanel>(
-        host,
-        iface,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->register_panel(host, &idSv, &props, cb, ud, err);
+    auto idSv  = PluginStringView::from(id);
+    auto props = PluginStringView::from(propsJson);
+    auto r     = co_await detail::clientTableAwaitAsync(
+        ctx,
+        [&ctx, ui, &idSv, &props](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->register_panel(ctx.host, &idSv, &props, cb, ud, err);
         }
     );
+    co_return clientHandleOf<AgentxxPanel>(r);
 }
 
 /// 更新面板内容; 返回 0 成功
@@ -288,26 +261,26 @@ inline void clientUnregisterPanel(
     ui->unregister_panel(host, panel, nullptr, nullptr, nullptr);
 }
 
-/// 注册 Info 栏段落
-inline AgentxxInfoSection* clientRegisterInfoSection(
-    const PluginxxHost*        host,
-    const AgentxxClientUiIface* ui,
-    std::string_view           id,
-    std::string_view           propsJson
+/// 注册 Info 栏段落 (**协程形态**)
+template<typename Ctx>
+inline asio::awaitable<AgentxxInfoSection*> clientRegisterInfoSectionAsync(
+    Ctx&        ctx,
+    std::string id,
+    std::string propsJson
 ) {
-    if (!host || !ui || !ui->register_info_section || id.empty()) {
-        return nullptr;
+    const auto* ui = ctx.iface.ui;
+    if (!ctx.host || !ui || !ui->register_info_section || id.empty()) {
+        co_return nullptr;
     }
-    const auto iface = ClientIfaces::query(host);
-    auto       idSv  = PluginStringView::from(id.data(), id.size());
-    auto       props = PluginStringView::from(propsJson.data(), propsJson.size());
-    return clientTableHandle<AgentxxInfoSection>(
-        host,
-        iface,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->register_info_section(host, &idSv, &props, cb, ud, err);
+    auto idSv  = PluginStringView::from(id);
+    auto props = PluginStringView::from(propsJson);
+    auto r     = co_await detail::clientTableAwaitAsync(
+        ctx,
+        [&ctx, ui, &idSv, &props](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->register_info_section(ctx.host, &idSv, &props, cb, ud, err);
         }
     );
+    co_return clientHandleOf<AgentxxInfoSection>(r);
 }
 
 /// 更新 Info 栏段落内容; 返回 0 成功
@@ -411,37 +384,44 @@ inline bool clientSendPluginData(
     });
 }
 
-/// 注册斜杠命令; 返回是否已受理
+/// 注册斜杠命令 (**协程形态**); 返回是否已受理
 /// - `execute` 是异步操作契约: 动作 JSON 经它自己的 `notify` 交回 (见
 ///   [AgentxxClientCommandExecuteFn]), 回调内部立刻 `notifyText` 就是同步完成;
 /// - `commandData` 只给 `execute` 用 (与本次调用的完成回调无关)
-inline bool clientRegisterCommand(
-    const PluginxxHost*           host,
-    const AgentxxClientUiIface*   ui,
-    std::string_view              name,
-    std::string_view              description,
+template<typename Ctx>
+inline asio::awaitable<bool> clientRegisterCommandAsync(
+    Ctx&                          ctx,
+    std::string                   name,
+    std::string                   description,
     AgentxxClientCommandExecuteFn execute,
     void*                         commandData
 ) {
-    if (!host || !ui || !ui->register_command || name.empty() || !execute) {
-        return false;
+    const auto* ui = ctx.iface.ui;
+    if (!ctx.host || !ui || !ui->register_command || name.empty() || !execute) {
+        co_return false;
     }
-    const auto iface = ClientIfaces::query(host);
-    auto       nameSv = PluginStringView::from(name.data(), name.size());
-    auto       descSv = PluginStringView::from(description.data(), description.size());
-    return clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-               return ui->register_command(
-                   host,
-                   &nameSv,
-                   &descSv,
-                   execute,
-                   commandData,
-                   cb,
-                   ud,
-                   err
-               );
-           })
-        .ok();
+    auto nameSv = PluginStringView::from(name);
+    auto descSv = PluginStringView::from(description);
+    auto r      = co_await detail::clientTableAwaitAsync(
+        ctx,
+        [&ctx, ui, &nameSv, &descSv, execute, commandData](
+                                                    PluginxxOperatorCallback cb,
+                                                    void*                    ud,
+                                                    PluginxxString*          err
+                                                ) {
+            return ui->register_command(
+                ctx.host,
+                &nameSv,
+                &descSv,
+                execute,
+                commandData,
+                cb,
+                ud,
+                err
+            );
+        }
+    );
+    co_return r.ok();
 }
 
 /// 注销斜杠命令 (只提交, 不等结果)
@@ -770,10 +750,9 @@ struct DiffSegment {
 /// 客户端插件实例上下文基类
 ///
 /// 继承 `pluginxx::PluginBaseT<ClientIfaces>`: 拿 `host` / `iface` / `log` 与协程驱动
-/// （`bridge()` / `spawn(...)`）。`start` 里的注册事务可以写成协程
-/// （`finishLater(notify)` + `spawn` + 逐条 `co_await clientTableOpAsync(...)`），
-/// 也可以继续用同步助手（同步桥保证不会自己等自己，见
-/// `pluginxx/api/sync_bridge.h`）。
+/// （`bridge()` / `spawn(...)`）。`start` 里的注册事务写成协程
+/// （`finishLater(notify)` + `spawn` + 逐条 `co_await clientTableOpAsync(...)`）;
+/// 展台类的查询 (客户端状态 / 区域尺寸 / 语言 …) 也都是协程形态 (`*Async`)。
 class ClientPluginBase : public pluginxx::PluginBaseT<ClientIfaces> {
 public:
 
@@ -793,26 +772,12 @@ public:
         return lifeToken_;
     }
 
-    /// 客户端会话状态 JSON (**阻塞形态**; 只在 `create` 这类加载线程上用)
-    ///
-    /// 插件执行线程上请用 [clientStateAsync]: 插件线程与 client io 线程是两条线程,
-    /// 在那里等结果会把它卡住 (阻塞形态会被拒绝并返回 `{}`)。
-    std::string clientState() const {
-        if (!host || !iface.session || !iface.session->get_client_state) {
-            return "{}";
-        }
-        const auto text = clientTableText(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.session->get_client_state(host, cb, ud, err);
-        });
-        return text.empty() ? std::string{"{}"} : text;
-    }
-
-    /// 客户端会话状态 JSON (**协程形态**)
-    pluginxx::Task<std::string> clientStateAsync() const {
+    /// 客户端会话状态 JSON (**协程形态**; 也用 [refreshClientStateAsync] 缓存快照)
+    asio::awaitable<std::string> clientStateAsync() const {
         if (!host || !iface.session || !iface.session->get_client_state) {
             co_return std::string{"{}"};
         }
-        auto r = co_await pluginxx::tableOp(
+        auto r = co_await detail::clientTableAwaitAsync(
             *this,
             [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return iface.session->get_client_state(host, cb, ud, err);
@@ -821,31 +786,25 @@ public:
         co_return r.ok() ? std::string{r.text()} : std::string{"{}"};
     }
 
-    std::string argsJson() const {
-        if (!host || !iface.self || !iface.self->get_plugin_args) {
-            return "{}";
+    /// 客户端会话状态解析成对象 (**协程形态**; 解析失败给空对象)
+    asio::awaitable<utilxx_base::Json> clientStateJsonAsync() const {
+        auto text = co_await clientStateAsync();
+        if (text.empty() || text == "{}") {
+            co_return utilxx_base::Json::object();
         }
-        const auto text = clientTableText(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.self->get_plugin_args(host, cb, ud, err);
-        });
-        return text.empty() ? std::string{"{}"} : text;
-    }
-
-    std::string configPath() const {
-        if (!host || !iface.self || !iface.self->get_plugin_config_path) {
-            return "";
+        try {
+            co_return utilxx_base::Json::parse(text);
+        } catch (...) {
+            co_return utilxx_base::Json::object();
         }
-        return clientTableText(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.self->get_plugin_config_path(host, cb, ud, err);
-        });
     }
 
     /// 实例参数 JSON (**协程形态**)
-    pluginxx::Task<std::string> argsJsonAsync() const {
+    asio::awaitable<std::string> argsJsonAsync() const {
         if (!host || !iface.config || !iface.config->get_plugin_args) {
             co_return std::string{"{}"};
         }
-        auto r = co_await pluginxx::tableOp(
+        auto r = co_await detail::clientTableAwaitAsync(
             *this,
             [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return iface.config->get_plugin_args(host, cb, ud, err);
@@ -855,11 +814,11 @@ public:
     }
 
     /// 实例配置文件路径 (**协程形态**)
-    pluginxx::Task<std::string> configPathAsync() const {
+    asio::awaitable<std::string> configPathAsync() const {
         if (!host || !iface.config || !iface.config->get_plugin_config_path) {
             co_return std::string{};
         }
-        auto r = co_await pluginxx::tableOp(
+        auto r = co_await detail::clientTableAwaitAsync(
             *this,
             [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return iface.config->get_plugin_config_path(host, cb, ud, err);
@@ -869,11 +828,11 @@ public:
     }
 
     /// 当前语言代码 (**协程形态**)
-    pluginxx::Task<std::string> languageAsync() const {
+    asio::awaitable<std::string> languageAsync() const {
         if (!host || !iface.config || !iface.config->get_language) {
             co_return std::string{"en"};
         }
-        auto r = co_await pluginxx::tableOp(
+        auto r = co_await detail::clientTableAwaitAsync(
             *this,
             [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return iface.config->get_language(host, cb, ud, err);
@@ -882,25 +841,19 @@ public:
         co_return (r.ok() && !r.text().empty()) ? std::string{r.text()} : std::string{"en"};
     }
 
-    std::string language() const {
-        if (!host || !iface.self || !iface.self->get_language) {
-            return "en";
-        }
-        const auto text = clientTableText(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.self->get_language(host, cb, ud, err);
-        });
-        return text.empty() ? std::string{"en"} : text;
-    }
-
-    bool setLanguage(std::string_view lang) const {
+    /// 设置语言 (**协程形态**; 返回是否已受理)
+    asio::awaitable<bool> setLanguageAsync(std::string lang) const {
         if (!host || !iface.self || !iface.self->set_language) {
-            return false;
+            co_return false;
         }
-        auto sv  = PluginStringView::from(lang.data(), lang.size());
-        auto res = clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.self->set_language(host, &sv, cb, ud, err);
-        });
-        return res.ok();
+        auto sv = PluginStringView::from(lang);
+        auto r  = co_await detail::clientTableAwaitAsync(
+            *this,
+            [this, &sv](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.self->set_language(host, &sv, cb, ud, err);
+            }
+        );
+        co_return r.ok();
     }
 
     /// 显示 toast (只提交, 不等结果)
@@ -985,27 +938,14 @@ public:
         });
     }
 
-    /// 代发用户消息 (**阻塞形态**; 只在 `create` 这类加载线程上用; 插件线程上用 [sendUserInputAsync])
-    bool sendUserInput(std::string_view sessionId, std::string_view text) const {
-        if (!host || !iface.session || !iface.session->send_user_input) {
-            return false;
-        }
-        auto sidSv = PluginStringView::from(sessionId.data(), sessionId.size());
-        auto txtSv = PluginStringView::from(text.data(), text.size());
-        auto res   = clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.session->send_user_input(host, &sidSv, &txtSv, cb, ud, err);
-        });
-        return res.ok();
-    }
-
     /// 代发用户消息 (**协程形态**); 返回是否已受理
-    pluginxx::Task<bool> sendUserInputAsync(std::string sessionId, std::string text) const {
+    asio::awaitable<bool> sendUserInputAsync(std::string sessionId, std::string text) const {
         if (!host || !iface.session || !iface.session->send_user_input) {
             co_return false;
         }
         auto sidSv = PluginStringView::from(sessionId);
         auto txtSv = PluginStringView::from(text);
-        auto r     = co_await pluginxx::tableOp(
+        auto r     = co_await detail::clientTableAwaitAsync(
             *this,
             [this, &sidSv, &txtSv](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return iface.session->send_user_input(host, &sidSv, &txtSv, cb, ud, err);
@@ -1286,10 +1226,15 @@ public:
         const std::string json = j.dump();
         auto              sv   = PluginStringView::from(json.data(), json.size());
         auto              tid  = PluginStringView::from(toolCallId.data(), toolCallId.size());
-        auto              res  = clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.ui->update_tool_decor(host, &tid, &sv, cb, ud, err);
-        });
-        return tableStatus(res);
+        // 只提交不等结果: 装饰不是调用方要判断成败的东西 (失败在主程序侧记日志)
+        const bool submitted = clientTableCall(
+            host,
+            iface,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.ui->update_tool_decor(host, &tid, &sv, cb, ud, err);
+            }
+        );
+        return submitted ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_FAILED;
     }
 
     /// 清除某次工具调用的消息装饰 (空 `toolCallId` = 清除本插件全部装饰)
@@ -1299,25 +1244,54 @@ public:
         }
         auto tid = PluginStringView::from(toolCallId.data(), toolCallId.size());
         auto sv  = PluginStringView::from("", 0);
-        auto res = clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.ui->update_tool_decor(host, &tid, &sv, cb, ud, err);
-        });
-        return tableStatus(res);
+        const bool submitted = clientTableCall(
+            host,
+            iface,
+            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.ui->update_tool_decor(host, &tid, &sv, cb, ud, err);
+            }
+        );
+        return submitted ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_FAILED;
     }
 
     // ==================== 能力协商查询 ====================
 
-    /// 主程序是否声明了某个能力名 (查 `get_client_state().interfaces`)
+    /// 刷新客户端状态快照 (**协程形态**)
+    ///
+    /// `get_client_state()` 是一次表调用, 只能在协程里等; 下面的 [clientStateSnapshot] /
+    /// [hostSupports] / [uiCapabilities] 读的是这次刷新的结果, 所以**注册事务里先调一次**
+    /// (之后再按需要刷新, 例如换语言后)。没刷新过时快照是空对象:
+    /// [hostSupports] 返回 false、[uiCapabilities] 按"描述层全支持"处理。
+    asio::awaitable<void> refreshClientStateAsync() {
+        auto text = co_await clientStateAsync();
+        auto parsed = utilxx_base::Json::object();
+        if (!text.empty() && text != "{}") {
+            try {
+                parsed = utilxx_base::Json::parse(text);
+            } catch (...) {
+                parsed = utilxx_base::Json::object();
+            }
+        }
+        clientStateCache_ = std::move(parsed);
+        uiCapsCached_     = false;
+    }
+
+    /// 最近一次 [refreshClientStateAsync] 拿到的客户端状态快照 (未刷新过时是空对象)
+    const utilxx_base::Json& clientStateSnapshot() const {
+        return clientStateCache_;
+    }
+
+    /// 主程序是否声明了某个能力名 (查快照的 `interfaces`)
     /// - 能力名常量见 `agentxx/plugin/plugin_interfaces.h` 的 plugin_interfaces 命名空间
-    ///   (如 "agentxx.client.components" / "agentxx.client.form")
-    /// - 老主程序未提供该能力时返回 false, 插件据此降级 (不报错、不静默丢内容)
+    ///   (如 `agentxx.client.components` / `agentxx.client.form`)
+    /// - 读的是 [refreshClientStateAsync] 的快照: 注册事务里没刷新过时为 false
+    ///   (老主程序本来也没有这些能力, 降级路径一致)
     bool hostSupports(std::string_view capability) const {
         if (capability.empty()) {
             return false;
         }
-        const auto state = clientStateJson();
-        const auto it    = state.find("interfaces");
-        if (it == state.end() || !it->is_array()) {
+        const auto it = clientStateCache_.find("interfaces");
+        if (it == clientStateCache_.end() || !it->is_array()) {
             return false;
         }
         for (const auto& entry : *it) {
@@ -1328,24 +1302,24 @@ public:
         return false;
     }
 
-    /// 客户端界面能力段 (客户端状态快照的 `ui` 段)
+    /// 客户端界面能力段 (状态快照的 `ui` 段)
     ///
     /// 客户端如实上报自己能画什么: 支持的组件/控件、每个字符格相当于多少 u、默认
     /// 行距。插件据此选择组件, 例如终端不推图片/着色器:
     /// ```c++
     /// if (kit.supportsBlock("Table")) { ... } else { ... }
     /// ```
-    /// 老主程序没有该段时按"描述层全支持"处理 —— 内容仍由客户端按自身能力降级
-    /// (见描述层的 `adapt`), 不会画错。
+    /// 没刷新过快照 (或老主程序没这一段) 时按"描述层全支持"处理 —— 内容仍由客户端
+    /// 按自身能力降级 (见描述层的 `adapt`), 不会画错。
     ///
     /// 解析结果按实例缓存 (客户端能力在生命周期内不变), 因此在渲染/拼装路径里反复
-    /// 调用不会有 JSON 解析开销。**仅 client io 线程可调** (读 `get_client_state`)。
+    /// 调用不会有 JSON 解析开销。
     const pluginxx::ui::Capabilities& uiCapabilities() const {
         if (!uiCapsCached_) {
             uiCapsCached_    = true;
-            const auto state = clientStateJson();
-            const auto it    = state.find("ui");
-            uiCapsCache_     = (state.is_object() && it != state.end() && it->is_object())
+            const auto it    = clientStateCache_.find("ui");
+            uiCapsCache_     = (clientStateCache_.is_object() && it != clientStateCache_.end()
+                            && it->is_object())
                                    ? pluginxx::ui::capabilitiesFromJson(*it)
                                    : pluginxx::ui::fullCapabilities();
         }
@@ -1368,38 +1342,25 @@ public:
         return &uiCapabilities();
     }
 
-    /// 当前 client 状态解析结果 (解析失败返回空对象)
-    utilxx_base::Json clientStateJson() const {
-        const std::string text = clientState();
-        if (text.empty() || text == "{}") {
-            return utilxx_base::Json::object();
-        }
-        try {
-            return utilxx_base::Json::parse(text);
-        } catch (...) {
-            return utilxx_base::Json::object();
-        }
-    }
-
     /// 展示区域尺寸 (宽/高; 未上报时返回 0)
     /// - 区域 id 为面板/Info 段落的注册 id (`update_panel` / `update_info_section` 的 id)
     /// - 主程序在每次布局后更新快照, 值变化时会另发 `agentxx.client.ui_layout` 频道;
     ///   老主程序 (未声明 `agentxx.client.layout`) 该接口返回 0, 插件应降级为固定宽度
-    /// - 查询走 `get_client_state()`, 因此仅在 client io 线程可调 (与其它表接口一致)
     struct RegionSize {
         int width  = 0;
         int height = 0;
     };
 
-    RegionSize regionSize(std::string_view regionId) const {
+    /// 查一个展示区域当前尺寸 (**协程形态**; 每次都要问主程序, 所以要 `co_await`)
+    asio::awaitable<RegionSize> regionSizeAsync(std::string regionId) const {
         RegionSize out;
-        if (regionId.empty()) {
-            return out;
+        if (regionId.empty() || !host) {
+            co_return out;
         }
-        const auto state = clientStateJson();
-        const auto it    = state.find("regions");
-        if (it == state.end() || !it->is_array()) {
-            return out;
+        auto json = co_await clientStateJsonAsync();
+        const auto it = json.find("regions");
+        if (it == json.end() || !it->is_array()) {
+            co_return out;
         }
         for (const auto& entry : *it) {
             if (!entry.is_object()) {
@@ -1412,7 +1373,7 @@ public:
             out.height = entry.value("h", 0);
             break;
         }
-        return out;
+        co_return out;
     }
 
     // ==================== 定时器 (`agentxx.client.timer`) ====================
@@ -1480,14 +1441,17 @@ public:
         std::shared_ptr<std::function<void()>> fn_;
     };
 
-    /// 注册定时器 (client io 线程; 返回句柄, 失败返回 nullptr)
+    /// 注册定时器 (**协程形态**; 返回句柄, 失败返回 nullptr)
     /// - 失败: spec 非法 / 主程序动画等级 Disabled / 单实例定时器超上限;
     ///   插件应据返回值降级 (不注册即静态展示)
     /// - 回调在 client io 线程执行; 回调内可更新面板/Info/overlay 描述
-    std::shared_ptr<TimerHandle>
-        registerTimer(int intervalMs, std::function<void()> fn, TimerOptions opts) {
+    asio::awaitable<std::shared_ptr<TimerHandle>> registerTimerAsync(
+        int                   intervalMs,
+        std::function<void()> fn,
+        TimerOptions          opts
+    ) {
         if (!host || !iface.timer || !iface.timer->set_timer || !fn) {
-            return nullptr;
+            co_return nullptr;
         }
         auto             holder = std::make_shared<std::function<void()>>(std::move(fn));
         AgentxxTimerSpec spec{};
@@ -1504,29 +1468,31 @@ public:
             }
         };
         spec.user_data = holder.get();
-        auto* timer    = clientTableHandle<AgentxxTimer>(
-            host,
-            iface,
+        auto* timer    = clientHandleOf<AgentxxTimer>(co_await detail::clientTableAwaitAsync(
+            *this,
             [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return iface.timer->set_timer(host, &spec, cb, ud, err);
             }
-        );
+        ));
         if (!timer) {
-            return nullptr;
+            co_return nullptr;
         }
-        return std::make_shared<TimerHandle>(host, timer, std::move(holder));
+        co_return std::make_shared<TimerHandle>(host, timer, std::move(holder));
     }
 
-    /// 关联展示区域当前是否可见 (client io 线程; 老主程序无该表返回 false)
-    bool isRegionVisible(std::string_view regionId) const {
+    /// 关联展示区域当前是否可见 (**协程形态**; 老主程序无该表返回 false)
+    asio::awaitable<bool> isRegionVisibleAsync(std::string regionId) const {
         if (!host || !iface.timer || !iface.timer->is_visible || regionId.empty()) {
-            return false;
+            co_return false;
         }
-        auto id  = PluginStringView::from(regionId.data(), regionId.size());
-        auto res = clientTableOp(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.timer->is_visible(host, &id, cb, ud, err);
-        });
-        return res.ok() && res.flag();
+        auto id = PluginStringView::from(regionId);
+        auto r  = co_await detail::clientTableAwaitAsync(
+            *this,
+            [this, &id](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.timer->is_visible(host, &id, cb, ud, err);
+            }
+        );
+        co_return r.ok() && r.flag();
     }
 
     // ==================== 全局快捷键 (`agentxx.client.keybind`) ====================
@@ -1578,17 +1544,17 @@ public:
         std::shared_ptr<std::function<void()>> fn_;
     };
 
-    /// 注册全局快捷键 (client io 线程; 返回句柄, 失败返回 nullptr)
+    /// 注册全局快捷键 (**协程形态**; 返回句柄, 失败返回 nullptr)
     /// - keys 格式见 [AgentxxKeybindSpec]: `"ctrl+alt+k"` / `"f9"` 等;
     ///   无修饰键的可打印字符不参与匹配 (注册失败)
     /// - 冲突 (同键位已被占用) 时返回 nullptr, 插件应降级或改用其它键位
-    std::shared_ptr<KeybindHandle> registerKeybind(
-        std::string_view      keys,
-        std::string_view      description,
+    asio::awaitable<std::shared_ptr<KeybindHandle>> registerKeybindAsync(
+        std::string           keys,
+        std::string           description,
         std::function<void()> fn
     ) {
         if (!host || !iface.keybind || !iface.keybind->register_keybind || !fn) {
-            return nullptr;
+            co_return nullptr;
         }
         auto               holder = std::make_shared<std::function<void()>>(std::move(fn));
         AgentxxKeybindSpec spec{};
@@ -1603,28 +1569,30 @@ public:
             }
         };
         spec.user_data = holder.get();
-        auto* bind     = clientTableHandle<AgentxxKeybind>(
-            host,
-            iface,
+        auto* bind     = clientHandleOf<AgentxxKeybind>(co_await detail::clientTableAwaitAsync(
+            *this,
             [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return iface.keybind->register_keybind(host, &spec, cb, ud, err);
             }
-        );
+        ));
         if (!bind) {
-            return nullptr;
+            co_return nullptr;
         }
-        return std::make_shared<KeybindHandle>(host, bind, std::move(holder));
+        co_return std::make_shared<KeybindHandle>(host, bind, std::move(holder));
     }
 
-    /// 当前已注册的快捷键列表 JSON (文本; 老主程序返回 "[]")
-    std::string keybindListJson() const {
+    /// 当前已注册的快捷键列表 JSON (**协程形态**; 老主程序返回 "[]")
+    asio::awaitable<std::string> keybindListJsonAsync() const {
         if (!host || !iface.keybind || !iface.keybind->list_keybinds) {
-            return "[]";
+            co_return std::string{"[]"};
         }
-        const auto text = clientTableText(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.keybind->list_keybinds(host, cb, ud, err);
-        });
-        return text.empty() ? std::string{"[]"} : text;
+        auto r = co_await detail::clientTableAwaitAsync(
+            *this,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.keybind->list_keybinds(host, cb, ud, err);
+            }
+        );
+        co_return (r.ok() && !r.text().empty()) ? std::string{r.text()} : std::string{"[]"};
     }
 
     template<typename T>
@@ -1645,6 +1613,8 @@ private:
     /// 界面能力段解析结果 (能力在客户端生命周期内不变; 见 [uiCapabilities])
     mutable bool                       uiCapsCached_ = false;
     mutable pluginxx::ui::Capabilities uiCapsCache_{};
+    /// 客户端状态快照 ([refreshClientStateAsync] 填;[hostSupports] / [uiCapabilities] 读)
+    utilxx_base::Json                  clientStateCache_ = utilxx_base::Json::object();
 };
 
 /// client 侧 create 阶段异常上报 (两侧统一用插件框架的 `pluginxx.log` 表)

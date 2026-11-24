@@ -116,7 +116,7 @@ std::string toolRecallMessage(
 /// - `list`: 列本会话的后台任务
 ///
 /// 并发额度、排队与执行都在主程序 (`submit_async_work`), 这里只管业务字段。
-std::string toolTask(
+asio::awaitable<std::string> toolTask(
     const ChatbotToolDeps& deps,
     std::string_view       threadId,
     std::string_view       argsJson
@@ -137,7 +137,7 @@ inline constexpr const char* kChatbotToolNames[] = {
 ///
 /// 把一个假消息包直接投给调度层 (不经过平台连接), 用来在测试或本地演示里
 /// 隔离平台网络验证「去重 → 路由 → 聚合 → 投递」这条流程。
-std::string toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJson);
+asio::awaitable<std::string> toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJson);
 
 /// `chatbot_debug_outbox` (仅 `behavior.debugTools` 打开时注册)
 ///

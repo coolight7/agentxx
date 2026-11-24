@@ -26,9 +26,11 @@ Supports:
 struct MathPluginCtx : public PluginBase {};
 
 /// 注册事务 (mount 的实际内容); 失败由主程序只回滚这一个 agent。
-static pluginxx::Task<void> mathSetupAsync(MathPluginCtx& ctx, ScopeRef ref) {
+///
+/// 协程体统一用 asio (`asio::awaitable`): 只依赖 asio 的协程模型与 kit 的 asio 形态入口。
+static asio::awaitable<void> mathSetupAsync(MathPluginCtx& ctx, ScopeRef ref) {
     auto schema
-        = (co_await agentxx::plugin::schemaOf(ctx, kNameCalculate))
+        = (co_await agentxx::plugin::schemaOfAsync(ctx, kNameCalculate))
               .string(
                   "expression",
                   "The mathematical expression string to evaluate, e.g. '2 + 3 * 4', 'sin(pi / 4) ^ 2', 'sqrt(16) + log10(100)', '5!', 'gcd(48, 18)'.",
@@ -47,16 +49,16 @@ static pluginxx::Task<void> mathSetupAsync(MathPluginCtx& ctx, ScopeRef ref) {
               )
               .build();
 
-    co_await tool(
+    co_await toolAsync(
         ctx,
         ref,
         kNameCalculate,
         kDepictCalculate,
         schema,
-        [](std::string_view args_json) -> ToolResult {
+        agentxx::plugin::onWorkerAsync([](std::string_view args_json) -> ToolResult {
             ArgReader args(args_json);
             return mathCalculateExecute(args.raw());
-        }
+        })
     );
     co_return;
 }
@@ -87,7 +89,7 @@ static void* mathMount(
     }
     const AgentRef agentRef(*spec);
     // 注册事务交给协程: 每个注册都是"提交 + co_await", 全部生效后再放行挂载
-    ctx.spawn([later, agentRef](MathPluginCtx& c, OpCtl&) -> pluginxx::Task<void> {
+    ctx.spawn([later, agentRef](MathPluginCtx& c, OpCtl&) -> asio::awaitable<void> {
         try {
             co_await mathSetupAsync(c, agentRef);
             later.ok();
