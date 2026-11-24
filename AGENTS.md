@@ -1049,7 +1049,9 @@ path/to/agentxx_test --log-level warn string_util regex
 - FFI C API (v4, 2026-11): 对外导出面收敛为 **15 个符号**, 业务能力全部进
   `agentxx_ffi_call({op,args,timeoutMs})` 的 op (27 个) —— 提交返回 `reqId`, 结果经
   `EVT_RESULT` 送达 (每个受理的 reqId **恰好一条**回执), `agentxx_ffi_call_cancel` 只停
-  等待; 事件 payload 改为**归回调所有** (`agentxx_ffi_string_free`); `stop` 异步
+  等待; 事件 payload 改为**归回调所有** (结构体与正文同一块堆内存, 回调
+  `agentxx_ffi_free(payload)` 释放整块 —— 因此 `NativeCallable.listener` 这类异步投递可用);
+  `stop` 异步
   (`EVT_STOPPED` 是最后一件事), `destroy` 只在 Created/Stopped 成功。对应关系:
   旧同步查询 → `model.list` / `context.get` / `session.list`; 旧 `send_wire` →
   `permission.*` / `input.queue.*` / `session.rename` / `fs.list_dir` / `plugin.data_up`;

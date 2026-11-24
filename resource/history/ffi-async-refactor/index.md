@@ -36,7 +36,14 @@
 
 ## 状态
 
-**规划完成，未开工。** 详细方案见 [plan.md](plan.md)，进度见 [work.md](work.md)。
+**已完成（2026-11-25）。** 详细方案见 [plan.md](plan.md)，进度与验证见 [work.md](work.md)。
+
+提交:
+
+- `6b814ee3` wire 相关性 + 通用回执（第 1 步）
+- `e76ce2a9` FFI 内部换代 + 生命周期异步化 + 测试重写（第 2、3 步）
+- `750170bc` benchmark / Dart SDK / 文档收尾，并修 `session.list` 回执 reqId 丢失与
+  事件 payload 结构体悬垂两个真问题（第 4~6 步）
 
 ## 关键决策
 
@@ -45,7 +52,7 @@
 | D1 | 导出面收敛为 `agentxx_ffi_call` + `call_cancel` + 本地同步的 `get_capabilities` / `drain_logs` |
 | D2 | 回执走事件（`EVT_RESULT` + `reqId`），不做 per-call 完成回调 |
 | D3 | `error.name` 稳定字符串 + `code` 为 `AGENTXX_FFI_ERR_*`，SDK 按名字判定 |
-| D4 | 事件 payload 所有权交给回调（不再借用） |
+| D4 | 事件 payload 所有权交给回调: 结构体与正文是**一块**堆内存, 回调 `agentxx_ffi_free(payload)` 释放整块（`NativeCallable.listener` 这类异步投递因此可用） |
 | D5 | 删除 `agentxx_ffi_event_queue_*` 四个符号 |
 | D6 | wire 请求/应答补 `reqId` 回显（并发调用的前提） |
 | D7 | 新增通用 `WireAck`：**所有命令类请求**都有回执（含 `hosttool.register`） |
@@ -62,6 +69,19 @@
 
 ## 结论
 
-待实施完成后补（预期结论：FFI 只剩"提交 / 取消 + 事件回执"一种形态；SDK 全部 `Future`/`Stream`，
-无阻塞、无轮询；每个调用都有确定结局，顺序可由"先 await 再提交"表达；新增 FFI 能力不再需要
-改导出符号）。
+原来的预期都成立了，另外多出两条实施中才暴露的约束。
+
+- **只有一种调用形态**: 提交拿 `reqId` + `EVT_RESULT` 回执；本地同步入口只剩
+  `get_capabilities` / `drain_logs` / 内存与版本函数——它们不跨线程等待。
+- **每个受理的 reqId 恰好一条回执**: 成功 / 失败 / 超时 / 取消 / 收尾中断都算。
+  `ffi_c_api` 463 条断言全绿（含并发 20 个在飞、取消后迟到应答被丢弃、回调内调 API）。
+- **顺序只靠 await**: `model.add → model.select → model.list` 这类链在 Dart 侧与 C++
+  侧都能稳定重现，不需要额外同步原语。
+- **性能**: 1000 次跨 C 边界往返 55~63 us/op（约 1.6~1.8 万 op/s）；合批把 66 条事件压到 24 条、
+  轮次耗时降到 1/5；首屏尾窗 200 条 vs 全量 240 条省 7.9 KiB 同步体积。数据见
+  [benchmark.md](../../../docs/zh-cn/design/benchmark.md) §1 与 `resource/benchmark/2026-11-25_750170bc_windows-resource-ffi/`。
+- **两条实施中发现的约束**（已写进代码注释与 `ffi.md`）:
+  1. 服务端“取数”→“回执”的协程里，回执 id 必须在取数**之后**补——先把 `resp.reqId`
+     设好再整体赋值会被取数结果覆盖，回执带 `reqId=0` 会被当成广播丢掉；
+  2. 事件 payload 的结构体不能放在回调返回前就失效的栈上——`NativeCallable.listener`
+     是异步投递，结构体必须与正文同在一块堆内存里活到回调释放它。
