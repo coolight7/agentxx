@@ -58,6 +58,7 @@ void emitOwnedEvent(const AgentxxFFICallbacks& cb, int32_t type, std::string jso
     holder->data     = buf;
     holder->size     = static_cast<uint64_t>(json.size());
     // 所有权交给回调: 这里不回收 (回调取完正文后 agentxx_ffi_free(payload) 释放整块)
+    // 回调抛异常时不补释放: 它可能已经释放过, 再释放就是双重释放 (宁可漏一块内存)
     try {
         cb.on_event(type, holder, cb.user_data);
     } catch (const std::exception& e) {
