@@ -31,10 +31,10 @@
 ///
 /// 事件模型 (异步, 运行期在内部 client io 线程回调):
 ///   - 所有事件经 AgentxxFFICallbacks::on_event 回调, payload 是**归回调所有**的
-///     `AgentxxString` (JSON), 回调返回前用 `agentxx_ffi_string_free` 释放即可;
-///     想保存就自己拷贝, 不要保留指针
-///   - payload 归回调所有, 因此绑定可以放心用 `NativeCallable.listener`
-///     (Dart) / threadsafe function (Node) 一类线程安全投递
+///     `AgentxxString*`: 结构体与 JSON 正文在同一块堆内存上, 取完用
+///     `agentxx_ffi_free(payload)` 释放整块 (想保存就自己拷贝, 别保留指针)
+///   - 结构体在回调释放前一直有效, 因此绑定可以放心用 `NativeCallable.listener`
+///     (Dart, 回调延后到 isolate 消息循环) / threadsafe function (Node) 一类线程安全投递
 ///   - 回调里可以调本 API 的任何函数 (call / call_cancel / stop / drain_logs ...);
 ///     回调必须快速返回, 长任务请自己投递到别的线程
 ///   - `AGENTXX_FFI_EVT_STOPPED` 是**最后一个**事件; 收到它之后不会再有回调
@@ -176,7 +176,10 @@ AGENTXX_FFI_EXPORT void* AGENTXX_FFI_CALL agentxx_ffi_malloc(uint64_t size);
 /// 释放由 agentxx_ffi_malloc 分配的裸内存
 AGENTXX_FFI_EXPORT void AGENTXX_FFI_CALL agentxx_ffi_free(const void* ptr);
 
-/// 释放由 FFI 接口分配并返回的 AgentxxString (含事件回调的 payload)
+/// 释放由 FFI 接口分配并返回的 AgentxxString 的**内容** (结构体由调用方持有)
+/// - 用于出参式接口 (`agentxx_ffi_create` 的 log / `agentxx_ffi_drain_logs` 的 out 等)
+/// - 事件回调的 payload 不是这种形态: 结构体与正文同在一块堆内存上,
+///   用 `agentxx_ffi_free(payload)` 释放
 AGENTXX_FFI_EXPORT void AGENTXX_FFI_CALL agentxx_ffi_string_free(AgentxxString* str);
 
 /// 分配并拷贝字符串视图为 AgentxxString
@@ -233,8 +236,11 @@ typedef struct AgentxxFFICallbacks {
     uint32_t struct_size; ///< = sizeof(AgentxxFFICallbacks); 用于跨版本扩展时判定字段可见性
     uint32_t reserved;    ///< 必须为 0
     /// 事件回调 (运行期在内部 client io 线程, 收尾时可能在收尾线程)
-    /// - payload **归回调所有**: 返回前必须 agentxx_ffi_string_free(payload)
-    /// - payload 是 UTF-8 JSON 文本
+    /// - [payload] **归回调所有**: 它是库分配的一块内存, `data`/`size` 是 UTF-8 JSON 文本,
+    ///   取完用 `agentxx_ffi_free(payload)` 释放整块 (不要用 `agentxx_ffi_string_free`:
+    ///   那会把结构体当成调用方自己的栈变量)
+    /// - 结构体与正文活到回调释放为止, 所以可以投递到别的线程/事件循环再处理
+    ///   (Dart 的 `NativeCallable.listener` 就是这么用的); 不释放就等于内存泄漏
     void(AGENTXX_FFI_CALL* on_event)(int32_t type, AgentxxString* payload, void* user_data);
     /// 嵌入方程序上下文 (原样转给 on_event)
     void* user_data;

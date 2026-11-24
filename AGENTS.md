@@ -1043,9 +1043,20 @@ path/to/agentxx_test --log-level warn string_util regex
   - 定稿对账**只增不减**: `messages` 通道写入时只有"定稿文本完整包含行文本"才整条替换,
     其它不一致保留行文本 —— 流式中断后重试时定稿文本只含最后一次尝试的内容, 覆盖等于
     把用户已看到的内容抹掉 (LLM 上下文丢掉还是保留那次半截输出, 展示都是追加)
-  - 不做旧版本兼容: wire `kVersion`/`kMinVersion` 同抬到 4, FFI API 抬到 3
-    (`AGENTXX_FFI_CAP_VIEW_REPLICA`); 改协议时同时改 `agent/schema/wire-schema.json`
+  - 不做旧版本兼容: wire `kVersion`/`kMinVersion` 同抬到 4, FFI API 抬到 4
+    (v4 = 提交 + 回执); 改协议时同时改 `agent/schema/wire-schema.json`
     与 `docs/zh-cn/design/wire-protocol-fields.md` (`AGENTXX_UPDATE_WIRE_SCHEMA=1` 重新生成)
+- FFI C API (v4, 2026-11): 对外导出面收敛为 **15 个符号**, 业务能力全部进
+  `agentxx_ffi_call({op,args,timeoutMs})` 的 op (27 个) —— 提交返回 `reqId`, 结果经
+  `EVT_RESULT` 送达 (每个受理的 reqId **恰好一条**回执), `agentxx_ffi_call_cancel` 只停
+  等待; 事件 payload 改为**归回调所有** (`agentxx_ffi_string_free`); `stop` 异步
+  (`EVT_STOPPED` 是最后一件事), `destroy` 只在 Created/Stopped 成功。对应关系:
+  旧同步查询 → `model.list` / `context.get` / `session.list`; 旧 `send_wire` →
+  `permission.*` / `input.queue.*` / `session.rename` / `fs.list_dir` / `plugin.data_up`;
+  旧 `tool_*` → `hosttool.*`; 旧 `set_delta_batch` → `delta.set_batch` (默认关闭)。
+  改 FFI 接口时同步改 `docs/zh-cn/design/ffi.md` (中/英)、`agent/ffi/dart/ffigen.yaml`
+  与示例 `agent/example/ffi/dart/`; 导出白名单只有 `agent/lib/ffi_symbols.map` 一份
+  (MSVC 也从它生成导出列表)
 - 测试模块: client 侧 19 个 (含 `banner_art` `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
   同步组另有 `view_replica`(副本语义) `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
   `chatbot_task`,

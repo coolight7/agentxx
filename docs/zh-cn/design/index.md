@@ -2268,7 +2268,7 @@ agent/
 │   └── include/agentxx-test/     # 测试头文件统一入口 (源码一律以 "agentxx-test/<组>/<模块>.h" 前缀引用, 与源码目录分离避免重名歧义)
 │       ├── test_framework.h                   # 测试框架 (断言宏 / TestResult)
 │       ├── test_toolcall_args.h               # 工具参数类型自动修正测试
-│       ├── test_ffi_c_api.h                   # FFI C API 测试 (生命周期/交互/HIL/事件队列)
+│       ├── test_ffi_c_api.h                   # FFI C API 测试 (生命周期/提交+回执/取消/超时/并发/HIL/headless)
 │       ├── core/                              # lib (agentxx 核心) 测试头 (与 core/*.cpp 同名模块)
 │       │   ├── test_agent.h                   # CodeAgent 集成测试 (模拟 LLM Server: 工具调用/多轮/权限模式/重试耗尽/异常拦截)
 │       │   │                                  #   test_agent.h 同时提供共享 LLM 模拟器 (DaSimServer),
@@ -2569,8 +2569,8 @@ EventBus (事件总线)
     淘汰后回填 (`updateViewMessage`) 命中不到行时只写库
   - 没有会话库时不淘汰 (内存是唯一副本, 淘汰等于永久丢历史)
 - 旧版本兼容: 不做 —— wire 协议 `kVersion`/`kMinVersion` 同抬到 5 (Hello 的 `historyTail`
-  取代链式哈希做尾窗声明), FFI API 抬到 3 (`AGENTXX_FFI_CAP_VIEW_REPLICA` 能力位告知
-  嵌入方程序可用副本语义)
+  取代链式哈希做尾窗声明), FFI API 抬到 4 (提交 + 回执; 导出面 15 个符号, 业务能力全在
+  `agentxx_ffi_call` 的 op 里, 见 [ffi.md](ffi.md))
 
 ### SyncPayload / MessageQueueItem
 - SyncPayload {fromIndex (窗口首条绝对下标), messages[], streaming (直播槽, 可选), totalMessages, deltaSeq, messageQueue[], lastViewSeq, incremental}

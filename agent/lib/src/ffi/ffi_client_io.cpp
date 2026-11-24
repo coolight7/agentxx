@@ -42,19 +42,24 @@ void emitOwnedEvent(const AgentxxFFICallbacks& cb, int32_t type, std::string jso
     if (cb.on_event == nullptr) {
         return; // headless: 不序列化, 不分配
     }
-    auto* buf = static_cast<char*>(agentxx_ffi_malloc(static_cast<uint64_t>(json.size()) + 1));
-    if (buf == nullptr) {
+    // 结构体与正文放在同一块内存里: 回调可能延后执行 (Dart 的 NativeCallable.listener
+    // 把调用投进 isolate 消息队列), 结构体本身也必须活到回调真正跑完, 不能放栈上
+    const size_t total = sizeof(AgentxxString) + json.size() + 1;
+    auto* holder = static_cast<AgentxxString*>(agentxx_ffi_malloc(total));
+    if (holder == nullptr) {
         XX_LOGW("[ffi] event payload allocation failed ({} bytes)", json.size());
         return;
     }
+    auto* buf = reinterpret_cast<char*>(holder + 1);
     if (!json.empty()) {
         std::memcpy(buf, json.data(), json.size());
     }
     buf[json.size()] = '\0';
-    // 所有权交给回调: 这里不回收 (回调返回前自己 agentxx_ffi_string_free)
-    AgentxxString payload{buf, static_cast<uint64_t>(json.size())};
+    holder->data     = buf;
+    holder->size     = static_cast<uint64_t>(json.size());
+    // 所有权交给回调: 这里不回收 (回调取完正文后 agentxx_ffi_free(payload) 释放整块)
     try {
-        cb.on_event(type, &payload, cb.user_data);
+        cb.on_event(type, holder, cb.user_data);
     } catch (const std::exception& e) {
         XX_LOGE("[ffi] on_event callback threw: {}", e.what());
     } catch (...) {

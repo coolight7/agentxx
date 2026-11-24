@@ -22,46 +22,31 @@ compiler-opts:
 llvm-path:
   - 'D:/0Acoolight/App/LLVM'
 functions:
-  include: # 精确放行 ffi_api.h 全部导出符号, 保证导出面收敛于契约
+  include: # 精确放行 ffi_api.h 的 15 个导出符号 (v4 导出面)
+    # ---- 内存 / 版本 / 错误信息 ----
     - 'agentxx_ffi_malloc'
     - 'agentxx_ffi_free'
+    - 'agentxx_ffi_string_free'
     - 'agentxx_ffi_strdup_n'
     - 'agentxx_ffi_api_version'
     - 'agentxx_ffi_library_version'
     - 'agentxx_ffi_strerror'
+    - 'agentxx_ffi_get_capabilities'
+    # ---- 生命周期 ----
     - 'agentxx_ffi_create'
     - 'agentxx_ffi_start'
     - 'agentxx_ffi_stop'
     - 'agentxx_ffi_destroy'
-    - 'agentxx_ffi_send_input'
-    - 'agentxx_ffi_cancel'
-    - 'agentxx_ffi_select_model'
-    - 'agentxx_ffi_set_permission'
-    - 'agentxx_ffi_switch_session'
-    - 'agentxx_ffi_get_model_info'
-    - 'agentxx_ffi_get_context_messages'
-    - 'agentxx_ffi_list_sessions'
-    - 'agentxx_ffi_interrupt_respond'
+    # ---- 调用 (提交 + 回执) ----
+    - 'agentxx_ffi_call'
+    - 'agentxx_ffi_call_cancel'
+    # ---- 本地同步 ----
     - 'agentxx_ffi_drain_logs'
-    # 异步安全事件队列桥接 (ffi_api.h "异步安全事件队列" 节)
-    - 'agentxx_ffi_event_queue_create'
-    - 'agentxx_ffi_event_queue_free'
-    - 'agentxx_ffi_event_queue_on_event'
-    - 'agentxx_ffi_event_queue_pop'
-    - 'agentxx_ffi_set_language'
-    - 'agentxx_ffi_get_language'
-    - 'agentxx_ffi_get_capabilities'
-    - 'agentxx_ffi_add_model'
-    - 'agentxx_ffi_remove_model'
-    - 'agentxx_ffi_list_models'
-    - 'agentxx_ffi_send_wire'
-    - 'agentxx_ffi_tool_register'
-    - 'agentxx_ffi_tool_unregister'
-    - 'agentxx_ffi_tool_respond'
-    - 'agentxx_ffi_set_delta_batch'
 structs:
   include:
     - 'AgentxxFFICallbacks'
+    - 'AgentxxString'
+    - 'AgentxxStringView'
 enums:
   include:
     - 'AgentxxFFIEventType'

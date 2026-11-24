@@ -1,9 +1,11 @@
-/// agent 事件模型 —— FFI 事件 payload (wire 协议 JSON) 的 Dart 侧解析。
+/// agent 事件模型 —— FFI 事件 payload (JSON) 的 Dart 侧解析。
 ///
 /// 事件种类对应 ffi_api.h 的 AgentxxFFIEventType; 各 payload 字段与服务端
 /// wire 协议一致 (agent/lib/include/agentxx/agent/io/wire_protocol.h):
+/// - result: {reqId, op, ok, result?|error:{code,name,message}}
 /// - delta: {"kind","seq","text","msgId","tool_name","tool_call_id",
 ///           "arguments","result","hasError","tipType",...}
+/// - delta_text_batch: {"msgId","kind","text"}  (合批窗口内的文本增量)
 /// - turn_result: {"sessionId","hasError","errorMessage"(可选),"interrupted"}
 /// - interrupt_request: {"interruptId","sessionId","node","value",
 ///                       "argJson": "<内嵌 JSON 字符串>"}
@@ -17,20 +19,71 @@ import 'package:agentxx_ffi_bindings/agentxx_ffi_bindings.dart' as bind;
 sealed class AgentEvent {
   AgentEvent(this.raw);
 
-  /// 原始 payload JSON 文本 (排障/透传用)
+  /// 原始 payload JSON 文本对应的对象 (排障/透传用)
   final Map<String, dynamic> raw;
 }
 
-/// EVT_READY: 服务端就绪
+/// EVT_READY: 服务端就绪 (此后提交的调用按当前会话处理)
 class ReadyEvent extends AgentEvent {
   ReadyEvent(super.raw);
 
   String get sessionId => raw['sessionId'] as String? ?? '';
 }
 
-/// EVT_SYNC: 全量/部分历史同步 (会话恢复)
+/// EVT_STOPPED: 收尾完成 —— **最后一个**事件, 之后不会再有回调
+class StoppedEvent extends AgentEvent {
+  StoppedEvent(super.raw);
+}
+
+/// 调用失败的结构化原因
+class CallError {
+  CallError(this.code, this.name, this.message);
+
+  factory CallError.fromJson(Map<String, dynamic> j) => CallError(
+        (j['code'] as num?)?.toInt() ?? 0,
+        j['name'] as String? ?? 'rejected',
+        j['message'] as String? ?? '',
+      );
+
+  final int code;
+
+  /// 稳定字符串 (SDK 按它判定, 不受错误码调整影响)
+  final String name;
+  final String message;
+
+  @override
+  String toString() => 'CallError($code $name${message.isEmpty ? '' : ': $message'})';
+}
+
+/// EVT_RESULT: 一次 `call` 的回执 (每个受理的 reqId 恰好一条)
+class ResultEvent extends AgentEvent {
+  ResultEvent(super.raw);
+
+  int get reqId => (raw['reqId'] as num?)?.toInt() ?? 0;
+  String get op => raw['op'] as String? ?? '';
+  bool get ok => raw['ok'] as bool? ?? false;
+
+  /// 成功时的结果对象 (无结果的 op 为空对象)
+  Map<String, dynamic> get result =>
+      (raw['result'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
+
+  /// 失败原因 (ok == true 时为 null)
+  CallError? get error {
+    final e = raw['error'];
+    if (e is Map<String, dynamic>) {
+      return CallError.fromJson(e);
+    }
+    return null;
+  }
+}
+
+/// EVT_SYNC: 全量/尾窗历史同步 (会话恢复)
 class SyncEvent extends AgentEvent {
   SyncEvent(super.raw);
+
+  /// 尾窗同步的起始下标 (0 = 完整同步)
+  int get fromIndex => (raw['fromIndex'] as num?)?.toInt() ?? 0;
+  int get totalMessages => (raw['totalMessages'] as num?)?.toInt() ?? 0;
 }
 
 /// EVT_DELTA: 流式增量事件 (文本/思考/工具/节点/系统提示等)
@@ -42,6 +95,7 @@ class DeltaEvent extends AgentEvent {
   String get kind => raw['kind'] as String? ?? 'text_token';
   int get seq => (raw['seq'] as num?)?.toInt() ?? 0;
   String get text => raw['text'] as String? ?? '';
+  String get msgId => raw['msgId'] as String? ?? '';
   String get toolName => raw['tool_name'] as String? ?? '';
   String get toolCallId => raw['tool_call_id'] as String? ?? '';
   String get arguments => raw['arguments'] as String? ?? '';
@@ -51,6 +105,15 @@ class DeltaEvent extends AgentEvent {
 
   /// 轮次统计字段 (kind == turn_end 时使用)
   double get tps => (raw['tps'] as num?)?.toDouble() ?? 0;
+}
+
+/// EVT_DELTA_TEXT_BATCH: 合批窗口内的文本/思考增量 `{msgId, kind, text}`
+class DeltaTextBatchEvent extends AgentEvent {
+  DeltaTextBatchEvent(super.raw);
+
+  String get msgId => raw['msgId'] as String? ?? '';
+  String get kind => raw['kind'] as String? ?? 'text_token';
+  String get text => raw['text'] as String? ?? '';
 }
 
 /// EVT_TURN_END: 一轮对话结束
@@ -70,6 +133,13 @@ class ContextStatsEvent extends AgentEvent {
   int get contextTokens => (raw['contextTokens'] as num?)?.toInt() ?? 0;
   int get maxContextTokens => (raw['maxContextTokens'] as num?)?.toInt() ?? 0;
   double get tps => (raw['tps'] as num?)?.toDouble() ?? 0;
+
+  /// 本会话累计用量 (新主程序才下发; 老主程序缺字段时为 0)
+  int get promptTokens => (raw['promptTokens'] as num?)?.toInt() ?? 0;
+  int get completionTokens => (raw['completionTokens'] as num?)?.toInt() ?? 0;
+  int get totalTokens => (raw['totalTokens'] as num?)?.toInt() ?? 0;
+  int get cachedPromptTokens =>
+      (raw['cachedPromptTokens'] as num?)?.toInt() ?? 0;
 }
 
 /// 单个模型的多模态输入能力 (capabilities[] 单项)
@@ -97,6 +167,9 @@ class ModelCapability {
 }
 
 /// EVT_MODEL_INFO: 当前模型信息 / 可用模型列表 / 各模型多模态能力
+///
+/// 既可能是 `model.list` 的回执, 也可能是切换会话/增删模型后的广播
+/// (广播对应的 payload 与回执一致; 回执走 [ResultEvent])
 class ModelInfoEvent extends AgentEvent {
   ModelInfoEvent(super.raw);
 
@@ -120,6 +193,22 @@ class ModelInfoEvent extends AgentEvent {
 /// EVT_COMPONENTS: 启动组件信息 (MCP/Skill/Memory/插件)
 class ComponentsEvent extends AgentEvent {
   ComponentsEvent(super.raw);
+}
+
+/// EVT_MESSAGE_QUEUE: 消息队列变化 `{sessionId, items[], state?}`
+class MessageQueueEvent extends AgentEvent {
+  MessageQueueEvent(super.raw);
+
+  String get sessionId => raw['sessionId'] as String? ?? '';
+  String get state => raw['state'] as String? ?? '';
+  List<dynamic> get items => raw['items'] as List<dynamic>? ?? const [];
+}
+
+/// EVT_PERMISSION_STATE: 权限状态广播 `{fullAuth}`
+class PermissionStateEvent extends AgentEvent {
+  PermissionStateEvent(super.raw);
+
+  bool get fullAuth => raw['fullAuth'] as bool? ?? false;
 }
 
 /// EVT_PLUGIN_DATA: 插件事件转发
@@ -189,11 +278,12 @@ class InterruptControl {
   final double? max;
 
   /// 结果值的 JSON 形态 (checkbox=布尔 / number=数值 / 其余=字符串/原始值)
-  bool get isBoolean => control == 'checkbox';
+  bool get isBoolean => control == 'checkbox' || control == 'switch';
   bool get isNumber => control == 'number';
   bool get isChoice => control == 'buttons' || control == 'select';
 }
 
+/// EVT_INTERRUPT_REQ: HIL 中断询问
 class InterruptReqEvent extends AgentEvent {
   InterruptReqEvent(super.raw) {
     // argJson 为内嵌 JSON 字符串 (InterruptHandleArg): {name,arg,resultId,ui}
@@ -238,8 +328,7 @@ class InterruptReqEvent extends AgentEvent {
 
   /// 内容块纯文本 (text/markdown 原文; 供控制台宿主展示)
   List<String> get contentLines => uiBlocks
-      .where((b) =>
-          b['kind'] == 'text' || b['kind'] == 'markdown')
+      .where((b) => b['kind'] == 'text' || b['kind'] == 'markdown')
       .map((b) => b['text'] as String? ?? '')
       .where((s) => s.isNotEmpty)
       .toList(growable: false);
@@ -270,11 +359,30 @@ class InterruptExpiredEvent extends AgentEvent {
   int get interruptId => (raw['interruptId'] as num?)?.toInt() ?? 0;
 }
 
+/// EVT_HOST_TOOL_CALL: 嵌入方程序工具调用请求
+class HostToolCallEvent extends AgentEvent {
+  HostToolCallEvent(super.raw);
+
+  int get callId => (raw['callId'] as num?)?.toInt() ?? 0;
+  String get name => raw['name'] as String? ?? '';
+  String get argsJson => raw['argsJson'] as String? ?? '';
+  int get timeoutSec => (raw['timeoutSec'] as num?)?.toInt() ?? 0;
+}
+
+/// EVT_HOST_TOOL_CANCELED: 嵌入方程序工具调用取消 `{callId, reason}`
+class HostToolCanceledEvent extends AgentEvent {
+  HostToolCanceledEvent(super.raw);
+
+  int get callId => (raw['callId'] as num?)?.toInt() ?? 0;
+  String get reason => raw['reason'] as String? ?? '';
+}
+
 /// EVT_ERROR: 内部错误
 class ErrorEvent extends AgentEvent {
   ErrorEvent(super.raw);
 
   int get code => (raw['code'] as num?)?.toInt() ?? 0;
+  String get name => raw['name'] as String? ?? '';
   String get message => raw['message'] as String? ?? '';
 }
 
@@ -301,20 +409,29 @@ AgentEvent? parseAgentEvent(int typeValue, String payloadJson) {
 
   return switch (type) {
     bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_READY => ReadyEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_STOPPED => StoppedEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_RESULT => ResultEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_ERROR => ErrorEvent(json),
     bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_SYNC => SyncEvent(json),
     bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_DELTA => DeltaEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_DELTA_TEXT_BATCH =>
+      DeltaTextBatchEvent(json),
     bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_TURN_END => TurnEndEvent(json),
     bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_CONTEXT_STATS =>
       ContextStatsEvent(json),
     bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_MODEL_INFO => ModelInfoEvent(json),
-    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_COMPONENTS =>
-      ComponentsEvent(json),
-    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_INTERRUPT_REQ =>
-      InterruptReqEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_COMPONENTS => ComponentsEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_MESSAGE_QUEUE =>
+      MessageQueueEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_PERMISSION_STATE =>
+      PermissionStateEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_INTERRUPT_REQ => InterruptReqEvent(json),
     bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_INTERRUPT_EXPIRED =>
       InterruptExpiredEvent(json),
-    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_PLUGIN_DATA =>
-      PluginDataEvent(json),
-    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_ERROR => ErrorEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_HOST_TOOL_CALL =>
+      HostToolCallEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_HOST_TOOL_CANCELED =>
+      HostToolCanceledEvent(json),
+    bind.AgentxxFFIEventType.AGENTXX_FFI_EVT_PLUGIN_DATA => PluginDataEvent(json),
   };
 }

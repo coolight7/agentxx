@@ -113,9 +113,10 @@ struct FfiEventRecorder {
         if (payload != nullptr && payload->data != nullptr && payload->size > 0) {
             s.assign(payload->data, static_cast<size_t>(payload->size));
         }
-        // payload 归回调所有: 看完立刻释放 (ASan 下同时验证没有泄漏/没有 UAF)
+        // payload 归回调所有: 结构体与正文同在一块堆内存上, 看完立刻 agentxx_ffi_free
+        // (ASan 下同时验证没有泄漏/没有 UAF)
         if (payload != nullptr) {
-            agentxx_ffi_string_free(payload);
+            agentxx_ffi_free(payload);
         }
         const auto t = static_cast<AgentxxFFIEventType>(type);
         {
@@ -1818,6 +1819,81 @@ void testHeadless() {
     mock.stop();
 }
 
+/// 18) 会话落盘: session.list / session.rename (列表走线程池卸载后回填)
+void testSessionStoreOps() {
+    namespace fs = std::filesystem;
+
+    FfiMockLLM mock;
+    uint16_t   port = 0;
+    if (!mock.start(port)) {
+        TEST_FAIL << "mock LLM server start failed" << std::endl;
+        g_ffi_failed++;
+        return;
+    }
+
+    const auto tmpDir
+        = fs::temp_directory_path()
+          / ("ffi_session_store_"
+             + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code ec;
+    fs::create_directories(tmpDir / "data", ec);
+
+    // 会话落盘打开: 会话列表要扫目录 + 读 SQLite, 服务端会卸载到线程池后回填
+    const std::string configJson
+        = utilxx_base::Json{
+              {"dataDir",            (tmpDir / "data").generic_string()},
+              {"workDir",            tmpDir.generic_string()            },
+              {"enableSessionStore", true                               },
+              {"permissionMode",     "pass"                             },
+    }
+              .dump();
+
+    FfiTestClient client;
+    XX_TEST_EXPECT_TRUE(ffiCreate(client, configJson.c_str(), mock.modelJson()));
+    XX_TEST_EXPECT_EQ(client.start(), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(client.ready());
+
+    // 一轮对话: 会话随轮次落盘
+    XX_TEST_EXPECT_TRUE(client.call("input.send", utilxx_base::Json{{"text", "hello store"}}).ok);
+    XX_TEST_EXPECT_TRUE(client.rec.wait(AGENTXX_FFI_EVT_TURN_END, 30000));
+
+    // 会话列表: 落盘打开后至少一条, 且带 sessionId
+    std::string sessionId;
+    {
+        auto reply = client.call("session.list", utilxx_base::Json::object(), -1, 30000);
+        XX_TEST_EXPECT_TRUE(reply.ok);
+        if (!reply.ok) {
+            std::cout << "[ffi_c_api] session.list failed: name=" << reply.name
+                      << " message=" << reply.message << std::endl;
+        }
+        XX_TEST_EXPECT_TRUE(reply.result.contains("sessions"));
+        if (reply.result.contains("sessions") && reply.result["sessions"].is_array()
+            && reply.result["sessions"].size() > 0) {
+            sessionId = reply.result["sessions"][0].value("sessionId", std::string{});
+        }
+        XX_TEST_EXPECT_TRUE(!sessionId.empty());
+    }
+
+    // 改名 (写会话库): 改的是句柄当前绑定的会话
+    if (!sessionId.empty()) {
+        auto reply = client.call(
+            "session.rename",
+            utilxx_base::Json{{"title", "store-renamed"}},
+            -1,
+            30000
+        );
+        XX_TEST_EXPECT_TRUE(reply.ok);
+    }
+
+    XX_TEST_EXPECT_EQ(client.stop(), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(client.waitStopped(30000));
+    XX_TEST_EXPECT_EQ(client.destroy(), AGENTXX_FFI_OK);
+    mock.stop();
+
+    std::error_code cleanupEc;
+    fs::remove_all(tmpDir, cleanupEc);
+}
+
 } // namespace
 
 namespace agentxx {
@@ -1841,6 +1917,7 @@ agentxx::test::TestResult testFfiCApi() {
     testTurnCancel();
     testMultipleRuntimesConcurrent();
     testHeadless();
+    testSessionStoreOps();
     return agentxx::test::TestResult(g_ffi_passed, g_ffi_failed);
 }
 

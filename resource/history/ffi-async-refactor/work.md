@@ -9,10 +9,10 @@
 - [x] 第 1 步：wire 相关性 + 通用回执（`reqId` + `WireAck` + 服务端 ack + schema）
 - [x] 第 2 步：FFI 内部换代（`ffi_call` / `call_cancel` / `ffi_ops` + C API v4 + 事件所有权 + 测试重写）
 - [x] 第 3 步：生命周期异步化（`stop` → `EVT_STOPPED`、`destroy` 约束）—— 与第 2 步同一批文件，合并实施
-- [ ] 第 4 步：benchmark FFI 场景更新（含调用吞吐 / 合批对比 / 首屏尾窗三个子场景）
-- [ ] 第 5 步：Dart 绑定重新生成 + SDK/示例异步化（含取消令牌与顺序用法）
-- [ ] 第 6 步：文档与导出白名单收尾
-- [ ] 第 7 步：全量回归 + 收尾
+- [x] 第 4 步：benchmark FFI 场景更新（含调用吞吐 / 合批对比 / 首屏尾窗三个子场景）
+- [x] 第 5 步：Dart 绑定重新生成 + SDK/示例异步化（含取消令牌与顺序用法）
+- [x] 第 6 步：文档与导出白名单收尾
+- [x] 第 7 步：全量回归（44016/0）+ Release 构建 `EXIT=0` + 冒烟收尾
 
 ## 开工前的现场（2026-11-24 调查，可直接引用）
 
@@ -174,20 +174,106 @@
 - `boundaries` 20 passed（修了两处注释用词：`领域` → `业务`）。
 - `wire_roundtrip` 285 / `wire_schema` 1377 / `session_admin` 38 / `input_delivery` 140 / `remote_agent` 602 / `agent` 223 全绿。
 
+### 第 4 步：benchmark FFI 场景 (2026-11-25)
+
+| 文件 | 改动 |
+|---|---|
+| `agent/benchmark/bench_resource.cpp` | `benchResourceFfi` 重写：新增 `FfiBenchLib`（**15 个符号全部解析** + 缺哪个点名）、`FfiBenchEvents`（payload 在回调里释放，按事件类型留计数/回执）、`FfiBenchHandle`（create/start/ready、`callOp` 等回执、stop 等 `EVT_STOPPED`、destroy）；`get_context_messages` → `call("context.get")`；`send_input` → `call("input.send")`；新增三个子场景 |
+| 同上 | 子场景一 **调用吞吐**: 预热 20 次后 1000 次 `model.list`（submit+ack），给出总耗时、us/op、op/s |
+| 同上 | 子场景二 **事件吞吐**: 起第二个 mock（`AGENTXX_BENCH_FFI_STREAM_CHUNKS`, 默认 64 段 SSE），`model.add` + `model.select` 切过去，合批关 / 24ms 各跑一轮，记事件数 / 字节 / 轮次耗时 |
+| 同上 | 子场景三 **首屏尾窗**: 临时句柄（会话落盘开、无插件）跑 40 轮造长会话，`session.switch` 回同一会话量 `EVT_SYNC` 字节/条数/耗时（`syncTailCount=200`）；再用 `syncTailCount=0` 的句柄切到同一会话对比完整同步 |
+
+验证（见下节“验证清单”）：Release 构建与 `resource_ffi` 实跑结果。
+
+偏差:
+
+1. **首屏尾窗的度量位置**: FFI 每次 `create` 都会新建会话（没有“接管已有会话”的配置），所以拿不到“首次接入已有长历史”的场景；改为用 `session.switch` 度量——它走同一个 `buildTailSync(effectiveSyncTailCount())`（服务端同一函数），字节数与延迟的统计方式一致。
+2. **`session.list` 的会话 id 字段名是 `sessionId`**（不是 `id`），第一版写错导致尾窗子场景拿不到 id，已修。
+
+顺带修掉的真问题（尾窗子场景跑不出来时才暴露）:
+
+- 现象: 会话落盘打开（`enableSessionStore: true`）时 `session.list` 永远不回执，10 s 后超时；
+  `enableSessionStore: false` 时正常（`ffi_c_api` 里原本只有开关关的那条路径）。
+- 根因: `session_server_agent_io.cpp` 的 `WireListSessions` 分支在协程开头设了 `resp.reqId`，
+  紧接着 `resp = co_await utilxx::offloadAsync<WireSessionList>(...)`（或走内联分支的同名赋值）
+  **把整个结构体换成取数结果**，而 `listSessionsFor()` 返回的结构体不带 reqId（它只负责取数），
+  于是回执带着 `reqId = 0` 发出去，FFI 侧按“不是回执”丢掉（`[ffi] reply without reqId ignored`）。
+  会话库关掉时走的是早退分支 `sendToClient(sender, WireSessionList{.reqId = m.reqId})`，所以看不出来。
+- 修法: 取数之后再补 `resp.reqId = req.reqId;`（注释写明了“先设再赋值会被覆盖”）。
+- 新增覆盖: `test_ffi_c_api.cpp` 的用例 18 `testSessionStoreOps()` —— 落盘打开的句柄跑一轮后
+  `session.list`（断言至少一条且带 `sessionId`）+ `session.rename`（写会话库）。
+  修为前该用例稳定失败（3 条断言），修后 `ffi_c_api` 463 通过 / 0 失败。
+
+第二个真问题（Dart `smoke_check` 首跑就崩在 `RtlFreeHeap`）:
+
+- 现象: `NativeCallable.listener` 收到的 payload 在 Dart 侧 `agentxx_ffi_string_free`
+  时堆破坏（`RtlFreeHeap+0x7d`）。
+- 根因: `emitOwnedEvent()` 把 `AgentxxString payload{buf,size}` 放在**自己的栈上**再传指针。
+  同步回调没问题，但 `listener` 是异步投递：原生函数返回后栈帧已回收，Dart 稍后读
+  `payload.ref` 拿到的是废内存（不是正文指针）。所谓“payload 归回调所有”只对正文成立。
+- 修法: 结构体与正文放进**同一块** `agentxx_ffi_malloc` 内存（结构体在前，`data` 指向
+  紧跟的字节），回调一次性 `agentxx_ffi_free(payload)` 释放整块；`agentxx_ffi_string_free`
+  保持“只释放出参内容、结构体归调用方”的语义（头里已写明两者区别）。
+- 同步改动: 头文件注释、`test_ffi_c_api.cpp` 的事件记录器、`bench_resource.cpp` 的
+  `FfiBenchEvents`（改用 `agentxx_ffi_free`）、Dart SDK `_onNativeEvent`、中英 `ffi.md`。
+
+### 第 5 步：Dart 绑定与 SDK 异步化 (2026-11-25)
+
+| 文件 | 改动 |
+|---|---|
+| `agent/ffi/dart/ffigen.yaml` | 函数清单按 v4 重写成 15 个符号（去掉了不存在的 `set_permission`、事件队列四个、同步查询、`send_wire`、`tool_*`）；`structs` 补 `AgentxxString` / `AgentxxStringView` |
+| `agent/ffi/dart/lib/agentxx_ffi_bindings.dart` | 用 ffigen 重新生成（431 行）|
+| `agent/ffi/dart/README.md` | 补 v4 调用模型与再生命令（**ffigen 19 从 `--config` 文件读配置**，旧版从 `pubspec.yaml` 的 `ffigen:` 段读）|
+| `agent/example/ffi/dart/lib/src/agent_client.dart` | 重写成 `Future`/`Stream`: `call(op, args, {timeout, cancel})` / `callNoWait` / `cancelCall` / `AgentxxCancelToken` / `AgentxxCanceledException`；`NativeCallable.listener` 收事件（payload 回调内 `string_free`）；`reqId → Completer` 表；`stop()` 等 `EVT_STOPPED`、`dispose()` 再 destroy；28 个便捷方法（input/model/session/context/permission/fs/interrupt/hosttool/plugin/language/delta）、`enableDeltaBatch`/`disableDeltaBatch`（**默认不开**）、`start(syncTailCount: 200)` |
+| `agent/example/ffi/dart/lib/src/events.dart` | 新增 `ResultEvent` / `StoppedEvent` / `DeltaTextBatchEvent` / `MessageQueueEvent` / `PermissionStateEvent` / `HostToolCallEvent` / `HostToolCanceledEvent` / `CallError`；删 `EVT_WIRE`；`ContextStatsEvent` 补累计用量字段 |
+| `agent/example/ffi/dart/lib/src/repl.dart` | 命令全部改 `await`；新增 `/compact` `/page` `/rename` `/batch` `/auth` `/caps`；会话 id 字段改 `sessionId`；权限应答改 `values:{decision,remember}` |
+| `agent/example/ffi/dart/bin/agentxx_cli.dart` | 新增 `--sync-tail <n>`；启动传 `syncTailCount` |
+| `agent/example/ffi/dart/lib/src/dll_loader.dart` | 补 `../../../build/*/exec` 候选（示例包在 `agent/example/ffi/dart` 而不是 `agent/ffi/dart`）|
+| `agent/example/ffi/dart/example/smoke_check.dart` | 重写为 5 个场景：对话流 / HIL 权限 / 调用顺序（add→select→list→未找到→context→page→本地 op）/ 取消令牌 / 生命周期（`EVT_STOPPED` 是最后一条事件）|
+
+偏差:
+
+1. **Dart 侧验证只能用 Release 库**: Debug 库带 ASan (`clang_rt.asan_dynamic-x86_64.dll`)，注入非 ASan 宿主进程（dartvm）时 ASan 自己 abort（`AddressSanitizer: access-violation`）—— 不是我们的代码问题，是“ASan 不能注入未插桩宿主”。
+2. **`interrupt.respond` 的 `values` 是控件值对象**（TUI 的权限卡片控件 id 是 `decision` / `remember` / `fullAuth`），FFI 负责包成服务端要的 `{"values":{...}}`；v3 的 Dart 示例传的是 `["true"]` 数组，已改。
+3. **`call()` 要把 `canceled` 还原成子类**: 回执里只有 `error.name == "canceled"` / `code == -9`，`call()` 现在直接抛 `AgentxxCanceledException`（不再抛基类），调用方不必自己比错误名。
+4. **`smoke_check` 四处稳定性修正**（首跑全暴露）:
+   - 场景 C 的 `model.add` 会写 `{dataDir}/agentxx-config.yaml`: 改成用临时 dataDir 并在 `finally` 删掉，否则第二次跑报“已有同名模型”；
+   - 场景 D 原来拿空会话的 `session.compact` 当“在飞调用”，但空上下文会立刻返回 `compaction_failed`，竞不过取消: 改成先跑一轮种子消息，再让 mock 每次响应延迟 3 s，取消才必然落在窗口内；
+   - 场景 E 断言 `EVT_STOPPED` 是最后一条事件时看的是 **Dart 事件流**（异步投递），`stop()` 返回时流里可能还有排队事件: 改成先等 `StoppedEvent` 真被消费，再等 300 ms 确认后面无新事件；
+   - mock 新增 `responseDelayMs`（场景 D 用）。
+
+### 第 6 步：文档与导出白名单收尾 (2026-11-25)
+
+| 文件 | 改动 |
+|---|---|
+| `docs/zh-cn/design/ffi.md` | 改写为 v4: 15 个符号 / 27 个 op / 事件表 / 生命周期状态机 / 顺序超时取消语义 / 性能默认值；保留中断 UI 渲染指引与输入 JSON；删事件队列、`send_wire`、同步查询约束 |
+| `docs/en/design/ffi.md` | 同上（英文版）|
+| `AGENTS.md` | “FFI API 抬到 3” → 4，并补一条 v4 汇总（15 符号 / op / 回调所有权 / stop 异步）|
+| `docs/zh-cn/design/index.md` | FFI API 版本说明与测试说明改为 v4 口径 |
+
+导出白名单（`agent/lib/ffi_symbols.map`）在第 2 步已一并改成 15 个符号；MSVC 的导出列表从同一份文件生成，无第二处。
+
 ## 验证清单
 
 - [x] 顶层 Debug 构建 `EXIT=0`
-- [x] `ffi_c_api` 全绿（每个 op / 并发 / 超时 / **取消** / **顺序** / 回调内调用 / 事件所有权 / 生命周期顺序）
-- [x] `wire_roundtrip` / `wire_schema` 全绿，schema 生成物已提交
-- [ ] TUI 交互抽查（`select_model` / `compact` / 队列操作）未被新增 ack 影响
-- [ ] Release 构建通过（含 benchmark、LTO）
-- [ ] `agentxx_benchmark` 的 `resource_ffi` 场景可跑通
-- [ ] `dart analyze` 无告警；`example/smoke_check.dart` 全绿
-- [ ] 性能：合批开/关的事件数与 CPU 对比、首屏尾窗 0 vs 200 的字节/延迟、headless 不序列化
-      （均记入基准报告）
-- [ ] 全量 `agentxx_test --log-level warn` 0 失败
-- [ ] 文档：`ffi.md`（中/英）、`wire-protocol-fields.md`、`AGENTS.md` 已更新
+- [x] 顶层 Release 构建 `EXIT=0`（含 benchmark、LTO）
+- [x] `ffi_c_api` 全绿（463 条：每个 op / 并发 / 超时 / **取消** / **顺序** / 回调内调用 /
+      事件所有权 / 生命周期顺序 / 会话落盘下的 `session.list` + `session.rename`）
+- [x] `wire_roundtrip`(285) / `wire_schema`(1377) / `session_admin`(38) / `input_delivery`(140) 全绿，
+      schema 生成物已提交
+- [x] 全量 `agentxx_test --log-level warn`: **44016 通过 / 0 失败**（2026-11-25，机器无其他构建）
+- [x] `agentxx_benchmark resource_ffi` 跑通（调用吞吐 / 合批 / 尾窗三个子场景都有数据，
+      数据记入 benchmark.md）
+- [x] `dart analyze`: 两个包都 `No issues found`
+- [x] Dart `example/smoke_check.dart` 5 个场景全绿（Release `libagentxx.dll`；
+      Debug 库带 ASan 无法注入 dartvm）
+- [x] 新增 ack 只在请求带 `reqId` 时才发，TUI 客户端发 0 所以拿不到新增回帧；
+      TUI 侧的交互仍由全量测试的 `tui_*` / `client_plugins` 覆盖（未做手工界面抽查）
+- [x] 文档: `ffi.md`（中/英）、`AGENTS.md`、`index.md`、`benchmark.md`
+      （`wire-protocol-fields.md` 与 schema 在第 1 步已生成）
 
 ## 剩余事项
 
-（实施中出现、但不属于本任务范围的，记在这里。）
+- 未修（不属于本任务范围）: `WireListSessions` 等消息在协程里抛异常时不回包（`co_spawn(...,
+  asio::detached)` 吞异常），调用方只能等超时。建议后续给这些分支加 `catchError`（或统一的
+  “失败也回一帧”包装），本次只修了 reqId 被覆盖那一条。

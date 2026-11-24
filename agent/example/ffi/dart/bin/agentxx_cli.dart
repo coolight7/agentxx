@@ -52,7 +52,12 @@ Future<void> main(List<String> args) async {
   // 先订阅事件再启动 (广播流无订阅者时会丢弃事件)
   repl.start();
   try {
-    await client.start(configJson: configJson, modelJson: modelJson);
+    // syncTailCount: 首屏只同步最近 200 条展示消息 (更早的历史用 /page 拉)
+    await client.start(
+      configJson: configJson,
+      modelJson: modelJson,
+      syncTailCount: opts.syncTailCount,
+    );
   } on Object catch (e) {
     stdout.writeln('✗ agent 启动失败: $e');
     final logs = client.drainLogs();
@@ -92,7 +97,7 @@ Future<void> main(List<String> args) async {
 
   await repl.done;
 
-  stdout.writeln('停止中…');
+  stdout.writeln('停止中… (等 EVT_STOPPED 后释放句柄)');
   await _disposeQuietly(repl, client);
   exit(0);
 }
@@ -121,6 +126,9 @@ class _Options {
   String? permissionMode;
   String? dataDir;
   bool enableSessionStore = false;
+
+  /// 首屏只同步最近 N 条展示消息 (0 = 完整同步)
+  int syncTailCount = 200;
 }
 
 _Options? _parseArgs(List<String> args) {
@@ -159,6 +167,8 @@ _Options? _parseArgs(List<String> args) {
         opts.dataDir = next();
       case '--enable-session-store':
         opts.enableSessionStore = true;
+      case '--sync-tail':
+        opts.syncTailCount = int.tryParse(next()) ?? 200;
       default:
         throw FormatException('未知参数: $a (见 --help)');
     }
@@ -189,6 +199,7 @@ agentxx_dart_cli —— libagentxx 的 Dart FFI 命令行 agent 客户端
       --permission-mode <m>  ask|all_ask|pass|deny (默认 ask: 工具访问询问)
       --data-dir <dir>       数据目录 (会话持久化等)
       --enable-session-store 开启会话持久化 (配合 /sessions 与 /switch)
+      --sync-tail <n>        首屏只同步最近 n 条展示消息 (默认 200; 0 = 完整同步)
 
 交互命令: 对话直接输入; /help 查看; Ctrl+C 退出。
 ''');

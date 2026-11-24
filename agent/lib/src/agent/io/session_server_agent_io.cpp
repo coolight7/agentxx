@@ -1559,8 +1559,8 @@ void SessionServerAgentIO::onPeerMessage(
                     ex_,
                     [self, sessionStore, agent, req = std::move(m), sender](
                     ) -> asio::awaitable<void> {
+                        // 取数结果本身不带 reqId: 回执 id 在取数之后补上 (先设再赋值会被覆盖)
                         WireSessionList resp;
-                        resp.reqId = req.reqId;
                         if (agent->agentContext->threadPool) {
                             resp = co_await utilxx::offloadAsync<WireSessionList>(
                                 *agent->agentContext->threadPool,
@@ -1571,6 +1571,7 @@ void SessionServerAgentIO::onPeerMessage(
                         } else {
                             resp = listSessionsFor(req, *sessionStore);
                         }
+                        resp.reqId = req.reqId;
                         self->sendToClient(sender, std::move(resp));
                     },
                     asio::detached

@@ -59,7 +59,7 @@
 | `resource_tui` | 同进程(无界面) TUI + Channel | TUI 端点仅作协议端点 (不启动 FTXUI), 测同步/分页/消息窗口 |
 | `resource_split_cli` | 真实两进程 | `agentxx server` + `agentxx cli --agent ws://...`, 分别采样 |
 | `resource_split_tui` | 真实 server + 连接客户端 | server 子进程 + bench 进程内 headless TUI 端点 (WS) |
-| `resource_ffi` | 动态库调用 | `dlopen(libagentxx.so)` + C ABI 驱动轮次 (对照组) |
+| `resource_ffi` | 动态库调用 | `dlopen(libagentxx.so)` + C ABI (`agentxx_ffi_call` 提交 + `EVT_RESULT` 回执) 驱动轮次 (对照组); 除 `startup`/`ctx100k`/`ctx200k` 外另有调用吞吐/合批/首屏尾窗子场景, 见下 |
 | `resource_real_tui` | 同进程 + **真实 TUI** | `TUIClientAgentIO::start()` 启动 FTXUI 界面线程, 采集帧耗时/帧数/渲染字节 |
 | `resource_server_only` | 真实 server 单独运行 | 无客户端常驻; 空载波动、真实 WS 轮次负载、客户端断开后回收 |
 | `resource_real_tui_child` | 真实 TUI 子进程 + 真实 server | 客户端经**伪终端 (PTY)** 启动, 用"打字"驱动轮次 (仅 POSIX) |
@@ -84,6 +84,36 @@
 | `AGENTXX_BENCH_ROUNDS` | 20 | 逐轮往返的轮数 |
 | `AGENTXX_BENCH_ROUND_BYTES` | 8192 | 每轮用户消息字节数 (轮次内容 `ROUND-<n>-...`) |
 | `AGENTXX_BENCH_STREAM_CHUNKS` | 0 | mock LLM 每个响应的 SSE 事件数 (0/1 = 单事件; 值 >1 时把回复切成 N 个 `delta.content` 事件), 用于测量逐事件 SSE 解析开销 |
+| `AGENTXX_BENCH_FFI_STREAM_CHUNKS` | 64 | `resource_ffi` 的事件吞吐子场景专用: 第二个 mock 把回复切成 N 段 SSE, 用于对比合批开/关的事件数与耗时 |
+
+`resource_ffi` 的三个子场景 (采样点名字即报告里的 `point`):
+
+| 采样点 | 量的是 | 做法 |
+|---|---|---|
+| `call_throughput` | C 边界 + 回执 + 事件回调的固定开销 | 预热 20 次后 1000 次 `model.list` (submit + 等 `EVT_RESULT`), 报总耗时 / us·op / op·s |
+| `delta_batch_off` / `delta_batch_24ms` | 合批对事件吞吐的影响 | 切到分段流式的第二个 mock, `delta.set_batch` 关 / 24ms 各跑一轮, 报事件数 / 字节 / 轮次耗时 |
+| `sync_tail_200` / `sync_tail_full` | 首屏尾窗对同步体积与接入延迟的影响 | 种子句柄 (`enableSessionStore` 开、无插件) 跑 60 轮造长会话 (约 240 条展示消息, 必须多于尾窗默认的 200 才能量出差别); 关掉种子句柄后另开两个只剩 `syncTailCount` 不同的句柄, 各自 `session.switch` 到该会话, 量 `EVT_SYNC` 字节/条数/耗时 |
+
+尾窗子场景用 `session.switch` 而不是「首次接入」: FFI 每次 `create` 都新建会话,
+没有「接管已有会话」的配置; `session.switch` 走的是服务端同一个
+`buildTailSync(effectiveSyncTailCount())`, 字节数与延迟的统计方式一致。
+种子句柄必须先关: 会话库对每个会话目录取写租约, 同一会话被两个句柄同时打开会失败
+(`session dir is busy`)。
+
+首轮实跑 (2026-11-25 / Windows / Release + LTO / 系统分配器 / 12 核 Intel):
+
+| 采样点 | 数据 | 说明 |
+|---|---|---|
+| `call_throughput` | 1000 次 `model.list` 55.5~62.7 ms (55.5~62.7 us/op, 15.9k~18.0k op/s), 均 1000/1000 回执齐全 | C 边界 + 提交 + 回执 + 事件回调的固定开销 |
+| `delta_batch_off` | 66 事件 / 6354~6356 B / 125~143 ms | 64 段 SSE, 每个 delta 一条事件 |
+| `delta_batch_24ms` | 24 事件 / 3030~3043 B / 19.8~25.1 ms | 合批把 66 条压到 24 条, 轮次耗时降到 1/5 左右 |
+| `sync_tail_200` | 200 条 / 40651 B / 4.4~5.7 ms | 尾窗接入 |
+| `sync_tail_full` | 240 条 / 48761 B / 3.4~4.6 ms | `syncTailCount=0` 完整同步 |
+
+- 合批后的条数随流式片段数下降, 字节也降 (每少一条事件就少一层 JSON 包装);
+- 尾窗 200 与完整同步都在 5 ms 级 (差异被固定开销盖住), 体积差约 7.9 KiB (240 → 200 条):
+  尾窗省的是同步的消息条数与字节, 不是首屏延迟;
+- 区间来自 3 次实跑 (吞吐 55.5 / 59.6 / 62.7 ms 等), 单次抖动约 ±10%。
 
 ## 2. 采集指标
 

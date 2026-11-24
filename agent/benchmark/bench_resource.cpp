@@ -33,8 +33,10 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <string>
 #include <thread>
@@ -1604,6 +1606,523 @@ void benchResourceSplitTui() {
 // 对照组: libagentxx_shared 动态库资源测试
 // ===========================================================================
 
+namespace {
+
+/// dlsym / GetProcAddress 解析到的 FFI 导出函数 (与 ffi_symbols.map 的 15 个符号一一对应)
+///
+/// - 类型全部取自 `agentxx/ffi_api.h` 的声明 (`decltype(&::...)`), 不手写签名 ——
+///   手写容易与头文件不一致 (曾把 stop/destroy 的 log 出参漏掉: 声明成一参后调用
+///   依然编译通过, 但被调函数仍会写这个出参, 于是写到寄存器里的野指针上,
+///   Windows 上表现为访问违例)
+/// - 少一个符号就说明导出面被改过: `load()` 会打印缺哪些并让场景跳过
+struct FfiBenchLib {
+#if XX_IS_WIN_D
+    HMODULE handle = nullptr;
+#else
+    void* handle = nullptr;
+#endif
+    decltype(&::agentxx_ffi_malloc)           fnMalloc       = nullptr;
+    decltype(&::agentxx_ffi_free)             fnFree         = nullptr;
+    // string_free 在头文件里有重载 (指针版 + AgentxxString& 便捷版), decltype 取不到
+    // 唯一类型, 这里显式写出指针版并保留调用约定
+    void(AGENTXX_FFI_CALL* fnStringFree)(AgentxxString*) = nullptr;
+    decltype(&::agentxx_ffi_strdup_n)         fnStrdup       = nullptr;
+    decltype(&::agentxx_ffi_api_version)      fnApiVersion   = nullptr;
+    decltype(&::agentxx_ffi_library_version)  fnLibVersion   = nullptr;
+    decltype(&::agentxx_ffi_strerror)         fnStrError     = nullptr;
+    decltype(&::agentxx_ffi_get_capabilities) fnCapabilities = nullptr;
+    decltype(&::agentxx_ffi_create)           fnCreate       = nullptr;
+    decltype(&::agentxx_ffi_start)            fnStart        = nullptr;
+    decltype(&::agentxx_ffi_stop)             fnStop         = nullptr;
+    decltype(&::agentxx_ffi_destroy)          fnDestroy      = nullptr;
+    decltype(&::agentxx_ffi_call)             fnCall         = nullptr;
+    decltype(&::agentxx_ffi_call_cancel)      fnCallCancel   = nullptr;
+    decltype(&::agentxx_ffi_drain_logs)       fnDrainLogs    = nullptr;
+
+    FfiBenchLib() = default;
+
+    ~FfiBenchLib() {
+        close();
+    }
+
+    FfiBenchLib(const FfiBenchLib&)            = delete;
+    FfiBenchLib& operator=(const FfiBenchLib&) = delete;
+
+    /// 载入动态库并解析全部 15 个导出符号
+    bool load(const std::string& path);
+    void close();
+
+    /// 释放库分配的字符串 (空串 / 空指针安全)
+    void freeString(AgentxxString& s) const {
+        if (s.data != nullptr && fnStringFree != nullptr) {
+            fnStringFree(&s);
+        }
+        s.data = nullptr;
+        s.size = 0;
+    }
+};
+
+bool FfiBenchLib::load(const std::string& path) {
+#if XX_IS_WIN_D
+    handle = ::LoadLibraryA(path.c_str());
+    if (handle == nullptr) {
+        std::cout << "  [resource][ffi] LoadLibrary failed: " << ::GetLastError() << std::endl;
+        return false;
+    }
+#define FFI_BENCH_RESOLVE(field, sym) \
+    field = reinterpret_cast<decltype(field)>(::GetProcAddress(handle, sym))
+#else
+    handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (handle == nullptr) {
+        std::cout << "  [resource][ffi] dlopen failed: " << dlerror() << std::endl;
+        return false;
+    }
+#define FFI_BENCH_RESOLVE(field, sym) field = reinterpret_cast<decltype(field)>(dlsym(handle, sym))
+#endif
+    FFI_BENCH_RESOLVE(fnMalloc, "agentxx_ffi_malloc");
+    FFI_BENCH_RESOLVE(fnFree, "agentxx_ffi_free");
+    FFI_BENCH_RESOLVE(fnStringFree, "agentxx_ffi_string_free");
+    FFI_BENCH_RESOLVE(fnStrdup, "agentxx_ffi_strdup_n");
+    FFI_BENCH_RESOLVE(fnApiVersion, "agentxx_ffi_api_version");
+    FFI_BENCH_RESOLVE(fnLibVersion, "agentxx_ffi_library_version");
+    FFI_BENCH_RESOLVE(fnStrError, "agentxx_ffi_strerror");
+    FFI_BENCH_RESOLVE(fnCapabilities, "agentxx_ffi_get_capabilities");
+    FFI_BENCH_RESOLVE(fnCreate, "agentxx_ffi_create");
+    FFI_BENCH_RESOLVE(fnStart, "agentxx_ffi_start");
+    FFI_BENCH_RESOLVE(fnStop, "agentxx_ffi_stop");
+    FFI_BENCH_RESOLVE(fnDestroy, "agentxx_ffi_destroy");
+    FFI_BENCH_RESOLVE(fnCall, "agentxx_ffi_call");
+    FFI_BENCH_RESOLVE(fnCallCancel, "agentxx_ffi_call_cancel");
+    FFI_BENCH_RESOLVE(fnDrainLogs, "agentxx_ffi_drain_logs");
+#undef FFI_BENCH_RESOLVE
+
+    std::vector<std::string> missing;
+    const auto               need = [&missing](const void* fn, const char* name) {
+        if (fn == nullptr) {
+            missing.emplace_back(name);
+        }
+    };
+    need(reinterpret_cast<const void*>(fnMalloc), "agentxx_ffi_malloc");
+    need(reinterpret_cast<const void*>(fnFree), "agentxx_ffi_free");
+    need(reinterpret_cast<const void*>(fnStringFree), "agentxx_ffi_string_free");
+    need(reinterpret_cast<const void*>(fnStrdup), "agentxx_ffi_strdup_n");
+    need(reinterpret_cast<const void*>(fnApiVersion), "agentxx_ffi_api_version");
+    need(reinterpret_cast<const void*>(fnLibVersion), "agentxx_ffi_library_version");
+    need(reinterpret_cast<const void*>(fnStrError), "agentxx_ffi_strerror");
+    need(reinterpret_cast<const void*>(fnCapabilities), "agentxx_ffi_get_capabilities");
+    need(reinterpret_cast<const void*>(fnCreate), "agentxx_ffi_create");
+    need(reinterpret_cast<const void*>(fnStart), "agentxx_ffi_start");
+    need(reinterpret_cast<const void*>(fnStop), "agentxx_ffi_stop");
+    need(reinterpret_cast<const void*>(fnDestroy), "agentxx_ffi_destroy");
+    need(reinterpret_cast<const void*>(fnCall), "agentxx_ffi_call");
+    need(reinterpret_cast<const void*>(fnCallCancel), "agentxx_ffi_call_cancel");
+    need(reinterpret_cast<const void*>(fnDrainLogs), "agentxx_ffi_drain_logs");
+    if (!missing.empty()) {
+        std::cout << "  [resource][ffi] missing exported symbol(s):";
+        for (const auto& name : missing) {
+            std::cout << ' ' << name;
+        }
+        std::cout << std::endl;
+        close();
+        return false;
+    }
+    return true;
+}
+
+void FfiBenchLib::close() {
+    if (handle == nullptr) {
+        return;
+    }
+#if XX_IS_WIN_D
+    ::FreeLibrary(handle);
+#else
+    dlclose(handle);
+#endif
+    handle = nullptr;
+}
+
+/// 事件接收端: 回调里立刻释放 payload, 只留下基准需要的计数与回执
+///
+/// 事件 payload 归回调所有 (v4): 结构体与正文同在一块堆内存上, 用 agentxx_ffi_free
+/// 释放整块; 这里也顺便验证了"回调 free"这条契约在长跑里是稳定的 (上千条事件)
+struct FfiBenchEvents {
+    /// 必须在 create 之前填好 (payload 由回调负责释放)
+    void(AGENTXX_FFI_CALL* memFree)(const void*) = nullptr;
+
+    std::mutex              mutex;
+    std::condition_variable cv;
+
+    bool   ready   = false;
+    bool   stopped = false;
+    size_t turnEnd = 0;
+
+    /// 回执: reqId → (ok, error.name, result JSON 文本)
+    struct Reply {
+        bool        ok = false;
+        std::string errorName;
+        std::string errorMessage;
+        std::string resultJson;
+    };
+
+    std::map<uint64_t, Reply> replies;
+
+    /// 是否保留 `result` 段: 1k 次吞吐测量时关掉, 免得 JSON 转存成本盖过边界成本
+    std::atomic<bool> keepResult{true};
+
+    /// 增量事件计数 (事件吞吐子场景)
+    std::atomic<size_t> deltaEvents{0};
+    std::atomic<size_t> deltaBytes{0};
+
+    /// 完整/尾窗同步: 每来一条 +1, 记下体积与条数
+    size_t syncGeneration = 0;
+    size_t syncBytes      = 0;
+    size_t syncCount      = 0;
+
+    AgentxxFFICallbacks callbacks() {
+        AgentxxFFICallbacks cb{};
+        cb.struct_size = sizeof(AgentxxFFICallbacks);
+        cb.reserved    = 0;
+        cb.on_event    = &FfiBenchEvents::onEvent;
+        cb.user_data   = this;
+        return cb;
+    }
+
+    /// 等 EVT_READY
+    bool waitReady(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex);
+        return cv.wait_for(lock, timeout, [this] {
+            return ready;
+        });
+    }
+
+    /// 等 EVT_STOPPED (最后一个事件)
+    bool waitStopped(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex);
+        return cv.wait_for(lock, timeout, [this] {
+            return stopped;
+        });
+    }
+
+    /// 等 `turnEnd` 超过 `baseline` (一轮结束)
+    bool waitTurnEndBeyond(size_t baseline, std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex);
+        return cv.wait_for(lock, timeout, [this, baseline] {
+            return turnEnd > baseline;
+        });
+    }
+
+    /// 等某条调用的回执
+    bool waitReply(uint64_t reqId, std::chrono::milliseconds timeout, Reply& out) {
+        std::unique_lock<std::mutex> lock(mutex);
+        const bool                   hit = cv.wait_for(lock, timeout, [this, reqId] {
+            return replies.find(reqId) != replies.end();
+        });
+        if (!hit) {
+            return false;
+        }
+        out = replies[reqId];
+        return true;
+    }
+
+    /// 等一条新的同步 (返回等待前后的代次差)
+    bool waitSyncBeyond(size_t baseline, std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex);
+        return cv.wait_for(lock, timeout, [this, baseline] {
+            return syncGeneration > baseline;
+        });
+    }
+
+    size_t turnEndCount() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return turnEnd;
+    }
+
+    size_t syncGenerationCount() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return syncGeneration;
+    }
+
+    void snapSync(size_t& bytes, size_t& count) {
+        std::lock_guard<std::mutex> lock(mutex);
+        bytes = syncBytes;
+        count = syncCount;
+    }
+
+    void resetDeltaCounters() {
+        deltaEvents.store(0, std::memory_order_relaxed);
+        deltaBytes.store(0, std::memory_order_relaxed);
+    }
+
+    static void AGENTXX_FFI_CALL onEvent(
+        int32_t        type,
+        AgentxxString* payload,
+        void*          ud
+    );
+};
+
+/// C 回调: 按事件类型取计数/回执, 然后无条件释放 payload
+void AGENTXX_FFI_CALL FfiBenchEvents::onEvent(
+    int32_t        type,
+    AgentxxString* payload,
+    void*          ud
+) {
+    auto* ev = static_cast<FfiBenchEvents*>(ud);
+    if (ev == nullptr) {
+        return;
+    }
+    std::string_view text{};
+    if (payload != nullptr && payload->data != nullptr) {
+        text = std::string_view{payload->data, static_cast<size_t>(payload->size)};
+    }
+
+    if (type == AGENTXX_FFI_EVT_DELTA || type == AGENTXX_FFI_EVT_DELTA_TEXT_BATCH) {
+        ev->deltaEvents.fetch_add(1, std::memory_order_relaxed);
+        ev->deltaBytes.fetch_add(text.size(), std::memory_order_relaxed);
+    } else if (type == AGENTXX_FFI_EVT_RESULT) {
+        uint64_t     reqId = 0;
+        bool         ok    = false;
+        Reply        reply;
+        try {
+            auto j = neograph::json::parse(text);
+            reqId  = j.value("reqId", uint64_t{0});
+            ok     = j.value("ok", false);
+            if (ok) {
+                if (ev->keepResult.load(std::memory_order_relaxed)) {
+                    if (j.contains("result")) {
+                        reply.resultJson = j.at("result").dump();
+                    }
+                }
+            } else if (j.contains("error")) {
+                const auto err     = j.at("error");
+                reply.errorName    = err.value("name", std::string{});
+                reply.errorMessage = err.value("message", std::string{});
+            }
+        } catch (...) {
+            // 解析失败也照常按 reqId=0 记一条 (不会命中任何等待)
+        }
+        reply.ok = ok;
+        {
+            std::lock_guard<std::mutex> lock(ev->mutex);
+            ev->replies[reqId] = std::move(reply);
+        }
+        ev->cv.notify_all();
+    } else if (type == AGENTXX_FFI_EVT_SYNC) {
+        size_t msgs = 0;
+        try {
+            auto j = neograph::json::parse(text);
+            if (j.contains("messages")) {
+                const auto arr = j.at("messages");
+                if (arr.is_array()) {
+                    msgs = arr.size();
+                }
+            }
+        } catch (...) {
+        }
+        {
+            std::lock_guard<std::mutex> lock(ev->mutex);
+            ++ev->syncGeneration;
+            ev->syncBytes = text.size();
+            ev->syncCount = msgs;
+        }
+        ev->cv.notify_all();
+    } else if (type == AGENTXX_FFI_EVT_READY) {
+        {
+            std::lock_guard<std::mutex> lock(ev->mutex);
+            ev->ready = true;
+        }
+        ev->cv.notify_all();
+    } else if (type == AGENTXX_FFI_EVT_STOPPED) {
+        {
+            std::lock_guard<std::mutex> lock(ev->mutex);
+            ev->stopped = true;
+        }
+        ev->cv.notify_all();
+    } else if (type == AGENTXX_FFI_EVT_TURN_END) {
+        {
+            std::lock_guard<std::mutex> lock(ev->mutex);
+            ++ev->turnEnd;
+        }
+        ev->cv.notify_all();
+    }
+
+    if (ev->memFree != nullptr) {
+        ev->memFree(payload);
+    }
+}
+
+/// 环境变量旋钮 (整数; 缺失或非法时取默认值)
+std::size_t ffiEnvSize(std::string_view name, std::size_t def) {
+    if (auto v = utilxx_base::ApplicationEnv::instance().get(name)) {
+        return static_cast<std::size_t>(std::strtoull(v->c_str(), nullptr, 10));
+    }
+    return def;
+}
+
+/// 一次 FFI 句柄: 提交 + 等回执 + 停止/销毁 (全部经 15 个导出符号调用)
+class FfiBenchHandle {
+public:
+    FfiBenchHandle(const FfiBenchLib& lib, FfiBenchEvents& events) :
+        lib_(lib),
+        events_(events) {}
+
+    ~FfiBenchHandle() {
+        destroy();
+    }
+
+    FfiBenchHandle(const FfiBenchHandle&)            = delete;
+    FfiBenchHandle& operator=(const FfiBenchHandle&) = delete;
+
+    /// create + start + 等 EVT_READY
+    bool open(
+        const std::string&        cfgJson,
+        const std::string&        modelJson,
+        std::chrono::milliseconds readyTimeout = std::chrono::seconds{20}
+    ) {
+        events_.memFree = lib_.fnFree;
+
+        AgentxxStringView   cfgSv{cfgJson.data(), static_cast<uint64_t>(cfgJson.size())};
+        AgentxxStringView   modelSv{modelJson.data(), static_cast<uint64_t>(modelJson.size())};
+        AgentxxFFICallbacks cb = events_.callbacks();
+
+        AgentxxString log{nullptr, 0};
+        handle_ = lib_.fnCreate(&cfgSv, &modelSv, &cb, &log);
+        noteLog(log);
+        if (handle_ == nullptr) {
+            return false;
+        }
+        AgentxxString startLog{nullptr, 0};
+        const int32_t rc = lib_.fnStart(handle_, &startLog);
+        noteLog(startLog);
+        if (rc != AGENTXX_FFI_OK) {
+            lastError_ = fmt::format("start failed: code {} ({})", rc, lastError_);
+            return false;
+        }
+        if (!events_.waitReady(readyTimeout)) {
+            lastError_ = "EVT_READY timeout";
+            return false;
+        }
+        return true;
+    }
+
+    /// 拼请求 JSON: `{"op":..,"args":..[,"timeoutMs":..]}`
+    static std::string requestJson(
+        std::string_view      op,
+        const neograph::json& args,
+        int32_t               timeoutMs = 0
+    ) {
+        std::string out = "{\"op\":\"";
+        out += op;
+        out += "\",\"args\":";
+        out += args.dump();
+        if (timeoutMs > 0) {
+            out += ",\"timeoutMs\":";
+            out += std::to_string(timeoutMs);
+        }
+        out += "}";
+        return out;
+    }
+
+    /// 只提交, 返回 reqId (0 = 同步失败)
+    uint64_t submit(std::string_view op, const neograph::json& args, int32_t timeoutMs = 0) {
+        if (handle_ == nullptr) {
+            return 0;
+        }
+        const std::string reqJson = requestJson(op, args, timeoutMs);
+        AgentxxStringView reqSv{reqJson.data(), static_cast<uint64_t>(reqJson.size())};
+        uint64_t          reqId = 0;
+        AgentxxString     log{nullptr, 0};
+        const int32_t     rc = lib_.fnCall(handle_, &reqSv, &reqId, &log);
+        noteLog(log);
+        if (rc != AGENTXX_FFI_OK) {
+            lastError_ = fmt::format("{}: submit failed: code {}", op, rc);
+            return 0;
+        }
+        return reqId;
+    }
+
+    /// 提交并等回执 (超时也算失败)
+    bool callOp(
+        std::string_view            op,
+        const neograph::json&       args,
+        FfiBenchEvents::Reply&      reply,
+        std::chrono::milliseconds   timeout = std::chrono::seconds{30},
+        int32_t                     timeoutMs = 0
+    ) {
+        const uint64_t reqId = submit(op, args, timeoutMs);
+        if (reqId == 0) {
+            return false;
+        }
+        if (!events_.waitReply(reqId, timeout, reply)) {
+            lastError_ = fmt::format("{}: EVT_RESULT timeout (reqId={})", op, reqId);
+            return false;
+        }
+        return true;
+    }
+
+    /// 等一轮结束 (baseline = 调用前 `events_.turnEndCount()`)
+    bool waitTurnEnd(size_t baseline, std::chrono::milliseconds timeout = std::chrono::seconds{30}) {
+        return events_.waitTurnEndBeyond(baseline, timeout);
+    }
+
+    /// stop + 等 EVT_STOPPED
+    bool close(std::chrono::milliseconds timeout = std::chrono::seconds{60}) {
+        if (handle_ == nullptr) {
+            return true;
+        }
+        AgentxxString log{nullptr, 0};
+        const int32_t rc = lib_.fnStop(handle_, &log);
+        noteLog(log);
+        if (rc != AGENTXX_FFI_OK) {
+            lastError_ = fmt::format("stop failed: code {}", rc);
+            return false;
+        }
+        return events_.waitStopped(timeout);
+    }
+
+    /// destroy (只在 Created / Stopped 成功; 失败不释放句柄)
+    void destroy() {
+        if (handle_ == nullptr) {
+            return;
+        }
+        AgentxxString log{nullptr, 0};
+        const int32_t rc = lib_.fnDestroy(handle_, &log);
+        noteLog(log);
+        if (rc == AGENTXX_FFI_OK) {
+            handle_ = nullptr;
+        } else {
+            XX_LOGW("[resource][ffi] destroy failed: code {}", rc);
+        }
+    }
+
+    AgentxxFFIAgent* raw() const {
+        return handle_;
+    }
+
+    FfiBenchEvents& events() {
+        return events_;
+    }
+
+    const std::string& lastError() const {
+        return lastError_;
+    }
+
+private:
+    void noteLog(AgentxxString& log) {
+        if (log.data == nullptr) {
+            return;
+        }
+        lastError_.assign(log.data, static_cast<size_t>(log.size));
+        lib_.freeString(log);
+    }
+
+    const FfiBenchLib& lib_;
+    FfiBenchEvents&    events_;
+    AgentxxFFIAgent*   handle_ = nullptr;
+    std::string        lastError_;
+};
+
+} // namespace
+
 void benchResourceFfi() {
     std::cout << "\n=== Resource Benchmark: FFI libagentxx_shared Control Group ===" << std::endl;
 
@@ -1617,53 +2136,41 @@ void benchResourceFfi() {
 
     std::cout << "  [resource][ffi] loading library: " << libPath << std::endl;
 
-#if XX_IS_WIN_D
-    HMODULE hLib = ::LoadLibraryA(libPath.c_str());
-    if (!hLib) {
-        std::cout << "  [resource][ffi] LoadLibrary failed: " << ::GetLastError() << std::endl;
-        return;
-    }
-#define RESOLVE_SYM(name) (name = reinterpret_cast<decltype(name)>(::GetProcAddress(hLib, #name)))
-#else
-    void* hLib = dlopen(libPath.c_str(), RTLD_NOW | RTLD_LOCAL);
-    if (!hLib) {
-        std::cout << "  [resource][ffi] dlopen failed: " << dlerror() << std::endl;
-        return;
-    }
-#define RESOLVE_SYM(name) (name = reinterpret_cast<decltype(name)>(dlsym(hLib, #name)))
-#endif
-
-    // 函数指针定义: 类型取自 ffi_api.h 的声明 (decltype(&::...)), 不手写签名 ——
-    // 手写容易与头文件不一致 (曾把 stop/destroy 的 log 出参漏掉: 声明成一参后调用
-    // 依然编译通过, 但被调函数仍会写这个出参, 于是写到寄存器里的野指针上,
-    // Windows 上表现为访问违例); 同时保留头文件里的调用约定 (Win32 上是 __stdcall)
-    decltype(&::agentxx_ffi_create)               agentxx_ffi_create               = nullptr;
-    decltype(&::agentxx_ffi_start)                agentxx_ffi_start                = nullptr;
-    decltype(&::agentxx_ffi_stop)                 agentxx_ffi_stop                 = nullptr;
-    decltype(&::agentxx_ffi_destroy)              agentxx_ffi_destroy              = nullptr;
-    decltype(&::agentxx_ffi_send_input)           agentxx_ffi_send_input           = nullptr;
-    decltype(&::agentxx_ffi_get_context_messages) agentxx_ffi_get_context_messages = nullptr;
-    // string_free 在头文件里有重载 (指针版 + AgentxxString& 便捷版), decltype(&...) 取不到
-    // 唯一类型, 这里显式写出类型 (与头文件的指针版一致, 保留调用约定)
-    void(AGENTXX_FFI_CALL * agentxx_ffi_string_free)(AgentxxString*) = nullptr;
-
-    bool symsOk = RESOLVE_SYM(agentxx_ffi_create) && RESOLVE_SYM(agentxx_ffi_start)
-                  && RESOLVE_SYM(agentxx_ffi_stop) && RESOLVE_SYM(agentxx_ffi_destroy)
-                  && RESOLVE_SYM(agentxx_ffi_send_input)
-                  && RESOLVE_SYM(agentxx_ffi_get_context_messages)
-                  && RESOLVE_SYM(agentxx_ffi_string_free);
-
-    if (!symsOk) {
-        std::cout << "  [resource][ffi] failed to resolve required FFI symbols" << std::endl;
-#if XX_IS_WIN_D
-        ::FreeLibrary(hLib);
-#else
-        dlclose(hLib);
-#endif
+    FfiBenchLib lib;
+    if (!lib.load(libPath)) {
         return;
     }
 
-    auto        sim      = startResourceLlmSimServer();
+    // 导出面自检: 15 个符号全部解析 + 版本号与头文件一致
+    const int32_t     apiVer = lib.fnApiVersion();
+    AgentxxStringView verSv{};
+    std::string       libVer;
+    if (lib.fnLibVersion(&verSv) == AGENTXX_FFI_OK && verSv.data != nullptr) {
+        libVer.assign(verSv.data, static_cast<size_t>(verSv.size));
+    }
+    std::cout << "  [resource][ffi] apiVersion=" << apiVer << " library=" << libVer << std::endl;
+    if (apiVer != AGENTXX_FFI_API_VERSION) {
+        std::cout << "  [resource][ffi] skipped: library api version " << apiVer
+                  << " != header " << AGENTXX_FFI_API_VERSION << std::endl;
+        return;
+    }
+    {
+        // 能力清单 (ops 全集 / features) 记进日志, 便于对照库版本
+        AgentxxString caps{nullptr, 0};
+        AgentxxString capsLog{nullptr, 0};
+        if (lib.fnCapabilities(nullptr, &caps, &capsLog) == AGENTXX_FFI_OK && caps.data != nullptr) {
+            std::cout << "  [resource][ffi] capabilities: "
+                      << std::string_view{caps.data, static_cast<size_t>(caps.size)} << std::endl;
+        }
+        lib.freeString(caps);
+        lib.freeString(capsLog);
+    }
+
+    auto        sim = startResourceLlmSimServer();
+    // 事件吞吐子场景用的分块流式服务器: 一个回复切成多段 SSE, 逼近逐 token 流
+    auto        simChunked = startResourceLlmSimServer(
+        ffiEnvSize("AGENTXX_BENCH_FFI_STREAM_CHUNKS", 64)
+    );
     auto        tmpDir   = createBenchTempDir("bench_ffi");
     auto&       reporter = BenchReporter::instance();
     const auto& counts   = getCalibratedCounts();
@@ -1697,92 +2204,40 @@ void benchResourceFfi() {
     modelJson["modelName"]            = "bench-sim";
     modelJson["modelContextMaxToken"] = 8 << 20;
 
-    std::string cfgStr   = cfgJson.dump();
-    std::string modelStr = modelJson.dump();
-
-    AgentxxStringView cfgSv{cfgStr.data(), static_cast<uint64_t>(cfgStr.size())};
-    AgentxxStringView modelSv{modelStr.data(), static_cast<uint64_t>(modelStr.size())};
-
-    struct FfiEventTracker {
-        std::mutex              m;
-        std::condition_variable cv;
-        bool                    ready    = false;
-        bool                    turnDone = false;
-    } tracker;
-
-    AgentxxFFICallbacks cb{};
-    cb.user_data = &tracker;
-    cb.on_event  = [](int32_t type, const AgentxxStringView*, void* ud) {
-        auto* tr = static_cast<FfiEventTracker*>(ud);
-        if (!tr) {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(tr->m);
-        if (type == AGENTXX_FFI_EVT_READY) {
-            tr->ready = true;
-            tr->cv.notify_all();
-        } else if (type == AGENTXX_FFI_EVT_TURN_END) {
-            tr->turnDone = true;
-            tr->cv.notify_all();
-        }
-    };
-
-    AgentxxString    logOut{nullptr, 0};
-    AgentxxFFIAgent* ffiAgent = agentxx_ffi_create(&cfgSv, &modelSv, &cb, &logOut);
-    if (logOut.data) {
-        agentxx_ffi_string_free(&logOut);
-    }
-    if (!ffiAgent) {
-        std::cout << "  [resource][ffi] agentxx_ffi_create failed" << std::endl;
-#if XX_IS_WIN_D
-        ::FreeLibrary(hLib);
-#else
-        dlclose(hLib);
-#endif
+    FfiBenchEvents  events;
+    FfiBenchHandle  ffi(lib, events);
+    if (!ffi.open(cfgJson.dump(), modelJson.dump())) {
+        std::cout << "  [resource][ffi] create/start failed: " << ffi.lastError() << std::endl;
+        std::error_code ec;
+        std::filesystem::remove_all(tmpDir, ec);
         return;
-    }
-
-    int32_t startCode = agentxx_ffi_start(ffiAgent, &logOut);
-    if (logOut.data) {
-        agentxx_ffi_string_free(&logOut);
-    }
-    if (startCode != 0) {
-        std::cout << "  [resource][ffi] agentxx_ffi_start failed, code: " << startCode << std::endl;
-        AgentxxString failLog{nullptr, 0};
-        agentxx_ffi_destroy(ffiAgent, &failLog);
-        if (failLog.data) {
-            agentxx_ffi_string_free(&failLog);
-        }
-#if XX_IS_WIN_D
-        ::FreeLibrary(hLib);
-#else
-        dlclose(hLib);
-#endif
-        return;
-    }
-
-    // 等待就绪 EVT_READY
-    {
-        std::unique_lock<std::mutex> lock(tracker.m);
-        tracker.cv.wait_for(lock, std::chrono::seconds(10), [&]() {
-            return tracker.ready;
-        });
     }
 
     // 预热一轮
-    std::string       warmupInput = R"_({"text":"hello"})_";
-    AgentxxStringView wInputSv{warmupInput.data(), static_cast<uint64_t>(warmupInput.size())};
-    tracker.turnDone = false;
-    agentxx_ffi_send_input(ffiAgent, &wInputSv, &logOut);
-    if (logOut.data) {
-        agentxx_ffi_string_free(&logOut);
-    }
     {
-        std::unique_lock<std::mutex> lock(tracker.m);
-        tracker.cv.wait_for(lock, std::chrono::seconds(5), [&]() {
-            return tracker.turnDone;
-        });
+        const size_t baseline = events.turnEndCount();
+        FfiBenchEvents::Reply reply;
+        if (!ffi.callOp("input.send", neograph::json{{"text", "hello"}}, reply)
+            || !reply.ok) {
+            std::cout << "  [resource][ffi] warmup turn rejected: " << reply.errorName
+                      << " (" << reply.errorMessage << ")" << std::endl;
+        }
+        ffi.waitTurnEnd(baseline, std::chrono::seconds{10});
     }
+
+    /// 一轮真实对话: 提交输入 (等受理回执) → 等轮次结束
+    const auto runTurn = [&](const std::string& label) -> bool {
+        const size_t baseline = events.turnEndCount();
+        FfiBenchEvents::Reply reply;
+        if (!ffi.callOp("input.send", neograph::json{{"text", label}}, reply)) {
+            return false;
+        }
+        if (!reply.ok) {
+            // 主会话已在跑时会被拒 (status=rejected): 等当前轮次结束再算完成
+            return ffi.waitTurnEnd(baseline, std::chrono::seconds{10});
+        }
+        return ffi.waitTurnEnd(baseline, std::chrono::seconds{10});
+    };
 
     // ---------------- P0: Startup (加载后稳态) ----------------
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -1805,13 +2260,14 @@ void benchResourceFfi() {
     res0.tokens        = 150;
     res0.note          = "FfiClientAgentIO over in-process Channel, dll loaded";
 
-    AgentxxString ctxOut{nullptr, 0};
-    if (agentxx_ffi_get_context_messages(ffiAgent, &ctxOut, &logOut) == 0 && ctxOut.data) {
-        res0.llmBytes = ctxOut.size;
-        agentxx_ffi_string_free(&ctxOut);
-    }
-    if (logOut.data) {
-        agentxx_ffi_string_free(&logOut);
+    {
+        // 上下文体积: 走 call("context.get") 的回执 (v3 的同步查询已删除)
+        FfiBenchEvents::Reply reply;
+        if (ffi.callOp("context.get", neograph::json::object(), reply) && reply.ok) {
+            res0.llmBytes = reply.resultJson.size();
+        } else {
+            std::cout << "  [resource][ffi] context.get failed: " << ffi.lastError() << std::endl;
+        }
     }
 
     phaseTracker.mark("ready", "FFI agent 已就绪 (动态库已加载)");
@@ -1822,24 +2278,10 @@ void benchResourceFfi() {
     // ---------------- P1: ~100K ----------------
     auto busyWin1 = cpuBegin(0);
     for (size_t i = 0; i < counts.n100; ++i) {
-        tracker.turnDone     = false;
-        std::string userText = fmt::format(
+        runTurn(fmt::format(
             "RES-BENCH user turn {:06d} | The quick brown fox jumps over the lazy dog. 请列出当前目录并读取 README 前 40 行。 #FIXED-9f3a",
             i + 1
-        );
-        // send_input 参数为输入 JSON (含 text/attachments/model/delivery)
-        std::string inputJson = utilxx_base::Json{
-            {"text", userText}
-        }.dump();
-        AgentxxStringView inputSv{inputJson.data(), static_cast<uint64_t>(inputJson.size())};
-        agentxx_ffi_send_input(ffiAgent, &inputSv, &logOut);
-        if (logOut.data) {
-            agentxx_ffi_string_free(&logOut);
-        }
-        std::unique_lock<std::mutex> lock(tracker.m);
-        tracker.cv.wait_for(lock, std::chrono::seconds(10), [&]() {
-            return tracker.turnDone;
-        });
+        ));
     }
     double busyCpu1 = cpuEnd(busyWin1);
     phaseTracker.mark("ctx100k_ready", "已注入 ~100K token 历史并完成同步");
@@ -1857,26 +2299,23 @@ void benchResourceFfi() {
     res1.tokens        = counts.actualTokens100;
     res1.pluginsAgent  = 5;
     res1.pluginsClient = 4;
-    res1.note          = "real turns driven via agentxx_ffi_send_input";
+    res1.note          = "real turns driven via call(\"input.send\")";
 
-    AgentxxString ctxOut1{nullptr, 0};
-    if (agentxx_ffi_get_context_messages(ffiAgent, &ctxOut1, &logOut) == 0 && ctxOut1.data) {
-        res1.llmBytes = ctxOut1.size;
-        try {
-            auto j = neograph::json::parse(
-                std::string_view{ctxOut1.data, static_cast<size_t>(ctxOut1.size)}
-            );
-            if (j.is_array()) {
-                res1.llmCount  = j.size();
-                res1.viewCount = j.size();
-                res1.viewBytes = res1.llmBytes;
+    {
+        FfiBenchEvents::Reply reply;
+        if (ffi.callOp("context.get", neograph::json::object(), reply) && reply.ok) {
+            res1.llmBytes = reply.resultJson.size();
+            try {
+                auto j = neograph::json::parse(reply.resultJson);
+                if (j.contains("messages") && j.at("messages").is_array()) {
+                    const size_t n = j.at("messages").size();
+                    res1.llmCount  = n;
+                    res1.viewCount = n;
+                    res1.viewBytes = res1.llmBytes;
+                }
+            } catch (...) {
             }
-        } catch (...) {
         }
-        agentxx_ffi_string_free(&ctxOut1);
-    }
-    if (logOut.data) {
-        agentxx_ffi_string_free(&logOut);
     }
 
     fillResourceMemDetail(res1, 0, true, false);
@@ -1886,24 +2325,10 @@ void benchResourceFfi() {
     // ---------------- P2: ~200K ----------------
     auto busyWin2 = cpuBegin(0);
     for (size_t i = counts.n100; i < counts.n200; ++i) {
-        tracker.turnDone     = false;
-        std::string userText = fmt::format(
+        runTurn(fmt::format(
             "RES-BENCH user turn {:06d} | The quick brown fox jumps over the lazy dog. 请列出当前目录并读取 README 前 40 行。 #FIXED-9f3a",
             i + 1
-        );
-        // send_input 参数为输入 JSON (含 text/attachments/model/delivery)
-        std::string inputJson = utilxx_base::Json{
-            {"text", userText}
-        }.dump();
-        AgentxxStringView inputSv{inputJson.data(), static_cast<uint64_t>(inputJson.size())};
-        agentxx_ffi_send_input(ffiAgent, &inputSv, &logOut);
-        if (logOut.data) {
-            agentxx_ffi_string_free(&logOut);
-        }
-        std::unique_lock<std::mutex> lock(tracker.m);
-        tracker.cv.wait_for(lock, std::chrono::seconds(10), [&]() {
-            return tracker.turnDone;
-        });
+        ));
     }
     double busyCpu2 = cpuEnd(busyWin2);
     phaseTracker.mark("ctx200k_ready", "已注入 ~200K token 历史并完成同步");
@@ -1921,57 +2346,354 @@ void benchResourceFfi() {
     res2.tokens        = counts.actualTokens200;
     res2.pluginsAgent  = 5;
     res2.pluginsClient = 4;
-    res2.note          = "real turns driven via agentxx_ffi_send_input";
+    res2.note          = "real turns driven via call(\"input.send\")";
 
-    AgentxxString ctxOut2{nullptr, 0};
-    if (agentxx_ffi_get_context_messages(ffiAgent, &ctxOut2, &logOut) == 0 && ctxOut2.data) {
-        res2.llmBytes = ctxOut2.size;
-        try {
-            auto j = neograph::json::parse(
-                std::string_view{ctxOut2.data, static_cast<size_t>(ctxOut2.size)}
-            );
-            if (j.is_array()) {
-                res2.llmCount  = j.size();
-                res2.viewCount = j.size();
-                res2.viewBytes = res2.llmBytes;
+    {
+        FfiBenchEvents::Reply reply;
+        if (ffi.callOp("context.get", neograph::json::object(), reply) && reply.ok) {
+            res2.llmBytes = reply.resultJson.size();
+            try {
+                auto j = neograph::json::parse(reply.resultJson);
+                if (j.contains("messages") && j.at("messages").is_array()) {
+                    const size_t n = j.at("messages").size();
+                    res2.llmCount  = n;
+                    res2.viewCount = n;
+                    res2.viewBytes = res2.llmBytes;
+                }
+            } catch (...) {
             }
-        } catch (...) {
         }
-        agentxx_ffi_string_free(&ctxOut2);
-    }
-    if (logOut.data) {
-        agentxx_ffi_string_free(&logOut);
     }
 
     fillResourceMemDetail(res2, 0, true, true);
     reporter.addResource(res2);
     printResourceResult(res2);
 
+    // ---------------- P3: 调用吞吐 (C 边界 + 回执 + 事件回调) ----------------
+    {
+        constexpr size_t kCalls   = 1000;
+        constexpr size_t kWarmup  = 20;
+        const auto       args     = neograph::json::object();
+        size_t           okCount  = 0;
+        // 预热: 让首调 (懒创建/日志) 不落进测量
+        for (size_t i = 0; i < kWarmup; ++i) {
+            FfiBenchEvents::Reply reply;
+            ffi.callOp("model.list", args, reply, std::chrono::seconds{10});
+        }
+        events.keepResult.store(false, std::memory_order_relaxed);
+        const auto t0 = std::chrono::steady_clock::now();
+        for (size_t i = 0; i < kCalls; ++i) {
+            FfiBenchEvents::Reply reply;
+            if (ffi.callOp("model.list", args, reply, std::chrono::seconds{10}) && reply.ok) {
+                ++okCount;
+            }
+        }
+        const auto   t1 = std::chrono::steady_clock::now();
+        events.keepResult.store(true, std::memory_order_relaxed);
+
+        const double totalMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        const double perOpUs = totalMs * 1000.0 / static_cast<double>(kCalls);
+        const double opsPerS = (totalMs > 0.0) ? (static_cast<double>(okCount) * 1000.0 / totalMs)
+                                               : 0.0;
+        const std::string note = fmt::format(
+            "{} x model.list (submit+ack) in {:.1f} ms: {:.1f} us/op, {:.0f} op/s, ok={}",
+            kCalls,
+            totalMs,
+            perOpUs,
+            opsPerS,
+            okCount
+        );
+        std::cout << "  [resource][ffi] call throughput: " << note << std::endl;
+
+        auto memCall = sampleMemoryMedian(0);
+        ResourceResult resCall;
+        resCall.mode       = "ffi";
+        resCall.side       = "self";
+        resCall.point      = "call_throughput";
+        resCall.rssMB      = memCall.rssMB;
+        resCall.privateMB  = memCall.privateMB;
+        resCall.cpuIdlePct = -1.0;
+        resCall.note       = note;
+        phaseTracker.mark("call_throughput", "1k 次 model.list 提交+回执完成");
+        reporter.addResource(resCall);
+        printResourceResult(resCall);
+    }
+
+    // ---------------- P4: 事件吞吐 (合批关 / 24ms) ----------------
+    {
+        // 加一个分块流式模型并切过去 (顺带覆盖 model.add / model.select 两个 op)
+        neograph::json model2 = modelJson;
+        model2["name"]        = "bench-sim-chunked";
+        model2["baseUrl"]     = fmt::format("http://127.0.0.1:{}/v1", simChunked.port);
+
+        FfiBenchEvents::Reply reply;
+        const bool            added
+            = ffi.callOp("model.add", model2, reply, std::chrono::seconds{30}) && reply.ok;
+        const bool selected
+            = added
+              && ffi.callOp(
+                     "model.select",
+                     neograph::json{{"name", "bench-sim-chunked"}},
+                     reply,
+                     std::chrono::seconds{10}
+                 )
+              && reply.ok;
+        if (!added || !selected) {
+            std::cout << "  [resource][ffi] delta batch scenario skipped: " << ffi.lastError()
+                      << std::endl;
+        } else {
+            // 一轮: 设合批窗口 → 提交输入 → 等轮次结束, 返回耗时与该轮的增量事件数
+            struct DeltaRun {
+                double ms     = 0.0;
+                size_t events = 0;
+                size_t bytes  = 0;
+            };
+            const auto runDeltaTurn = [&](int batchMs) -> DeltaRun {
+                FfiBenchEvents::Reply setReply;
+                ffi.callOp(
+                    "delta.set_batch",
+                    neograph::json{{"maxDelayMs", batchMs}},
+                    setReply,
+                    std::chrono::seconds{10}
+                );
+                events.resetDeltaCounters();
+                const size_t baseline = events.turnEndCount();
+                const auto   t0       = std::chrono::steady_clock::now();
+                FfiBenchEvents::Reply inputReply;
+                ffi.callOp(
+                    "input.send",
+                    neograph::json{{"text", "RES-BENCH delta batch probe"}},
+                    inputReply,
+                    std::chrono::seconds{10}
+                );
+                ffi.waitTurnEnd(baseline, std::chrono::seconds{30});
+                const auto t1 = std::chrono::steady_clock::now();
+                DeltaRun   run;
+                run.ms     = std::chrono::duration<double, std::milli>(t1 - t0).count();
+                run.events = events.deltaEvents.load(std::memory_order_relaxed);
+                run.bytes  = events.deltaBytes.load(std::memory_order_relaxed);
+                return run;
+            };
+
+            const DeltaRun off = runDeltaTurn(0);
+            const DeltaRun on  = runDeltaTurn(24);
+
+            const auto reportDelta = [&](const char* point, const DeltaRun& run, int batchMs) {
+                const std::string note = fmt::format(
+                    "delta batching {}: {} events, {} bytes, turn {:.1f} ms",
+                    batchMs > 0 ? fmt::format("{}ms", batchMs) : std::string{"off"},
+                    run.events,
+                    run.bytes,
+                    run.ms
+                );
+                std::cout << "  [resource][ffi] " << note << std::endl;
+                auto           memD = sampleMemoryMedian(0);
+                ResourceResult resD;
+                resD.mode       = "ffi";
+                resD.side       = "self";
+                resD.point      = point;
+                resD.rssMB      = memD.rssMB;
+                resD.privateMB  = memD.privateMB;
+                resD.cpuIdlePct = -1.0;
+                resD.note       = note;
+                reporter.addResource(resD);
+                printResourceResult(resD);
+            };
+            phaseTracker.mark("delta_batch", "合批关 / 合批 24ms 各跑一轮");
+            reportDelta("delta_batch_off", off, 0);
+            reportDelta("delta_batch_24ms", on, 24);
+
+            // 切回主模型, 后面的子场景用默认的对话链路
+            ffi.callOp(
+                "model.select",
+                neograph::json{{"name", "bench-sim"}},
+                reply,
+                std::chrono::seconds{10}
+            );
+        }
+    }
+
+    // ---------------- P5: 首屏尾窗 (syncTailCount 0 vs 200) ----------------
+    //
+    // 尾窗只在"接入一个已有长历史的会话"时起作用: 先用一个临时句柄 (会话落盘打开)
+    // 跑出长会话, 再用两个只有 syncTailCount 不同的句柄切到同一会话, 量同步体积与耗时
+    {
+        const auto tailDir = tmpDir / "tail";
+        {
+            // 会话库目录必须存在: sqlite 不会自己建父目录, 缺失时 store 建不起来,
+            // session.list 会空 (尾窗子场景就拿不到会话 id)
+            std::error_code ecDir;
+            std::filesystem::create_directories(tailDir / "data", ecDir);
+        }
+        neograph::json tailCfg;
+        tailCfg["dataDir"]            = (tailDir / "data").string();
+        tailCfg["workDir"]            = tailDir.string();
+        tailCfg["permissionMode"]     = "pass";
+        tailCfg["enableSessionStore"] = true;
+        tailCfg["enableSubagent"]     = false;
+        tailCfg["enableWorktree"]     = false;
+        tailCfg["llmMaxRetry"]        = 0;
+        // 尾窗子场景不需要插件: 少几条加载路径, 建句柄更快
+        tailCfg["syncTailCount"] = 200;
+
+        FfiBenchEvents  tailEvents;
+        FfiBenchHandle  builder(lib, tailEvents);
+        bool            ok = builder.open(tailCfg.dump(), modelJson.dump());
+        std::string     longSessionId;
+
+        // 60 轮 ≈ 240 条展示消息 (每轮 user / assistant(tool_call) / tool / assistant):
+        // 必须多于 syncTailCount 默认的 200, 否则尾窗就是全部历史, 两个点量不出差别
+        constexpr size_t kTailTurns = 60;
+        if (ok) {
+            for (size_t i = 0; i < kTailTurns; ++i) {
+                const size_t baseline = tailEvents.turnEndCount();
+                FfiBenchEvents::Reply reply;
+                builder.callOp(
+                    "input.send",
+                    neograph::json{{"text", fmt::format("RES-BENCH tail seed turn {:03d}", i + 1)}},
+                    reply,
+                    std::chrono::seconds{10}
+                );
+                if (!builder.waitTurnEnd(baseline, std::chrono::seconds{20})) {
+                    std::cout << "  [resource][ffi] tail scenario: seed turn timeout" << std::endl;
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if (ok) {
+            FfiBenchEvents::Reply reply;
+            if (builder.callOp("session.list", neograph::json::object(), reply, std::chrono::seconds{10})
+                && reply.ok) {
+                try {
+                    auto j = neograph::json::parse(reply.resultJson);
+                    if (j.contains("sessions") && j.at("sessions").is_array()
+                        && j.at("sessions").size() > 0) {
+                        const auto first = j.at("sessions").at(0);
+                        longSessionId    = first.value("sessionId", std::string{});
+                    }
+                } catch (...) {
+                }
+            }
+            if (longSessionId.empty()) {
+                std::cout << "  [resource][ffi] tail scenario: session id not found "
+                          << "(session.list ok=" << reply.ok << ", reason=" << reply.errorName
+                          << ", result="
+                          << reply.resultJson.substr(0, std::min<size_t>(200, reply.resultJson.size()))
+                          << ")" << std::endl;
+                // 排障: 把句柄里积压的日志打出来 (会话库打不开时只能看到日志)
+                AgentxxString logs{nullptr, 0};
+                if (lib.fnDrainLogs(builder.raw(), &logs, nullptr) == AGENTXX_FFI_OK
+                    && logs.data != nullptr) {
+                    std::cout << "  [resource][ffi] builder logs: "
+                              << std::string_view{logs.data, static_cast<size_t>(logs.size)}
+                              << std::endl;
+                }
+                lib.freeString(logs);
+                ok = false;
+            }
+        }
+
+        if (ok) {
+            // 在指定句柄上切到长会话, 量"提交 → 收到 EVT_SYNC"的耗时与体积
+            struct SyncRun {
+                double ms    = 0.0;
+                size_t bytes = 0;
+                size_t msgs  = 0;
+            };
+            const auto measureSwitch = [&](FfiBenchHandle& h, const char* label) -> SyncRun {
+                auto&  ev       = h.events();
+                size_t baseline = ev.syncGenerationCount();
+                const auto t0   = std::chrono::steady_clock::now();
+                const uint64_t reqId
+                    = h.submit("session.switch", neograph::json{{"sessionId", longSessionId}});
+                ev.waitSyncBeyond(baseline, std::chrono::seconds{30});
+                const auto t1 = std::chrono::steady_clock::now();
+                SyncRun    run;
+                run.ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+                ev.snapSync(run.bytes, run.msgs);
+                if (reqId != 0) {
+                    FfiBenchEvents::Reply reply;
+                    ev.waitReply(reqId, std::chrono::seconds{30}, reply);
+                }
+                std::cout << "  [resource][ffi] sync tail " << label << ": "
+                          << fmt::format("{:.1f} ms, {} bytes, {} messages", run.ms, run.bytes, run.msgs)
+                          << std::endl;
+                return run;
+            };
+
+            // 两个新句柄各自"首次接入这个长会话", 只差 syncTailCount
+            const auto openAndMeasure
+                = [&](int64_t syncTailCount, const char* label) -> std::optional<SyncRun> {
+                neograph::json cfg = tailCfg;
+                cfg["syncTailCount"] = syncTailCount;
+                FfiBenchEvents ev;
+                FfiBenchHandle h(lib, ev);
+                if (!h.open(cfg.dump(), modelJson.dump())) {
+                    std::cout << "  [resource][ffi] sync tail " << label
+                              << ": handle failed to start: " << h.lastError() << std::endl;
+                    return std::nullopt;
+                }
+                SyncRun run = measureSwitch(h, label);
+                h.close();
+                h.destroy();
+                return run;
+            };
+
+            phaseTracker.mark("sync_tail", "尾窗 200 / 完整同步各接入一次");
+            const auto tail200 = openAndMeasure(200, "200");
+            const auto tail0   = openAndMeasure(0, "0 (full)");
+
+            const auto reportSync
+                = [&](const char* point, const SyncRun& run, const char* label) {
+                const std::string note = fmt::format(
+                    "session.switch -> EVT_SYNC with {}: {} messages, {} bytes, {:.1f} ms",
+                    label,
+                    run.msgs,
+                    run.bytes,
+                    run.ms
+                );
+                auto           memS = sampleMemoryMedian(0);
+                ResourceResult resS;
+                resS.mode       = "ffi";
+                resS.side       = "self";
+                resS.point      = point;
+                resS.rssMB      = memS.rssMB;
+                resS.privateMB  = memS.privateMB;
+                resS.cpuIdlePct = -1.0;
+                resS.viewCount  = run.msgs;
+                resS.viewBytes  = run.bytes;
+                resS.note       = note;
+                reporter.addResource(resS);
+                printResourceResult(resS);
+            };
+            if (tail200.has_value()) {
+                reportSync("sync_tail_200", *tail200, "syncTailCount=200");
+            }
+            if (tail0.has_value()) {
+                reportSync("sync_tail_full", *tail0, "syncTailCount=0 (full)");
+            }
+        } else {
+            std::cout << "  [resource][ffi] tail scenario skipped" << std::endl;
+        }
+        // 种子句柄必须先关掉: 会话库对每个会话目录取写租约, 同一会话在被它占着时
+        // 第二个句柄打开/切进去会直接失败 ("session dir is busy")
+        builder.close();
+        builder.destroy();
+        std::error_code ecTail;
+        std::filesystem::remove_all(tailDir, ecTail);
+    }
+
     phaseTracker.printTable("ffi 分阶段内存");
     reporter.attachPhases("ffi", "self", phaseTracker.samples());
 
-    // 销毁 (stop/destroy 都需要 log 出参; 传 NULL 语义上安全, 但这里顺带回传并打印详情)
-    AgentxxString stopLog{nullptr, 0};
-    agentxx_ffi_stop(ffiAgent, &stopLog);
-    if (stopLog.data) {
-        XX_LOGW("[resource][ffi] stop 返回详情: {}", std::string_view{stopLog.data, stopLog.size});
-        agentxx_ffi_string_free(&stopLog);
+    // 停止 + 等 EVT_STOPPED, 再 destroy (v4 的 stop 是异步的, destroy 只认 Stopped)
+    if (!ffi.close()) {
+        std::cout << "  [resource][ffi] stop/EVT_STOPPED failed: " << ffi.lastError() << std::endl;
     }
-    AgentxxString destroyLog{nullptr, 0};
-    agentxx_ffi_destroy(ffiAgent, &destroyLog);
-    if (destroyLog.data) {
-        XX_LOGW(
-            "[resource][ffi] destroy 返回详情: {}",
-            std::string_view{destroyLog.data, destroyLog.size}
-        );
-        agentxx_ffi_string_free(&destroyLog);
-    }
-
-#if XX_IS_WIN_D
-    ::FreeLibrary(hLib);
-#else
-    dlclose(hLib);
-#endif
+    ffi.destroy();
+    simChunked.stop();
+    sim.stop();
     std::error_code ec;
     std::filesystem::remove_all(tmpDir, ec);
 }

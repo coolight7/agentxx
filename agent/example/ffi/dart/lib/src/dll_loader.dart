@@ -26,12 +26,20 @@ List<String> _platformLibraryNames() {
 List<String> _candidateDirectories() {
   final exeDir = File(Platform.resolvedExecutable).parent.path;
   final dirs = <String>[
-    // 以 cwd 为基准 (在 dart/ 目录内运行 `dart run ...` 的典型场景)
+    // 以 cwd 为基准
+    // - agent/ffi/dart 内运行: `../agent/build/...`
+    // - agent/example/ffi/dart 内运行: `../../../build/...`
     '../agent/build/windows-debug/exec',
     '../agent/build/windows-release/exec',
     '../agent/build/linux-debug/exec',
     '../agent/build/linux-release/exec',
     '../agent/build/android-release/exec',
+    '../../../build/windows-debug/exec',
+    '../../../build/windows-release/exec',
+    '../../../build/linux-debug/exec',
+    '../../../build/linux-release/exec',
+    '../../../build/macos-debug/exec',
+    '../../../build/macos-release/exec',
     // 以可执行文件为基准 (编译为 exe 后运行的场景; `dart run` 时指向
     // dart sdk 目录, 候选不存在会被安全跳过)
     '$exeDir/../agent/build/windows-debug/exec',
