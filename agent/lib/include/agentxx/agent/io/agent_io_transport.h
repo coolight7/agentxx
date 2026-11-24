@@ -280,13 +280,23 @@ struct WireInputAck {
     std::string itemId;   ///< 队列条目 id (queued/started 时有值)
 };
 
+/// 请求/应答相关性字段的取值约定 (所有 wire 请求/应答共用)
+///
+/// - `reqId == 0`: 请求方不关心应答 (旧客户端/TUI 的既有行为), 服务端不回
+///   `WireAck`, 应答消息也不带 `reqId` 字段
+/// - `reqId != 0`: 请求方按序号等应答, 服务端在应答 (typed 应答或通用
+///   [WireAck]) 里原样回显该序号, 调用方据此把应答配给发起的调用
+/// - 一个连接上可以同时有任意多个未完成请求 (各自带不同的 reqId)
 struct WireCancel {
     std::string sessionId;
+    uint64_t    reqId = 0;
 };
 
 struct WireSelectModel {
     std::string sessionId;
     std::string model;
+    /// >0 时服务端回 [WireAck] (data 里带生效后的模型名); 0 = 不回
+    uint64_t reqId = 0;
 };
 
 struct WireInterruptRequest {
@@ -300,6 +310,8 @@ struct WireInterruptRequest {
 struct WireInterruptResponse {
     int64_t           id = 0;
     utilxx_base::Json result;
+    /// >0 时服务端回 [WireAck] (未知中断 id → `interrupt_not_found`); 0 = 不回
+    uint64_t reqId = 0;
 };
 
 /// 服务端通知中断已过期 (超时/会话取消) (Server -> Client)
@@ -457,6 +469,7 @@ struct WireLog {
 /// 客户端请求当前模型信息 (Client -> Server)
 struct WireGetModel {
     std::string sessionId;
+    uint64_t    reqId = 0;
 };
 
 /// 单个模型的多模态输入能力描述
@@ -476,31 +489,41 @@ struct WireModelInfo {
     std::string                      currentModel;
     std::vector<std::string>         models;
     std::vector<ModelCapabilityInfo> capabilities; ///< 各模型的多模态能力清单
+    /// 回显请求的 reqId (0 = 本应答不对应某个请求, 属于广播)
+    uint64_t reqId = 0;
 };
 
 /// 客户端请求会话启动信息 (Client -> Server): 拉取已加载的 MCP/Skill/Memory 列表
 struct WireGetAppendComponentInfo {
     std::string sessionId;
+    uint64_t    reqId = 0;
 };
 
 /// 服务端加载组件响应 (Server -> Client): collectAppendComponentInfo 收集的结果
 struct WireAppendComponentInfo {
     std::vector<AppendComponentNotification> notifications;
+    uint64_t                                 reqId = 0;
 };
 
 /// 客户端请求当前会话 LLM 上下文消息 (Client -> Server)
 struct WireGetContext {
     std::string sessionId;
+    /// 只回最近这么多条上下文 (0 = 整份): 长上下文下调用方常常只需要尾部几条
+    uint32_t tail = 0;
+    uint64_t reqId = 0;
 };
 
 /// 服务端 LLM 上下文消息响应 (Server -> Client)
 struct WireContextMessages {
     utilxx_base::Json messages;
+    uint64_t          reqId = 0;
 };
 
 /// 客户端请求压缩当前会话上下文 (Client -> Server)
 struct WireCompactContext {
     std::string sessionId;
+    /// >0 时服务端在压缩**完成后**回 [WireAck] (data `{ok}`); 0 = 不回
+    uint64_t reqId = 0;
 };
 
 /// 客户端请求持久化会话列表 (Client -> Server): 会话选择弹窗数据源
@@ -519,6 +542,7 @@ struct WireListSessions {
     /// - 检索模式下忽略游标字段, 服务端按最近活动降序返回命中项 (含命中片段)
     /// - 老服务端不认识该字段: 忽略并返回普通列表 (客户端按未检索处理)
     std::string keyword;
+    uint64_t    reqId = 0;
 };
 
 /// 服务端持久化会话列表响应 (Server -> Client)
@@ -529,6 +553,7 @@ struct WireSessionList {
     uint64_t totalCount = 0;
     /// 是否还有未加载的更早会话; 旧版服务端无此字段 → false (视为完整响应)
     bool hasMore = false;
+    uint64_t reqId    = 0;
 };
 
 /// 客户端请求切换当前连接的会话 (Client -> Server): 将会话端点重新绑定到
@@ -536,6 +561,8 @@ struct WireSessionList {
 /// SessionServerAgentIO::switchSession)
 struct WireSwitchSession {
     std::string sessionId;
+    /// >0 时服务端在切换**提交后**回 [WireAck] (data `{sessionId}`); 0 = 不回
+    uint64_t reqId = 0;
 };
 
 /// 插件事件转发 (Server -> Client)
@@ -562,6 +589,8 @@ struct WirePluginDataUp {
     std::string topic;
     /// JSON 载荷字符串 (语义由插件定义)
     std::string data;
+    /// >0 时服务端在发布到 agent 总线后回 [WireAck]; 0 = 不回
+    uint64_t reqId = 0;
 };
 
 /// 服务端消息队列同步 (Server -> Client)
@@ -576,17 +605,21 @@ struct WireMessageQueueUpdate {
 /// 客户端请求清空消息队列 (Client -> Server)
 struct WireClearMessageQueue {
     std::string sessionId;
+    uint64_t    reqId = 0;
 };
 
 /// 客户端请求删除单条排队消息 (Client -> Server)
 struct WireRemoveQueueItem {
     std::string sessionId;
     std::string itemId;
+    /// >0 时回 [WireAck] (条目不存在 → `item_not_found`); 0 = 不回
+    uint64_t reqId = 0;
 };
 
 /// 客户端请求打断当前会话执行并立即运行消息队列首条 (Client -> Server)
 struct WireInterruptAndRunNext {
     std::string sessionId;
+    uint64_t    reqId = 0;
 };
 
 /// 客户端请求 viewMessages 历史分页 (Client -> Server)
@@ -604,6 +637,7 @@ struct WireGetViewMessages {
     uint64_t beforeIndex = 0;
     /// 请求条数; 0 = 服务端使用默认页大小
     uint32_t count = 0;
+    uint64_t reqId = 0;
 };
 
 /// 服务端 viewMessages 历史分页响应 (Server -> Client)
@@ -616,6 +650,7 @@ struct WireViewMessagesPage {
     /// 服务端会话总消息数 (供客户端判断 hasMore: startIndex > 0 即还有更早消息)
     uint64_t                 totalCount = 0;
     std::vector<ViewMessage> messages;
+    uint64_t                 reqId = 0;
 };
 
 /// 目录条目 (客户端-服务端文件浏览; name 为纯文件名/目录名不含图标, 图标由 UI 自主渲染)
@@ -650,12 +685,16 @@ struct WireListDirResult {
 /// 界面 (TUI Info 侧边栏) 需要展示"完全授权"状态且用户可以切换, 而该状态
 /// 由 agent 侧权限中间件持有, 因此客户端经本消息主动查询一次
 /// (接入握手后 + 用户点击切换后), 服务端以 [WirePermissionState] 回应。
-struct WireGetPermissionState {};
+struct WireGetPermissionState {
+    uint64_t reqId = 0;
+};
 
 /// 客户端设置"完全授权"状态 (Client -> Server)
 struct WireSetFullAuth {
     /// true = 完全授权 (后续不再询问权限), false = 恢复询问
     bool fullAuth = true;
+    /// >0 时服务端把生效后的状态回给发起方 (其余客户端仍收广播); 0 = 只广播
+    uint64_t reqId = 0;
 };
 
 /// 服务端权限状态 (Server -> Client)
@@ -666,6 +705,8 @@ struct WireSetFullAuth {
 struct WirePermissionState {
     /// 是否已完全授权 (对应 PermissionMiddlewareHandle::isFullAuthorized)
     bool fullAuth = false;
+    /// 回显请求的 reqId (0 = 状态变更广播, 不对应某个请求)
+    uint64_t reqId = 0;
 };
 
 /// 客户端新增模型配置 (Client -> Server; TUI 选择模型弹窗顶部的"添加模型配置")
@@ -695,6 +736,7 @@ struct WireAddModel {
     utilxx_base::Json extraApiConfig;
     /// 额外请求头 (yaml `extra_headers`; 空对象 = 未指定)
     utilxx_base::Json extraHeaders;
+    uint64_t          reqId = 0;
 };
 
 /// 新增模型配置的结果 (Server -> Client)
@@ -702,6 +744,7 @@ struct WireAddModelResult {
     bool        ok = false;
     std::string name;  ///< 新增的模型名 (ok=true 时客户端据此立即切换)
     std::string error; ///< 失败原因 (给用户看的文本; ok=true 时为空)
+    uint64_t    reqId = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -714,6 +757,7 @@ struct WireAddModelResult {
 struct WireRenameSession {
     std::string sessionId;
     std::string title; ///< 新标题 (单行; 服务端按原样去首尾空白后保存)
+    uint64_t    reqId = 0;
 };
 
 /// 服务端重命名结果 (Server -> Client)
@@ -721,13 +765,15 @@ struct WireRenameSessionResult {
     std::string sessionId;
     std::string title; ///< 生效后的标题 (ok=true 时非空)
     std::string error; ///< 失败原因 (给用户看的文本; ok=true 时为空)
-    bool        ok = false;
+    bool        ok    = false;
+    uint64_t    reqId = 0;
 };
 
 /// 客户端请求删除模型配置 (Client -> Server)
 struct WireRemoveModel {
     std::string sessionId;
     std::string name; ///< 待删除的模型名称
+    uint64_t    reqId = 0;
 };
 
 /// 删除模型配置的结果 (Server -> Client)
@@ -735,6 +781,7 @@ struct WireRemoveModelResult {
     std::string name;
     bool        ok = false;
     std::string error; ///< 失败原因 (给用户看的文本; ok=true 时为空)
+    uint64_t    reqId = 0;
 };
 
 /// 主程序/客户端注册的工具元数据
@@ -750,12 +797,16 @@ struct WireHostToolInfo {
 struct WireHostToolRegister {
     std::string                   sessionId;
     std::vector<WireHostToolInfo> tools;
+    /// >0 时回 [WireAck] (data `{registered[], failed[{name,error}]}`); 0 = 不回
+    uint64_t reqId = 0;
 };
 
 /// 客户端注销 host tool (Client -> Server)
 struct WireHostToolUnregister {
     std::string              sessionId;
     std::vector<std::string> names;
+    /// >0 时回 [WireAck] (data `{removed[]}`); 0 = 不回
+    uint64_t reqId = 0;
 };
 
 /// 服务端请求客户端执行 host tool (Server -> Client)
@@ -773,6 +824,28 @@ struct WireHostToolResult {
     bool        ok     = false;
     std::string resultJson;
     std::string errorMessage;
+    /// >0 时回 [WireAck] (未知 callId → `call_not_found`); 0 = 不回
+    uint64_t reqId = 0;
+};
+
+/// 命令类请求的通用回执 (Server -> Client)
+///
+/// 请求方在请求里带 `reqId != 0` 时, 服务端在处理完成后回一条本消息: 没有
+/// 专属应答类型的命令 (`cancel` / `select_model` / `switch_session` /
+/// `compact_context` / `host_tool_register` 等) 都用它表达"已处理"与失败原因。
+///
+/// - `reqId == 0` 不回 (旧客户端不认识本消息类型, WS 解码遇到未知类型会断开)
+/// - `ok == false` 时 `reason` 是机器可读的失败原因 (`model_not_found` /
+///   `interrupt_not_found` / `session_mismatch` / `item_not_found` /
+///   `call_not_found` / `no_permission_middleware` ...), `error` 是给人看的说明
+/// - `data` 按请求类型约定 (如 `select_model` 给 `{model}`, `host_tool_register`
+///   给 `{registered[], failed[]}`); 没有数据时为 null
+struct WireAck {
+    uint64_t          reqId = 0;
+    bool              ok    = false;
+    std::string       reason;
+    std::string       error;
+    utilxx_base::Json data;
 };
 
 /// 所有可能的线消息类型 (tagged variant)
@@ -826,7 +899,9 @@ using WireMessage = std::variant<
     WireHostToolRegister,
     WireHostToolUnregister,
     WireHostToolCall,
-    WireHostToolResult>;
+    WireHostToolResult,
+    /// 命令类请求的通用回执 (追加在末尾保持既有变体下标稳定)
+    WireAck>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

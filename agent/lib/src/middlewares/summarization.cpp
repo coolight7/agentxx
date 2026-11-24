@@ -1181,18 +1181,36 @@ asio::awaitable<void>
 
 asio::awaitable<bool>
     SummarizationMiddlewareHandle::compactSessionContext(std::string_view sessionId) {
+    // 压缩完成通知: **每条**退出路径都发一次
+    // - 发起事件只代表"已受理"; 需要知道"何时结束"的调用方 (会话服务端点的
+    //   `compact_context` 命令回执) 订阅本事件后才不会无限等待
+    // - 没有总线时跳过: 那时也没有订阅方, 也就不存在等待方
+    auto notifyDone = [this, sessionId](bool ok) -> asio::awaitable<void> {
+        auto bus = registeredBus_.lock();
+        if (!bus) {
+            co_return;
+        }
+        co_await bus->publish<events::EventCompactContextDone>(
+            events::Topic::SummarizationCompactDone,
+            events::EventCompactContextDone{.sessionId = std::string{sessionId}, .ok = ok}
+        );
+    };
+
     auto agentCtxPtr = agentContext.lock();
     if (nullptr == agentCtxPtr) {
+        co_await notifyDone(false);
         co_return false;
     }
     auto session = agentCtxPtr->sessions->get(sessionId);
     if (!session) {
+        co_await notifyDone(false);
         co_return false;
     }
 
     // 手动压缩: 上下文取自会话 (唯一权威)
     auto messages = session->messages();
     if (messages.empty()) {
+        co_await notifyDone(false);
         co_return false;
     }
 
@@ -1341,6 +1359,7 @@ asio::awaitable<bool>
         }
     }
 
+    co_await notifyDone(true);
     co_return true;
 }
 

@@ -54,11 +54,11 @@ utilxx_base::Json toJson(const WireInputAck& msg) {
 }
 
 utilxx_base::Json toJson(const WireCancel& msg) {
-    return makeCancel(msg.sessionId);
+    return withReqId(makeCancel(msg.sessionId), msg);
 }
 
 utilxx_base::Json toJson(const WireSelectModel& msg) {
-    return makeSelectModel(msg.sessionId, msg.model);
+    return withReqId(makeSelectModel(msg.sessionId, msg.model), msg);
 }
 
 utilxx_base::Json toJson(const WireInterruptRequest& msg) {
@@ -66,7 +66,7 @@ utilxx_base::Json toJson(const WireInterruptRequest& msg) {
 }
 
 utilxx_base::Json toJson(const WireInterruptResponse& msg) {
-    return makeInterruptResponse(msg.id, msg.result);
+    return withReqId(makeInterruptResponse(msg.id, msg.result), msg);
 }
 
 utilxx_base::Json toJson(const WireInterruptExpired& msg) {
@@ -105,43 +105,46 @@ utilxx_base::Json toJson(const WireLog& msg) {
 }
 
 utilxx_base::Json toJson(const WireGetModel& msg) {
-    return makeGetModel(msg.sessionId);
+    return withReqId(makeGetModel(msg.sessionId), msg);
 }
 
 utilxx_base::Json toJson(const WireModelInfo& msg) {
-    return makeModelInfo(msg.currentModel, msg.models, msg.capabilities);
+    return withReqId(makeModelInfo(msg.currentModel, msg.models, msg.capabilities), msg);
 }
 
 utilxx_base::Json toJson(const WireGetAppendComponentInfo& msg) {
-    return makeGetAppendComponentInfo(msg.sessionId);
+    return withReqId(makeGetAppendComponentInfo(msg.sessionId), msg);
 }
 
 utilxx_base::Json toJson(const WireAppendComponentInfo& msg) {
-    return makeAppendComponentInfo(msg.notifications);
+    return withReqId(makeAppendComponentInfo(msg.notifications), msg);
 }
 
 utilxx_base::Json toJson(const WireGetContext& msg) {
-    return makeGetContext(msg.sessionId);
+    return withReqId(makeGetContext(msg.sessionId, msg.tail), msg);
 }
 
 utilxx_base::Json toJson(const WireCompactContext& msg) {
-    return makeCompactContext(msg.sessionId);
+    return withReqId(makeCompactContext(msg.sessionId), msg);
 }
 
 utilxx_base::Json toJson(const WireContextMessages& msg) {
-    return makeContextMessages(msg.messages);
+    return withReqId(makeContextMessages(msg.messages), msg);
 }
 
 utilxx_base::Json toJson(const WireListSessions& msg) {
-    return makeListSessions(msg.beforeMs, msg.beforeId, msg.limit, msg.keyword);
+    return withReqId(
+        makeListSessions(msg.beforeMs, msg.beforeId, msg.limit, msg.keyword),
+        msg
+    );
 }
 
 utilxx_base::Json toJson(const WireSessionList& msg) {
-    return makeSessionList(msg.sessions, msg.totalCount, msg.hasMore);
+    return withReqId(makeSessionList(msg.sessions, msg.totalCount, msg.hasMore), msg);
 }
 
 utilxx_base::Json toJson(const WireSwitchSession& msg) {
-    return makeSwitchSession(msg.sessionId);
+    return withReqId(makeSwitchSession(msg.sessionId), msg);
 }
 
 utilxx_base::Json toJson(const WirePluginData& msg) {
@@ -149,7 +152,7 @@ utilxx_base::Json toJson(const WirePluginData& msg) {
 }
 
 utilxx_base::Json toJson(const WirePluginDataUp& msg) {
-    return makePluginDataUp(msg);
+    return withReqId(makePluginDataUp(msg), msg);
 }
 
 utilxx_base::Json toJson(const WireMessageQueueUpdate& msg) {
@@ -157,23 +160,26 @@ utilxx_base::Json toJson(const WireMessageQueueUpdate& msg) {
 }
 
 utilxx_base::Json toJson(const WireClearMessageQueue& msg) {
-    return makeClearMessageQueue(msg.sessionId);
+    return withReqId(makeClearMessageQueue(msg.sessionId), msg);
 }
 
 utilxx_base::Json toJson(const WireRemoveQueueItem& msg) {
-    return makeRemoveQueueItem(msg.sessionId, msg.itemId);
+    return withReqId(makeRemoveQueueItem(msg.sessionId, msg.itemId), msg);
 }
 
 utilxx_base::Json toJson(const WireInterruptAndRunNext& msg) {
-    return makeInterruptAndRunNext(msg.sessionId);
+    return withReqId(makeInterruptAndRunNext(msg.sessionId), msg);
 }
 
 utilxx_base::Json toJson(const WireGetViewMessages& msg) {
-    return makeGetViewMessages(msg.sessionId, msg.beforeIndex, msg.count);
+    return withReqId(makeGetViewMessages(msg.sessionId, msg.beforeIndex, msg.count), msg);
 }
 
 utilxx_base::Json toJson(const WireViewMessagesPage& msg) {
-    return makeViewMessagesPage(msg.sessionId, msg.startIndex, msg.totalCount, msg.messages);
+    return withReqId(
+        makeViewMessagesPage(msg.sessionId, msg.startIndex, msg.totalCount, msg.messages),
+        msg
+    );
 }
 
 utilxx_base::Json toJson(const WireListDir& msg) {
@@ -191,48 +197,48 @@ utilxx_base::Json toJson(const WireListDirResult& msg) {
     );
 }
 
-utilxx_base::Json toJson(const WireGetPermissionState& /*msg*/) {
-    return makeGetPermissionState();
+utilxx_base::Json toJson(const WireGetPermissionState& msg) {
+    return withReqId(makeGetPermissionState(), msg);
 }
 
 utilxx_base::Json toJson(const WireSetFullAuth& msg) {
-    return makeSetFullAuth(msg.fullAuth);
+    return withReqId(makeSetFullAuth(msg.fullAuth), msg);
 }
 
 utilxx_base::Json toJson(const WirePermissionState& msg) {
-    return makePermissionState(msg.fullAuth);
+    return withReqId(makePermissionState(msg.fullAuth), msg);
 }
 
 utilxx_base::Json toJson(const WireAddModel& msg) {
-    return makeAddModelMsg(msg);
+    return withReqId(makeAddModelMsg(msg), msg);
 }
 
 utilxx_base::Json toJson(const WireAddModelResult& msg) {
-    return makeAddModelResultMsg(msg);
+    return withReqId(makeAddModelResultMsg(msg), msg);
 }
 
 utilxx_base::Json toJson(const WireRenameSession& msg) {
-    return makeRenameSession(msg.sessionId, msg.title);
+    return withReqId(makeRenameSession(msg.sessionId, msg.title), msg);
 }
 
 utilxx_base::Json toJson(const WireRenameSessionResult& msg) {
-    return makeRenameSessionResult(msg);
+    return withReqId(makeRenameSessionResult(msg), msg);
 }
 
 utilxx_base::Json toJson(const WireRemoveModel& msg) {
-    return makeRemoveModelMsg(msg);
+    return withReqId(makeRemoveModelMsg(msg), msg);
 }
 
 utilxx_base::Json toJson(const WireRemoveModelResult& msg) {
-    return makeRemoveModelResultMsg(msg);
+    return withReqId(makeRemoveModelResultMsg(msg), msg);
 }
 
 utilxx_base::Json toJson(const WireHostToolRegister& msg) {
-    return makeHostToolRegisterMsg(msg);
+    return withReqId(makeHostToolRegisterMsg(msg), msg);
 }
 
 utilxx_base::Json toJson(const WireHostToolUnregister& msg) {
-    return makeHostToolUnregisterMsg(msg);
+    return withReqId(makeHostToolUnregisterMsg(msg), msg);
 }
 
 utilxx_base::Json toJson(const WireHostToolCall& msg) {
@@ -240,7 +246,11 @@ utilxx_base::Json toJson(const WireHostToolCall& msg) {
 }
 
 utilxx_base::Json toJson(const WireHostToolResult& msg) {
-    return makeHostToolResultMsg(msg);
+    return withReqId(makeHostToolResultMsg(msg), msg);
+}
+
+utilxx_base::Json toJson(const WireAck& msg) {
+    return makeAck(msg);
 }
 
 // ---------------------------------------------------------------------------
@@ -458,6 +468,8 @@ WireAppendComponentInfo appendComponentInfoMessageFromJson(const utilxx_base::Js
 WireGetContext getContextFromJson(const utilxx_base::Json& j) {
     WireGetContext req;
     req.sessionId = j.value("sessionId", std::string{});
+    // 可选 tail (只取最近 N 条上下文; 缺字段 = 整份)
+    req.tail = static_cast<uint32_t>(j.value("tail", uint64_t{0}));
     return req;
 }
 
@@ -495,6 +507,10 @@ WireHostToolCall hostToolCallMsgFromJson(const utilxx_base::Json& j) {
 
 WireHostToolResult hostToolResultMsgFromJson(const utilxx_base::Json& j) {
     return hostToolResultFromJson(j);
+}
+
+WireAck ackMsgFromJson(const utilxx_base::Json& j) {
+    return ackFromJson(j);
 }
 
 // ---------------------------------------------------------------------------
@@ -709,6 +725,10 @@ static const std::unordered_map<std::string_view, DeserializerFn>& getDeserializ
          [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
              return hostToolResultMsgFromJson(j);
          }},
+        {MsgType::Ack,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return ackMsgFromJson(j);
+         }},
     };
     return s_map;
 }
@@ -742,7 +762,12 @@ std::optional<WireMessage> deserialize(std::string_view jsonText) {
     const auto& map = getDeserializerMap();
     auto        it  = map.find(t);
     if (it != map.end()) {
-        return it->second(j);
+        auto msg = it->second(j);
+        if (msg.has_value()) {
+            // 请求/应答相关性字段在入口统一回填: 各消息的 *FromJson 不必各自处理
+            assignReqId(*msg, readReqId(j));
+        }
+        return msg;
     }
     return std::nullopt;
 }

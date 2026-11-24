@@ -8,7 +8,7 @@
 >
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-协议版本: `5` · 消息类型数: 48
+协议版本: `5` · 消息类型数: 49
 
 字段类型按序列化后的 JSON 取值推导 (`array<T>` 表示数组, `object{...}` 展开一层
 字段); 省略的字段表示该字段可缺省 (取零值/默认值), 老对端不认识的新字段会被忽略。
@@ -20,7 +20,7 @@
 | 2 | user_input | `user_input` | `type` string, `sessionId` string, `text` string, `model` string, `delivery` string, `requestId` integer, `attachments` array<object{type:string, display_name:string, mime_type:string, path_or_url:string, data_url:string, size_bytes:integer}> |
 | 3 | input_ack | `input_ack` | `type` string, `status` string, `requestId` integer, `sessionId` string, `delivery` string, `reason` string, `detail` string, `itemId` string |
 | 4 | cancel | `cancel` | `type` string, `sessionId` string |
-| 5 | select_model | `select_model` | `type` string, `sessionId` string, `model` string |
+| 5 | select_model | `select_model` | `type` string, `sessionId` string, `model` string, `reqId` integer |
 | 6 | interrupt_request | `interrupt_request` | `type` string, `id` integer, `sessionId` string, `node` string, `value` string, `argJson` string |
 | 7 | interrupt_response | `interrupt_response` | `type` string, `id` integer, `result` object{allow:string} |
 | 8 | interrupt_expired | `interrupt_expired` | `type` string, `id` integer, `sessionId` string |
@@ -30,11 +30,11 @@
 | 12 | context_stats | `context_stats` | `type` string, `contextTokens` integer, `maxContextTokens` integer, `tps` number, `promptTokens` integer, `completionTokens` integer, `totalTokens` integer, `cachedPromptTokens` integer, `asyncWorks` array<object{id:string, kind:string, name:string, state:string, elapsedMs:integer, queueAhead:integer}> |
 | 13 | error | `error` | `type` string, `code` integer, `message` string |
 | 14 | log | `log` | `type` string, `level` integer, `message` string |
-| 15 | get_model | `get_model` | `type` string, `sessionId` string |
-| 16 | model_info | `model_info` | `type` string, `currentModel` string, `models` array<string>, `capabilities` array<object{name:string, image_input:boolean, audio_input:boolean, video_input:boolean}> |
+| 15 | get_model | `get_model` | `type` string, `sessionId` string, `reqId` integer |
+| 16 | model_info | `model_info` | `type` string, `currentModel` string, `models` array<string>, `capabilities` array<object{name:string, image_input:boolean, audio_input:boolean, video_input:boolean}>, `reqId` integer |
 | 17 | get_append_component_info | `get_append_component_info` | `type` string, `sessionId` string |
 | 18 | append_component_info | `append_component_info` | `type` string, `notifications` array<object{type:integer, name:string, success:boolean, errorMessage:string}> |
-| 19 | get_context | `get_context` | `type` string, `sessionId` string |
+| 19 | get_context | `get_context` | `type` string, `sessionId` string, `tail` integer, `reqId` integer |
 | 20 | compact_context | `compact_context` | `type` string, `sessionId` string |
 | 21 | context_messages | `context_messages` | `type` string, `messages` array<object{role:string, content:string}> |
 | 22 | list_sessions | `list_sessions` | `type` string, `beforeMs` integer, `beforeId` string, `limit` integer |
@@ -62,7 +62,8 @@
 | 44 | host_tool_register | `host_tool_register` | `type` string, `sessionId` string, `tools` array<object{name:string, description:string, inputSchema:object, timeoutSec:integer, maxConcurrent:integer}> |
 | 45 | host_tool_unregister | `host_tool_unregister` | `type` string, `sessionId` string, `names` array<string> |
 | 46 | host_tool_call | `host_tool_call` | `type` string, `callId` integer, `sessionId` string, `name` string, `argsJson` string, `timeoutSec` integer |
-| 47 | host_tool_result | `host_tool_result` | `type` string, `callId` integer, `ok` boolean, `resultJson` string, `errorMessage` string |
+| 47 | host_tool_result | `host_tool_result` | `type` string, `callId` integer, `ok` boolean, `resultJson` string, `errorMessage` string, `reqId` integer |
+| 48 | ack | `ack` | `type` string, `ok` boolean, `reqId` integer, `reason` string, `error` string |
 
 ## 说明
 

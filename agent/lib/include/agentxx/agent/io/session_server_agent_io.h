@@ -108,6 +108,15 @@ public:
     /// 广播消息到所有活跃的客户端
     void broadcastToClients(const WireMessage& msg);
 
+    /// 广播消息给除指定客户端以外的其余活跃客户端
+    /// - 用于"先向发起方定向回执, 再向其他人广播状态变化"的场景 (如权限状态切换),
+    ///   避免发起方收两条 (收到是幂等的, 但会多出一条界面事件)
+    /// - [except] 为空时等同 [broadcastToClients]
+    void broadcastToClientsExcept(
+        const std::shared_ptr<AgentIOTransportBase>& except,
+        const WireMessage&                           msg
+    );
+
     /// 定向发送消息给特定客户端
     void sendToClient(const std::shared_ptr<AgentIOTransportBase>& transport, WireMessage msg);
 
@@ -314,7 +323,11 @@ private:
     );
 
     /// 处理客户端返回的外部工具执行结果 (WireHostToolResult)
-    void handleHostToolResult(const WireHostToolResult& resp);
+    /// - [sender] 来源 transport (带 reqId 时回通用回执; 未知 callId → `call_not_found`)
+    void handleHostToolResult(
+        const WireHostToolResult&                    resp,
+        const std::shared_ptr<AgentIOTransportBase>& sender
+    );
 
     /// 反向调用客户端执行主程序工具
     asio::awaitable<std::string> callHostToolAsync(
@@ -383,6 +396,18 @@ private:
         std::string_view                             itemId = {}
     );
 
+    /// 回通用回执 ([WireAck])
+    /// - `reqId == 0` 直接跳过: 旧客户端/未投递 reqId 的请求保持原行为
+    /// - 未与 `reqId != 0` 配对的应答不会被调用方收到, 发出去也只会被丢弃
+    void sendAck(
+        const std::shared_ptr<AgentIOTransportBase>& sender,
+        uint64_t                                     reqId,
+        bool                                         ok,
+        std::string_view                             reason = {},
+        std::string                                  error  = {},
+        utilxx_base::Json                            data   = {}
+    );
+
     /// 队列状态转移 (记 Debug 日志: 旧状态 → 新状态 + 原因)
     void setQueueState(SessionQueueState state, std::string_view reason);
 
@@ -435,20 +460,21 @@ private:
 
     /// 会话 ID 校验 (端点绑定单一会话; 统一入口校验)
     /// - `sessionId` 为空: 视为"未指定", 按当前绑定会话处理 (旧客户端兼容)
-    /// - 与当前绑定会话不一致: 拒绝该请求, 回 WireError(SessionMismatch) 给来源
-    ///   (来源为空时广播), 并记警告日志 —— 避免切换会话后迟到的旧请求写到新会话
-    /// - 发给**正在切换过去**的会话的请求不会走到这里: 它们在 [onPeerMessage] 里
-    ///   先被暂存, 等切换提交后按原顺序重新分发 (见 [stashWhileSwitching])
+    /// - 与当前绑定会话不一致: 拒绝该请求, `reqId` 非 0 时回
+    ///   `WireAck{ok=false, reason="session_mismatch"}`, 否则回 WireError(SessionMismatch)
+    ///   —— 带 reqId 的调用方拿确定的失败, 不必等超时
     ///
     /// - `args`:
     ///     - [sessionId] 请求携带的会话 ID
     ///     - [sender]    请求来源 transport (错误回执只发回给它)
     ///     - [what]      请求名称 (日志与错误文本用, 如 "user_input")
+    ///     - [reqId]     请求的关联序号 (0 = 不回通用回执)
     /// - `return` 是否接受该请求
     bool acceptSessionScope(
         std::string_view                             sessionId,
         const std::shared_ptr<AgentIOTransportBase>& sender,
-        std::string_view                             what
+        std::string_view                             what,
+        uint64_t                                     reqId = 0
     );
 
     /// 切换会话进行中时暂存发给目标会话的请求 (仅 ex_ 线程)
@@ -473,7 +499,9 @@ private:
     /// 实际清理逻辑 (须在 ex_ 线程执行)
     void stopImpl();
 
-    void resolveInterrupt(int64_t id, utilxx_base::Json result);
+    /// 结束一个挂起的中断 (把结果交给等待方并广播"已过期")
+    /// - `return` 是否命中一个尚未应答的中断 (供命令回执判断 `interrupt_not_found`)
+    bool resolveInterrupt(int64_t id, utilxx_base::Json result);
     /// 取消会话当前轮次 (取消令牌级联到正在跑的 LLM 请求 / 工具 / HIL 等待)
     /// - `reason` 只用于日志: 排查"没有用户操作但轮次被取消"时能直接看出是谁发起的
     void onCancel(std::string_view reason = "unspecified");
@@ -499,6 +527,12 @@ private:
     ///   经服务端读写; 状态变化 (询问卡片勾选 / 任一客户端切换) 经本订阅广播
     ///   给所有已连接客户端, 多端界面保持一致
     void subscribePermissionEvents(const std::shared_ptr<agentxx::events::EventBus>& bus);
+
+    /// 订阅上下文压缩完成事件 (`Topic::SummarizationCompactDone`)
+    /// - 压缩是异步长任务 (`session.compact` 请求受理后压缩还在跑), 命令回执必须
+    ///   等它真的结束 —— 否则调用方以为压缩已完成就去取上下文, 拿到的还是旧的
+    /// - 事件载荷带 sessionId, 与排队中的回执按会话 FIFO 配对
+    void subscribeSummarizationDone(const std::shared_ptr<agentxx::events::EventBus>& bus);
 
     /// 查询 agent 侧权限中间件 (未加载时返回 nullptr)
     agentxx::middleware::PermissionMiddlewareHandle* permissionMiddleware() const;
@@ -591,6 +625,16 @@ private:
     size_t hostSubId_   = 0;
     /// 权限状态变更事件订阅 id (0 = 未订阅)
     size_t fullAuthSubId_ = 0;
+    /// 压缩完成事件订阅 id (0 = 未订阅)
+    size_t compactDoneSubId_ = 0;
+
+    /// 等压缩完成的回执请求 (按会话 FIFO)
+    /// - 同一会话可能连续提交多次压缩, 完成事件按次发布, 因此按顺序逐个回执
+    struct PendingCompactAck {
+        uint64_t                              reqId = 0;
+        std::shared_ptr<AgentIOTransportBase> sender;
+    };
+    std::map<std::string, std::deque<PendingCompactAck>> pendingCompactAcks_;
     /// 上行 WirePluginDataUp 对端缺失警告冷却表 (仅 ex_ 线程访问):
     /// client 插件上行数据但 agent 侧未加载同名插件时, 每插件名最多每
     /// kUplinkWarnCooldown 一次 XX_LOGW, 防御高频上行刷屏

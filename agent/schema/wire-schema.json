@@ -1,6 +1,6 @@
 {
   "protocolVersion": 5,
-  "messageCount": 48,
+  "messageCount": 49,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_WIRE_SCHEMA=1 agentxx_test wire_schema",
   "messages": [
     {
@@ -153,12 +153,14 @@
       "fields": {
         "type": "string",
         "sessionId": "string",
-        "model": "string"
+        "model": "string",
+        "reqId": "integer"
       },
       "sample": {
         "type": "select_model",
         "sessionId": "s1",
-        "model": "claude-y"
+        "model": "claude-y",
+        "reqId": 7
       }
     },
     {
@@ -409,11 +411,13 @@
       "type": "get_model",
       "fields": {
         "type": "string",
-        "sessionId": "string"
+        "sessionId": "string",
+        "reqId": "integer"
       },
       "sample": {
         "type": "get_model",
-        "sessionId": "s1"
+        "sessionId": "s1",
+        "reqId": 11
       }
     },
     {
@@ -424,7 +428,8 @@
         "type": "string",
         "currentModel": "string",
         "models": "array<string>",
-        "capabilities": "array<object{name:string, image_input:boolean, audio_input:boolean, video_input:boolean}>"
+        "capabilities": "array<object{name:string, image_input:boolean, audio_input:boolean, video_input:boolean}>",
+        "reqId": "integer"
       },
       "sample": {
         "type": "model_info",
@@ -440,7 +445,8 @@
             "audio_input": false,
             "video_input": false
           }
-        ]
+        ],
+        "reqId": 11
       }
     },
     {
@@ -488,11 +494,15 @@
       "type": "get_context",
       "fields": {
         "type": "string",
-        "sessionId": "string"
+        "sessionId": "string",
+        "tail": "integer",
+        "reqId": "integer"
       },
       "sample": {
         "type": "get_context",
-        "sessionId": "s1"
+        "sessionId": "s1",
+        "tail": 20,
+        "reqId": 12
       }
     },
     {
@@ -1018,14 +1028,35 @@
         "callId": "integer",
         "ok": "boolean",
         "resultJson": "string",
-        "errorMessage": "string"
+        "errorMessage": "string",
+        "reqId": "integer"
       },
       "sample": {
         "type": "host_tool_result",
         "callId": 7,
         "ok": true,
         "resultJson": "{\"opened\":true}",
-        "errorMessage": ""
+        "errorMessage": "",
+        "reqId": 9
+      }
+    },
+    {
+      "index": 48,
+      "name": "ack",
+      "type": "ack",
+      "fields": {
+        "type": "string",
+        "ok": "boolean",
+        "reqId": "integer",
+        "reason": "string",
+        "error": "string"
+      },
+      "sample": {
+        "type": "ack",
+        "ok": false,
+        "reqId": 7,
+        "reason": "model_not_found",
+        "error": "model 'x' is not registered"
       }
     }
   ]

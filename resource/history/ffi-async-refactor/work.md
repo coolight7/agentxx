@@ -6,9 +6,8 @@
 - [x] 规划通读核对（2026-11-24）：合批改默认关闭（D17 / §9.2）、D15 超时表补 `fs.list_dir`、
       事件枚举名与 `AgentxxFFICallbacks.struct_size`、D1 本地同步入口数、日志 sink 线程数、
       `ffi_api.h` 引用了不存在的 `agentxx_ffi_get_view_messages` — 均已改入 plan
-- [ ] 第 1 步：wire 相关性 + 通用回执（`reqId` + `WireAck` + 服务端 ack + schema）
-- [ ] 第 2 步：FFI 内部换代（`ffi_call` / `call_cancel` / `ffi_ops` + C API v4 + 事件所有权 + 测试重写）
-- [ ] 第 3 步：生命周期异步化（`stop` → `EVT_STOPPED`、`destroy` 约束）
+- [x] 第 1 步：wire 相关性 + 通用回执（`reqId` + `WireAck` + 服务端 ack + schema）
+- [ ] 第 2 步：FFI 内部换代（`ffi_call` / `call_cancel` / `ffi_ops` + C API v4 + 事件所有权 + 测试重写）- [ ] 第 3 步：生命周期异步化（`stop` → `EVT_STOPPED`、`destroy` 约束）
 - [ ] 第 4 步：benchmark FFI 场景更新（含调用吞吐 / 合批对比 / 首屏尾窗三个子场景）
 - [ ] 第 5 步：Dart 绑定重新生成 + SDK/示例异步化（含取消令牌与顺序用法）
 - [ ] 第 6 步：文档与导出白名单收尾
@@ -86,7 +85,42 @@
 
 ## 各步记录
 
-（每完成一步在这里补：改了哪些文件、怎么验证、遇到的问题。未开工。）
+### 第 1 步：wire 相关性 + 通用回执 (2026-11-24 完成)
+
+改动文件与内容:
+
+| 文件 | 改动 |
+|---|---|
+| `agent/lib/include/agentxx/agent/io/agent_io_transport.h` | 31 个请求/应答结构体末尾加 `uint64_t reqId = 0`（`WireGetContext` 另加 `uint32_t tail = 0`）；新增 `WireAck` 并追加到 `WireMessage` 变体末尾 |
+| `agent/lib/include/agentxx/agent/io/wire_protocol.h` | `MsgType::Ack`；`putReqId` / `readReqId` / `withReqId` / `assignReqId` 四个轻量工具；`makeAck` / `ackFromJson`；`makeGetContext` 加可选 `tail`；声明 `toJson(WireAck)` / `ackMsgFromJson` |
+| `agent/lib/src/agent/wire_protocol.cpp` | 各 `toJson` 统一走 `withReqId`（`reqId == 0` 不写字段）；`deserialize` 入口统一 `assignReqId`（各 `*FromJson` 不必各写一遍）；补 `ack` 反序列化映射；`getContextFromJson` 读 `tail` |
+| `agent/lib/include/agentxx/agent/io/session_server_agent_io.h/.cpp` | 新增 `sendAck` / `broadcastToClientsExcept` / `subscribeSummarizationDone` / `pendingCompactAcks_`；`acceptSessionScope` 加 `reqId`（非 0 改回 `session_mismatch` ack）；`resolveInterrupt` 改为返回 bool；`handleHostToolResult` 加 sender 参数；各命令分发处回 ack |
+| `agent/lib/include/agentxx/event/events.h` | 新增 `Topic::SummarizationCompactDone` 与 `EventCompactContextDone{sessionId, ok}` |
+| `agent/lib/src/middlewares/summarization.cpp` | `compactSessionContext` 在**每条**退出路径发布完成事件（含三条提前 `co_return false`） |
+| `agent/test/core/test_wire_roundtrip.cpp` | 新增 reqId 往返（含 `reqId == 0` 不写字段）、`tail`、`WireAck` 成功/失败与缺 reason 的兜底断言 |
+| `agent/test/core/test_wire_schema.cpp` | 补 `ack` 示例（变体最后一个），`select_model` / `get_model` / `model_info` / `get_context` / `host_tool_result` 示例带 reqId 以便生成物里出现该字段 |
+| `agent/schema/wire-schema.json`、`docs/zh-cn/design/wire-protocol-fields.md` | 用 `AGENTXX_UPDATE_WIRE_SCHEMA=1` 重新生成 |
+
+关键实现选择:
+
+1. **写侧 `withReqId` / 读侧 `assignReqId` 各只一处** —— 读侧放在 `deserialize()` 入口（`std::visit` + `requires { m.reqId; }`），
+   以后新增带 `reqId` 的消息不必逐改 30 多处 `*FromJson`；写侧仍在各 `toJson` 里显式调用，
+   这样 schema 生成物能看到该字段。
+2. **`reqId == 0` 一律不写字段、不回 ack** —— TUI/旧客户端行为不变（TUI 不填 reqId，也不会收到它不认识的 `ack`）。
+3. **`set_full_auth` 的回执与广播分开** —— 发起方拿带 reqId 的 `WirePermissionState`，
+   其余客户端经新增 `broadcastToClientsExcept` 收广播，避免发起方收两条。
+4. **`session.compact` 的回执等真的结束** —— `pendingCompactAcks_` 按会话 FIFO 排，
+   `SummarizationCompactDone` 到达时逐个回（`ok=false` 用 `compaction_failed`）。
+5. **`select_model` 补模型存在性校验** —— 空模型名仍表示“沿用当前”（TUI 切换会话后重发用），
+   名字不在注册表则回 `model_not_found`（以前是静默忽略）。
+6. **`plugin_data_up` 的 ack 在 `bus->publish` 之后** —— 语义是“已发布到 agent 总线”，
+   不是在“已投递到总线 executor”时。
+
+验证:
+
+- 顶层 Debug 构建通过（首次构建 MSBuild 子节点异常退出，原样重跑即成功，与本次代码无关）。
+- `wire_roundtrip` 285 passed / 0 failed；`wire_schema` 1377 passed / 0 failed（schema 已重新生成）。
+- `agent`（223）/ `session_admin`（38）/ `input_delivery`（140）/ `remote_agent`（602）全绿。
 
 ## 验证清单
 

@@ -103,6 +103,8 @@ struct MsgType { // ===== Client -> Server =====
     inline static constexpr std::string_view HostToolCall = "host_tool_call";
     /// 客户端返回 host tool 执行结果
     inline static constexpr std::string_view HostToolResult = "host_tool_result";
+    /// 服务端命令类请求的通用回执 ([WireAck])
+    inline static constexpr std::string_view Ack = "ack";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -111,6 +113,88 @@ struct CloseReason {
     inline static constexpr std::string_view ClientDisconnected = "client_disconnected";
     inline static constexpr std::string_view Timeout            = "timeout";
 };
+
+// ---------------------------------------------------------------------------
+// 请求/应答相关性 (reqId)
+// ---------------------------------------------------------------------------
+
+/// 写入请求/应答相关性字段: `reqId == 0` 时不写
+/// - 不写字段 = 旧对端行为 (不认识该字段的对端与不认识新消息类型的解码器都不受影响)
+inline void putReqId(utilxx_base::Json& j, uint64_t reqId) {
+    if (reqId != 0) {
+        j["reqId"] = reqId;
+    }
+}
+
+/// 读取请求/应答相关性字段 (缺字段 = 0)
+inline uint64_t readReqId(const utilxx_base::Json& j) {
+    return j.value("reqId", uint64_t{0});
+}
+
+/// 给已组装好的 JSON 补上请求/应答相关性字段
+/// - 只对带 `reqId` 成员的消息生效, 其余类型原样返回 (模板内 `if constexpr` 判断)
+/// - 送入时按值接受 JSON, 调用处写成 `return withReqId(makeXxx(...), msg);` 即可
+///   (move 进参数, 不额外拷贝)
+template <typename T>
+inline utilxx_base::Json withReqId(utilxx_base::Json j, const T& msg) {
+    if constexpr (requires { msg.reqId; }) {
+        putReqId(j, static_cast<uint64_t>(msg.reqId));
+    }
+    return j;
+}
+
+/// 把 JSON 里的请求/应答相关性字段写回已解析的消息
+/// - 只对带 `reqId` 成员的消息类型生效 (其余类型忽略)
+/// - 反序列化入口统一调用一次, 因此各消息的 `*FromJson` 不必各自处理
+inline void assignReqId(WireMessage& msg, uint64_t reqId) {
+    if (reqId == 0) {
+        return;
+    }
+    std::visit(
+        [reqId](auto& m) {
+            if constexpr (requires { m.reqId; }) {
+                m.reqId = reqId;
+            }
+        },
+        msg
+    );
+}
+
+/// 命令类请求的通用回执 (Server -> Client)
+///
+/// `ok == false` 时 `reason` 必填 (机器可读), `error` 可选 (给人看); `data` 无数据时不写。
+inline utilxx_base::Json makeAck(const WireAck& ack) {
+    utilxx_base::Json j = {
+        {"type", MsgType::Ack},
+        {"ok",   ack.ok      },
+    };
+    if (ack.reqId != 0) {
+        j["reqId"] = ack.reqId;
+    }
+    if (ack.ok) {
+        if (!ack.data.is_null()) {
+            j["data"] = ack.data;
+        }
+    } else {
+        j["reason"] = ack.reason.empty() ? std::string{"rejected"} : ack.reason;
+        if (!ack.error.empty()) {
+            j["error"] = ack.error;
+        }
+    }
+    return j;
+}
+
+inline WireAck ackFromJson(const utilxx_base::Json& j) {
+    WireAck ack;
+    ack.reqId  = readReqId(j);
+    ack.ok     = j.value("ok", false);
+    ack.reason = j.value("reason", std::string{});
+    ack.error  = j.value("error", std::string{});
+    if (j.contains("data") && !j["data"].is_null()) {
+        ack.data = j["data"];
+    }
+    return ack;
+}
 
 // ---------------------------------------------------------------------------
 // WireDelta <-> json
@@ -865,11 +949,15 @@ inline utilxx_base::Json makePong(int64_t t) {
     };
 }
 
-inline utilxx_base::Json makeGetContext(std::string_view sessionId) {
-    return utilxx_base::Json{
+inline utilxx_base::Json makeGetContext(std::string_view sessionId, uint32_t tail = 0) {
+    utilxx_base::Json j = {
         {"type",      MsgType::GetContext},
         {"sessionId", sessionId          },
     };
+    if (tail > 0) {
+        j["tail"] = tail;
+    }
+    return j;
 }
 
 inline utilxx_base::Json makeCompactContext(std::string_view sessionId) {
@@ -1838,6 +1926,9 @@ WireHostToolCall  hostToolCallMsgFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json  toJson(const WireHostToolResult& msg);
 WireHostToolResult hostToolResultMsgFromJson(const utilxx_base::Json& j);
+
+utilxx_base::Json toJson(const WireAck& msg);
+WireAck           ackMsgFromJson(const utilxx_base::Json& j);
 
 /// 统一序列化为 JSON 字符串
 std::string serialize(const WireMessage& msg);

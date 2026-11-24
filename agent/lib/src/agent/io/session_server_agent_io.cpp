@@ -276,6 +276,33 @@ void SessionServerAgentIO::broadcastToClients(const WireMessage& msg) {
     }
 }
 
+void SessionServerAgentIO::broadcastToClientsExcept(
+    const std::shared_ptr<AgentIOTransportBase>& except,
+    const WireMessage&                           msg
+) {
+    if (!except) {
+        broadcastToClients(msg);
+        return;
+    }
+    for (auto it = clients_.begin(); it != clients_.end();) {
+        auto& t = *it;
+        if (!t || !t->alive()) {
+            if (transport_ == t) {
+                transport_.reset();
+            }
+            it = clients_.erase(it);
+            continue;
+        }
+        if (t != except) {
+            t->send(msg);
+        }
+        ++it;
+    }
+    if (!transport_ && !clients_.empty()) {
+        transport_ = clients_.back();
+    }
+}
+
 void SessionServerAgentIO::sendToClient(
     const std::shared_ptr<AgentIOTransportBase>& transport,
     WireMessage                                  msg
@@ -666,6 +693,27 @@ void SessionServerAgentIO::sendInputAck(
     ack.reason    = std::string{reason};
     ack.detail    = std::move(detail);
     ack.itemId    = std::string{itemId};
+    sendToClient(sender, std::move(ack));
+}
+
+void SessionServerAgentIO::sendAck(
+    const std::shared_ptr<AgentIOTransportBase>& sender,
+    uint64_t                                     reqId,
+    bool                                         ok,
+    std::string_view                             reason,
+    std::string                                  error,
+    utilxx_base::Json                            data
+) {
+    // 没带 reqId 的请求 (旧客户端/TUI) 不回: 对端不认识该消息类型, 也无从匹配
+    if (reqId == 0) {
+        return;
+    }
+    WireAck ack;
+    ack.reqId  = reqId;
+    ack.ok     = ok;
+    ack.reason = std::string{reason};
+    ack.error  = std::move(error);
+    ack.data   = std::move(data);
     sendToClient(sender, std::move(ack));
 }
 
@@ -1215,6 +1263,20 @@ static std::string_view wireSessionIdOf(const WireMessage& msg) {
     );
 }
 
+/// 取消息携带的请求序号 (消息没有该字段或未填写时返回 0)
+static uint64_t wireReqIdOf(const WireMessage& msg) {
+    return std::visit(
+        [](const auto& m) -> uint64_t {
+            if constexpr (requires { m.reqId; }) {
+                return static_cast<uint64_t>(m.reqId);
+            } else {
+                return 0;
+            }
+        },
+        msg
+    );
+}
+
 void SessionServerAgentIO::onPeerMessage(
     WireMessage                                  msg,
     const std::shared_ptr<AgentIOTransportBase>& sender
@@ -1228,6 +1290,14 @@ void SessionServerAgentIO::onPeerMessage(
         XX_LOGW(
             "[session_ctrl] reject business message before handshake (session={})",
             config_.sessionId
+        );
+        // 带 reqId 的调用方还要一条确定失败的回执, 否则只能等到超时
+        sendAck(
+            sender,
+            wireReqIdOf(msg),
+            false,
+            "invalid_state",
+            "handshake not completed for this connection; send hello first"
         );
         sendToClient(
             sender,
@@ -1254,7 +1324,7 @@ void SessionServerAgentIO::onPeerMessage(
                 // 输入受理 (投递模式分发 + 回执 + 收件箱落库)
                 handleUserInput(std::move(m), sender);
             } else if constexpr (std::is_same_v<T, WireCancel>) {
-                if (!acceptSessionScope(m.sessionId, sender, "cancel")) {
+                if (!acceptSessionScope(m.sessionId, sender, "cancel", m.reqId)) {
                     return;
                 }
                 // 仅在轮次进行中时暂停队列: 空闲时收到取消 (无轮次可取消) 不应
@@ -1263,11 +1333,14 @@ void SessionServerAgentIO::onPeerMessage(
                     setQueueState(SessionQueueState::Paused, "cancel");
                 }
                 onCancel("wire_cancel");
+                // 回执表示"取消请求已处理" (置取消标记); 不保证轮次已停下
+                sendAck(sender, m.reqId, true);
             } else if constexpr (std::is_same_v<T, WireInterruptAndRunNext>) {
-                if (!acceptSessionScope(m.sessionId, sender, "interrupt_and_run_next")) {
+                if (!acceptSessionScope(m.sessionId, sender, "interrupt_and_run_next", m.reqId)) {
                     return;
                 }
                 interruptAndRunNext();
+                sendAck(sender, m.reqId, true);
             } else if constexpr (std::is_same_v<T, WireGetViewMessages>) {
                 // 客户端历史分页请求: 切片 [max(0, before-count), before) 回应。
                 // viewMessages 为 append-only, 绝对下标恒定, 轮次进行中追加
@@ -1276,15 +1349,17 @@ void SessionServerAgentIO::onPeerMessage(
                 //  回错误会打断其分页状态机)
                 handleGetViewMessages(m, sender);
             } else if constexpr (std::is_same_v<T, WireClearMessageQueue>) {
-                if (!acceptSessionScope(m.sessionId, sender, "clear_message_queue")) {
+                if (!acceptSessionScope(m.sessionId, sender, "clear_message_queue", m.reqId)) {
                     return;
                 }
                 clearMessageQueue();
+                sendAck(sender, m.reqId, true);
             } else if constexpr (std::is_same_v<T, WireRemoveQueueItem>) {
-                if (!acceptSessionScope(m.sessionId, sender, "remove_queue_item")) {
+                if (!acceptSessionScope(m.sessionId, sender, "remove_queue_item", m.reqId)) {
                     return;
                 }
-                if (!removeQueueItem(m.itemId)) {
+                const bool removed = removeQueueItem(m.itemId);
+                if (!removed) {
                     // 条目已不在 (被清空/已受理/重复删除): 明确告知对端, 不静默成功
                     auto err = WireError{
                         .code    = WireErrorCode::MessageNotFound,
@@ -1299,24 +1374,69 @@ void SessionServerAgentIO::onPeerMessage(
                         sendToPeer(std::move(err));
                     }
                 }
+                sendAck(
+                    sender,
+                    m.reqId,
+                    removed,
+                    removed ? std::string_view{} : std::string_view{"item_not_found"},
+                    removed ? std::string{} : fmt::format("queue item '{}' not found", m.itemId)
+                );
             } else if constexpr (std::is_same_v<T, WireSelectModel>) {
-                if (!acceptSessionScope(m.sessionId, sender, "select_model")) {
+                if (!acceptSessionScope(m.sessionId, sender, "select_model", m.reqId)) {
                     return;
                 }
                 auto agent = agent_.lock();
-                if (agent) {
-                    agent->selectModel(m.sessionId, m.model);
+                if (!agent) {
+                    sendAck(sender, m.reqId, false, "invalid_state", "agent is not available");
+                    return;
                 }
+                // 空模型名 = 沿用当前选择 (TUI 切换会话后重发当前选择走这条)
+                const std::string target = m.model.empty()
+                                               ? agent->getCurrentModelName(m.sessionId)
+                                               : m.model;
+                // 选错模型名以前被静默忽略 (调用方以为什么都没发生), 现在给确定失败
+                bool known = false;
+                if (agent->agentContext && agent->agentContext->agentConfig) {
+                    known = agent->agentContext->agentConfig->availableModels.contains(target);
+                }
+                if (!known && agent->agentContext && agent->agentContext->modelRegistry) {
+                    known = agent->agentContext->modelRegistry->hasModel(target);
+                }
+                if (!known) {
+                    sendAck(
+                        sender,
+                        m.reqId,
+                        false,
+                        "model_not_found",
+                        fmt::format("model '{}' is not registered", target)
+                    );
+                    return;
+                }
+                agent->selectModel(m.sessionId, target);
+                utilxx_base::Json data = utilxx_base::Json::object();
+                data["model"]          = target;
+                sendAck(sender, m.reqId, true, {}, {}, std::move(data));
             } else if constexpr (std::is_same_v<T, WireInterruptResponse>) {
-                resolveInterrupt(m.id, std::move(m.result));
+                const bool found = resolveInterrupt(m.id, std::move(m.result));
+                sendAck(
+                    sender,
+                    m.reqId,
+                    found,
+                    found ? std::string_view{} : std::string_view{"interrupt_not_found"},
+                    found ? std::string{}
+                          : fmt::format("interrupt #{} is unknown or already answered", m.id)
+                );
             } else if constexpr (std::is_same_v<T, WireGetModel>) {
-                if (!acceptSessionScope(m.sessionId, sender, "get_model")) {
+                if (!acceptSessionScope(m.sessionId, sender, "get_model", m.reqId)) {
                     return;
                 }
                 if (!agent_.lock()) {
+                    sendAck(sender, m.reqId, false, "invalid_state", "agent is not available");
                     return;
                 }
-                sendToClient(sender, buildModelInfo(m.sessionId));
+                auto info  = buildModelInfo(m.sessionId);
+                info.reqId = m.reqId;
+                sendToClient(sender, std::move(info));
             } else if constexpr (std::is_same_v<T, WireAddModel>) {
                 handleAddModel(m, sender);
             } else if constexpr (std::is_same_v<T, WireRemoveModel>) {
@@ -1326,21 +1446,30 @@ void SessionServerAgentIO::onPeerMessage(
             } else if constexpr (std::is_same_v<T, WireHostToolUnregister>) {
                 handleHostToolUnregister(m, sender);
             } else if constexpr (std::is_same_v<T, WireHostToolResult>) {
-                handleHostToolResult(m);
+                handleHostToolResult(m, sender);
             } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
-                if (!acceptSessionScope(m.sessionId, sender, "get_append_component_info")) {
+                if (!acceptSessionScope(
+                        m.sessionId,
+                        sender,
+                        "get_append_component_info",
+                        m.reqId
+                    )) {
                     return;
                 }
                 auto agent = agent_.lock();
                 if (!agent) {
+                    sendAck(sender, m.reqId, false, "invalid_state", "agent is not available");
                     return;
                 }
                 // 客户端拉取加载的组件信息: 收集已加载的 MCP/Skill/Memory 并回填
                 std::vector<AppendComponentNotification> notifications;
                 agent->collectAppendComponentInfo(notifications);
-                sendToClient(sender, WireAppendComponentInfo{std::move(notifications)});
+                sendToClient(
+                    sender,
+                    WireAppendComponentInfo{std::move(notifications), m.reqId}
+                );
             } else if constexpr (std::is_same_v<T, WireGetContext>) {
-                if (!acceptSessionScope(m.sessionId, sender, "get_context")) {
+                if (!acceptSessionScope(m.sessionId, sender, "get_context", m.reqId)) {
                     return;
                 }
                 auto agent = agent_.lock();
@@ -1371,14 +1500,34 @@ void SessionServerAgentIO::onPeerMessage(
                         msgs = std::move(newMsgs);
                     }
                 }
-                sendToClient(sender, WireContextMessages{std::move(msgs)});
-            } else if constexpr (std::is_same_v<T, WireCompactContext>) {
-                if (!acceptSessionScope(m.sessionId, sender, "compact_context")) {
+                // 只要尾部 N 条: 调用方常常只看最近几条, 不必回传整份上下文
+                if (m.tail > 0 && msgs.is_array() && msgs.size() > m.tail) {
+                    utilxx_base::Json window = utilxx_base::Json::array();
+                    const size_t       begin  = msgs.size() - m.tail;
+                    for (size_t i = begin; i < msgs.size(); ++i) {
+                        window.push_back(msgs[i]);
+                    }
+                    msgs = std::move(window);
+                }
+                sendToClient(sender, WireContextMessages{std::move(msgs), m.reqId});            } else if constexpr (std::is_same_v<T, WireCompactContext>) {
+                if (!acceptSessionScope(m.sessionId, sender, "compact_context", m.reqId)) {
                     return;
                 }
                 auto agent = agent_.lock();
                 if (!agent || !agent->agentContext || !agent->agentContext->bus) {
+                    sendAck(
+                        sender,
+                        m.reqId,
+                        false,
+                        "invalid_state",
+                        "agent is not ready for compaction"
+                    );
                     return;
+                }
+                // 回执只能等压缩真的结束 (订阅 SummarizationCompactDone): 先登记,
+                // 同一会话排队多个压缩时按 FIFO 逐个回执
+                if (m.reqId != 0) {
+                    pendingCompactAcks_[m.sessionId].push_back(PendingCompactAck{m.reqId, sender});
                 }
                 auto bus = agent->agentContext->bus;
                 auto sid = std::string{m.sessionId};
@@ -1401,7 +1550,7 @@ void SessionServerAgentIO::onPeerMessage(
                 auto agent = agent_.lock();
                 if (!agent || !agent->agentContext
                     || !agent->agentContext->sessions->sessionStore) {
-                    sendToClient(sender, WireSessionList{});
+                    sendToClient(sender, WireSessionList{.reqId = m.reqId});
                     return;
                 }
                 auto sessionStore = agent->agentContext->sessions->sessionStore;
@@ -1411,6 +1560,7 @@ void SessionServerAgentIO::onPeerMessage(
                     [self, sessionStore, agent, req = std::move(m), sender](
                     ) -> asio::awaitable<void> {
                         WireSessionList resp;
+                        resp.reqId = req.reqId;
                         if (agent->agentContext->threadPool) {
                             resp = co_await utilxx::offloadAsync<WireSessionList>(
                                 *agent->agentContext->threadPool,
@@ -1571,13 +1721,33 @@ void SessionServerAgentIO::onPeerMessage(
                 // 客户端查询权限状态 (TUI Info 侧边栏的授权按钮初值/刷新)
                 WirePermissionState state;
                 state.fullAuth = fullAuthorized();
+                state.reqId    = m.reqId;
                 sendToClient(sender, std::move(state));
             } else if constexpr (std::is_same_v<T, WireSetFullAuth>) {
                 // 客户端切换"完全授权所有权限":
-                // - 立即向本端点客户端广播新状态 (界面即时生效; 幂等)
-                // - 权限中间件同时发布状态变更事件 (见 subscribePermissionEvents),
-                //   供其他会话端点/其他客户端同步; 询问卡片勾选路径只走该事件
-                if (setFullAuthorized(m.fullAuth)) {
+                // - 发起方拿带 reqId 的回执 (生效后的状态), 不必靠广播去猜
+                // - 其余客户端收广播, 多端界面保持一致; 权限中间件同时发布状态变更
+                //   事件 (见 subscribePermissionEvents), 供其他会话端点同步
+                if (!setFullAuthorized(m.fullAuth)) {
+                    sendAck(
+                        sender,
+                        m.reqId,
+                        false,
+                        "no_permission_middleware",
+                        "permission middleware is not assembled"
+                    );
+                    return;
+                }
+                if (m.reqId != 0) {
+                    sendToClient(
+                        sender,
+                        WirePermissionState{.fullAuth = m.fullAuth, .reqId = m.reqId}
+                    );
+                    broadcastToClientsExcept(
+                        sender,
+                        WireMessage{WirePermissionState{.fullAuth = m.fullAuth}}
+                    );
+                } else {
                     sendToPeer(WirePermissionState{m.fullAuth});
                 }
             } else if constexpr (std::is_same_v<T, WireSwitchSession>) {
@@ -1590,10 +1760,14 @@ void SessionServerAgentIO::onPeerMessage(
                 // 切换提交后按到达顺序重放
                 const uint64_t switchSeq = ++switchSeq_;
                 switchTargetId_          = m.sessionId;
+                const uint64_t switchReqId = m.reqId;
                 asio::co_spawn(
                     ex_,
-                    [self = shared_from_this(), newId = std::move(m.sessionId), switchSeq](
-                    ) -> asio::awaitable<void> {
+                    [self = shared_from_this(),
+                     newId = std::move(m.sessionId),
+                     switchSeq,
+                     switchReqId,
+                     sender]() -> asio::awaitable<void> {
                         if (auto agent = self->agent_.lock(); agent && agent->agentContext) {
                             // 加载失败 (如会话库损坏) 不阻断切换: 记录原因后按空历史提交,
                             // 保证暂存的请求仍会被重放
@@ -1614,10 +1788,21 @@ void SessionServerAgentIO::onPeerMessage(
                         }
                         // 已有更新的切换请求: 本次作废 (新请求自己提交并重放暂存请求)
                         if (self->switchSeq_ != switchSeq) {
+                            self->sendAck(
+                                sender,
+                                switchReqId,
+                                false,
+                                "superseded",
+                                "a newer switch request replaced this one"
+                            );
                             co_return;
                         }
                         self->switchTargetId_.clear();
                         self->switchSession(std::move(newId));
+                        // 回执在切换提交后、历史/模型/统计回推之后发出 (同一连接按序投递)
+                        utilxx_base::Json data = utilxx_base::Json::object();
+                        data["sessionId"]      = self->config_.sessionId;
+                        self->sendAck(sender, switchReqId, true, {}, {}, std::move(data));
                         // 暂存请求按到达顺序重新分发: 此时端点已绑定新会话,
                         // 它们的会话校验与平时一致
                         self->replayStashedWhileSwitching();
@@ -1642,11 +1827,23 @@ void SessionServerAgentIO::onPeerMessage(
                         m.topic,
                         topicErr
                     );
+                    sendAck(
+                        sender,
+                        m.reqId,
+                        false,
+                        "bad_topic",
+                        fmt::format(
+                            "topic `{}` must be `agentxx.client.*` ({})",
+                            m.topic,
+                            topicErr
+                        )
+                    );
                     return;
                 }
                 auto agent = agent_.lock();
                 if (!agent || !agent->agentContext || !agent->agentContext->bus) {
                     XX_LOGW("[session_ctrl] WirePluginDataUp dropped (no agent bus): {}", m.topic);
+                    sendAck(sender, m.reqId, false, "invalid_state", "agent bus is not available");
                     return;
                 }
                 // 对端缺失检测: client 插件数据在 agent 侧无同名插件时, 发布后将
@@ -1676,11 +1873,18 @@ void SessionServerAgentIO::onPeerMessage(
                 auto topic = std::move(m.topic);
                 auto data  = std::move(m.data);
                 // EventBus::publish 为协程; 投递到总线 executor 执行
+                // 带 reqId 时在 publish 之后回执: "已发布到总线"才是这一步真的完成
+                const uint64_t pubReqId = m.reqId;
                 asio::co_spawn(
                     bus->executor(),
-                    [bus, topic = std::move(topic), data = std::move(data)](
+                    [bus, topic = std::move(topic), data = std::move(data), self = shared_from_this(), sender, pubReqId](
                     ) -> asio::awaitable<void> {
                         co_await bus->publish(topic, data);
+                        if (pubReqId != 0) {
+                            asio::post(self->ex_, [self, sender, pubReqId] {
+                                self->sendAck(sender, pubReqId, true);
+                            });
+                        }
                         co_return;
                     },
                     asio::detached
@@ -2082,13 +2286,15 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     sendContextStats();
 }
 
-void SessionServerAgentIO::resolveInterrupt(int64_t id, utilxx_base::Json result) {
+bool SessionServerAgentIO::resolveInterrupt(int64_t id, utilxx_base::Json result) {
     auto it = pending_.find(id);
-    if (it != pending_.end()) {
-        it->second.ch->try_send(ErrorCode{}, std::move(result));
-        // 该中断已被某一客户端处理解决, 广播通知所有客户端此中断已结束
-        sendToPeer(WireInterruptExpired{id, config_.sessionId});
+    if (it == pending_.end()) {
+        return false;
     }
+    it->second.ch->try_send(ErrorCode{}, std::move(result));
+    // 该中断已被某一客户端处理解决, 广播通知所有客户端此中断已结束
+    sendToPeer(WireInterruptExpired{id, config_.sessionId});
+    return true;
 }
 
 void SessionServerAgentIO::onCancel(std::string_view reason) {
@@ -2151,6 +2357,8 @@ void SessionServerAgentIO::subscribePluginEvents() {
     pluginSubscribed_ = true;
     // 权限状态变更订阅 (完全授权切换广播)
     subscribePermissionEvents(bus);
+    // 上下文压缩完成订阅 (命令回执只在压缩真的结束后发出)
+    subscribeSummarizationDone(bus);
     // 发布主程序约定事件 client_attached: 双端插件据此重发当前状态快照,
     // 修复"status 等一次性事件先于本订阅发布而丢失 → 客户端滞留初始占位"
     // 的问题 (晚创建的控制器/晚接入的客户端由此获得快照)
@@ -2181,6 +2389,51 @@ void SessionServerAgentIO::subscribePermissionEvents(
                       // 访问 (与插件事件转发同一处理方式)
                       asio::post(sp->ex_, [sp, fullAuth = evt.fullAuth] {
                           sp->sendToPeer(WirePermissionState{fullAuth});
+                      });
+                      co_return;
+                  }
+              );
+}
+
+void SessionServerAgentIO::subscribeSummarizationDone(
+    const std::shared_ptr<agentxx::events::EventBus>& bus
+) {
+    if (!bus) {
+        return;
+    }
+    auto self     = shared_from_this();
+    compactDoneSubId_
+        = bus->get<events::EventCompactContextDone>(events::Topic::SummarizationCompactDone)
+              .subscribe(
+                  [weakSelf = std::weak_ptr<SessionServerAgentIO>{self
+                   }](const events::EventCompactContextDone& evt) -> asio::awaitable<void> {
+                      auto sp = weakSelf.lock();
+                      if (!sp) {
+                          co_return;
+                      }
+                      // 回调运行在 bus executor; post 到 ex_ 统一串行化端点状态
+                      asio::post(sp->ex_, [sp, sid = evt.sessionId, ok = evt.ok] {
+                          auto it = sp->pendingCompactAcks_.find(sid);
+                          if (it == sp->pendingCompactAcks_.end() || it->second.empty()) {
+                              return;
+                          }
+                          // 同一会话可能先后提交多次压缩: 完成事件按次发布, 逐个 FIFO 回执
+                          auto pending = it->second.front();
+                          it->second.pop_front();
+                          if (it->second.empty()) {
+                              sp->pendingCompactAcks_.erase(it);
+                          }
+                          utilxx_base::Json data = utilxx_base::Json::object();
+                          data["ok"]            = ok;
+                          sp->sendAck(
+                              pending.sender,
+                              pending.reqId,
+                              ok,
+                              ok ? std::string_view{} : std::string_view{"compaction_failed"},
+                              ok ? std::string{}
+                                 : std::string{"context compaction did not complete"},
+                              std::move(data)
+                          );
                       });
                       co_return;
                   }
@@ -2448,6 +2701,16 @@ void SessionServerAgentIO::stopImpl() {
         }
         fullAuthSubId_ = 0;
     }
+    // 退订上下文压缩完成事件 (未完成的回执随端点一起丢弃: 对端已断开)
+    if (compactDoneSubId_ != 0) {
+        if (auto agent = agent_.lock(); agent && agent->agentContext && agent->agentContext->bus) {
+            agent->agentContext->bus
+                ->get<events::EventCompactContextDone>(events::Topic::SummarizationCompactDone)
+                .unsubscribe(compactDoneSubId_);
+        }
+        compactDoneSubId_ = 0;
+    }
+    pendingCompactAcks_.clear();
     for (auto& t : clients_) {
         if (t) {
             t->close();
@@ -2622,6 +2885,7 @@ void SessionServerAgentIO::handleRenameSession(
 
     WireRenameSessionResult result;
     result.sessionId = sessionId;
+    result.reqId     = req.reqId;
 
     if (title.empty()) {
         result.error = "session title must not be empty";
@@ -2668,7 +2932,8 @@ void SessionServerAgentIO::handleRenameSession(
 bool SessionServerAgentIO::acceptSessionScope(
     std::string_view                             sessionId,
     const std::shared_ptr<AgentIOTransportBase>& sender,
-    std::string_view                             what
+    std::string_view                             what,
+    uint64_t                                     reqId
 ) {
     // 空 sessionId = 未指定: 按当前绑定会话处理 (旧客户端兼容, 语义与拆分前一致)
     if (sessionId.empty() || sessionId == config_.sessionId) {
@@ -2680,16 +2945,22 @@ bool SessionServerAgentIO::acceptSessionScope(
         sessionId,
         config_.sessionId
     );
+    const std::string detail = fmt::format(
+        "request '{}' targets session '{}' but this endpoint serves '{}'",
+        what,
+        sessionId,
+        config_.sessionId
+    );
+    if (reqId != 0) {
+        // 带 reqId 的调用方拿确定失败 (不必等超时); 旧对端仍只收 WireError
+        sendAck(sender, reqId, false, "session_mismatch", detail);
+        return false;
+    }
     sendToClient(
         sender,
         WireError{
             .code    = WireErrorCode::SessionMismatch,
-            .message = fmt::format(
-                "request '{}' targets session '{}' but this endpoint serves '{}'",
-                what,
-                sessionId,
-                config_.sessionId
-            ),
+            .message = detail,
         }
     );
     return false;
@@ -2746,6 +3017,7 @@ void SessionServerAgentIO::handleGetViewMessages(
 
     WireViewMessagesPage page;
     page.sessionId = config_.sessionId;
+    page.reqId     = req.reqId;
     // 会话校验: 端点绑定单一会话; 不匹配的请求按错投处理回空页
     // (切换会话后迟到的旧请求 / 客户端状态异常), 避免泄漏其他会话内容
     if (!req.sessionId.empty() && req.sessionId != config_.sessionId) {
@@ -2900,7 +3172,8 @@ void SessionServerAgentIO::handleAddModel(
     const std::shared_ptr<AgentIOTransportBase>& sender
 ) {
     WireAddModelResult result;
-    result.name = req.name;
+    result.name  = req.name;
+    result.reqId = req.reqId;
 
     auto agent = agent_.lock();
     if (!agent || !agent->agentContext || !agent->agentContext->agentConfig) {
@@ -2957,7 +3230,8 @@ void SessionServerAgentIO::handleRemoveModel(
     const std::shared_ptr<AgentIOTransportBase>& sender
 ) {
     WireRemoveModelResult result;
-    result.name = req.name;
+    result.name  = req.name;
+    result.reqId = req.reqId;
 
     auto agent = agent_.lock();
     if (!agent || !agent->agentContext || !agent->agentContext->agentConfig) {
@@ -3092,12 +3366,36 @@ void SessionServerAgentIO::handleHostToolRegister(
     const WireHostToolRegister&                  req,
     const std::shared_ptr<AgentIOTransportBase>& sender
 ) {
+    utilxx_base::Json registered = utilxx_base::Json::array();
+    utilxx_base::Json failed     = utilxx_base::Json::array();
+    const uint64_t    reqId      = req.reqId;
+    auto              reply      = [this, reqId, &registered, &failed, sender]() {
+        // 注册结果以前只落日志: 同名冲突/非法 schema 时嵌入方毫不知情, 模型也永远
+        // 看不到这些工具。带 reqId 的请求拿一条确定回执 (成功/失败名单)
+        if (reqId == 0) {
+            return;
+        }
+        utilxx_base::Json data = utilxx_base::Json::object();
+        data["registered"]     = std::move(registered);
+        data["failed"]         = std::move(failed);
+        sendAck(sender, reqId, true, {}, {}, std::move(data));
+    };
+
     if (!sender) {
         return;
     }
     auto agent = agent_.lock();
     if (!agent || !agent->agentContext || !agent->agentContext->toolRegistry) {
         XX_LOGW("[host_tool] agent toolRegistry not ready for host tool register");
+        if (reqId != 0) {
+            sendAck(
+                sender,
+                reqId,
+                false,
+                "invalid_state",
+                "agent tool registry is not ready"
+            );
+        }
         return;
     }
 
@@ -3135,11 +3433,17 @@ void SessionServerAgentIO::handleHostToolRegister(
                 == registeredNames.end()) {
                 registeredNames.push_back(toolInfo.name);
             }
+            registered.push_back(toolInfo.name);
             XX_LOGI("[host_tool] registered host tool '{}'", toolInfo.name);
         } else {
             XX_LOGW("[host_tool] failed to register host tool '{}' (conflict)", toolInfo.name);
+            failed.push_back({
+                {"name",  toolInfo.name      },
+                {"error", "name_conflict"    }
+            });
         }
     }
+    reply();
 }
 
 void SessionServerAgentIO::handleHostToolUnregister(
@@ -3148,6 +3452,7 @@ void SessionServerAgentIO::handleHostToolUnregister(
 ) {
     auto agent = agent_.lock();
     if (!agent || !agent->agentContext || !agent->agentContext->toolRegistry) {
+        sendAck(sender, req.reqId, false, "invalid_state", "agent tool registry is not ready");
         return;
     }
     auto                      toolRegistry    = agent->agentContext->toolRegistry;
@@ -3159,6 +3464,7 @@ void SessionServerAgentIO::handleHostToolUnregister(
         }
     }
 
+    utilxx_base::Json removed = utilxx_base::Json::array();
     for (const auto& name : req.names) {
         toolRegistry->unregisterTool(name);
         if (registeredNames) {
@@ -3167,16 +3473,31 @@ void SessionServerAgentIO::handleHostToolUnregister(
                 registeredNames->end()
             );
         }
+        removed.push_back(name);
         XX_LOGI("[host_tool] unregistered host tool '{}'", name);
     }
+    utilxx_base::Json data = utilxx_base::Json::object();
+    data["removed"]        = std::move(removed);
+    sendAck(sender, req.reqId, true, {}, {}, std::move(data));
 }
 
-void SessionServerAgentIO::handleHostToolResult(const WireHostToolResult& resp) {
+void SessionServerAgentIO::handleHostToolResult(
+    const WireHostToolResult&                    resp,
+    const std::shared_ptr<AgentIOTransportBase>& sender
+) {
     auto it = pendingHostToolCalls_.find(resp.callId);
     if (it != pendingHostToolCalls_.end()) {
         it->second.ch->try_send(utilxx_base::AsioErrorCode{}, resp);
+        sendAck(sender, resp.reqId, true);
     } else {
         XX_LOGW("[host_tool] received result for unknown callId {}", resp.callId);
+        sendAck(
+            sender,
+            resp.reqId,
+            false,
+            "call_not_found",
+            fmt::format("host tool call #{} is unknown or already answered", resp.callId)
+        );
     }
 }
 

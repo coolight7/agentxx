@@ -107,6 +107,14 @@ struct Topic {
         "agentxx.agent.service.summarization.compact"
     };
 
+    /// 上下文压缩完成 (单向事件): EventCompactContextDone
+    /// - 压缩是异步长任务 (发起事件只表示"已受理"), 需要知道完成时刻的调用方
+    ///   (如会话服务端点的 `session.compact` 命令回执) 订阅本主题
+    /// - 每条提前退出路径也会发布 `ok=false`, 订阅方不会一直等下去
+    inline static constexpr std::string_view SummarizationCompactDone{
+        "agentxx.agent.service.summarization.compact.done"
+    };
+
     /// ===== 单向事件: 事件中枢生命周期 =====
     /// 值到达 / 流结束: EventHubValue / EventHubEnded
     /// - 在 `agentxx.agent.hub.` 段, 不在中枢收值的 `agentxx.agent.event.` 段里,
@@ -475,6 +483,17 @@ struct RespSubagentExecute {
 /// 上下文手动压缩 (service.summarization.compact)
 struct EventCompactContext {
     std::string sessionId;
+};
+
+/// 上下文压缩完成 (service.summarization.compact.done)
+///
+/// 发布方: [SummarizationMiddlewareHandle::compactSessionContext] —— **每条**退出路径都发
+/// (正常的 ok=true, 没有 agent 上下文/会话/上下文为空等提前退出发 ok=false)。
+/// 订阅方: 会话服务端点 (SessionServerAgentIO) —— 把排队中的 `compact_context`
+/// 命令请求按会话 FIFO 逐个回 `WireAck`, 使调用方知道压缩真的结束了。
+struct EventCompactContextDone {
+    std::string sessionId;
+    bool        ok = false;
 };
 
 /// ===== 事件中枢 (EventHub) 生命周期 =====

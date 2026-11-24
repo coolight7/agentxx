@@ -97,6 +97,7 @@ using agentxx::agent::WireUserInput;
 using agentxx::agent::WireViewMessagesPage;
 using agentxx::agent::io::serialize;
 // 模型删除与 host tool (追加在变体末尾)
+using agentxx::agent::WireAck;
 using agentxx::agent::WireHostToolCall;
 using agentxx::agent::WireHostToolInfo;
 using agentxx::agent::WireHostToolRegister;
@@ -223,9 +224,10 @@ std::vector<WireSample> wireSamples() {
     // 5) 取消
     out.push_back({"cancel", WireMessage{WireCancel{.sessionId = "s1"}}});
     // 6) 切换模型
-    out.push_back(
-        {"select_model", WireMessage{WireSelectModel{.sessionId = "s1", .model = "claude-y"}}}
-    );
+    out.push_back({
+        "select_model",
+        WireMessage{WireSelectModel{.sessionId = "s1", .model = "claude-y", .reqId = 7}}
+    });
     // 7) 中断请求 (服务端 -> 客户端)
     {
         WireInterruptRequest m;
@@ -349,11 +351,12 @@ std::vector<WireSample> wireSamples() {
     // 15) 日志
     out.push_back({"log", WireMessage{WireLog{.level = 3, .message = "警告: 写入失败"}}});
     // 16) 请求模型列表
-    out.push_back({"get_model", WireMessage{WireGetModel{.sessionId = "s1"}}});
+    out.push_back({"get_model", WireMessage{WireGetModel{.sessionId = "s1", .reqId = 11}}});
     // 17) 模型信息
     {
         WireModelInfo m;
         m.currentModel = "gpt-x";
+        m.reqId        = 11;
         m.models       = {"gpt-x", "claude-y"};
         m.capabilities.push_back(ModelCapabilityInfo{
             .name       = "gpt-x",
@@ -385,7 +388,9 @@ std::vector<WireSample> wireSamples() {
         out.push_back({"append_component_info", WireMessage{std::move(m)}});
     }
     // 20) 请求上下文
-    out.push_back({"get_context", WireMessage{WireGetContext{.sessionId = "s1"}}});
+    out.push_back(
+        {"get_context", WireMessage{WireGetContext{.sessionId = "s1", .tail = 20, .reqId = 12}}}
+    );
     // 21) 请求压缩
     out.push_back({"compact_context", WireMessage{WireCompactContext{.sessionId = "s1"}}});
     // 22) 上下文消息
@@ -619,7 +624,17 @@ std::vector<WireSample> wireSamples() {
         m.ok           = true;
         m.resultJson   = R"({"opened":true})";
         m.errorMessage = "";
+        m.reqId        = 9;
         out.push_back({"host_tool_result", WireMessage{std::move(m)}});
+    }
+    // 49) 命令类请求的通用回执 (追加在变体末尾)
+    {
+        WireAck m;
+        m.reqId  = 7;
+        m.ok     = false;
+        m.reason = "model_not_found";
+        m.error  = "model 'x' is not registered";
+        out.push_back({"ack", WireMessage{std::move(m)}});
     }
     return out;
 }

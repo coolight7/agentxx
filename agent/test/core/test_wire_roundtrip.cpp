@@ -787,6 +787,65 @@ TestResult testWireRoundtrip() {
         XX_TEST_EXPECT_EQ(back.message, std::string{"警告: 磁盘写入失败"});
     }
 
+    // ---------------- 请求/应答相关性 (reqId) 与通用回执 ----------------
+
+    {
+        // 请求与应答都带同一个序号: 并发调用靠它把应答配给发起方
+        auto sel = roundTrip(WireSelectModel{.sessionId = "s1", .model = "m2", .reqId = 42});
+        XX_TEST_EXPECT_EQ(sel.reqId, uint64_t{42});
+        XX_TEST_EXPECT_EQ(sel.model, std::string{"m2"});
+
+        auto getModel = roundTrip(WireGetModel{.sessionId = "s1", .reqId = 43});
+        XX_TEST_EXPECT_EQ(getModel.reqId, uint64_t{43});
+
+        WireModelInfo info;
+        info.currentModel = "m2";
+        info.reqId        = 43;
+        auto infoBack     = roundTrip(info);
+        XX_TEST_EXPECT_EQ(infoBack.reqId, uint64_t{43});
+        XX_TEST_EXPECT_EQ(infoBack.currentModel, std::string{"m2"});
+
+        // reqId == 0: 不写字段 (旧对端行为不变), 解析回来仍是 0
+        const auto plain = WsAgentIOTransport::serialize(WireMessage{WireGetModel{.sessionId = "s"}}
+        );
+        XX_TEST_EXPECT_FALSE(plain.find("reqId") != std::string::npos);
+        auto plainBack = WsAgentIOTransport::deserialize(plain);
+        XX_TEST_EXPECT_TRUE(plainBack.has_value());
+        if (plainBack.has_value()) {
+            XX_TEST_EXPECT_EQ(std::get<WireGetModel>(*plainBack).reqId, uint64_t{0});
+        }
+
+        // 上下文的可选 tail 一并往返
+        auto ctx = roundTrip(WireGetContext{.sessionId = "s1", .tail = 20, .reqId = 44});
+        XX_TEST_EXPECT_EQ(ctx.tail, uint32_t{20});
+        XX_TEST_EXPECT_EQ(ctx.reqId, uint64_t{44});
+    }
+    {
+        // 通用回执: 失败时带机器可读的 reason, 成功时可带 data
+        WireAck failAck;
+        failAck.reqId  = 51;
+        failAck.ok     = false;
+        failAck.reason = "model_not_found";
+        failAck.error  = "model 'x' is not registered";
+        auto back      = roundTrip(failAck);
+        XX_TEST_EXPECT_EQ(back.reqId, uint64_t{51});
+        XX_TEST_EXPECT_FALSE(back.ok);
+        XX_TEST_EXPECT_EQ(back.reason, std::string{"model_not_found"});
+        XX_TEST_EXPECT_EQ(back.error, std::string{"model 'x' is not registered"});
+
+        WireAck okAck;
+        okAck.reqId     = 52;
+        okAck.ok        = true;
+        okAck.data      = utilxx_base::Json{{"model", "m2"}};
+        auto okBack     = roundTrip(okAck);
+        XX_TEST_EXPECT_TRUE(okBack.ok);
+        XX_TEST_EXPECT_EQ(okBack.data.value("model", std::string{}), std::string{"m2"});
+
+        // 缺 reason 的失败回执仍给出可读原因 (不会序列化成空串)
+        const auto bare = io::makeAck(WireAck{.reqId = 53, .ok = false});
+        XX_TEST_EXPECT_EQ(bare.value("reason", std::string{}), std::string{"rejected"});
+    }
+
     // ---------------- 向前兼容 ----------------
 
     {
