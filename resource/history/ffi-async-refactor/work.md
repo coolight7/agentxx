@@ -7,7 +7,8 @@
       事件枚举名与 `AgentxxFFICallbacks.struct_size`、D1 本地同步入口数、日志 sink 线程数、
       `ffi_api.h` 引用了不存在的 `agentxx_ffi_get_view_messages` — 均已改入 plan
 - [x] 第 1 步：wire 相关性 + 通用回执（`reqId` + `WireAck` + 服务端 ack + schema）
-- [ ] 第 2 步：FFI 内部换代（`ffi_call` / `call_cancel` / `ffi_ops` + C API v4 + 事件所有权 + 测试重写）- [ ] 第 3 步：生命周期异步化（`stop` → `EVT_STOPPED`、`destroy` 约束）
+- [x] 第 2 步：FFI 内部换代（`ffi_call` / `call_cancel` / `ffi_ops` + C API v4 + 事件所有权 + 测试重写）
+- [x] 第 3 步：生命周期异步化（`stop` → `EVT_STOPPED`、`destroy` 约束）—— 与第 2 步同一批文件，合并实施
 - [ ] 第 4 步：benchmark FFI 场景更新（含调用吞吐 / 合批对比 / 首屏尾窗三个子场景）
 - [ ] 第 5 步：Dart 绑定重新生成 + SDK/示例异步化（含取消令牌与顺序用法）
 - [ ] 第 6 步：文档与导出白名单收尾
@@ -122,11 +123,62 @@
 - `wire_roundtrip` 285 passed / 0 failed；`wire_schema` 1377 passed / 0 failed（schema 已重新生成）。
 - `agent`（223）/ `session_admin`（38）/ `input_delivery`（140）/ `remote_agent`（602）全绿。
 
+### 第 2 步：FFI 内部换代 (2026-11-24 完成)
+
+改动文件与内容:
+
+| 文件 | 改动 |
+|---|---|
+| `agent/lib/src/ffi/ffi_call.h/.cpp`（新增）| `CallRegistry`：`begin` / `abort` / `settle` / `cancel` / `failAll` / `pendingCount` / `stop`；共享一条 `asio::steady_timer` + 按到期时刻排序的 `multimap` 索引（超时不再每个调用一条定时器）；`settle` 用 CAS 保证**恰好一条回执** |
+| `agent/lib/src/ffi/ffi_ops.h/.cpp`（新增）| `CallContext`（reqId / 会话 / client 端点 / 投递函数 / 本地完成回调）、`FfiCompletion`（`TypedResponse` / `Ack` / `Local`）、`FfiOpDef`（名称 / 完成方式 / 默认超时 / 默认失败码 / 处理函数）与 **27 个 op**；`findOp` / `opsDefinition` |
+| `agent/lib/include/agentxx/ffi_api.h` | v4：`AGENTXX_FFI_API_VERSION` 3→4；新增 `AGENTXX_FFI_ERR_CANCELED(-9)` / `AGENTXX_FFI_ERR_REJECTED(-10)`；新回调结构 `AgentxxFFICallbacks{struct_size, reserved, on_event, user_data}`（payload 归回调所有）；事件枚举新增 `EVT_STOPPED` / `EVT_RESULT` / `EVT_MESSAGE_QUEUE` / `EVT_PERMISSION_STATE` / `EVT_HOST_TOOL_CANCELED`，删除 `EVT_WIRE`；导出面 35 → **15** 个符号（去掉全部同步查询、`send_wire` 与 `event_queue_*`，新增 `call` / `call_cancel`）| 
+| `agent/lib/src/ffi/ffi_api.cpp` | 只剩内存/版本/`strerror`/`get_capabilities`/`create`/`start`/`stop`/`destroy`/`call`/`call_cancel`/`drain_logs`；`create` 校验 `callbacks.struct_size` 与 `reserved` |
+| `agent/lib/src/ffi/ffi_client_io.h/.cpp` | `emitOwnedEvent`（`agentxx_ffi_malloc` 分配、不回收）；`emitCallResult` / `emitEvent`；`onPeerMessage` 全部按 `reqId` 分流（`reqId == 0` 才走广播事件）；`WireInputAck` 按 `requestId` 当 reqId 结算；删除 `SyncKind` / `onSyncReply` / `EVT_WIRE` |
+| `agent/lib/src/ffi/ffi_runtime.h/.cpp` | 状态机 `Created/Starting/Ready/Stopping/Stopped/Failed` + `calls_`；`call()` 同步校验后 `begin` 再 `run`（同步失败 `abort` 且不写 outReqId）；`callCancel()` 幂等；日志 `LogSink` + 每秒 pump；`sessionMutex_` 保护会话绑定 |
+| `agent/lib/src/ffi/event_queue.cpp` | **删除**（阻塞 pop + 有界队列全部退役）| 
+| `agent/lib/include/agentxx/agent/io/user_input_json.h/.cpp` | 新增 `parseUserInputJsonValue(const Json&)`，`parseUserInputJson` 改为 parse 后委托（FFI 的 `input.send` 复用同一套校验）| 
+| `agent/lib/ffi_symbols.map` | 白名单改为 15 个符号 |
+| `agent/test/test_ffi_c_api.cpp` | 重写为 17 个用例（451 条断言）：事件记录器（payload 立刻 free）/ 提交-回执封装；并发 20 调用、取消与迟到应答、超时、顺序、回调内调用、生命周期顺序、本地 op、hosttool、能力清单、fs/plugin_data、HIL、轮次取消、多句柄并发、headless |
+
+关键实现选择:
+
+1. **超时只用一个定时器**：`deadlines_` 是 `multimap<到期时刻, reqId>`，重臂时取最小到期；回调带代次号，旧代次直接退出。
+2. **恰好一条回执**：服务端应答 / 超时 / 取消 / 收尾都汇到 `settle`（`atomic<bool>` CAS），赢家负责 `erase` + 投递，后到者返回 false 被丢弃并记 debug 日志。
+3. **回执投递就地或投递**：已在 client io 线程（服务端应答 / 超时 / 收尾）就同步发，其它线程（`call_cancel` / 本地 op）`asio::post` 过去 —— 这样“取消/收尾产生的回执排在 `EVT_STOPPED` 之前”不需要额外同步。
+4. **`reqId == 0` 的应答一律不当回执**：TUI 等其它客户端的结果、服务端主动广播仍走广播事件；`EVT_WIRE` 与它一起删除。
+5. **ack 的 `result` 取 `data`**（plan §3.3 `ok ? result = data`），不是整个 ack 对象 —— 调用方已经在信封上看到 `op` / `reqId` / `ok`。
+6. **`input.send` 直接用 reqId 当 wire `requestId`**（plan D9），服务端 `input_ack` 按它匹配，不需要第二张映射表。
+7. **本地 op 不进 wire**（`language.get/set`、`delta.set_batch`）：`begin` 时超时置 0，处理函数当场 `.completeLocal(result)`。
+8. **headless（`on_event == NULL`）不序列化**：`emitOwnedEvent` 在分配前就返回，回执照常结算（只是看不到）。
+
+### 第 3 步：生命周期异步化 (2026-11-24 完成, 与第 2 步同一批文件)
+
+| 位置 | 行为 |
+|---|---|
+| `stop()` | `stopRequested_` 交换保证幂等（重复调用不再发事件）；Created 直接在调用线程收尾，其余起**收尾线程** `stopInternal()` → `finishStop()` |
+| `stopInternal()` | ① `runtime_->stop()` ② client io 屏障（5s）内跑 `onRuntimeStopping`（挂起中断失败 + 未完成调用按 `canceled` 收尾）③ 等 `serverIO()->running()==false`（20s）④ 摘日志 sink ⑤ `shutdownAsync`（25s）→ 停 server io + join ⑥ 停 client io + join ⑦ 显式释放 transport 对象 |
+| `finishStop()` | 置 `Stopped` 后发 `EVT_STOPPED`（最后一个事件）|
+| `destroy()` | 只在 `Created` / `Stopped` 成功；**内部线程（含收尾线程）上调用直接拒绝**；纯释放 + `joinFinishThreadIfNeeded()`（自我 join 改为 detach）|
+
+偏差与注意:
+
+1. **`interrupt.respond` 保留本地预检**：`hasPendingInterrupt(id)` 不成立时直接同步失败（`ERR_INTERRUPT`），不进 wire；服务端的 `interrupt_not_found` 同样映射到 `-6`。这样“应答一个不存在/已应答的中断”不会白等一次往返。
+2. **`session.switch` 在提交时就切本地绑定**（与旧实现一致），要确认生效就等这条回执；回执失败（`session_mismatch`）不会把绑定改回去。
+3. **附件用例未逐字段覆盖**：`input.send` 的附件仍经公共 `parseUserInputJsonValue` 校验（与 CLI/插件同一套规则），FFI 测试只验证带附件时提交成功与 ack，具体媒体能力判定不在本任务范围。
+4. **`stop` 期间的 `call` 返回 `ERR_STATE`**（`acceptsCalls()` 只接 Starting/Ready），与 plan §3.7 一致。
+
+验证:
+
+- 顶层 Debug 构建 `EXIT=0`。
+- `ffi_c_api` **451 passed / 0 failed**（含取消/超时/并发/顺序/回调内调用/headless）。
+- `boundaries` 20 passed（修了两处注释用词：`领域` → `业务`）。
+- `wire_roundtrip` 285 / `wire_schema` 1377 / `session_admin` 38 / `input_delivery` 140 / `remote_agent` 602 / `agent` 223 全绿。
+
 ## 验证清单
 
-- [ ] 顶层 Debug 构建 `EXIT=0`
-- [ ] `ffi_c_api` 全绿（每个 op / 并发 / 超时 / **取消** / **顺序** / 回调内调用 / 事件所有权 / 生命周期顺序）
-- [ ] `wire_roundtrip` / `wire_schema` 全绿，schema 生成物已提交
+- [x] 顶层 Debug 构建 `EXIT=0`
+- [x] `ffi_c_api` 全绿（每个 op / 并发 / 超时 / **取消** / **顺序** / 回调内调用 / 事件所有权 / 生命周期顺序）
+- [x] `wire_roundtrip` / `wire_schema` 全绿，schema 生成物已提交
 - [ ] TUI 交互抽查（`select_model` / `compact` / 队列操作）未被新增 ack 影响
 - [ ] Release 构建通过（含 benchmark、LTO）
 - [ ] `agentxx_benchmark` 的 `resource_ffi` 场景可跑通

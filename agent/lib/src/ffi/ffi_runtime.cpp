@@ -4,10 +4,10 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
-#include "agentxx/agent/io/user_input_json.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/agent/session_runtime.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/version.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -15,10 +15,12 @@
 #include "fmt/format.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <random>
 
@@ -80,7 +82,29 @@ void FfiAgentRuntime::pushLogItem(LogItem item) {
     logRing_.push_back(std::move(item));
 }
 
+void FfiAgentRuntime::scheduleLogPump() {
+    if (!logPumpTimer_ || !clientIoCtx_ || clientIoCtx_->stopped()) {
+        return;
+    }
+    logPumpTimer_->expires_after(std::chrono::seconds{1});
+    auto self = shared_from_this();
+    logPumpTimer_->async_wait([self](const std::error_code& ec) {
+        if (ec) {
+            return; // 已取消 (收尾)
+        }
+        if (self->logSink_) {
+            self->logSink_->pump();
+        }
+        self->scheduleLogPump();
+    });
+}
+
 std::string FfiAgentRuntime::drainLogs() {
+    // LogSink 队列满时丢**新**条目: 取走前先搬运一次, 让队列里没有待处理的日志,
+    // 否则高频日志会把队列尾部 (最新) 全部丢掉
+    if (logSink_) {
+        logSink_->pump();
+    }
     std::deque<LogItem> drained;
     {
         std::lock_guard<std::mutex> lock(logMutex_);
@@ -190,6 +214,11 @@ bool FfiAgentRuntime::buildConfigs(
         config->memoryFilePaths     = utilxx_base::jsonGetStringArray(cfgJ, "memoryFiles");
         config->websearchApiUrl     = cfgJ.value("websearchApiUrl", config->websearchApiUrl);
 
+        // 首屏只同步尾窗 (默认 200 条): 更早历史由 `context.view_page` 按页拉
+        // - 0 = 完整同步 (旧行为; 嵌入方自己按页拉时不需要)
+        initialSyncTailCount_
+            = static_cast<size_t>(std::max<int64_t>(0, cfgJ.value("syncTailCount", int64_t{200})));
+
         // MCP 服务器: {"ns": {"url": "...", "timeoutSec": 120}}
         if (cfgJ.contains("mcpServers") && cfgJ["mcpServers"].is_object()) {
             for (const auto& [ns, v] : cfgJ["mcpServers"].items()) {
@@ -260,8 +289,8 @@ bool FfiAgentRuntime::buildConfigs(
     mc.modelContextMaxToken     = mj.value("modelContextMaxToken", size_t{0});
     mc.sendThinking             = mj.value("sendThinking", false);
     // 多模态输入能力 (与 yaml 的 image_input/audio_input/video_input 同义):
-    // 决定嵌入方程序能否上传图片/音频/视频, 经 WireModelInfo.capabilities 下发
-    // (见 agentxx_ffi_get_model_info 与 EVT_MODEL_INFO); 字段名兼容驼峰与下划线
+    // 决定嵌入方程序能否上传图片/音频/视频, 经 WireModelInfo.capabilities 下发;
+    // 字段名兼容驼峰与下划线
     mc.imageInput = mj.value("imageInput", mj.value("image_input", false));
     mc.audioInput = mj.value("audioInput", mj.value("audio_input", false));
     mc.videoInput = mj.value("videoInput", mj.value("video_input", false));
@@ -303,18 +332,36 @@ bool FfiAgentRuntime::buildConfigs(
     return true;
 }
 
-FfiAgentRuntime::~FfiAgentRuntime() {
-    // 保护: 若未显式 stop, 保证内部线程与所有资源安全退出与释放
-    if (state() != State::Stopped && state() != State::Created) {
-        if (!isOnAnyIoThread()) {
-            stopInternal();
-        }
-    } else {
-        // Created 状态直接清理对象 (启动壳未建, 端点也未必建过)
-        clientIO_.reset();
-        runtime_.reset();
-        agent_.reset();
+void FfiAgentRuntime::joinFinishThreadIfNeeded() {
+    if (!finishThread_.joinable()) {
+        return;
     }
+    if (finishThread_.get_id() == std::this_thread::get_id()) {
+        // 自我 join 会 std::terminate; 收尾线程自己不负责回收自己
+        finishThread_.detach();
+        return;
+    }
+    finishThread_.join();
+}
+
+FfiAgentRuntime::~FfiAgentRuntime() {
+    // 析构时若收尾线程还在跑, 先等它结束 (它负责发 EVT_STOPPED)
+    joinFinishThreadIfNeeded();
+
+    // 保护: 若未显式 stop, 保证内部线程与所有资源安全退出与释放
+    const State st = state();
+    if (st != State::Stopped && st != State::Created && !isOnAnyInternalThread()) {
+        stopRequested_.store(true, std::memory_order_release);
+        stopInternal();
+        state_.store(State::Stopped, std::memory_order_release);
+    }
+
+    // 显式释放所有持有 transport/channel 的对象, 确保它们在 ioCtx 析构前完成清理
+    clientIO_.reset();
+    runtime_.reset();
+    agent_.reset();
+    calls_.reset();
+    logPumpTimer_.reset();
 }
 
 bool FfiAgentRuntime::isOnAgentThread() const {
@@ -324,6 +371,11 @@ bool FfiAgentRuntime::isOnAgentThread() const {
 
 bool FfiAgentRuntime::isOnClientThread() const {
     const auto tid = clientThread_.get_id();
+    return tid != std::thread::id{} && std::this_thread::get_id() == tid;
+}
+
+bool FfiAgentRuntime::isOnFinishThread() const {
+    const auto tid = finishThread_.get_id();
     return tid != std::thread::id{} && std::this_thread::get_id() == tid;
 }
 
@@ -339,6 +391,7 @@ int FfiAgentRuntime::start(std::string& err) {
     }
 
     clientIoCtx_ = std::make_shared<asio::io_context>();
+    logPumpTimer_ = std::make_shared<asio::steady_timer>(*clientIoCtx_);
 
     // FFI client 端点 (绑定 client io 线程; 端点自带合批/中断等待)
     clientIO_ = std::make_shared<FfiClientAgentIO>(clientIoCtx_->get_executor(), callbacks_);
@@ -350,11 +403,34 @@ int FfiAgentRuntime::start(std::string& err) {
         pushLogItem(LogItem{2, fmt::format("[startup] {}", step)});
     };
 
-    // 同步应答路由: client io 线程收到 Wire 响应时完成对应 promise
-    auto weakSelf          = std::weak_ptr<FfiAgentRuntime>{shared_from_this()};
-    clientIO_->onSyncReply = [weakSelf](FfiClientAgentIO::SyncKind kind, utilxx_base::Json j) {
+    // 待完成调用表: 回执统一经 deliverResult (已在 client io 线程时同步发出)
+    auto weakSelf = std::weak_ptr<FfiAgentRuntime>{shared_from_this()};
+    calls_        = std::make_shared<CallRegistry>(
+        *clientIoCtx_,
+        [weakSelf](uint64_t reqId, std::string_view op, const CallOutcome& outcome) {
+            if (auto sp = weakSelf.lock()) {
+                sp->deliverResult(reqId, op, outcome);
+            }
+        }
+    );
+
+    // 应答分流: client io 线程收到带 reqId 的应答 → 结算对应调用
+    clientIO_->onCallReply
+        = [weakSelf](
+              uint64_t          reqId,
+              utilxx_base::Json result,
+              bool              ok,
+              std::string       reason,
+              std::string       message
+          ) {
+              if (auto sp = weakSelf.lock()) {
+                  sp->onCallReply(reqId, std::move(result), ok, std::move(reason), std::move(message));
+              }
+          };
+    // 端点收尾: 仍未完成的调用按取消收尾 (在 join 之前, 因此排在 EVT_STOPPED 之前)
+    clientIO_->onStopping = [weakSelf]() {
         if (auto sp = weakSelf.lock()) {
-            sp->onSyncReplyOnClientThread(kind, std::move(j));
+            sp->onRuntimeStopping();
         }
     };
 
@@ -381,13 +457,13 @@ int FfiAgentRuntime::start(std::string& err) {
     //   start/挂载事务, 这里交给 agent 自己在 init 里加载, 与单 agent 模式同一路径)
     // - forwardInitProgress=false: 进度已经写进本类的日志环形缓冲
     agent::AgentSessionRuntime::Config rtCfg;
-    rtCfg.sessionId             = sessionId_;
-    rtCfg.clientExecutor        = clientIoCtx_->get_executor();
-    rtCfg.interruptTimeout      = interruptTimeout_;
-    rtCfg.deltaBufferCap        = 0; // 嵌入方程序不重连重放: 不占缓冲内存
-    rtCfg.initialSyncTailCount  = 0; // 完整同步
-    rtCfg.loadPluginsInHost     = false;
-    rtCfg.forwardInitProgress   = false;
+    rtCfg.sessionId            = sessionId_;
+    rtCfg.clientExecutor       = clientIoCtx_->get_executor();
+    rtCfg.interruptTimeout     = interruptTimeout_;
+    rtCfg.deltaBufferCap       = 0; // 嵌入方程序不重连重放: 不占缓冲内存
+    rtCfg.initialSyncTailCount = initialSyncTailCount_;
+    rtCfg.loadPluginsInHost    = false;
+    rtCfg.forwardInitProgress  = false;
     rtCfg.autoRequestComponents = true;
     {
         std::lock_guard<std::mutex> lock(langMutex_);
@@ -395,26 +471,34 @@ int FfiAgentRuntime::start(std::string& err) {
     }
     rtCfg.onTransportStarted = [self = shared_from_this()]() {
         // 握手后立即拉一次模型信息 (EVT_MODEL_INFO 回填嵌入方程序的模型选择 UI)
-        self->clientIO_->sendToPeer(agent::WireGetModel{self->sessionId_});
+        self->clientIO_->sendToPeer(agent::WireGetModel{self->currentSessionId()});
     };
     rtCfg.onInitError = [self = shared_from_this()](std::string_view errmsg) {
         self->clientIO_->notifyError(
             AGENTXX_FFI_ERR_INIT,
+            "init_failed",
             fmt::format("agent init failed: {}", errmsg)
         );
-        self->state_ = State::Failed;
+        State expected = State::Starting;
+        self->state_.compare_exchange_strong(expected, State::Failed);
     };
     rtCfg.onServerReady = [self = shared_from_this()]() {
         // 先置 Ready 再通知: 就绪回调里嵌入方程序可能立刻操作, 不能遇到 ERR_STATE
-        self->state_ = State::Ready;
+        self->state_.store(State::Ready, std::memory_order_release);
     };
 
     runtime_ = agent::AgentSessionRuntime::create(agent_, clientIO_, std::move(rtCfg));
     if (!runtime_) {
         err = "启动壳装配失败 (参数不完整)";
+        state_.store(State::Failed, std::memory_order_release);
         return AGENTXX_FFI_ERR_INTERNAL;
     }
     runtime_->start();
+
+    // 日志搬运: client io 上每秒一次 (LogSink 队列满时丢新条目, 必须低频持续搬运)
+    asio::post(*clientIoCtx_, [self = shared_from_this()] {
+        self->scheduleLogPump();
+    });
 
     return AGENTXX_FFI_OK;
 }
@@ -424,23 +508,32 @@ std::shared_ptr<agent::SessionServerAgentIO> FfiAgentRuntime::serverIO() const {
 }
 
 void FfiAgentRuntime::stopInternal() {
-    const State st = state_.load();
-    if (st == State::Stopped) {
-        return;
-    }
-    if (st == State::Created) {
-        state_ = State::Stopped;
-        return;
-    }
-    state_ = State::Stopping;
-
-    // 1) Client 侧与 Server 侧: 交给启动壳按固定顺序收 (先失败挂起中断 + 关 client 传输,
-    //    再停服务端点)
+    // 1) 通知端点收尾 (失败挂起中断 + 未完成调用按取消结算) 并关传输, 再停服务端点
     if (runtime_) {
         runtime_->stop();
     }
 
-    // 2) 等待服务端点驱动循环退出 (最长 20s)
+    // 2) 等端点把"未完成调用按取消收尾"跑完: 那些回执必须排在 EVT_STOPPED 之前,
+    //    而它们可能是在收尾线程上投递进 client io 的, 因此在停 client io 之前
+    //    投一个屏障并等它执行 (超时只记日志, 不让收尾卡死)
+    if (clientIoCtx_ && !clientIoCtx_->stopped()) {
+        auto promise = std::make_shared<std::promise<void>>();
+        auto future  = promise->get_future();
+        asio::post(*clientIoCtx_, [this, promise] {
+            onRuntimeStopping();
+            try {
+                promise->set_value();
+            } catch (...) {
+            }
+        });
+        if (future.wait_for(std::chrono::seconds{5}) != std::future_status::ready) {
+            XX_LOGW("[ffi] stop: pending calls were not canceled within 5s");
+        }
+    } else {
+        onRuntimeStopping();
+    }
+
+    // 3) 等待服务端点驱动循环退出 (最长 20s)
     if (auto server = serverIO()) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{20};
         while (server->running() && std::chrono::steady_clock::now() < deadline) {
@@ -451,13 +544,12 @@ void FfiAgentRuntime::stopInternal() {
         }
     }
 
-    // 3) 摘除日志 sink
+    // 4) 摘除日志 sink
     utilxx_base::LogDispatcher::instance().removeSink(logSink_);
 
-    // 4) 停止并 join Server-IO 线程
-    //    插件关闭必须先于此完成: shutdownAsync 在 agent IO 线程上 stop →
-    //    等 lease 归零 → destroy/dlclose。executor 一旦停止就只能走同步析构
-    //    保护 (实例保留 CloseFailed, 动态库不卸载)。
+    // 5) 插件关闭 (必须先于 server io 停止): shutdownAsync 在 agent IO 线程上 stop →
+    //    等 lease 归零 → destroy/dlclose。executor 一旦停止就只能走同步析构保护
+    //    (实例保留 CloseFailed, 动态库不卸载)。
     if (agent_ && serverIoCtx_ && !serverIoCtx_->stopped()) {
         try {
             auto closed = asio::co_spawn(
@@ -482,7 +574,10 @@ void FfiAgentRuntime::stopInternal() {
         serverThread_.join();
     }
 
-    // 5) 停止并 join Client-IO 线程
+    // 6) 停止并 join Client-IO 线程
+    if (logPumpTimer_) {
+        logPumpTimer_->cancel();
+    }
     if (clientIoCtx_) {
         clientWorkGuard_.reset();
         clientIoCtx_->stop();
@@ -491,631 +586,363 @@ void FfiAgentRuntime::stopInternal() {
         clientThread_.join();
     }
 
-    // 6) 取消所有残留的同步查询等待
-    {
-        std::lock_guard<std::mutex> lock(syncMutex_);
-        for (auto& [kind, q] : syncWaits_) {
-            for (auto& w : q) {
-                try {
-                    w->promise.set_value("{}");
-                } catch (...) {
-                }
-            }
-            q.clear();
-        }
-    }
-
     // 7) 显式释放所有持有 transport/channel 的对象, 确保它们在 ioCtx 析构前完成清理
     clientIO_.reset();
     runtime_.reset();
     agent_.reset();
+    calls_.reset();
+    logPumpTimer_.reset();
+}
 
-    state_ = State::Stopped;
+void FfiAgentRuntime::finishStop() {
+    state_.store(State::Stopped, std::memory_order_release);
+    // EVT_STOPPED 是最后一个事件: 发完之后不会再有任何回调
+    if (callbacks_.on_event != nullptr) {
+        emitOwnedEvent(callbacks_, AGENTXX_FFI_EVT_STOPPED, "{}");
+    }
 }
 
 int FfiAgentRuntime::stop(std::string& err) {
-    if (isOnAnyIoThread()) {
-        err = "不能在 agent/client io 线程 (事件回调) 内调用 stop; 请从嵌入方程序线程调用";
-        return AGENTXX_FFI_ERR_STATE;
+    // 幂等: 只有第一次受理负责发 EVT_STOPPED
+    if (stopRequested_.exchange(true, std::memory_order_acq_rel)) {
+        return AGENTXX_FFI_OK;
     }
-    stopInternal();
+
+    const State st = state();
+    if (st == State::Stopped) {
+        return AGENTXX_FFI_OK;
+    }
+    if (st == State::Created) {
+        // 还没启动任何内部线程: 直接在调用线程收尾并发 EVT_STOPPED
+        // (此时不可能与其它事件并发)
+        state_.store(State::Stopping, std::memory_order_release);
+        clientIO_.reset();
+        runtime_.reset();
+        agent_.reset();
+        finishStop();
+        return AGENTXX_FFI_OK;
+    }
+
+    state_.store(State::Stopping, std::memory_order_release);
+    try {
+        finishThread_ = std::thread([self = shared_from_this()] {
+            self->stopInternal();
+            self->finishStop();
+        });
+    } catch (const std::exception& e) {
+        // 起不了收尾线程: 退回同步收尾 (调用方可能被阻塞, 但总比不收尾好)
+        XX_LOGE("[ffi] stop: cannot start finish thread ({}); stopping synchronously", e.what());
+        stopInternal();
+        finishStop();
+    }
     return AGENTXX_FFI_OK;
 }
 
 int FfiAgentRuntime::destroy(std::string& err) {
-    if (isOnAnyIoThread()) {
-        err = "不能在 agent/client io 线程 (事件回调) 内调用 destroy; 请从嵌入方程序线程调用";
+    if (isOnAnyInternalThread()) {
+        err = "不能在内部线程 (事件回调/收尾线程) 内调用 destroy; "
+              "请在等到 EVT_STOPPED 的线程上调用";
         return AGENTXX_FFI_ERR_STATE;
     }
-    stopInternal();
+    const State st = state();
+    if (st != State::Created && st != State::Stopped) {
+        err = fmt::format(
+            "状态错误: 当前状态 {} 不能 destroy; 先 stop 并等 EVT_STOPPED",
+            static_cast<int>(st)
+        );
+        return AGENTXX_FFI_ERR_STATE;
+    }
+    // 纯释放: 收尾线程早在发 EVT_STOPPED 之前就做完了业务, 这里只回收线程
+    joinFinishThreadIfNeeded();
     return AGENTXX_FFI_OK;
 }
 
 // ---------------------------------------------------------------------------
-// 会话交互 (投递 client io 线程)
+// 调用 (提交 + 回执)
 // ---------------------------------------------------------------------------
 
-namespace {
-
-bool stateUsable(FfiAgentRuntime::State s) {
-    return s == FfiAgentRuntime::State::Starting || s == FfiAgentRuntime::State::Ready;
+void FfiAgentRuntime::deliverResult(
+    uint64_t          reqId,
+    std::string_view  op,
+    const CallOutcome& outcome
+) {
+    // EVT_STOPPED 之后不再有事件 (收尾已走完, 迟到的回执直接丢弃)
+    if (state() == State::Stopped) {
+        XX_LOGD("[ffi] result for call #{} dropped (handle stopped)", reqId);
+        return;
+    }
+    auto emit = [this, reqId, opName = std::string{op}, outcome] {
+        if (!clientIO_) {
+            return;
+        }
+        clientIO_->emitCallResult(
+            reqId,
+            opName,
+            outcome.ok,
+            outcome.code,
+            outcome.errorName,
+            outcome.message,
+            outcome.result
+        );
+    };
+    // 已在 client io 线程 (服务端应答 / 超时 / 收尾) 就同步发, 保证"每个 reqId 恰好
+    // 一条回执且排在 EVT_STOPPED 之前"; 其余线程 (call_cancel / 本地 op) 投递过去
+    if (isOnClientThread() || !clientIoCtx_ || clientIoCtx_->stopped()) {
+        emit();
+        return;
+    }
+    asio::post(*clientIoCtx_, std::move(emit));
 }
 
-} // namespace
-
-int FfiAgentRuntime::sendInput(std::string_view inputJson, std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
+void FfiAgentRuntime::onCallReply(
+    uint64_t          reqId,
+    utilxx_base::Json result,
+    bool              ok,
+    std::string       reason,
+    std::string       message
+) {
+    if (!calls_) {
+        return;
     }
-
-    // 输入 JSON 解析与参数校验走公共实现 (CLI/FFI/插件同一套规则)
-    auto parsed = agent::parseUserInputJson(inputJson);
-    if (!parsed.has_value()) {
-        err = std::move(parsed.error().message);
-        return parsed.error().badJson ? AGENTXX_FFI_ERR_JSON : AGENTXX_FFI_ERR_INVALID;
+    CallOutcome outcome;
+    outcome.ok        = ok;
+    outcome.result    = std::move(result);
+    outcome.errorName = std::move(reason);
+    outcome.message   = std::move(message);
+    if (!calls_->settle(reqId, std::move(outcome))) {
+        // 迟到应答 (已超时/已取消/已收尾): 丢弃, 不产生第二条回执
+        XX_LOGD("[ffi] late reply for call #{} dropped", reqId);
     }
-    auto input      = std::move(*parsed);
-    input.sessionId = sessionId_;
-    // 受理回执照样经 EVT_WIRE 上报: 服务端只在 requestId > 0 时回 input_ack
-    input.requestId = nextInputRequestId_.fetch_add(1, std::memory_order_relaxed) + 1;
-
-    auto clientIO = clientIO_;
-    asio::post(*clientIoCtx_, [clientIO, input = std::move(input)]() mutable {
-        clientIO->sendToPeer(std::move(input));
-    });
-    return AGENTXX_FFI_OK;
 }
 
-int FfiAgentRuntime::cancel(std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
+void FfiAgentRuntime::onRuntimeStopping() {
+    if (!calls_) {
+        return;
     }
-    auto clientIO = clientIO_;
-    auto tid      = sessionId_;
-    asio::post(*clientIoCtx_, [clientIO, tid = std::move(tid)]() mutable {
-        clientIO->sendToPeer(agent::WireCancel{std::move(tid)});
-    });
-    return AGENTXX_FFI_OK;
+    const size_t canceled
+        = calls_->failAll(AGENTXX_FFI_ERR_CANCELED, "canceled", "runtime is stopping");
+    if (canceled > 0) {
+        XX_LOGD("[ffi] {} pending call(s) canceled by runtime stop", canceled);
+    }
+    calls_->stop();
 }
 
-int FfiAgentRuntime::selectModel(std::string_view modelName, std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
+void FfiAgentRuntime::notifyError(int code, std::string name, std::string message) {
+    if (clientIO_) {
+        clientIO_->notifyError(code, std::move(name), std::move(message));
     }
-    if (modelName.empty()) {
-        err = "模型名为空";
+}
+
+int FfiAgentRuntime::call(std::string_view requestJson, uint64_t* outReqId, std::string& err) {
+    if (outReqId == nullptr) {
+        err = "out_req_id 不能为空";
         return AGENTXX_FFI_ERR_INVALID;
     }
-    auto clientIO = clientIO_;
-    auto tid      = sessionId_;
-    auto model    = std::string{modelName};
-    asio::post(*clientIoCtx_, [clientIO, tid = std::move(tid), model = std::move(model)]() mutable {
-        clientIO->sendToPeer(agent::WireSelectModel{std::move(tid), std::move(model)});
-    });
-    return AGENTXX_FFI_OK;
-}
-
-int FfiAgentRuntime::switchSession(std::string_view sessionId, std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
+    *outReqId = 0;
+    if (!acceptsCalls()) {
+        err = "状态错误: 句柄未启动或已停止";
         return AGENTXX_FFI_ERR_STATE;
     }
-    if (sessionId.empty()) {
-        err = "sessionId 为空";
+    if (!calls_ || !clientIO_ || !clientIoCtx_) {
+        err = "状态错误: 调用通道尚未就绪";
+        return AGENTXX_FFI_ERR_STATE;
+    }
+
+    utilxx_base::Json req;
+    try {
+        req = utilxx_base::Json::parse(requestJson);
+    } catch (const std::exception& e) {
+        err = fmt::format("request_json 非法 JSON: {}", e.what());
+        return AGENTXX_FFI_ERR_JSON;
+    }
+    if (!req.is_object()) {
+        err = "request_json 必须是 JSON 对象, 形如 {\"op\":\"model.list\",\"args\":{}}";
         return AGENTXX_FFI_ERR_INVALID;
     }
-    auto clientIO = clientIO_;
-    auto newTid   = std::string{sessionId};
-    asio::post(*clientIoCtx_, [this, clientIO, newTid]() mutable {
-        sessionId_ = newTid;
-        clientIO->setSessionId(newTid);
-        clientIO->sendToPeer(agent::WireSwitchSession{std::move(newTid)});
-    });
+
+    std::string op;
+    if (req.contains("op") && !req["op"].is_null()) {
+        if (!req["op"].is_string()) {
+            err = "request_json.op 必须是字符串";
+            return AGENTXX_FFI_ERR_INVALID;
+        }
+        op = req["op"].get<std::string>();
+    }
+    if (op.empty()) {
+        err = "request_json 缺少 op";
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+    const FfiOpDef* def = findOp(op);
+    if (def == nullptr) {
+        err = fmt::format("未知 op '{}' (用 get_capabilities 取可用 op 清单)", op);
+        return AGENTXX_FFI_ERR_INVALID;
+    }
+
+    utilxx_base::Json args = utilxx_base::Json::object();
+    if (req.contains("args") && !req["args"].is_null()) {
+        if (!req["args"].is_object()) {
+            err = "request_json.args 必须是对象";
+            return AGENTXX_FFI_ERR_INVALID;
+        }
+        args = req["args"];
+    }
+
+    int32_t timeoutMs = def->defaultTimeoutMs;
+    if (req.contains("timeoutMs") && !req["timeoutMs"].is_null()) {
+        if (!req["timeoutMs"].is_number_integer()) {
+            err = "request_json.timeoutMs 必须是整数 (毫秒)";
+            return AGENTXX_FFI_ERR_INVALID;
+        }
+        const int64_t v = req["timeoutMs"].get<int64_t>();
+        if (v < 0) {
+            err = "request_json.timeoutMs 不能为负数 (0 = 不超时)";
+            return AGENTXX_FFI_ERR_INVALID;
+        }
+        timeoutMs = static_cast<int32_t>(std::min<int64_t>(v, INT32_MAX));
+    }
+    // 本地 op 不进 wire: 不登记超时
+    if (def->completion == FfiCompletion::Local) {
+        timeoutMs = 0;
+    }
+
+    const uint64_t reqId = calls_->begin(*def, timeoutMs);
+
+    CallContext ctx;
+    ctx.reqId       = reqId;
+    ctx.def         = def;
+    ctx.sessionId   = currentSessionId();
+    ctx.clientIO    = clientIO_;
+    ctx.clientIoCtx = clientIoCtx_.get();
+    // 本地 op 的完成回调可能被异步调用 (挂起的中断等), 只持弱引用
+    const std::weak_ptr<FfiAgentRuntime> weakSelf = weak_from_this();
+    ctx.completeLocal
+        = [weakSelf, reqId](utilxx_base::Json result) {
+              auto sp = weakSelf.lock();
+              if (!sp || !sp->calls_) {
+                  return;
+              }
+              CallOutcome outcome;
+              outcome.ok     = true;
+              outcome.result = std::move(result);
+              sp->calls_->settle(reqId, std::move(outcome));
+          };
+
+    std::string opErr;
+    int32_t     rc = 0;
+    try {
+        rc = def->run(*this, args, ctx, opErr);
+    } catch (const std::exception& e) {
+        rc    = AGENTXX_FFI_ERR_INTERNAL;
+        opErr = fmt::format("op '{}' threw: {}", op, e.what());
+    } catch (...) {
+        rc    = AGENTXX_FFI_ERR_INTERNAL;
+        opErr = fmt::format("op '{}' threw an unknown exception", op);
+    }
+    if (rc != 0) {
+        // 同步失败: 撤销登记, 不写 out_req_id, 也就没有回执
+        calls_->abort(reqId);
+        err = opErr.empty() ? fmt::format("op '{}' failed synchronously", op) : opErr;
+        return rc;
+    }
+
+    *outReqId = reqId;
     return AGENTXX_FFI_OK;
 }
 
-int FfiAgentRuntime::setLanguage(std::string_view language, std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
+int FfiAgentRuntime::callCancel(uint64_t reqId, std::string& err) {
+    if (reqId == 0) {
+        err = "req_id 不能为 0";
+        return AGENTXX_FFI_ERR_INVALID;
     }
-    auto norm = agent::normalizeLanguage(language);
-    {
-        std::lock_guard<std::mutex> lock(langMutex_);
-        language_ = norm;
+    if (!calls_) {
+        err = fmt::format("call #{} already completed (nothing to cancel)", reqId);
+        return AGENTXX_FFI_OK;
     }
-    if (agent_ && serverIoCtx_) {
-        auto ag  = agent_;
-        auto sid = sessionId_;
-        asio::post(*serverIoCtx_, [ag, sid, norm]() {
-            ag->setLanguage(norm, sid);
-        });
+    if (calls_->cancel(reqId)) {
+        return AGENTXX_FFI_OK;
     }
+    // 幂等: 已完成/从未发出 —— 给一条说明但不当作错误 (避免竞态里出现伪错误)
+    err = fmt::format("call #{} already completed (nothing to cancel)", reqId);
     return AGENTXX_FFI_OK;
 }
 
-std::string FfiAgentRuntime::getLanguage(std::string& err) {
-    std::lock_guard<std::mutex> lock(langMutex_);
-    return language_.empty() ? "en" : language_;
-}
-
 // ---------------------------------------------------------------------------
-// 同步查询
+// 本地同步信息
 // ---------------------------------------------------------------------------
 
-void FfiAgentRuntime::onSyncReplyOnClientThread(
-    FfiClientAgentIO::SyncKind kind,
-    utilxx_base::Json          j
-) {
-    std::shared_ptr<SyncWait> waiter;
-    {
-        std::lock_guard<std::mutex> lock(syncMutex_);
-        auto&                       q = syncWaits_[kind];
-        if (!q.empty()) {
-            waiter = q.front();
-            q.pop_front();
-        }
+std::string FfiAgentRuntime::getCapabilities() const {
+    utilxx_base::Json ops = utilxx_base::Json::array();
+    for (const auto& def : opsDefinition()) {
+        ops.push_back(std::string{def.name});
     }
-    if (waiter) {
-        waiter->promise.set_value(j.dump());
-    }
-}
-
-std::string FfiAgentRuntime::syncQuery(
-    FfiClientAgentIO::SyncKind kind,
-    std::function<void()>      send,
-    std::string&               err
-) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return {};
-    }
-    auto waiter = std::make_shared<SyncWait>();
-    {
-        std::lock_guard<std::mutex> lock(syncMutex_);
-        syncWaits_[kind].push_back(waiter);
-    }
-    asio::post(*clientIoCtx_, std::move(send));
-
-    constexpr auto kTimeout = std::chrono::seconds{10};
-    auto           fut      = waiter->promise.get_future();
-    if (fut.wait_for(kTimeout) != std::future_status::ready) {
-        // 超时: 移除本等待器 (防止后续应答错配)
-        std::lock_guard<std::mutex> lock(syncMutex_);
-        auto&                       q = syncWaits_[kind];
-        for (auto it = q.begin(); it != q.end(); ++it) {
-            if (*it == waiter) {
-                q.erase(it);
-                break;
-            }
-        }
-        err = "同步查询等待服务端响应超时 (10s)";
-        return {};
-    }
-    return fut.get();
-}
-
-std::string FfiAgentRuntime::getModelInfo(std::string& err) {
-    auto clientIO = clientIO_;
-    auto tid      = sessionId_;
-    return syncQuery(
-        FfiClientAgentIO::SyncKind::ModelInfo,
-        [clientIO, tid = std::move(tid)]() mutable {
-            clientIO->sendToPeer(agent::WireGetModel{std::move(tid)});
-        },
-        err
+    utilxx_base::Json features = utilxx_base::Json::array(
+        {"call_api", "call_cancel", "event_owned_payload", "async_stop", "op_ack"}
     );
-}
-
-std::string FfiAgentRuntime::getContextMessages(std::string& err) {
-    auto clientIO = clientIO_;
-    auto tid      = sessionId_;
-    return syncQuery(
-        FfiClientAgentIO::SyncKind::ContextMessages,
-        [clientIO, tid = std::move(tid)]() mutable {
-            clientIO->sendToPeer(agent::WireGetContext{std::move(tid)});
-        },
-        err
-    );
-}
-
-std::string FfiAgentRuntime::listSessions(std::string& err) {
-    auto clientIO = clientIO_;
-    return syncQuery(
-        FfiClientAgentIO::SyncKind::SessionList,
-        [clientIO]() mutable {
-            clientIO->sendToPeer(agent::WireListSessions{});
-        },
-        err
-    );
-}
-
-// -------------------------------------------------------------------
-// 能力清单 (A6)
-// -------------------------------------------------------------------
-
-std::string FfiAgentRuntime::getCapabilities() {
     utilxx_base::Json j = {
-        {"apiVersion",     AGENTXX_FFI_API_VERSION},
-        {"libraryVersion", "0.4.0"                },
-        {"capabilities",
-         {
-             AGENTXX_FFI_CAP_ADD_MODEL,
-             AGENTXX_FFI_CAP_REMOVE_MODEL,
-             AGENTXX_FFI_CAP_LIST_MODELS,
-             AGENTXX_FFI_CAP_MESSAGE_QUEUE,
-             AGENTXX_FFI_CAP_VIEW_MESSAGES,
-             AGENTXX_FFI_CAP_HOST_TOOLS,
-             AGENTXX_FFI_CAP_PLUGIN_DATA_UP,
-             AGENTXX_FFI_CAP_WIRE_PASSTHROUGH,
-             AGENTXX_FFI_CAP_DELTA_BATCH,
-         }                                        }
+        {"apiVersion",     AGENTXX_FFI_API_VERSION      },
+        {"libraryVersion", std::string{agentxx::kVersion}},
+        {"ops",            std::move(ops)               },
+        {"features",       std::move(features)          },
     };
     return j.dump();
 }
 
-// -------------------------------------------------------------------
-// 模型管理 (A1)
-// -------------------------------------------------------------------
-
-int FfiAgentRuntime::addModel(std::string_view modelJson, std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
-    }
-    utilxx_base::Json j;
-    try {
-        j = utilxx_base::Json::parse(modelJson);
-    } catch (const std::exception& e) {
-        err = fmt::format("model_json JSON 解析失败: {}", e.what());
-        return AGENTXX_FFI_ERR_JSON;
-    }
-    if (!j.is_object() || !j.contains("name") || !j["name"].is_string()
-        || j["name"].get<std::string>().empty()) {
-        err = "model_json 格式错误: 缺少必填字段 name";
-        return AGENTXX_FFI_ERR_CONFIG;
-    }
-
-    auto req      = agentxx::agent::io::addModelFromJson(j);
-    req.sessionId = sessionId_;
-
-    auto resStr = syncQuery(
-        FfiClientAgentIO::SyncKind::AddModelResult,
-        [this, req = std::move(req)]() mutable {
-            clientIO_->sendToPeer(std::move(req));
-        },
-        err
-    );
-    if (resStr.empty()) {
-        return AGENTXX_FFI_ERR_TIMEOUT;
-    }
-    try {
-        auto resJ = utilxx_base::Json::parse(resStr);
-        if (!resJ.value("ok", false)) {
-            err = resJ.value("error", "添加模型失败");
-            return AGENTXX_FFI_ERR_CONFIG;
-        }
-    } catch (...) {
-        err = "解析添加模型回执失败";
-        return AGENTXX_FFI_ERR_INTERNAL;
-    }
-    return AGENTXX_FFI_OK;
-}
-
-int FfiAgentRuntime::removeModel(std::string_view modelName, std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
-    }
-    if (modelName.empty()) {
-        err = "model_name 不能为空";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-
-    agent::WireRemoveModel req{
-        .sessionId = std::string(sessionId_),
-        .name      = std::string(modelName),
-    };
-
-    auto resStr = syncQuery(
-        FfiClientAgentIO::SyncKind::RemoveModelResult,
-        [this, req = std::move(req)]() mutable {
-            clientIO_->sendToPeer(std::move(req));
-        },
-        err
-    );
-    if (resStr.empty()) {
-        return AGENTXX_FFI_ERR_TIMEOUT;
-    }
-    try {
-        auto resJ = utilxx_base::Json::parse(resStr);
-        if (!resJ.value("ok", false)) {
-            err = resJ.value("error", "删除模型失败");
-            return AGENTXX_FFI_ERR_CONFIG;
-        }
-    } catch (...) {
-        err = "解析删除模型回执失败";
-        return AGENTXX_FFI_ERR_INTERNAL;
-    }
-    return AGENTXX_FFI_OK;
-}
-
-std::string FfiAgentRuntime::listModels(std::string& err) {
-    return getModelInfo(err);
-}
-
-// -------------------------------------------------------------------
-// Wire 原样转发 (A2)
-// -------------------------------------------------------------------
-
-int FfiAgentRuntime::sendWire(std::string_view wireJson, std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
-    }
-    utilxx_base::Json j;
-    try {
-        j = utilxx_base::Json::parse(wireJson);
-    } catch (const std::exception& e) {
-        err = fmt::format("wire_json JSON 解析失败: {}", e.what());
-        return AGENTXX_FFI_ERR_JSON;
-    }
-    if (!j.is_object() || !j.contains("type") || !j["type"].is_string()) {
-        err = "wire_json 格式错误: 缺少必填字段 type";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-
-    const std::string msgType = j["type"].get<std::string>();
-
-    // 黑名单拦截
-    if (msgType == "hello" || msgType == "ping" || msgType == "pong") {
-        err = "核心连接消息禁止由 send_wire 发送";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    if (msgType == "user_input") {
-        err = "发送用户输入请使用专用接口 agentxx_ffi_send_input";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    if (msgType == "cancel") {
-        err = "取消当前轮次请使用专用接口 agentxx_ffi_cancel";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    if (msgType == "select_model") {
-        err = "切换当前模型请使用专用接口 agentxx_ffi_select_model";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    if (msgType == "switch_session") {
-        err = "切换当前会话请使用专用接口 agentxx_ffi_switch_session";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    if (msgType == "interrupt_response") {
-        err = "提交中断应答请使用专用接口 agentxx_ffi_interrupt_respond";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    if (msgType == "add_model") {
-        err = "添加模型配置请使用专用接口 agentxx_ffi_add_model";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    if (msgType == "remove_model") {
-        err = "删除模型配置请使用专用接口 agentxx_ffi_remove_model";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    if (msgType == "get_model" || msgType == "get_context" || msgType == "list_sessions") {
-        err = "同步查询请使用对应的专用查询符号 (如 agentxx_ffi_get_model_info 等)";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-
-    // 白名单放行校验
-    static const std::set<std::string, std::less<>> s_whitelist = {
-        "compact_context",
-        "get_view_messages",
-        "list_dir",
-        "rename_session",
-        "set_full_auth",
-        "get_permission_state",
-        "clear_message_queue",
-        "remove_queue_item",
-        "interrupt_and_run_next",
-        "plugin_data_up",
-        "host_tool_register",
-        "host_tool_unregister",
-        "host_tool_result",
-    };
-
-    if (!s_whitelist.contains(msgType)) {
-        err = fmt::format("消息类型 '{}' 不在白名单允许范围内", msgType);
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-
-    // 如果未带 sessionId, 自动补齐为当前绑定 sessionId
-    if (!j.contains("sessionId") || j["sessionId"].is_null()
-        || (j["sessionId"].is_string() && j["sessionId"].get<std::string>().empty())) {
-        j["sessionId"] = sessionId_;
-    }
-
-    auto wireMsg = agentxx::agent::io::deserialize(j.dump());
-    if (!wireMsg.has_value()) {
-        err = fmt::format("线消息反序列化失败: type={}", msgType);
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-
-    asio::post(*clientIoCtx_, [self = shared_from_this(), msg = std::move(*wireMsg)]() mutable {
-        self->clientIO_->sendToPeer(std::move(msg));
-    });
-    return AGENTXX_FFI_OK;
-}
-
-// -------------------------------------------------------------------
-// 嵌入方程序工具 (A3)
-// -------------------------------------------------------------------
-
-int FfiAgentRuntime::toolRegister(std::string_view toolJson, std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
-    }
-    utilxx_base::Json j;
-    try {
-        j = utilxx_base::Json::parse(toolJson);
-    } catch (const std::exception& e) {
-        err = fmt::format("tool_json JSON 解析失败: {}", e.what());
-        return AGENTXX_FFI_ERR_JSON;
-    }
-
-    agent::WireHostToolRegister reg;
-    reg.sessionId = sessionId_;
-
-    auto parseOneTool
-        = [](const utilxx_base::Json& item) -> std::optional<agent::WireHostToolInfo> {
-        if (!item.is_object() || !item.contains("name") || !item["name"].is_string()) {
-            return std::nullopt;
-        }
-        agent::WireHostToolInfo info;
-        info.name        = item["name"].get<std::string>();
-        info.description = item.value("description", std::string{});
-        if (item.contains("inputSchema")) {
-            info.inputSchema = item["inputSchema"];
-        }
-        info.timeoutSec    = item.value("timeoutSec", uint32_t{0});
-        info.maxConcurrent = item.value("maxConcurrent", uint32_t{0});
-        return info;
-    };
-
-    if (j.is_array()) {
-        for (const auto& item : j) {
-            if (auto t = parseOneTool(item)) {
-                reg.tools.push_back(std::move(*t));
-            }
-        }
-    } else if (j.is_object()) {
-        if (j.contains("tools") && j["tools"].is_array()) {
-            for (const auto& item : j["tools"]) {
-                if (auto t = parseOneTool(item)) {
-                    reg.tools.push_back(std::move(*t));
-                }
-            }
-        } else {
-            if (auto t = parseOneTool(j)) {
-                reg.tools.push_back(std::move(*t));
-            }
-        }
-    }
-
-    if (reg.tools.empty()) {
-        err = "tool_json 未包含有效的工具定义 (需 name 字段)";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-
-    asio::post(*clientIoCtx_, [self = shared_from_this(), req = std::move(reg)]() mutable {
-        self->clientIO_->sendToPeer(std::move(req));
-    });
-    return AGENTXX_FFI_OK;
-}
-
-int FfiAgentRuntime::toolUnregister(std::string_view name, std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
-    }
-    if (name.empty()) {
-        err = "工具名称不能为空";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    agent::WireHostToolUnregister unreg{
-        .sessionId = std::string(sessionId_),
-        .names     = {std::string(name)},
-    };
-    asio::post(*clientIoCtx_, [self = shared_from_this(), req = std::move(unreg)]() mutable {
-        self->clientIO_->sendToPeer(std::move(req));
-    });
-    return AGENTXX_FFI_OK;
-}
-
-int FfiAgentRuntime::toolRespond(
-    int64_t          callId,
-    int32_t          isError,
-    std::string_view resultJson,
-    std::string&     err
-) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
-    }
-    auto str = std::string(resultJson);
-    asio::post(
-        *clientIoCtx_,
-        [self = shared_from_this(), callId, isError, str = std::move(str)]() mutable {
-            self->clientIO_->submitHostToolResponse(callId, isError, std::move(str));
-        }
-    );
-    return AGENTXX_FFI_OK;
-}
-
-// -------------------------------------------------------------------
-// 文本合批 (A11)
-// -------------------------------------------------------------------
-
-int FfiAgentRuntime::setDeltaBatch(int32_t maxDelayMs, std::string& err) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
-    }
-    asio::post(*clientIoCtx_, [self = shared_from_this(), maxDelayMs]() {
-        self->clientIO_->setDeltaBatch(maxDelayMs);
-    });
-    return AGENTXX_FFI_OK;
-}
-
 // ---------------------------------------------------------------------------
-// HIL 中断
+// 语言与合批
 // ---------------------------------------------------------------------------
+
+std::string FfiAgentRuntime::currentSessionId() const {
+    std::lock_guard<std::mutex> lock(sessionMutex_);
+    return sessionId_;
+}
+
+void FfiAgentRuntime::setSessionBinding(std::string newSessionId) {
+    {
+        std::lock_guard<std::mutex> lock(sessionMutex_);
+        sessionId_ = newSessionId;
+    }
+    if (clientIO_ && clientIoCtx_) {
+        auto client = clientIO_;
+        asio::post(*clientIoCtx_, [client, newSessionId = std::move(newSessionId)]() mutable {
+            client->setSessionId(std::move(newSessionId));
+        });
+    }
+}
+
+std::string FfiAgentRuntime::language() const {
+    std::lock_guard<std::mutex> lock(langMutex_);
+    return language_.empty() ? "en" : language_;
+}
+
+void FfiAgentRuntime::applyLanguage(std::string normalized) {
+    {
+        std::lock_guard<std::mutex> lock(langMutex_);
+        language_ = normalized;
+    }
+    if (agent_ && serverIoCtx_) {
+        auto ag  = agent_;
+        auto sid = currentSessionId();
+        asio::post(*serverIoCtx_, [ag, sid, normalized]() {
+            ag->setLanguage(normalized, sid);
+        });
+    }
+}
+
+void FfiAgentRuntime::applyDeltaBatch(int32_t maxDelayMs) {
+    if (!clientIO_ || !clientIoCtx_) {
+        return;
+    }
+    auto clientIO = clientIO_;
+    asio::post(*clientIoCtx_, [clientIO, maxDelayMs]() {
+        clientIO->setDeltaBatch(maxDelayMs);
+    });
+}
 
 bool FfiAgentRuntime::hasPendingInterrupt(int64_t interruptId) const {
     if (!clientIO_) {
         return false;
     }
     return clientIO_->hasPendingInterrupt(interruptId);
-}
-
-int FfiAgentRuntime::interruptRespond(
-    int64_t                  interruptId,
-    const AgentxxStringView* valuesJson,
-    std::string&             err
-) {
-    if (!stateUsable(state())) {
-        err = "状态错误: 未启动或已停止";
-        return AGENTXX_FFI_ERR_STATE;
-    }
-    utilxx_base::Json val   = utilxx_base::Json::object();
-    auto              valSv = toSv(valuesJson);
-    if (!valSv.empty()) {
-        try {
-            val = utilxx_base::Json::parse(valSv);
-        } catch (const std::exception& e) {
-            err = fmt::format("valuesJson 非法 JSON: {}", e.what());
-            return AGENTXX_FFI_ERR_JSON;
-        }
-    }
-    // 应答载荷恒为对象形态 {"values": {"<控件 id>": 值}} (见
-    // agentxx::middleware::makeInterruptResult); 非对象形态直接拒绝,
-    // 避免契约外的载荷被静默当成"空应答"导致权限被误判为拒绝。
-    // (参数校验先于中断 id 校验: 载荷错误与 id 状态无关, 报错更确定)
-    if (!val.is_object() || !val.contains("values") || !val["values"].is_object()) {
-        err = "valuesJson 须为 {\"values\":{\"<控件 id>\":值}} 对象形态";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    if (!hasPendingInterrupt(interruptId)) {
-        err = fmt::format("中断 #{} 不存在、已应答或已过期", interruptId);
-        return AGENTXX_FFI_ERR_INTERRUPT;
-    }
-    auto clientIO = clientIO_;
-    asio::post(*clientIoCtx_, [clientIO, interruptId, val = std::move(val)]() mutable {
-        clientIO->submitInterruptResponse(interruptId, std::move(val));
-    });
-    return AGENTXX_FFI_OK;
 }
 
 } // namespace ffi

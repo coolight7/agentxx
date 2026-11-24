@@ -38,6 +38,11 @@ std::expected<WireUserInput, UserInputError> parseUserInputJson(std::string_view
             UserInputError{true, fmt::format("input_json JSON 解析失败: {}", e.what())}
         );
     }
+    return parseUserInputJsonValue(j);
+}
+
+std::expected<WireUserInput, UserInputError>
+    parseUserInputJsonValue(const utilxx_base::Json& j) {
     if (!j.is_object()) {
         return std::unexpected(UserInputError{
             false,

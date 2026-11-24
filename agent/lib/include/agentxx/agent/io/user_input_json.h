@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/io/agent_io_transport.h"
+#include "utilxx_base/json.h"
 #include <expected>
 #include <string>
 #include <string_view>
@@ -47,6 +48,14 @@ struct UserInputError {
 ///
 /// - `return` 成功给 wire 输入; 失败给可读原因
 std::expected<WireUserInput, UserInputError> parseUserInputJson(std::string_view inputJson);
+
+/// 同上, 直接接受已解析的 JSON 对象
+///
+/// 调用方本来就拿着 Json 时用它, 免得为了复用校验再 dump 一次 (大附件时
+/// 多一份完整拷贝)。校验顺序与语义与 [parseUserInputJson] 完全一致
+/// (标量赋值是拷贝, 不改动传入的对象)。
+std::expected<WireUserInput, UserInputError>
+    parseUserInputJsonValue(const utilxx_base::Json& inputJson);
 
 } // namespace agent
 } // namespace agentxx
