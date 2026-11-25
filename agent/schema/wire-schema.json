@@ -565,7 +565,8 @@
         "type": "string",
         "sessions": "array<object{sessionId:string, lastActiveMs:integer, title:string}>",
         "totalCount": "integer",
-        "hasMore": "boolean"
+        "hasMore": "boolean",
+        "error": "string"
       },
       "sample": {
         "type": "session_list",
@@ -577,7 +578,8 @@
           }
         ],
         "totalCount": 3,
-        "hasMore": true
+        "hasMore": true,
+        "error": "session store is broken"
       }
     },
     {

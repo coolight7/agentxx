@@ -415,6 +415,7 @@ std::vector<WireSample> wireSamples() {
         WireSessionList m;
         m.totalCount = 3;
         m.hasMore    = true;
+        m.error      = "session store is broken";
         m.sessions.push_back(SessionInfo{
             .sessionId    = "s10",
             .title        = "会话标题",

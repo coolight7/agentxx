@@ -1085,7 +1085,8 @@ inline SessionInfo sessionInfoFromJson(const utilxx_base::Json& j) {
 inline utilxx_base::Json makeSessionList(
     const std::vector<SessionInfo>& sessions,
     uint64_t                        totalCount = 0,
-    bool                            hasMore    = false
+    bool                            hasMore    = false,
+    std::string_view                error      = {}
 ) {
     utilxx_base::Json j = {
         {"type", MsgType::SessionList}
@@ -1102,6 +1103,10 @@ inline utilxx_base::Json makeSessionList(
     if (hasMore) {
         j["hasMore"] = true;
     }
+    // 取数失败的原因 (可选; 缺省时旧版客户端按空列表处理)
+    if (!error.empty()) {
+        j["error"] = error;
+    }
     return j;
 }
 
@@ -1116,6 +1121,8 @@ inline WireSessionList sessionListFromJson(const utilxx_base::Json& j) {
     // 分页元数据 (旧版服务端不携带 → 0/false, 客户端按完整响应处理)
     out.totalCount = j.value("totalCount", uint64_t{0});
     out.hasMore    = j.value("hasMore", false);
+    // 取数失败原因 (旧版服务端不携带 → 空, 按可用处理)
+    out.error = j.value("error", std::string{});
     return out;
 }
 

@@ -394,6 +394,7 @@ TestResult testWireRoundtrip() {
         WireSessionList list;
         list.totalCount = 3;
         list.hasMore    = true;
+        list.error      = "session store is broken";
         SessionInfo info;
         info.sessionId    = "s10";
         info.title        = "会话标题";
@@ -403,6 +404,7 @@ TestResult testWireRoundtrip() {
         XX_TEST_EXPECT_EQ(back.sessions.size(), size_t{1});
         XX_TEST_EXPECT_EQ(back.totalCount, uint64_t{3});
         XX_TEST_EXPECT_TRUE(back.hasMore);
+        XX_TEST_EXPECT_EQ(back.error, std::string{"session store is broken"});
         if (!back.sessions.empty()) {
             XX_TEST_EXPECT_EQ(back.sessions[0].sessionId, std::string{"s10"});
             XX_TEST_EXPECT_EQ(back.sessions[0].title, std::string{"会话标题"});

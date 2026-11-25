@@ -422,6 +422,21 @@ TestResult testTuiSurface() {
         }
     }
 
+    // ---- 会话选择弹窗: 取数失败时显示原因, 而不是“无已保存会话” ----
+    {
+        SurfaceFixture fx;
+        fx.sharedState.mutate([](TUIRenderState& st) {
+            st.sessionListLoaded = true;
+            st.sessionListError  = "session store is broken";
+        });
+        auto comp = std::make_shared<SessionSelectorOverlay>(fx.ctx);
+        auto r    = fx.probe(comp);
+
+        XX_TEST_EXPECT_TRUE(r.text.find("会话列表读取失败") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(r.text.find("session store is broken") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(r.text.find("无已保存会话") == std::string::npos);
+    }
+
     // ---- 会话选择弹窗: 当前会话标出 (自动选中 + 强调色) ----
     {
         SurfaceFixture fx;

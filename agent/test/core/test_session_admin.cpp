@@ -392,6 +392,8 @@ asio::awaitable<void> test_rename_and_search() {
     );
     auto plain = fx->recorder->lastList();
     XX_TEST_EXPECT_EQ(plain.sessions.size(), size_t{2});
+    // 正常响应不带失败原因 (error 只用于取数失败)
+    XX_TEST_EXPECT_TRUE(plain.error.empty());
     auto alphaInfo = findSession(plain, "alpha");
     XX_TEST_EXPECT_HAS_VALUE(alphaInfo);
     if (alphaInfo) {

@@ -283,6 +283,9 @@ struct TUIRenderState {
 
     bool showContextOverlay = false;
     bool sessionListLoaded  = false;
+    /// 会话列表取数失败的原因 (WireSessionList.error; 空 = 列表可用)
+    /// - 弹窗在列表为空时优先显示这句, 而不是"没有会话"
+    std::string sessionListError;
     /// 是否还有未加载的更早会话 (WireSessionList.hasMore; 旧版服务端完整响应
     /// 时恒为 false); 末尾空页防御: 收到空页即置 false 终止续取
     bool sessionListHasMore = false;

@@ -1602,8 +1602,16 @@ void SessionServerAgentIO::onPeerMessage(
                 // 分页: limit > 0 时走 keyset 游标分页查询 (仅返回一页),
                 // limit == 0 为全部列举
                 auto agent = agent_.lock();
-                if (!agent || !agent->agentContext
-                    || !agent->agentContext->sessions->sessionStore) {
+                if (!agent || !agent->agentContext) {
+                    // agent 已不可用: 明确告诉调用方没取到, 而不是给一个“空列表”
+                    sendToClient(
+                        sender,
+                        WireSessionList{.error = "agent is not available", .reqId = m.reqId}
+                    );
+                    return;
+                }
+                if (!agent->agentContext->sessions->sessionStore) {
+                    // 会话持久化没开: 确实没有可列出的会话, 不算取数失败
                     sendToClient(sender, WireSessionList{.reqId = m.reqId});
                     return;
                 }
@@ -1635,7 +1643,9 @@ void SessionServerAgentIO::onPeerMessage(
                                     req.keyword,
                                     errmsg
                                 );
-                                co_return WireSessionList{};
+                                WireSessionList failed;
+                                failed.error = std::move(errmsg);
+                                co_return failed;
                             }
                         );
                         resp.reqId = req.reqId;

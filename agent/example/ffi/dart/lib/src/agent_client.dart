@@ -442,7 +442,10 @@ class AgentClient {
         timeout: const Duration(seconds: 30),
       );
 
-  /// 持久化会话列表: `{sessions[], totalCount, hasMore}`
+  /// 持久化会话列表: `{sessions[], totalCount, hasMore, error?}`
+  ///
+  /// 取数失败时 `sessions` 为空且 `error` 带原因 (库损坏/目录读不了),
+  /// 因此不要把“空列表”直接当成“没有会话”——先看 `error`
   Future<Map<String, dynamic>> listSessions({
     int? beforeMs,
     String? beforeId,

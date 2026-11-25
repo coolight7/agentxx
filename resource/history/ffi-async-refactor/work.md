@@ -253,6 +253,25 @@
 
 导出白名单（`agent/lib/ffi_symbols.map`）在第 2 步已一并改成 15 个符号；MSVC 的导出列表从同一份文件生成，无第二处。
 
+## 后续修（2026-11-25, 本任务收尾后）: `WireSessionList.error`
+
+上一轮的“失败回空列表”让调用方分不出“真的没有会话”与“没读出来”。给响应加一个
+可选的 `error` 字段 (取值非空 = 本帧不可用):
+
+| 位置 | 改动 |
+|---|---|
+| `agent_io_transport.h` | `WireSessionList` 加 `std::string error`（空 = 列表可用；旧服务端无此字段 → 空）|
+| `wire_protocol.h` / `wire_protocol.cpp` | `makeSessionList` 多一个可选 `error` 参（非空才写进 JSON）；`sessionListFromJson` 读回 |
+| `session_server_agent_io.cpp` | 取数抛异常时 `error` = 异常文本；`agent` 不可用但端点还在时 → `error = "agent is not available"`（会话持久化没开不回 error，那不是失败）|
+| TUI (`agent_tui.cpp`) | `onSessionListPage` 把 `error` 写进共享状态并弹 toast (`toast.sessionListFailed`) |
+| TUI 弹窗 (`overlays.cpp`) | 列表尾部提示优先显示“会话列表读取失败: 原因”，不再落到“无已保存会话” |
+| Dart SDK | `listSessions` 文档说明 `error` 的含义 |
+| 生成物 | `agent/schema/wire-schema.json` 与 `docs/zh-cn/design/wire-protocol-fields.md` 重新生成（`AGENTXX_UPDATE_WIRE_SCHEMA=1`）|
+
+新增/扩展的断言: `wire_roundtrip` 带 `error` 往返（286）；`wire_schema`（1377）；
+`session_admin` 断言正常响应的 `error` 为空（39）；`tui_surface` 断言取数失败时弹窗显示
+失败原因而不是“无已保存会话”（839）。
+
 ## 后续修（2026-11-25, 本任务收尾后）: 服务端回包协程的异常兜底
 
 背景: `asio::co_spawn(..., asio::detached)` 不处理异常 —— 分支里的取数/发布抛异常时，
@@ -284,9 +303,9 @@
       会话库损坏时 `session.list` 仍回执）
 - [x] `wire_roundtrip`(285) / `wire_schema`(1377) / `session_admin`(38) / `input_delivery`(140) 全绿，
       schema 生成物已提交
-- [x] 全量 `agentxx_test --log-level warn`: **44031 通过 / 0 失败**（2026-11-25，机器无其他构建；
-      含本次异常兜底的用例）
-- [x] 异常兜底改动后的顶层 Release 构建 `EXIT=0`；Dart `smoke_check` 5 个场景仍全绿
+- [x] 全量 `agentxx_test --log-level warn`: **44036 通过 / 0 失败**（2026-11-25，机器无其他构建；
+      含异常兜底与 `WireSessionList.error` 的用例）
+- [x] 异常兜底与 `error` 字段改动后的顶层 Release 构建 `EXIT=0`；Dart `smoke_check` 5 个场景仍全绿
 - [x] `agentxx_benchmark resource_ffi` 跑通（调用吞吐 / 合批 / 尾窗三个子场景都有数据，
       数据记入 benchmark.md）
 - [x] `dart analyze`: 两个包都 `No issues found`
@@ -299,8 +318,5 @@
 
 ## 剩余事项
 
-- 想区分“真的没有会话”与“取数失败”时，需要给 `WireSessionList` 加一个 `error` 字段
-  （现在失败回的是空列表，调用方看不出区别）；本次没加，避免改协议与 schema。
-- 其他会话控制分支（`WireSwitchSession` 等）已经自己局部捕获了可预期的失败（加载失败记
-  日志后继续切），但整个协程体本身仍没有统一兜底 —— 以后再往里加可能抛的调用时，记得
-  用 `catchErrorAsync` 包一层。
+- `WireSwitchSession` 的协程体仍没有统一兜底（它已知的会话加载失败已在局部捕获并记日志
+  后继续切）。以后再往里加可能抛的调用时，用 `catchErrorAsync` 包一层。

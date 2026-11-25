@@ -973,6 +973,9 @@ Element SessionSelectorOverlay::OnRender() {
     std::string tailHint;
     if (!st.sessionListLoaded) {
         tailHint = std::string{tr("session.loading")};
+    } else if (!st.sessionListError.empty()) {
+        // 取数失败: 说清楚原因, 而不是当成"一个会话都没有"
+        tailHint = trf("session.loadFailed", st.sessionListError);
     } else if (st.sessionList.empty()) {
         tailHint = std::string{tr("session.empty")};
     } else if (st.sessionListLoadingMore) {

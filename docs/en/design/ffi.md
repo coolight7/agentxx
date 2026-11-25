@@ -237,7 +237,7 @@ pass `sessionId` in `args`; `session.switch` is the exception).
 | `model.select` | `name` (empty = keep current) | ack | 10s | result `{model}`: the effective model name; unknown name → `error.name:"model_not_found"` |
 | `model.add` | model config object (same fields as `create`'s `model_json`) | resp:`add_model_result` | 30s | Failure `code=-4` (it writes the yaml config) |
 | `model.remove` | `name` | resp:`remove_model_result` | 30s | Removing the current model is rejected |
-| `session.list` | `beforeMs?` / `beforeId?` / `limit?` (default 50) / `keyword?` | resp:`session_list` | 10s | `{sessions[], totalCount, hasMore}`; if the fetch fails (broken store / unreadable dir) the server replies with an empty list and logs the reason — **a reply always arrives** |
+| `session.list` | `beforeMs?` / `beforeId?` / `limit?` (default 50) / `keyword?` | resp:`session_list` | 10s | `{sessions[], totalCount, hasMore, error?}`; when the fetch fails (broken store / unreadable dir) `sessions` is empty and `error` carries the reason — **a reply always arrives**, and a failure is never reported as "no sessions" |
 | `session.switch` | `sessionId` | ack | 60s | Acknowledged once the switch is **submitted** (result `{sessionId}`); the history `EVT_SYNC` / `EVT_MODEL_INFO` / `EVT_CONTEXT_STATS` were sent before it |
 | `session.rename` | `title` | resp:`rename_session_result` | 10s | Empty title rejected |
 | `session.compact` | – | ack | 0 (no limit) | Acknowledged **after** compaction really finished (result `{ok}`) |

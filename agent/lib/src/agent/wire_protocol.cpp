@@ -140,7 +140,10 @@ utilxx_base::Json toJson(const WireListSessions& msg) {
 }
 
 utilxx_base::Json toJson(const WireSessionList& msg) {
-    return withReqId(makeSessionList(msg.sessions, msg.totalCount, msg.hasMore), msg);
+    return withReqId(
+        makeSessionList(msg.sessions, msg.totalCount, msg.hasMore, msg.error),
+        msg
+    );
 }
 
 utilxx_base::Json toJson(const WireSwitchSession& msg) {

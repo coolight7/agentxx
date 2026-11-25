@@ -43,6 +43,7 @@ constexpr Entry kTable[] = {
      "Please stop the current session before switching",                                                                 "请先停止当前会话, 再进行会话切换"                                                          },
     {"toast.copied",                    "Copied ({})",                                                                   "已复制 ({})"                                                                                           },
     {"toast.copyFailed",                "Copy failed (clipboard unavailable)",                                           "复制失败 (剪贴板不可用)"                                                                        },
+    {"toast.sessionListFailed",         "Failed to load sessions: {}",                                                   "会话列表读取失败: {}"                                                                             },
     {"toast.attachNotSupported",
      "Current model does not support multimodal file input",                                                             "当前模型不支持多模态文件输入"                                                               },
     {"toast.attachLimit",               "Max attachments per message (5) reached",                                       "已达到单次对话最大附件数 (5)"
@@ -188,6 +189,7 @@ constexpr Entry kTable[] = {
     {"session.new",                     "[ + New Session ]",                                                             "[ + 新会话 ]"                                                                                          },
     {"session.loading",                 "( Loading sessions... )",                                                       "( 会话加载中... )"                                                                                   },
     {"session.empty",                   "( no persisted sessions )",                                                     "( 无已保存会话 )"                                                                                   },
+    {"session.loadFailed",              "Failed to load sessions: {}",                                                   "会话列表读取失败: {}"                                                                             },
     {"session.current",                 "{} ( current )",                                                                "{} ( 当前 )"                                                                                            },
     {"session.loadingMore",             "↓ Loading...",                                                                "↓ 加载中..."                                                                                         },
     {"session.loadedMore",              "Loaded {}/{}  ↓ Scroll down for more",                                        "已加载 {}/{}  ↓ 下移加载更多"                                                                  },

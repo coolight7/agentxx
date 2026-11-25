@@ -2549,11 +2549,18 @@ void TUIClientAgentIO::requestServerListDir(
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::onSessionListPage(const agentxx::agent::WireSessionList& resp) {
+    // 取数失败: 服务端在回帧里带原因 (sessions 为空)。不只当空列表处理,
+    // 否则用户会以为"一个会话都没有"
+    if (!resp.error.empty()) {
+        uiToast(trf("toast.sessionListFailed", resp.error), 2);
+    }
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
         // 加载标志复位 (无论本页是否可用, 请求生命周期已结束)
         st.sessionListLoadingMore = false;
+        // 取数失败原因 (空 = 本页可用); 首页失败时上一次的旧列表不再可信
+        st.sessionListError = resp.error;
         // 兼容: 响应无分页元数据 (totalCount==0 && !hasMore) 时视为
         // 完整列表, 直接替换本地列表
         const bool legacyFullList = (resp.totalCount == 0 && !resp.hasMore);

@@ -553,7 +553,12 @@ struct WireSessionList {
     uint64_t totalCount = 0;
     /// 是否还有未加载的更早会话; 旧版服务端无此字段 → false (视为完整响应)
     bool hasMore = false;
-    uint64_t reqId    = 0;
+    /// 取数失败的原因 (库打不开/目录读不了等); 空 = 本响应可用
+    ///
+    /// 失败时仍然回这一帧 (sessions 为空), 调用方据此区分“真的没有会话”与“没读出
+    /// 来”; 旧版服务端无此字段 → 空 (按可用处理)
+    std::string error;
+    uint64_t    reqId = 0;
 };
 
 /// 客户端请求切换当前连接的会话 (Client -> Server): 将会话端点重新绑定到

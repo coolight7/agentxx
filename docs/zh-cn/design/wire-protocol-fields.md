@@ -38,7 +38,7 @@
 | 20 | compact_context | `compact_context` | `type` string, `sessionId` string |
 | 21 | context_messages | `context_messages` | `type` string, `messages` array<object{role:string, content:string}> |
 | 22 | list_sessions | `list_sessions` | `type` string, `beforeMs` integer, `beforeId` string, `limit` integer |
-| 23 | session_list | `session_list` | `type` string, `sessions` array<object{sessionId:string, lastActiveMs:integer, title:string}>, `totalCount` integer, `hasMore` boolean |
+| 23 | session_list | `session_list` | `type` string, `sessions` array<object{sessionId:string, lastActiveMs:integer, title:string}>, `totalCount` integer, `hasMore` boolean, `error` string |
 | 24 | switch_session | `switch_session` | `type` string, `sessionId` string |
 | 25 | plugin_data | `plugin_data` | `type` string, `topic` string, `data` string |
 | 26 | plugin_data_up | `plugin_data_up` | `type` string, `topic` string, `data` string |
