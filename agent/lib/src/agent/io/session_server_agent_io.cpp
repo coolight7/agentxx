@@ -1892,14 +1892,41 @@ void SessionServerAgentIO::onPeerMessage(
                             co_return;
                         }
                         self->switchTargetId_.clear();
-                        self->switchSession(std::move(newId));
-                        // 回执在切换提交后、历史/模型/统计回推之后发出 (同一连接按序投递)
-                        utilxx_base::Json data = utilxx_base::Json::object();
-                        data["sessionId"]      = self->config_.sessionId;
-                        self->sendAck(sender, switchReqId, true, {}, {}, std::move(data));
-                        // 暂存请求按到达顺序重新分发: 此时端点已绑定新会话,
-                        // 它们的会话校验与平时一致
-                        self->replayStashedWhileSwitching();
+                        // 提交切换与回执整体纳入异常保护: 这条回包协程是 detached 的,
+                        // 异常逃出去就等于"这一帧永远不回" (session.switch 的默认超时是 60s),
+                        // 暂存请求也会一起丢掉
+                        const bool committed = co_await agentxx::util::catchErrorAsync<bool>(
+                            [self, newId = std::string{newId}, switchReqId, sender](
+                            ) mutable -> asio::awaitable<bool> {
+                                self->switchSession(std::move(newId));
+                                // 回执在切换提交后、历史/模型/统计回推之后发出 (同一连接按序投递)
+                                utilxx_base::Json data = utilxx_base::Json::object();
+                                data["sessionId"]      = self->config_.sessionId;
+                                self->sendAck(sender, switchReqId, true, {}, {}, std::move(data));
+                                // 暂存请求按到达顺序重新分发: 此时端点已绑定新会话,
+                                // 它们的会话校验与平时一致
+                                self->replayStashedWhileSwitching();
+                                co_return true;
+                            },
+                            [self, switchReqId, sender](std::string errmsg
+                            ) -> asio::awaitable<bool> {
+                                XX_LOGE("[session_ctrl] switch session failed: {}", errmsg);
+                                // 切换可能已经改写了一部分绑定 (switchSession 先写
+                                // config_.sessionId 再回推状态): 按当前绑定回一条确定失败,
+                                // 并把暂存的请求放出去 —— 它们会按当前绑定各自得到确切结论,
+                                // 不用等到超时
+                                self->sendAck(
+                                    sender,
+                                    switchReqId,
+                                    false,
+                                    "switch_failed",
+                                    errmsg
+                                );
+                                self->replayStashedWhileSwitching();
+                                co_return false;
+                            }
+                        );
+                        (void)committed;
                     },
                     asio::detached
                 );

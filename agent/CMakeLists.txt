@@ -634,7 +634,7 @@ endif()
 #   走 `<应用名>.net`。client 侧删 events / json / log 三张自有表
 # - **库代码里的默认值不改**: cxx_pluginxx 被多个主程序共用, `abi.h` 的
 #   `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认恒为 1, 不跟随任一主程序;
-# - agentxx 在自己的构建里用宏覆盖成 7 (这里是唯一改代次的地方): 嵌套构建
+# - agentxx 在自己的构建里用宏覆盖成 8 (这里是唯一改代次的地方): 嵌套构建
 #   (cxx_pluginxx / 插件 / 测试 / 客户端) 都经 _AGENTXX_COMMON_CMAKE_ARGS 继承同一份
 #   FLAGS, 因此框架、使用方与插件看到的值一致; 插件不链接框架库也能拿到 (只用头文件)
 set(

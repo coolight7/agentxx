@@ -177,6 +177,10 @@ int32_t rc = agentxx_ffi_call(agent, &req, &reqId, &log);   /* accepted immediat
   that `reqId`.
 - `rc != 0` is a synchronous failure (bad argument / bad state); there will be **no reply**,
   and `log` explains why.
+- Raced with `agentxx_ffi_stop`: once admission has stopped (state already `Stopping` /
+  the pending table has been drained) every new call returns `AGENTXX_FFI_ERR_STATE` with
+  no reply, and everything already accepted is settled as `canceled` — `rc` is the only
+  thing that decides, there is no "accepted but never answered" state.
 - Any number of calls may be in flight on one handle; replies are matched by `reqId`.
 - When "the previous step must be effective first", await its reply before submitting the
   next call. Concurrently submitted calls **do not complete in submission order**.

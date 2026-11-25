@@ -164,6 +164,9 @@ int32_t rc = agentxx_ffi_call(agent, &req, &reqId, &log);   /* 受理即返回 *
 - `rc == AGENTXX_FFI_OK` = **已受理**, 结果一定经 `EVT_RESULT` 到达
   (`reqId` 与之对应)
 - `rc != 0` = 同步失败 (参数/状态), **不会有回执**, `log` 里是原因
+- 与 `agentxx_ffi_stop` 并发时: 停止受理之后 (`stop()` 已把状态推进到 Stopping /
+  收尾已清表) 提交的调用一律返回 `AGENTXX_FFI_ERR_STATE` 且无回执; 已受理的全部
+  以 `canceled` 收尾 —— 受不受理只看 `rc`, 没有"受理了但没有回执"的中间态
 - 同一句柄可以同时有任意多个未完成调用; 各自的回执按 `reqId` 匹配
 - 需要"前一步真的生效再发下一步"时, 等前一步回执再提交下一步;
   同时提交的多个调用**不保证完成顺序**

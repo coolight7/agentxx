@@ -18,7 +18,7 @@ CallRegistry::~CallRegistry() {
     // 定时器随 io_context 一起收尾: 这里只保证回调不会再碰已析构的对象
     std::lock_guard<std::mutex> lock(mutex_);
     stopping_ = true;
-    ++generation_;
+    generation_.fetch_add(1, std::memory_order_release);
     if (timer_) {
         timer_->cancel();
     }
@@ -37,6 +37,12 @@ uint64_t CallRegistry::begin(const FfiOpDef& def, int32_t timeoutMs) {
     uint64_t reqId = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        // 收尾已开始: 表已被 failAll 清过一次, 此后登记的条目既不会被它命中, 也不会
+        // 排超时定时器 (onTimeout 看到 stopping_ 直接返回) —— 调用方会永远等不到回执。
+        // 未受理由调用方按状态错误返回 (不发回执), 与参数校验失败同一条路。
+        if (stopping_) {
+            return 0;
+        }
         reqId = ++nextReqId_;
         // 1 是第一个可用序号; 0 留给"没有 reqId"
         if (reqId == 0) {
@@ -52,6 +58,11 @@ uint64_t CallRegistry::begin(const FfiOpDef& def, int32_t timeoutMs) {
         reschedule();
     }
     return reqId;
+}
+
+bool CallRegistry::isStopping() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stopping_;
 }
 
 void CallRegistry::abort(uint64_t reqId) {
@@ -155,7 +166,7 @@ void CallRegistry::stop() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stopping_ = true;
-        ++generation_;
+        generation_.fetch_add(1, std::memory_order_release);
     }
     if (timer_) {
         asio::post(ioCtx_, [timer = timer_] { timer->cancel(); });
@@ -169,7 +180,7 @@ void CallRegistry::reschedule() {
 
 void CallRegistry::armTimerLocked(int64_t nextDeadlineMs) {
     // 已在 io 线程: 直接用最新代次重臂
-    const uint64_t gen = ++generation_;
+    const uint64_t gen = generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
     if (nextDeadlineMs <= 0) {
         timer_->cancel();
         return;
@@ -184,7 +195,7 @@ void CallRegistry::armTimerLocked(int64_t nextDeadlineMs) {
             return; // 被取消/覆盖: 由新的那次检查负责
         }
         std::unique_lock<std::mutex> lock(self->mutex_);
-        if (gen != self->generation_ || self->stopping_) {
+        if (gen != self->generation_.load(std::memory_order_acquire) || self->stopping_) {
             return;
         }
         lock.unlock();

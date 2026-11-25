@@ -257,7 +257,11 @@ asio::awaitable<std::string>
         }
     }
     if (canceled == 0) {
-        co_return "取消失败: 主程序没有接受取消请求 (任务可能刚好结束)";
+        // 主程序没受理: 最常见的情形是任务刚好跑完 (排队/运行都已经不在), 这不属于
+        // 取消失败 —— 按"已结束"回答, 免得模型/用户把它当成错误再重试一遍
+        co_return "任务" + (targets.size() > 1 ? std::string{"都已结束"}
+                                                 : targets.front() + " 已经结束")
+                  + "或正在收尾, 主程序没有接受取消";
     }
     co_return "已取消 " + std::to_string(canceled) + " 个后台任务"
               + (targets.size() > 1 ? "" : (" (" + targets.front() + ")"));

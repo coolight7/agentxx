@@ -165,8 +165,14 @@ int32_t PluginNetService::callAsync(
         if (!state) {
             return;
         }
-        // 插件实例已经销毁: 不再回到插件代码 (这次请求按取消处理)
+        // 插件实例已经销毁: 不再回到插件代码, 但这次操作仍必须有终态 —— 按"已取消"
+        // 交回完成回调 (它只碰 OpCore, 不会进入插件)。直接 return 会让 OpCore 永不
+        // 提交终态: `runtime->operations` 里留一项, 且 OpCore 与句柄/完成端点互相
+        // 强引用, 整块泄漏, 插件卸载的 idle 等待也会等到截止时间
         if (hasGuard && guard.expired()) {
+            if (cb != nullptr) {
+                cb(ud, PLUGINXX_OPERATOR_CANCELED, nullptr);
+            }
             return;
         }
         if (cb == nullptr) {

@@ -64,7 +64,13 @@ public:
 
     /// 登记一次调用, 返回 reqId
     /// - `timeoutMs > 0` 才登记超时 (`0` = 不限; 本地 op 传 0)
+    /// - 返回 `0` = 收尾已经开始 ([stop] 之后), 本次**未登记**; 调用方按状态错误
+    ///   返回且不发回执 (登记与收尾判定在同一把锁里做, 避免"收尾清完表之后才登记"
+    ///   的调用既不会被取消也不会超时)
     uint64_t begin(const FfiOpDef& def, int32_t timeoutMs);
+
+    /// 收尾是否已经开始 (登记不再受理)
+    bool isStopping() const;
 
     /// 撤销登记 (同步失败: 不发回执)
     void abort(uint64_t reqId);
@@ -121,7 +127,8 @@ private:
     bool stopping_ = false;
 
     /// 定时器代次: 每次重臂 +1, 旧的回调发现自己过期就直接退出
-    uint64_t generation_ = 0;
+    /// - 读写可能跨线程 ([stop] / 析构 与 io 线程的 [armTimerLocked]), 因此用原子量
+    std::atomic<uint64_t> generation_{0};
 
     std::shared_ptr<asio::steady_timer> timer_;
 };

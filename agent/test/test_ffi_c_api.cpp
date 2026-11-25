@@ -1323,6 +1323,71 @@ void testLifecycleAsync() {
     mock.stop();
 }
 
+/// 9b) stop() 与 call() 并发: 每条**受理**的调用恰好一条回执 (服务端应答或取消),
+///     未受理的是同步错误 —— 老实现里"收尾清完表之后才登记"的调用既不会被取消也不会
+///     超时, 调用方永远等不到回执
+void testStopCallRace() {
+    FfiMockLLM mock;
+    uint16_t   port = 0;
+    if (!mock.start(port)) {
+        TEST_FAIL << "mock LLM server start failed" << std::endl;
+        g_ffi_failed++;
+        return;
+    }
+
+    FfiTestClient client;
+    XX_TEST_EXPECT_TRUE(ffiCreate(client, nullptr, mock.modelJson()));
+    XX_TEST_EXPECT_EQ(client.start(), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(client.ready());
+
+    std::atomic<bool>     stopIssued{false};
+    std::mutex            mtx;
+    std::vector<uint64_t> accepted;
+
+    std::thread worker([&] {
+        const std::string req = R"({"op":"model.list","args":{}})";
+        auto              sv  = agentxx_string_view(req.data(), req.size());
+        while (!stopIssued.load(std::memory_order_acquire)) {
+            uint64_t      reqId = 0;
+            AgentxxString log{};
+            // 直接调 C API: FfiTestClient::submit 会写 lastLog, 不是线程安全的
+            const int32_t rc = agentxx_ffi_call(client.a, &sv, &reqId, &log);
+            agentxx_ffi_string_free(&log);
+            if (rc == AGENTXX_FFI_OK) {
+                std::lock_guard<std::mutex> lock(mtx);
+                accepted.push_back(reqId);
+            }
+        }
+    });
+
+    // 让 worker 跑起来, 使"登记"与"收尾清表"两件事真正交错
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    XX_TEST_EXPECT_EQ(client.stop(), AGENTXX_FFI_OK);
+    stopIssued.store(true, std::memory_order_release);
+    worker.join();
+    XX_TEST_EXPECT_TRUE(client.waitStopped(30000));
+
+    std::vector<uint64_t> ids;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        ids = accepted;
+    }
+    XX_TEST_EXPECT_TRUE(!ids.empty());
+    size_t missing    = 0;
+    size_t duplicated = 0;
+    for (uint64_t id : ids) {
+        if (client.rec.waitResult(id, 3000).empty()) {
+            ++missing;
+        } else if (client.rec.resultCountOf(id) != 1) {
+            ++duplicated;
+        }
+    }
+    XX_TEST_EXPECT_EQ(missing, size_t{0});
+    XX_TEST_EXPECT_EQ(duplicated, size_t{0});
+    XX_TEST_EXPECT_EQ(client.destroy(), AGENTXX_FFI_OK);
+    mock.stop();
+}
+
 /// 10) 本地 op: language.get/set、delta.set_batch (不进 wire, 立即回执)
 void testLocalOps() {
     FfiMockLLM mock;
@@ -1997,6 +2062,7 @@ agentxx::test::TestResult testFfiCApi() {
     testOrdering();
     testCallFromCallback();
     testLifecycleAsync();
+    testStopCallRace();
     testLocalOps();
     testHostToolOps();
     testCapabilities();

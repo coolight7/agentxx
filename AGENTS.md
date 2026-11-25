@@ -937,7 +937,7 @@ path/to/agentxx_test --log-level warn string_util regex
   4 个网络插件已全部迁完 (`websearch` / `rag_search` / `text_selection_monitor` / `chatbot`),
   插件里不再出现 `utilxx/http_client.h` / `ws_client.h`; 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §22
-- 接口表版本与基线 (**当前代次 7** (agent 侧) / **8** (client 侧), 全局 API 版本 = 7:
+- 接口表版本与基线 (**当前代次 8** (agent 侧) / **9** (client 侧), 全局 API 版本 = 8:
   v2 是多 agent 挂载换代;
   v3 把通用表里的业务成员 (会话工作目录 / 取消查询 / 工具提示词) 迁回 agentxx 业务表
   并把 "agent" 用词泛化为 "作用域"; v4 = 工具结果换代 (成败改由状态位表达);
@@ -946,14 +946,17 @@ path/to/agentxx_test --log-level warn string_util regex
   v6 = 工具结果两段上报 (`AgentxxPluginToolNotify`, `agentxx.agent.tools` 抬到 4);
   v7 = 表成员全改**异步操作契约** (agent 9 张业务表 + 运行时会话表 + 框架通用表;
   SDK 只留 `co_await xxxAsync(...)` / `tableOpCallback`, 删掉全部阻塞形态);
-  client 侧 `AGENTXX_CLIENT_PLUGIN_API_VERSION` = **8** (client 六张表改异步 +
+  v8 = 插件接口重构 (入口符号统一 `agentxx_agent_plugin_*` / `agentxx_client_plugin_*`,
+  `get_info` 改填表, `create` 合并 start 且与 stop/destroy 同一套异步"恰好一次 notify" 协议;
+  每端一个管理器启动即建 — 一条插件执行线程 + 一个工作池, 工具只剩 `tool`);
+  client 侧 `AGENTXX_CLIENT_PLUGIN_API_VERSION` = **9** (client 六张表改异步 +
   渲染/命令回调改 notify; client 侧没有保留的同步成员);
   业务表 `version` = `MIN_VERSION` = 2 ~ 4, 通用表见 `pluginxx/api/tables.h`,
   基线 = 重置时的完整布局):
   - **库里的默认值不改**: cxx_pluginxx 的 `abi.h` 中 `PLUGINXX_API_VERSION` /
     `PLUGINXX_MIN_API_VERSION` 恒保持 1 (多主程序共用); agentxx 在 `agent/CMakeLists.txt`
-    用 `AGENTXX_PLUGIN_API_VERSION` 选项向全局 FLAGS 追 `-D...=7` 覆盖, 并随 `CMAKE_ARGS`
-    传给 cxx_pluginxx 的嵌套构建 (installed targets 的 INTERFACE 定义随之变成 7)
+    用 `AGENTXX_PLUGIN_API_VERSION` 选项向全局 FLAGS 追 `-D...=8` 覆盖, 并随 `CMAKE_ARGS`
+    传给 cxx_pluginxx 的嵌套构建 (installed targets 的 INTERFACE 定义随之变成 8)
   - 改代次时注意构建缓存: 覆盖时必须**先剔旧值再追加** (否则嵌套 ExternalProject
     会一直用缓存里的上一代值编译)
   - `agentxx.config` 现有 `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language`,

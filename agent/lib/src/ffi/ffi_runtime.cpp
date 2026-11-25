@@ -484,7 +484,16 @@ int FfiAgentRuntime::start(std::string& err) {
     };
     rtCfg.onServerReady = [self = shared_from_this()]() {
         // 先置 Ready 再通知: 就绪回调里嵌入方程序可能立刻操作, 不能遇到 ERR_STATE
-        self->state_.store(State::Ready, std::memory_order_release);
+        // - 只允许 Starting -> Ready: stop() 已经把状态推进到 Stopping 后, 迟到的
+        //   就绪回调不能把句柄"复活"成可受理状态 (那样新调用会登记进已停止的表,
+        //   既拿不到回执也不会超时)
+        State expected = State::Starting;
+        self->state_.compare_exchange_strong(
+            expected,
+            State::Ready,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire
+        );
     };
 
     runtime_ = agent::AgentSessionRuntime::create(agent_, clientIO_, std::move(rtCfg));
@@ -719,12 +728,15 @@ void FfiAgentRuntime::onRuntimeStopping() {
     if (!calls_) {
         return;
     }
+    // 先停止受理再清表: 顺序反过来时, 两次之间的 begin() 会漏网 —— 它既不在 failAll
+    // 的快照里, 之后也不会排超时 (onTimeout 看到 stopping_ 直接返回), 调用方就永远
+    // 等不到回执。stop() 之后 begin() 一律返回 0, 调用方按状态错误返回。
+    calls_->stop();
     const size_t canceled
         = calls_->failAll(AGENTXX_FFI_ERR_CANCELED, "canceled", "runtime is stopping");
     if (canceled > 0) {
         XX_LOGD("[ffi] {} pending call(s) canceled by runtime stop", canceled);
     }
-    calls_->stop();
 }
 
 void FfiAgentRuntime::notifyError(int code, std::string name, std::string message) {
@@ -806,6 +818,12 @@ int FfiAgentRuntime::call(std::string_view requestJson, uint64_t* outReqId, std:
     }
 
     const uint64_t reqId = calls_->begin(*def, timeoutMs);
+    if (reqId == 0) {
+        // 收尾已经开始 (stop 已把未完成的调用按取消结算过): 这条调用没有入表,
+        // 既不会收到服务端应答也不会超时, 按状态错误当场返回 (不发回执)
+        err = "状态错误: 句柄正在停止, 不再受理新调用";
+        return AGENTXX_FFI_ERR_STATE;
+    }
 
     CallContext ctx;
     ctx.reqId       = reqId;
