@@ -480,6 +480,24 @@ static YamlAppConfig parseYamlConfigNode(
                     );
                 }
             }
+            if (node["output_idle_timeout"]) {
+                // 同上: 容错解析, 避免非法配置导致 std::stoi 抛异常崩溃
+                auto val = resolveEnvVars(
+                    node["output_idle_timeout"].as<std::string>("600"),
+                    dotEnvVars,
+                    overrideEnvVars
+                );
+                int parsed = mc.outputIdleTimeoutSeconds;
+                if (parseFullNumber(val, parsed)) {
+                    mc.outputIdleTimeoutSeconds = parsed;
+                } else {
+                    XX_LOGW(
+                        "[Config] Warning: invalid output_idle_timeout `{}`, keeping default {}",
+                        val,
+                        mc.outputIdleTimeoutSeconds
+                    );
+                }
+            }
             if (node["ssl_verify"]) {
                 auto val = resolveEnvVars(
                     node["ssl_verify"].as<std::string>(""),

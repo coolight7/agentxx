@@ -2508,6 +2508,63 @@ void test_anthropic_sse_message_stop_flag() {
     XX_TEST_EXPECT_TRUE(run("event: message_stop\ndata: {\"type\":\"message_stop\"}", true));
 }
 
+/// `ping` 保活事件不计作"有效输出": 只有正文/思考/工具参数分片才算进展
+///
+/// Anthropic 在思考与排队期间会持续发 `event: ping`, 块间超时因此永远不到期
+/// (见 protocol/provider_common.h 的 StreamOutputWatchdog)。
+void test_anthropic_ping_is_not_output() {
+    using server::AnthropicProvider;
+    namespace proto = agentxx::protocol;
+
+    proto::StreamProgress             progress;
+    neograph::ChatCompletion          completion;
+    std::string                       content, thinking;
+    std::map<int, neograph::ToolCall> tcMap;
+    std::map<int, std::string>        blockTypes, thinkingTexts, blockSignatures;
+    progress.lastOutputAt = std::chrono::steady_clock::now() - std::chrono::seconds{120};
+    const auto before     = progress.idleSinceOutput();
+
+    std::string buf
+        = "event: ping\ndata: {\"type\":\"ping\"}\n\n"
+          "event: ping\ndata: {\"type\":\"ping\"}\n\n";
+    AnthropicProvider::processSseBuffer(
+        buf,
+        completion,
+        content,
+        thinking,
+        tcMap,
+        blockTypes,
+        thinkingTexts,
+        blockSignatures,
+        nullptr,
+        /*finalFlush=*/true,
+        &progress
+    );
+    XX_TEST_EXPECT_EQ(progress.events, size_t{2});
+    XX_TEST_EXPECT_TRUE(progress.idleSinceOutput() >= before);
+
+    // 正文增量: 有效输出复位
+    std::string delta
+        = "event: content_block_delta\n"
+          "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\","
+          "\"text\":\"hi\"}}\n\n";
+    AnthropicProvider::processSseBuffer(
+        delta,
+        completion,
+        content,
+        thinking,
+        tcMap,
+        blockTypes,
+        thinkingTexts,
+        blockSignatures,
+        nullptr,
+        /*finalFlush=*/true,
+        &progress
+    );
+    XX_TEST_EXPECT_EQ(content, std::string{"hi"});
+    XX_TEST_EXPECT_TRUE(progress.idleSinceOutput() < std::chrono::seconds{5});
+}
+
 /// 已收到 message_delta.stop_reason 但缺少 message_stop 就结束:
 /// 按"已完整"收尾, 不能把已生成完的正文/工具调用丢掉
 asio::awaitable<void>
@@ -2591,6 +2648,7 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
     test_anthropic_sse_signature_capture();
     test_anthropic_sse_crlf_separator();
     test_anthropic_sse_message_stop_flag();
+    test_anthropic_ping_is_not_output();
 
     // Integration tests
     uint16_t port = 0;

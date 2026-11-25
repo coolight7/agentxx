@@ -1355,6 +1355,12 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     const auto readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds};
     const auto finishGraceTimeout =
         agentxx::protocol::streamFinishGraceTimeout(readChunkTimeout);
+    // "无有效输出"看门狗: 块间超时按"收到任意字节"重置, 上游只发保活心跳时永远不到期
+    // (见 protocol/provider_common.h 的 StreamOutputWatchdog)
+    agentxx::protocol::StreamOutputWatchdog outputWatchdog{
+        .limit = std::chrono::seconds{config_.outputIdleTimeoutSeconds},
+        .model = params.model.empty() ? config_.modelName : params.model,
+    };
     // 发送期限按 body 大小推导 (移动进 HTTP 层之前取, 移动后 size 为 0)
     const auto sendTimeout = agentxx::protocol::llmSendTimeout(bodyStr.size());
 
@@ -1374,12 +1380,12 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
                     .keepAlive        = true,
                     .maxConcurrentConnections = config_.maxConcurrentConnections,
                     .readChunkTimeoutPerRead
-                    = [&progress, finishGraceTimeout]()
+                    = [&progress, &outputWatchdog, readChunkTimeout, finishGraceTimeout]()
                         -> std::optional<std::chrono::milliseconds> {
-                        if (!progress.finishSeen) {
-                            return std::nullopt;
-                        }
-                        return finishGraceTimeout;
+                        return outputWatchdog.nextReadTimeout(
+                            progress,
+                            progress.finishSeen ? finishGraceTimeout : readChunkTimeout
+                        );
                     },
                 },
                 // 返回 true 通知 http 层流已结束 (收到 [DONE]): 立即断开连接停止读取,
@@ -1425,6 +1431,19 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
             }
             if (progress.finishSeen) {
                 salvagedOnError = true;
+                if (outputWatchdog.tripped(progress)) {
+                    // 只剩心跳的收尾阶段到点: 正文与工具参数都已完整, 直接按完成收尾
+                    XX_LOGW(
+                        "LLM stream produced no output for {} ms after finish_reason={}; "
+                        "accepted | model={} recv={}B events={}",
+                        progress.idleSinceOutput().count(),
+                        progress.finishReason,
+                        outputWatchdog.model,
+                        progress.bytes,
+                        progress.events
+                    );
+                    co_return false;
+                }
                 XX_LOGW(
                     "LLM stream ended without [DONE] after finish_reason={}; accepted | model={} "
                     "err={}{}",
@@ -1437,6 +1456,28 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
             }
             // 上游业务错误 (HTTP 状态码 + error body) 不加诊断后缀, 保留原文
             const bool apiError = errinfo.find("API error (HTTP ") != std::string::npos;
+            // 无有效输出上限: 上游一直在发保活/空事件, 本次生成没有可用结果。
+            // 明确写出来 (而不是让日志里只出现一条 1 ms 的读超时), 便于事后定位
+            if (!apiError && outputWatchdog.tripped(progress)) {
+                const auto idle  = progress.idleSinceOutput();
+                const auto limit = outputWatchdog.limit;
+                XX_LOGW(
+                    "LLM stream idle timeout: no output for {} ms (limit {} ms) | model={} "
+                    "recv={}B events={}",
+                    idle.count(),
+                    limit.count(),
+                    outputWatchdog.model,
+                    progress.bytes,
+                    progress.events
+                );
+                throw std::runtime_error(fmt::format(
+                    "LLM stream idle timeout: no output for {} ms (limit {} ms) | model={}{}",
+                    idle.count(),
+                    limit.count(),
+                    outputWatchdog.model,
+                    agentxx::protocol::streamFailureSuffix(progress, tcMap)
+                ));
+            }
             throw std::runtime_error(
                 apiError ? errinfo
                          : errinfo + agentxx::protocol::streamFailureSuffix(progress, tcMap)
@@ -1540,6 +1581,12 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
     agentxx::protocol::StreamProgress progress;
     // 是否收到 Responses API 结束事件 "response.completed", 用于检测流截断
     bool doneReceived = false;
+    // 读 body 的块间上限与"无有效输出"看门狗 (同 doStream, 见 provider_common.h)
+    const auto readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds};
+    agentxx::protocol::StreamOutputWatchdog outputWatchdog{
+        .limit = std::chrono::seconds{config_.outputIdleTimeoutSeconds},
+        .model = params.model.empty() ? config_.modelName : params.model,
+    };
     // 发送期限按 body 大小推导 (移动进 HTTP 层之前取, 移动后 size 为 0)
     const auto sendTimeout = agentxx::protocol::llmSendTimeout(bodyStr.size());
 
@@ -1554,10 +1601,16 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
                 HttpClient::RequestConfig{
                     .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
                     .sendTimeout      = sendTimeout,
-                    .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                    .readChunkTimeout = readChunkTimeout,
                     .sslVerify        = config_.sslVerify,
                     .keepAlive        = true,
                     .maxConcurrentConnections = config_.maxConcurrentConnections,
+                    .readChunkTimeoutPerRead
+                    = [&progress, &outputWatchdog, readChunkTimeout]()
+                        -> std::optional<std::chrono::milliseconds> {
+                        // Responses 事件里没有"只差结束标记"的收尾阶段, 只用块间超时做上界
+                        return outputWatchdog.nextReadTimeout(progress, readChunkTimeout);
+                    },
                 },
                 // 返回 true 通知 http 层流已结束 (收到 response.completed): 立即断开
                 [&](std::string_view chunk) -> bool {
@@ -1601,6 +1654,27 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
             }
             // 上游业务错误 (HTTP 状态码 + error body) 不加诊断后缀, 保留原文
             const bool apiErrorLogged = errinfo.find("API error (HTTP ") != std::string::npos;
+            // 无有效输出上限 (同 doStream): 只剩保活/空事件, 本次生成没有可用结果
+            if (!apiErrorLogged && outputWatchdog.tripped(progress)) {
+                const auto idle  = progress.idleSinceOutput();
+                const auto limit = outputWatchdog.limit;
+                XX_LOGW(
+                    "LLM stream idle timeout: no output for {} ms (limit {} ms) | model={} "
+                    "recv={}B events={}",
+                    idle.count(),
+                    limit.count(),
+                    outputWatchdog.model,
+                    progress.bytes,
+                    progress.events
+                );
+                throw std::runtime_error(fmt::format(
+                    "LLM stream idle timeout: no output for {} ms (limit {} ms) | model={}{}",
+                    idle.count(),
+                    limit.count(),
+                    outputWatchdog.model,
+                    agentxx::protocol::streamFailureSuffix(progress, tcMap)
+                ));
+            }
             throw std::runtime_error(
                 apiErrorLogged
                     ? errinfo
@@ -1825,6 +1899,11 @@ bool OpenAIProvider::processSseLine(
             return;
         }
         fullThinking += token;
+        // 有效输出: 只有真的产出内容才算"有进展", 保活心跳不算
+        // (见 protocol/provider_common.h 的 StreamOutputWatchdog)
+        if (progress) {
+            progress->noteOutput();
+        }
         if (on_chunk) {
             on_chunk(neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_THINKING, token});
         }
@@ -1841,6 +1920,9 @@ bool OpenAIProvider::processSseLine(
             }
             if (!token.empty()) {
                 fullContent += token;
+                if (progress) {
+                    progress->noteOutput();
+                }
                 if (on_chunk) {
                     on_chunk(
                         neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_CONTENT, token}
@@ -1932,21 +2014,34 @@ bool OpenAIProvider::processSseLine(
             auto fn = tc["function"];
             // 工具名到达前是否为空 (用于判定"本次分片才首次拿到工具名")
             const bool nameWasEmpty = tcMap[idx].name.empty();
+            bool       hasFragment  = false;
             if (fn.valid() && fn.is_object()) {
                 auto nameView = fn["name"];
                 if (nameView.valid() && nameView.is_string()) {
                     try {
-                        tcMap[idx].name += std::string(nameView.get_string_view());
+                        std::string piece{nameView.get_string_view()};
+                        if (!piece.empty()) {
+                            tcMap[idx].name += piece;
+                            hasFragment      = true;
+                        }
                     } catch (...) {
                     }
                 }
                 auto argsView = fn["arguments"];
                 if (argsView.valid() && argsView.is_string()) {
                     try {
-                        tcMap[idx].arguments += std::string(argsView.get_string_view());
+                        std::string piece{argsView.get_string_view()};
+                        if (!piece.empty()) {
+                            tcMap[idx].arguments += piece;
+                            hasFragment            = true;
+                        }
                     } catch (...) {
                     }
                 }
+            }
+            // 有效输出: 工具名/参数分片也算在产出 (长参数生成期间没有正文与思考)
+            if (hasFragment && progress) {
+                progress->noteOutput();
             }
             // 工具调用开始 (见 protocol/provider_common.h): 首个分片即通知 UI
             // (此时参数必然不完整, 内容无法展示); 工具名可能晚于首片到达, 首次拿到
@@ -2153,6 +2248,10 @@ bool OpenAIProvider::processResponsesSseLine(
             return;
         }
         fullContent += token;
+        // 有效输出: 保活/空事件不算进展 (见 provider_common.h 的 StreamOutputWatchdog)
+        if (progress) {
+            progress->noteOutput();
+        }
         if (on_chunk) {
             on_chunk(neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_CONTENT, token});
         }
@@ -2162,6 +2261,9 @@ bool OpenAIProvider::processResponsesSseLine(
             return;
         }
         fullThinking += token;
+        if (progress) {
+            progress->noteOutput();
+        }
         if (on_chunk) {
             on_chunk(neograph::ChatStreamChunk{neograph::ChatStreamChunk::TYPE_THINKING, token});
         }
@@ -2304,7 +2406,14 @@ bool OpenAIProvider::processResponsesSseLine(
         int  idx       = viewOutputIndex(jv);
         auto deltaView = jv["delta"];
         if (deltaView.valid() && deltaView.is_string()) {
-            tcMap[idx].arguments += viewString(deltaView);
+            std::string piece = viewString(deltaView);
+            if (!piece.empty()) {
+                tcMap[idx].arguments += piece;
+                // 有效输出: 长参数生成期间没有正文与思考, 只有参数分片
+                if (progress) {
+                    progress->noteOutput();
+                }
+            }
         }
         return false;
     }

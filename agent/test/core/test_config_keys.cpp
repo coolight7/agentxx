@@ -779,6 +779,19 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          })}
     );
     out.push_back(
+        {"model.list[].output_idle_timeout",
+         "int (秒; 0 = 关闭)",
+         "600",
+         "model:\n  list:\n    - name: m1\n      output_idle_timeout: 120\n",
+         kMinimalModelYaml,
+         false,
+         "600",
+         "120",
+         modelProbe([](const agentxx::agent::ModelConfig& m) {
+             return std::to_string(m.outputIdleTimeoutSeconds);
+         })}
+    );
+    out.push_back(
         {"model.list[].ssl_verify",
          "bool (省略 = 未指定, 用全局默认策略)",
          "未指定 (nullopt)",

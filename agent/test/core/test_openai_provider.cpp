@@ -2844,6 +2844,59 @@ void test_true_streaming_incremental(uint16_t) {
     srv->stop();
 }
 
+/// 端到端: 上游只发保活心跳 (`: keep-alive` 注释 + 空 delta 事件) 时,
+/// "无有效输出"上限必须打断请求并给出明确错误, 而不是一直等下去
+///
+/// 背景见 provider_common.h 的 StreamOutputWatchdog: 块间超时按"收到任意字节"重置,
+/// 心跳能让它永远不到期 (实测卡十几分钟, 只能手动取消)。
+void test_stream_idle_timeout_end_to_end() {
+    auto srv = std::make_unique<DelayedStreamServer>();
+    // 只有心跳: 没有正文、思考与工具参数分片
+    for (int i = 0; i < 40; ++i) {
+        srv->chunks.push_back(": keep-alive\n\n");
+        srv->chunks.push_back("data: {\"choices\":[{\"index\":0,\"delta\":{}}]}\n\n");
+    }
+    srv->delay = std::chrono::milliseconds{50};
+    srv->start();
+
+    auto cfg                     = makeOaiCfg("sk-test", "http://127.0.0.1:" + std::to_string(srv->boundPort));
+    cfg.outputIdleTimeoutSeconds = 1; // 1 秒没有有效输出即判定超时
+
+    auto provider = server::OpenAIProvider::create(cfg);
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "heartbeat only"}
+    };
+
+    std::string errText;
+    bool        gotCompletion = false;
+    asio::io_context ctx;
+    asio::co_spawn(
+        ctx,
+        [&]() -> asio::awaitable<void> {
+            try {
+                co_await provider->invoke(params, [](const std::string&) {});
+                gotCompletion = true;
+            } catch (const std::exception& e) {
+                errText = e.what();
+            } catch (...) {
+                errText = "unknown";
+            }
+            co_return;
+        },
+        asio::detached
+    );
+    ctx.run();
+
+    XX_TEST_EXPECT_FALSE(gotCompletion);
+    XX_TEST_EXPECT_TRUE(errText.find("LLM stream idle timeout") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(errText.find("limit 1000 ms") != std::string::npos);
+
+    srv->stop();
+}
+
 // ---------------------------------------------------------------------------
 // Timeout tests — connect, send, read
 // ---------------------------------------------------------------------------
@@ -5229,6 +5282,109 @@ void test_sse_progress_finish_reason_and_events() {
     XX_TEST_EXPECT_EQ(completion.stop_reason, std::string{"tool_use"});
 }
 
+/// "无有效输出"看门狗: 只有真正的输出才算进展, 保活心跳不刷新空闲计时
+///
+/// 背景: 块间超时按"这次读有没有返回字节"重置, 上游持续发 `: ping` 注释 /
+/// 空 delta 事件时永远不到期 (实测卡十几分钟, 只能手动取消)。看门狗按有效输出计时,
+/// 到期把下一次读的超时压到最短, 让既有的读超时机制关掉连接。
+void test_stream_output_watchdog() {
+    using namespace std::chrono;
+    namespace proto = agentxx::protocol;
+
+    // 上限关闭: 原样返回块间超时, 不判定到期
+    {
+        proto::StreamOutputWatchdog dogwatch;
+        proto::StreamProgress        progress;
+        progress.lastOutputAt = std::chrono::steady_clock::now() - seconds{30};
+        XX_TEST_EXPECT_EQ(dogwatch.nextReadTimeout(progress, seconds{60}).count(), 60000LL);
+        XX_TEST_EXPECT_FALSE(dogwatch.tripped(progress));
+    }
+    // 上限内: 取"剩余预算"与"块间超时"的较小者
+    {
+        proto::StreamOutputWatchdog dogwatch;
+        dogwatch.limit       = seconds{100};
+        dogwatch.logInterval = milliseconds{0}; // 测试里不打等待日志
+        proto::StreamProgress progress;
+        progress.lastOutputAt = std::chrono::steady_clock::now() - seconds{95};
+        const auto next       = dogwatch.nextReadTimeout(progress, seconds{60});
+        XX_TEST_EXPECT_TRUE(next.count() > 0 && next.count() <= 5000);
+        XX_TEST_EXPECT_FALSE(dogwatch.tripped(progress));
+    }
+    // 到期: 压到 1 ms 让这次读立刻结束, 并判定为"无输出超时"
+    {
+        proto::StreamOutputWatchdog dogwatch;
+        dogwatch.limit       = seconds{10};
+        dogwatch.logInterval = milliseconds{0};
+        proto::StreamProgress progress;
+        progress.lastOutputAt = std::chrono::steady_clock::now() - seconds{11};
+        XX_TEST_EXPECT_EQ(dogwatch.nextReadTimeout(progress, seconds{60}).count(), 1LL);
+        XX_TEST_EXPECT_TRUE(dogwatch.tripped(progress));
+    }
+    // 解析器打点: 只有正文/思考/工具参数分片才刷新有效输出
+    {
+        proto::StreamProgress             progress;
+        neograph::ChatCompletion          completion;
+        std::string                       fullContent;
+        std::string                       fullThinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        // 人为把"上次有效输出"放到 2 分钟前
+        progress.lastOutputAt = std::chrono::steady_clock::now() - seconds{120};
+        const auto before     = progress.idleSinceOutput();
+
+        // 心跳: SSE 注释行 + 空 delta 事件 (只算事件, 不算输出)
+        std::string heartbeat
+            = ": keep-alive\n\n"
+              "data: {\"choices\":[{\"index\":0,\"delta\":{}}]}\n\n";
+        server::OpenAIProvider::processSseBuffer(
+            heartbeat,
+            completion,
+            fullContent,
+            fullThinking,
+            tcMap,
+            nullptr,
+            /*finalFlush=*/true,
+            &progress
+        );
+        XX_TEST_EXPECT_EQ(progress.events, size_t{1});
+        XX_TEST_EXPECT_TRUE(progress.idleSinceOutput() >= before);
+        XX_TEST_EXPECT_TRUE(progress.idleSinceOutput() >= seconds{120});
+
+        // 正文增量: 有效输出复位
+        std::string content
+            = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n";
+        server::OpenAIProvider::processSseBuffer(
+            content,
+            completion,
+            fullContent,
+            fullThinking,
+            tcMap,
+            nullptr,
+            /*finalFlush=*/true,
+            &progress
+        );
+        XX_TEST_EXPECT_EQ(fullContent, std::string{"hi"});
+        XX_TEST_EXPECT_TRUE(progress.idleSinceOutput() < seconds{5});
+
+        // 工具参数分片: 长参数生成期间没有正文, 也必须算作有输出
+        progress.lastOutputAt = std::chrono::steady_clock::now() - seconds{120};
+        std::string toolArgs
+            = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+              "{\"index\":0,\"function\":{\"arguments\":\"{\\\"a\\\":1}\"}}]}}]}\n\n";
+        server::OpenAIProvider::processSseBuffer(
+            toolArgs,
+            completion,
+            fullContent,
+            fullThinking,
+            tcMap,
+            nullptr,
+            /*finalFlush=*/true,
+            &progress
+        );
+        XX_TEST_EXPECT_EQ(tcMap[0].arguments, std::string{"{\"a\":1}"});
+        XX_TEST_EXPECT_TRUE(progress.idleSinceOutput() < seconds{5});
+    }
+}
+
 /// 已收到 finish_reason 但缺少 [DONE] 就结束: 按"已完整"收尾, 不能丢掉工具调用
 asio::awaitable<void>
     test_streaming_finish_reason_without_done_accepted(MockOpenAIServer& mock, uint16_t port) {
@@ -5451,6 +5607,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     // 收尾宽限 / 发送期限取值表 + SSE 进度统计
     test_stream_finish_grace_and_send_timeout_values();
     test_sse_progress_finish_reason_and_events();
+    test_stream_output_watchdog();
 
     // ModelProviderRegistry::createProvider tests
     test_create_provider_openai();
@@ -5601,6 +5758,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
 
     // True streaming incremental verification
     test_true_streaming_incremental(port);
+    test_stream_idle_timeout_end_to_end();
 
     // Timeout tests
     test_send_timeout_calculation();

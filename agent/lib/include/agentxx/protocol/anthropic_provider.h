@@ -355,6 +355,11 @@ public:
                 if (deltaType == "text_delta") {
                     auto text    = viewStr(deltaView["text"]);
                     fullContent += text;
+                    // 有效输出: 只有真的产出内容才算进展, 保活 (`ping` 事件 / 注释行) 不算
+                    // (见 protocol/provider_common.h 的 StreamOutputWatchdog)
+                    if (progress && !text.empty()) {
+                        progress->noteOutput();
+                    }
                     if (on_chunk) {
                         on_chunk(neograph::ChatStreamChunk{
                             neograph::ChatStreamChunk::TYPE_CONTENT,
@@ -365,6 +370,9 @@ public:
                     auto thinking       = viewStr(deltaView["thinking"]);
                     fullThinking       += thinking;
                     thinkingTexts[idx] += thinking;
+                    if (progress && !thinking.empty()) {
+                        progress->noteOutput();
+                    }
                     if (on_chunk) {
                         on_chunk(neograph::ChatStreamChunk{
                             neograph::ChatStreamChunk::TYPE_THINKING,
@@ -377,6 +385,10 @@ public:
                 } else if (deltaType == "input_json_delta") {
                     auto partialJson      = viewStr(deltaView["partial_json"]);
                     tcMap[idx].arguments += partialJson;
+                    // 有效输出: 长参数生成期间没有正文与思考, 只有参数分片
+                    if (progress && !partialJson.empty()) {
+                        progress->noteOutput();
+                    }
                 }
             }
         } else if (currentEvent == "content_block_stop") {

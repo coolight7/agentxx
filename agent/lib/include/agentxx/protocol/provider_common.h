@@ -12,6 +12,7 @@
 #include "neograph/api.h"
 #include "neograph/provider.h"
 #include "utilxx/http_header.h"
+#include "utilxx_base/log.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -461,6 +462,8 @@ struct StreamProgress {
     std::chrono::steady_clock::time_point startedAt{std::chrono::steady_clock::now()};
     /// 最近一次收到数据的时刻 (未收到过数据时等于 startedAt)
     std::chrono::steady_clock::time_point lastDataAt = startedAt;
+    /// 最近一次**有效输出**的时刻 (正文/思考/工具参数分片; 未产出时等于 startedAt)
+    std::chrono::steady_clock::time_point lastOutputAt = startedAt;
     /// 已收字节数 (含 SSE 注释与空行)
     size_t bytes = 0;
     /// 已解析的 data 事件数
@@ -477,11 +480,93 @@ struct StreamProgress {
         lastDataAt = std::chrono::steady_clock::now();
     }
 
+    /// 记录一段**有效输出** (正文/思考/工具参数分片)
+    ///
+    /// 与 [noteChunk] 分开记的原因: 上游等待生成时会持续发保活心跳 (SSE 注释
+    /// `: ping`、Anthropic 的 `{"type":"ping"}`、空 delta 事件), 这些字节会刷新
+    /// `lastDataAt`, 让基于数据的空闲判定失效; 只有真正产出内容的时刻才代表"在进展"。
+    void noteOutput() noexcept {
+        lastOutputAt = std::chrono::steady_clock::now();
+    }
+
     /// 距最近一次数据的时长 (从未收到数据时是距请求发出)
     std::chrono::milliseconds idleMs() const noexcept {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - lastDataAt
         );
+    }
+
+    /// 距最近一次有效输出的时长 (从未有输出时是距请求发出)
+    std::chrono::milliseconds idleSinceOutput() const noexcept {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - lastOutputAt
+        );
+    }
+};
+
+/// 流式请求的"无有效输出"看门狗 (语义空闲上限)
+///
+/// 为什么需要: HTTP 层的块间超时 ([RequestConfig::readChunkTimeout]) 按"这次读有没有
+/// 返回数据"重置, 上游/网关只要持续发保活心跳就不会到期 —— 一次已经没有产出的请求可以
+/// 无限期挂着: 没有超时、没有重试, 日志里也没有任何提示 (实测卡十几分钟, 只能手动取消)。
+///
+/// 做法: 只把 [StreamProgress::noteOutput] 记下的有效输出算作进展。距上次有效输出超过
+/// [limit] 时, 把下一次读的超时压到最短 (1 ms), 由 HTTP 层既有的超时机制关闭连接,
+/// 上层按普通传输失败重试; 等待期间每 [logInterval] 输出一条 WARN 说明"还在等",
+/// 事后能直接从日志看出卡在哪一步。
+struct StreamOutputWatchdog {
+    /// 无有效输出上限 (0 = 不限制, 只保留日志)
+    std::chrono::milliseconds limit{0};
+    /// 等待期间的提示间隔 (0 = 不提示)
+    std::chrono::milliseconds logInterval{std::chrono::seconds{60}};
+    /// 模型名 (只用于日志)
+    std::string model;
+    /// 每次请求最多提示的次数 (避免长时间等待刷满日志)
+    static constexpr size_t kMaxIdleLogs = 8;
+
+    std::chrono::steady_clock::time_point lastLogAt{};
+    size_t                                logged = 0;
+
+    /// 下一次读的超时: 取 [base] 与"距无输出上限还剩多少"的较小者
+    ///
+    /// - `base` 由调用方给: 未收到结束原因时是 `readChunkTimeout`, 收到结束原因
+    ///   (只差结束标记) 时是 [streamFinishGraceTimeout] 的结果;
+    /// - 上限已到 (或已过) 时返回 1 ms: 让这一次读立刻到期, 连接被关闭, 上层按
+    ///   "没有有效输出"的传输失败处理;
+    /// - 上限关闭时原样返回 `base`, 行为与只用块间超时一致。
+    ///
+    /// 线程: 只在所属 io 线程调用 (HTTP 层在两次读之间取样)。
+    std::chrono::milliseconds
+        nextReadTimeout(const StreamProgress& progress, std::chrono::milliseconds base) {
+        const auto idle = progress.idleSinceOutput();
+        if (logInterval.count() > 0 && idle >= logInterval && logged < kMaxIdleLogs) {
+            const auto now = std::chrono::steady_clock::now();
+            if (lastLogAt.time_since_epoch().count() == 0 || now - lastLogAt >= logInterval) {
+                lastLogAt = now;
+                ++logged;
+                XX_LOGW(
+                    "[llm] no output for {} ms while streaming (model={} recv={}B events={}): "
+                    "still waiting; upstream may only be sending keep-alive",
+                    idle.count(),
+                    model,
+                    progress.bytes,
+                    progress.events
+                );
+            }
+        }
+        if (limit.count() <= 0) {
+            return base;
+        }
+        const auto remaining = limit - idle;
+        if (remaining.count() <= 0) {
+            return std::chrono::milliseconds{1};
+        }
+        return (std::min)(base, remaining);
+    }
+
+    /// 本次失败是否由"无有效输出"上限导致
+    bool tripped(const StreamProgress& progress) const noexcept {
+        return limit.count() > 0 && progress.idleSinceOutput() >= limit;
     }
 };
 

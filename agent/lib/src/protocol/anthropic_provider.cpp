@@ -606,6 +606,12 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     const auto readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds};
     const auto finishGraceTimeout =
         agentxx::protocol::streamFinishGraceTimeout(readChunkTimeout);
+    // "无有效输出"看门狗: Anthropic 在思考/排队期间会持续发 `event: ping` 保活,
+    // 块间超时因此永远不到期 (见 protocol/provider_common.h 的 StreamOutputWatchdog)
+    agentxx::protocol::StreamOutputWatchdog outputWatchdog{
+        .limit = std::chrono::seconds{config_.outputIdleTimeoutSeconds},
+        .model = params.model.empty() ? config_.modelName : params.model,
+    };
     // 发送期限按 body 大小推导
     const auto sendTimeout = agentxx::protocol::llmSendTimeout(bodyStr.size());
 
@@ -628,12 +634,12 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
                     .keepAlive        = true,
                     .maxConcurrentConnections = config_.maxConcurrentConnections,
                     .readChunkTimeoutPerRead
-                    = [&progress, finishGraceTimeout]()
+                    = [&progress, &outputWatchdog, readChunkTimeout, finishGraceTimeout]()
                         -> std::optional<std::chrono::milliseconds> {
-                        if (!progress.finishSeen) {
-                            return std::nullopt;
-                        }
-                        return finishGraceTimeout;
+                        return outputWatchdog.nextReadTimeout(
+                            progress,
+                            progress.finishSeen ? finishGraceTimeout : readChunkTimeout
+                        );
                     },
                 },
                 // 返回 true 通知 http 层流已结束 (收到 message_stop): 立即断开连接停止读取,
@@ -677,6 +683,19 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
             }
             if (progress.finishSeen) {
                 salvagedOnError = true;
+                if (outputWatchdog.tripped(progress)) {
+                    // 只剩 `ping` 的收尾阶段到点: 正文与工具参数都已完整, 直接按完成收尾
+                    XX_LOGW(
+                        "LLM stream produced no output for {} ms after stop_reason={}; "
+                        "accepted | model={} recv={}B events={}",
+                        progress.idleSinceOutput().count(),
+                        progress.finishReason,
+                        outputWatchdog.model,
+                        progress.bytes,
+                        progress.events
+                    );
+                    co_return false;
+                }
                 XX_LOGW(
                     "LLM stream ended without message_stop after stop_reason={}; accepted | "
                     "model={} err={}{}",
@@ -689,6 +708,27 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
             }
             // 上游业务错误 (HTTP 状态码 + error body) 不加诊断后缀, 保留原文
             const bool apiError = errmsg.find("API error (HTTP ") != std::string::npos;
+            // 无有效输出上限: 上游只剩 `ping` 保活, 本次生成没有可用结果
+            if (!apiError && outputWatchdog.tripped(progress)) {
+                const auto idle  = progress.idleSinceOutput();
+                const auto limit = outputWatchdog.limit;
+                XX_LOGW(
+                    "LLM stream idle timeout: no output for {} ms (limit {} ms) | model={} "
+                    "recv={}B events={}",
+                    idle.count(),
+                    limit.count(),
+                    outputWatchdog.model,
+                    progress.bytes,
+                    progress.events
+                );
+                throw std::runtime_error(fmt::format(
+                    "LLM stream idle timeout: no output for {} ms (limit {} ms) | model={}{}",
+                    idle.count(),
+                    limit.count(),
+                    outputWatchdog.model,
+                    agentxx::protocol::streamFailureSuffix(progress, tcMap)
+                ));
+            }
             throw std::runtime_error(
                 apiError ? errmsg
                          : errmsg + agentxx::protocol::streamFailureSuffix(progress, tcMap)

@@ -102,6 +102,14 @@ public:
     /// 接收Api响应数据分段时，分段间隔的超时时间
     int readChunkTimeoutSeconds = 60;
 
+    /// 流式响应的"无有效输出"上限 (秒, yaml `output_idle_timeout`; 0 = 关闭)
+    ///
+    /// 块间超时按"这次读有没有收到字节"重置, 上游/网关用保活心跳 (SSE 注释 `: ping`、
+    /// Anthropic 的 `{"type":"ping"}`、空 delta 事件) 就能让它永不到期 —— 一次已经没有
+    /// 产出的请求会一直挂在 llm 节点上, 既不超时也不重试。本上限只把"解析出正文/思考/
+    /// 工具参数分片"算作进展, 超过它就中断本次请求并交由重试流程处理。
+    int outputIdleTimeoutSeconds = 600;
+
     /// 当 api 为 HTTPS 连接时，是否验证 SSL 证书
     std::optional<bool> sslVerify = std::nullopt;
 
