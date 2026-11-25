@@ -1672,33 +1672,35 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
         }
     }
 
-    // 对端缺失提示 (每插件名一次): 这条频道在本端没有订阅方时, 该插件事件
-    // 在本地无人处理 —— 多半是对应插件未在本端加载 (分进程/分设备部署时单侧缺失)。
-    // 仅警告一次, 不随事件频率刷屏; 正常情况 (有插件订阅, 各自按名过滤) 不受影响。
-    bool hasSubscriber = false;
-    if (broadcasts_) {
-        try {
-            const auto listed = utilxx_base::Json::parse(broadcasts_->listJson(data.topic));
-            if (listed.contains("broadcasts") && listed["broadcasts"].is_array()) {
-                for (const auto& item : listed["broadcasts"]) {
-                    if (item.value("subscribers", 0) > 0) {
-                        hasSubscriber = true;
-                        break;
+    // 对端缺失提示 (每插件名一次): 只看插件族主题 `plugin.<插件名>.*`。
+    // 这条频道在本端没有订阅方时, 该插件事件在本地无人处理 —— 多半是对应
+    // 插件未在本端加载 (分进程/分设备部署时单侧缺失)。仅警告一次, 不随事件
+    // 频率刷屏; 正常情况 (有插件订阅, 各自按名过滤) 不受影响。
+    // 主程序约定事件 (`agentxx.agent.host.client_attached` / `server_plugins`)
+    // 由对端主程序发布, 本端没有任何插件订阅是正常情况 (client 插件关心的是
+    // `agentxx.client.*` 自己的频道), 因此不按"插件缺失"提示。
+    const auto pluginName = agentxx::events::naming::pluginNameOfTopic(data.topic);
+    if (!pluginName.empty()) {
+        bool hasSubscriber = false;
+        if (broadcasts_) {
+            try {
+                const auto listed = utilxx_base::Json::parse(broadcasts_->listJson(data.topic));
+                if (listed.contains("broadcasts") && listed["broadcasts"].is_array()) {
+                    for (const auto& item : listed["broadcasts"]) {
+                        if (item.value("subscribers", 0) > 0) {
+                            hasSubscriber = true;
+                            break;
+                        }
                     }
                 }
+            } catch (...) {
+                // 自省输出异常: 当作有订阅方, 只是不提示
+                hasSubscriber = true;
             }
-        } catch (...) {
-            // 自省输出异常: 当作有订阅方, 只是不提示
-            hasSubscriber = true;
         }
-    }
-    if (!hasSubscriber) {
-        // 去重键 = 插件名 (非插件主题归到发送方自己的名字下)
-        const auto ownerOf = [](std::string_view topic) {
-            const auto pluginName = agentxx::events::naming::pluginNameOfTopic(topic);
-            return pluginName.empty() ? std::string{topic} : std::string{pluginName};
-        };
-        if (pluginDataNoSubWarned_.insert(ownerOf(data.topic)).second) {
+        // 去重键 = 插件名 (同一插件的多条事件只提示一次)
+        if (!hasSubscriber
+            && pluginDataNoSubWarned_.insert(std::string{pluginName}).second) {
             XX_LOGW(
                 "[client_plugin] plugin data `{}` received but no client plugin subscribed "
                 "(plugin missing on this side? server-side loaded: {})",

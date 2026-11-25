@@ -28,6 +28,7 @@
 #include "agentxx/plugin/api/client_plugin_kit.h"
 #include "agentxx/plugin/builtin_tool_renderers.h"
 #include "agentxx/plugin/client_plugin_manager.h"
+#include "agentxx/util/diagnostics.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/executor_work_guard.hpp"
@@ -1508,9 +1509,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // - server_plugins (结构化载荷) → 记录服务端已加载插件列表, get_client_state
     //   以 "agentPlugins" 暴露 [{name,version,interfaces},...] (client 插件
     //   判断对端可用性/能力的正式通道)
-    // - PLUGIN_DATA 无任何 client 订阅者: 不崩溃 (每插件名一次警告, 无法
-    //   断言日志, 仅验证路径安全)
+    // - 无订阅者提示只看插件族主题 (每插件名一次): 主程序约定事件
+    //   (`agentxx.agent.host.*`) 不属于任何插件, 不得报警 (TUI 启动时
+    //   client_attached 每次都会到, 报警是误报)
     {
+        // 捕获日志后断言: 约定事件无警告, 插件族主题恰好一次
+        agentxx::util::enableLogCapture(256);
+        agentxx::util::clearCapturedLogs();
+
         agentxx::agent::WirePluginData d;
         d.topic = "agentxx.agent.host.server_plugins";
         d.data
@@ -1533,11 +1539,37 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto stateJson2 = mgr->clientStateJson();
         XX_TEST_EXPECT_TRUE(stateJson2.find("agentxx_codegraph") != std::string::npos);
 
-        // 无订阅者路径 (当前无任何已加载插件): 安全
+        // 约定事件 client_attached / 无订阅方的 server_plugins: 只分发, 不报警
+        agentxx::agent::WirePluginData attached;
+        attached.topic = "agentxx.agent.host.client_attached";
+        attached.data  = R"({"sessionId":"session"})";
+        mgr->onPluginData(attached);
+        mgr->onPluginData(d);
+
+        // 插件族主题无订阅者 (当前无任何已加载插件): 安全, 同一插件名只警告一次
         agentxx::agent::WirePluginData orphan;
         orphan.topic = "plugin.some_plugin.progress";
         orphan.data   = R"({})";
         mgr->onPluginData(orphan);
+        mgr->onPluginData(orphan);
+
+        size_t hostWarn = 0;
+        size_t orphanWarn = 0;
+        for (const auto& line : agentxx::util::recentLogLines()) {
+            if (line.find("no client plugin subscribed") == std::string::npos) {
+                continue;
+            }
+            if (line.find("agentxx.agent.host.") != std::string::npos) {
+                ++hostWarn;
+            }
+            if (line.find("plugin.some_plugin.progress") != std::string::npos) {
+                ++orphanWarn;
+            }
+        }
+        XX_TEST_EXPECT_EQ(hostWarn, size_t{0});
+        XX_TEST_EXPECT_EQ(orphanWarn, size_t{1});
+        agentxx::util::clearCapturedLogs();
+        agentxx::util::disableLogCapture();
     }
 
     // ---- 11. 接口协商: 主程序支持集 / require 限制 / 发现通道 ----

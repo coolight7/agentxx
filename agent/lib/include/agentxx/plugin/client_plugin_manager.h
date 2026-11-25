@@ -1201,10 +1201,13 @@ private:
         std::vector<std::string> interfaces; ///< 该插件声明的接口 (require∪optional)
     };
 
-    std::vector<ServerPluginInfo>
-        serverPlugins_; /// PLUGIN_DATA 无订阅者警告去重 (仅 io 线程; 每插件名只警告一次):
-    /// 收到 WirePluginData 但无任何 client 插件订阅 EVT_PLUGIN_DATA 时,
-    /// 多半是对端插件未在本地加载 —— 提示一次便于排查, 不随事件频率刷屏
+    /// 服务端已加载的 agent 侧插件 (空 = 服务端未提供)
+    std::vector<ServerPluginInfo> serverPlugins_;
+
+    /// PLUGIN_DATA 无订阅者警告去重 (仅 io 线程; 每插件名只警告一次)
+    /// - 只看插件族主题 (`plugin.<插件名>.*`): 收到但本端没有任何 client 插件
+    ///   订阅时, 多半是对端插件未在本地加载 —— 提示一次便于排查, 不随事件频率刷屏;
+    ///   主程序约定事件 (`agentxx.agent.host.*`) 不属于任何插件, 不进这里也不提示
     std::set<std::string> pluginDataNoSubWarned_;
 
     /// 因接口要求未满足被跳过的插件 (io 线程; 见 skippedPlugins())
