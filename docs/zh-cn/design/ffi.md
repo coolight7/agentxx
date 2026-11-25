@@ -219,7 +219,7 @@ agentxx_ffi_call_cancel(agent, reqId, &log);   /* 任意线程, 幂等 */
 | `model.select` | `name` (空 = 沿用当前) | ack | 10s | result `{model}`: 生效后的模型名; 名字不在注册表 → `error.name:"model_not_found"` |
 | `model.add` | 模型配置对象 (同 `create` 的 `model_json`) | resp:`add_model_result` | 30s | 失败 `code=-4` (要写 yaml 落盘) |
 | `model.remove` | `name` | resp:`remove_model_result` | 30s | 删除当前模型被拒 |
-| `session.list` | `beforeMs?` / `beforeId?` / `limit?` (默认 50) / `keyword?` | resp:`session_list` | 10s | `{sessions[], totalCount, hasMore}` |
+| `session.list` | `beforeMs?` / `beforeId?` / `limit?` (默认 50) / `keyword?` | resp:`session_list` | 10s | `{sessions[], totalCount, hasMore}`; 取数出错 (库损坏/目录读不了) 时回空列表并在服务端记日志 —— **不会没有回执** |
 | `session.switch` | `sessionId` | ack | 60s | 在切换**提交后**回执 (result `{sessionId}`); 历史 `EVT_SYNC` / `EVT_MODEL_INFO` / `EVT_CONTEXT_STATS` 已先于它发出 |
 | `session.rename` | `title` | resp:`rename_session_result` | 10s | 空标题被拒 |
 | `session.compact` | – | ack | 0 (不限) | 压缩**完成后**回执 (result `{ok}`) |

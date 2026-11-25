@@ -1531,12 +1531,66 @@ void SessionServerAgentIO::onPeerMessage(
                 }
                 auto bus = agent->agentContext->bus;
                 auto sid = std::string{m.sessionId};
+                // 发布失败也要回一帧: 压缩完成依赖 SummarizationCompactDone 事件,
+                // 发布没成功时那条事件永远不会来, 调用方 (session.compact 无超时) 会一直等
+                auto self           = shared_from_this();
+                const auto compactReq = m.reqId;
                 asio::co_spawn(
                     bus->executor(),
-                    [bus, sid = std::move(sid)]() -> asio::awaitable<void> {
-                        co_await bus->publish<events::EventCompactContext>(
-                            events::Topic::SummarizationCompact,
-                            events::EventCompactContext{.sessionId = sid}
+                    [bus, sid, self, sender, compactReq]() -> asio::awaitable<void> {
+                        co_await agentxx::util::catchErrorAsync(
+                            [bus, sid]() -> asio::awaitable<void> {
+                                co_await bus->publish<events::EventCompactContext>(
+                                    events::Topic::SummarizationCompact,
+                                    events::EventCompactContext{.sessionId = sid}
+                                );
+                                co_return;
+                            },
+                            [sid, self, sender, compactReq](std::string errmsg
+                            ) -> asio::awaitable<void> {
+                                XX_LOGW(
+                                    "[session_ctrl] compact publish failed (session={}): {}",
+                                    sid,
+                                    errmsg
+                                );
+                                if (compactReq == 0) {
+                                    co_return;
+                                }
+                                // 回到 io 线程操作 pendingCompactAcks_: 先摘掉自己那一项,
+                                // 已经被告知完成事件回执过就不补第二条 (恰好一条回执)
+                                asio::post(
+                                    self->ex_,
+                                    [self, sid, errmsg, sender, compactReq] {
+                                        auto it = self->pendingCompactAcks_.find(sid);
+                                        if (it == self->pendingCompactAcks_.end()) {
+                                            return;
+                                        }
+                                        auto& queue = it->second;
+                                        auto  pos   = std::find_if(
+                                            queue.begin(),
+                                            queue.end(),
+                                            [compactReq](const PendingCompactAck& ack) {
+                                                return ack.reqId == compactReq;
+                                            }
+                                        );
+                                        if (pos == queue.end()) {
+                                            return; // 已被完成事件回执
+                                        }
+                                        queue.erase(pos);
+                                        if (queue.empty()) {
+                                            self->pendingCompactAcks_.erase(it);
+                                        }
+                                        self->sendAck(
+                                            sender,
+                                            compactReq,
+                                            false,
+                                            "compact_failed",
+                                            errmsg
+                                        );
+                                    }
+                                );
+                                co_return;
+                            }
                         );
                     },
                     asio::detached
@@ -1560,17 +1614,30 @@ void SessionServerAgentIO::onPeerMessage(
                     [self, sessionStore, agent, req = std::move(m), sender](
                     ) -> asio::awaitable<void> {
                         // 取数结果本身不带 reqId: 回执 id 在取数之后补上 (先设再赋值会被覆盖)
-                        WireSessionList resp;
-                        if (agent->agentContext->threadPool) {
-                            resp = co_await utilxx::offloadAsync<WireSessionList>(
-                                *agent->agentContext->threadPool,
-                                [sessionStore, req]() -> asio::awaitable<WireSessionList> {
-                                    co_return listSessionsFor(req, *sessionStore);
+                        // 取数抛异常也要回一帧空列表: 不回包时调用方只能一直等到超时,
+                        // 也看不出是库打不开还是目录读不了
+                        WireSessionList resp = co_await agentxx::util::catchErrorAsync<WireSessionList>(
+                            [agent, req, sessionStore]() -> asio::awaitable<WireSessionList> {
+                                if (agent->agentContext->threadPool) {
+                                    co_return co_await utilxx::offloadAsync<WireSessionList>(
+                                        *agent->agentContext->threadPool,
+                                        [sessionStore, req]() -> asio::awaitable<WireSessionList> {
+                                            co_return listSessionsFor(req, *sessionStore);
+                                        }
+                                    );
                                 }
-                            );
-                        } else {
-                            resp = listSessionsFor(req, *sessionStore);
-                        }
+                                co_return listSessionsFor(req, *sessionStore);
+                            },
+                            [req](std::string errmsg) -> asio::awaitable<WireSessionList> {
+                                XX_LOGW(
+                                    "[session_ctrl] list sessions failed (limit={} keyword='{}'): {}",
+                                    req.limit,
+                                    req.keyword,
+                                    errmsg
+                                );
+                                co_return WireSessionList{};
+                            }
+                        );
                         resp.reqId = req.reqId;
                         self->sendToClient(sender, std::move(resp));
                     },
@@ -1699,17 +1766,33 @@ void SessionServerAgentIO::onPeerMessage(
                             return result;
                         };
 
-                        WireListDirResult res;
-                        if (agent && agent->agentContext && agent->agentContext->threadPool) {
-                            res = co_await utilxx::offloadAsync<WireListDirResult>(
-                                *agent->agentContext->threadPool,
-                                [scanDir]() -> asio::awaitable<WireListDirResult> {
+                        // 扫描抛异常也要回一帧 (ok=false + 原因): 不回包时客户端只能等到超时
+                        WireListDirResult res
+                            = co_await agentxx::util::catchErrorAsync<WireListDirResult>(
+                                [agent, scanDir]() -> asio::awaitable<WireListDirResult> {
+                                    if (agent && agent->agentContext
+                                        && agent->agentContext->threadPool) {
+                                        co_return co_await utilxx::offloadAsync<WireListDirResult>(
+                                            *agent->agentContext->threadPool,
+                                            [scanDir]() -> asio::awaitable<WireListDirResult> {
+                                                co_return scanDir();
+                                            }
+                                        );
+                                    }
                                     co_return scanDir();
+                                },
+                                [req](std::string errmsg) -> asio::awaitable<WireListDirResult> {
+                                    XX_LOGW(
+                                        "[session_ctrl] list dir failed (path='{}'): {}",
+                                        req.path,
+                                        errmsg
+                                    );
+                                    WireListDirResult failed;
+                                    failed.reqId = req.reqId;
+                                    failed.error = std::move(errmsg);
+                                    co_return failed;
                                 }
                             );
-                        } else {
-                            res = scanDir();
-                        }
                         if (sender) {
                             self->sendToClient(sender, std::move(res));
                         } else {
@@ -1880,7 +1963,36 @@ void SessionServerAgentIO::onPeerMessage(
                     bus->executor(),
                     [bus, topic = std::move(topic), data = std::move(data), self = shared_from_this(), sender, pubReqId](
                     ) -> asio::awaitable<void> {
-                        co_await bus->publish(topic, data);
+                        // 发布抛异常也要回一帧 (带 reqId 的客户端在等结果, 不能只记日志)
+                        co_await agentxx::util::catchErrorAsync(
+                            [bus, topic, data]() -> asio::awaitable<void> {
+                                co_await bus->publish(topic, data);
+                                co_return;
+                            },
+                            [self, sender, pubReqId, topic](std::string errmsg
+                            ) -> asio::awaitable<void> {
+                                XX_LOGW(
+                                    "[session_ctrl] publish client data to `{}` failed: {}",
+                                    topic,
+                                    errmsg
+                                );
+                                if (pubReqId != 0) {
+                                    asio::post(
+                                        self->ex_,
+                                        [self, sender, pubReqId, errmsg] {
+                                            self->sendAck(
+                                                sender,
+                                                pubReqId,
+                                                false,
+                                                "publish_failed",
+                                                errmsg
+                                            );
+                                        }
+                                    );
+                                }
+                                co_return;
+                            }
+                        );
                         if (pubReqId != 0) {
                             asio::post(self->ex_, [self, sender, pubReqId] {
                                 self->sendAck(sender, pubReqId, true);

@@ -253,15 +253,40 @@
 
 导出白名单（`agent/lib/ffi_symbols.map`）在第 2 步已一并改成 15 个符号；MSVC 的导出列表从同一份文件生成，无第二处。
 
+## 后续修（2026-11-25, 本任务收尾后）: 服务端回包协程的异常兜底
+
+背景: `asio::co_spawn(..., asio::detached)` 不处理异常 —— 分支里的取数/发布抛异常时，
+异常被丢掉，对端永远等不到那一帧（`session.compact` 甚至没有超时）。
+
+| 分支 | 失败时的回包 |
+|---|---|
+| `WireListSessions` | 空列表 (`{sessions:[], totalCount:0, hasMore:false}`) + 原因记日志 |
+| `WireListDir` | `ok=false` + `error` 写异常文本（这个结构本来就有这两个字段）|
+| `WireCompactContext` | `sendAck(false, "compact_failed", 原因)`；同时把自己在 `pendingCompactAcks_` 里的那一项摘掉（已经被完成事件回执过就不补第二条，保持“恰好一条回执”）|
+| `WirePluginDataUp` | `sendAck(false, "publish_failed", 原因)` |
+
+统一用 `agentxx::util::catchErrorAsync`（取消/中断类异常仍然向上抛，不当普通错误吞掉）。
+
+新增用例 21 `testSessionListBrokenStore`: 往会话库目录里放一个损坏的 `session.db`，
+断言分页与全量两条取数都在限定时间内拿到回执。说明: 目前 `SessionStore` 内部对单个
+坏库已经做了降级（跳过该目录、不抛异常），所以该用例固定的是“客户端总能拿到回执”这个
+外部契约，不直接覆盖 catch 分支本身。
+
+验证: `ffi_c_api` **478 通过 / 0 失败**（新增 15 条）；`session_admin` / `remote_agent` /
+`input_delivery` 全绿；全量测试见下。
+
 ## 验证清单
 
 - [x] 顶层 Debug 构建 `EXIT=0`
 - [x] 顶层 Release 构建 `EXIT=0`（含 benchmark、LTO）
-- [x] `ffi_c_api` 全绿（463 条：每个 op / 并发 / 超时 / **取消** / **顺序** / 回调内调用 /
-      事件所有权 / 生命周期顺序 / 会话落盘下的 `session.list` + `session.rename`）
+- [x] `ffi_c_api` 全绿（478 条：每个 op / 并发 / 超时 / **取消** / **顺序** / 回调内调用 /
+      事件所有权 / 生命周期顺序 / 会话落盘下的 `session.list` + `session.rename` /
+      会话库损坏时 `session.list` 仍回执）
 - [x] `wire_roundtrip`(285) / `wire_schema`(1377) / `session_admin`(38) / `input_delivery`(140) 全绿，
       schema 生成物已提交
-- [x] 全量 `agentxx_test --log-level warn`: **44016 通过 / 0 失败**（2026-11-25，机器无其他构建）
+- [x] 全量 `agentxx_test --log-level warn`: **44031 通过 / 0 失败**（2026-11-25，机器无其他构建；
+      含本次异常兜底的用例）
+- [x] 异常兜底改动后的顶层 Release 构建 `EXIT=0`；Dart `smoke_check` 5 个场景仍全绿
 - [x] `agentxx_benchmark resource_ffi` 跑通（调用吞吐 / 合批 / 尾窗三个子场景都有数据，
       数据记入 benchmark.md）
 - [x] `dart analyze`: 两个包都 `No issues found`
@@ -274,6 +299,8 @@
 
 ## 剩余事项
 
-- 未修（不属于本任务范围）: `WireListSessions` 等消息在协程里抛异常时不回包（`co_spawn(...,
-  asio::detached)` 吞异常），调用方只能等超时。建议后续给这些分支加 `catchError`（或统一的
-  “失败也回一帧”包装），本次只修了 reqId 被覆盖那一条。
+- 想区分“真的没有会话”与“取数失败”时，需要给 `WireSessionList` 加一个 `error` 字段
+  （现在失败回的是空列表，调用方看不出区别）；本次没加，避免改协议与 schema。
+- 其他会话控制分支（`WireSwitchSession` 等）已经自己局部捕获了可预期的失败（加载失败记
+  日志后继续切），但整个协程体本身仍没有统一兜底 —— 以后再往里加可能抛的调用时，记得
+  用 `catchErrorAsync` 包一层。

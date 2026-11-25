@@ -22,6 +22,11 @@
 // 14. 能力清单: ops / features
 // 15. fs.list_dir / plugin.data_up (含 topic 校验失败)
 // 16. HIL 中断: interrupt.respond op
+// 17. 轮次取消: input.cancel 与队列类 op 的回执
+// 18. 同进程多运行时并发 (事件各自归属, 互不干扰)
+// 19. headless: on_event 传 NULL 也能受理与结算
+// 20. 会话落盘: session.list / session.rename (列表走线程池卸载)
+// 21. 会话库损坏时 session.list 仍要回执 (取数失败不能变成"没有响应")
 #include "agentxx-test/test_ffi_c_api.h"
 
 #include "agentxx/ffi_api.h"
@@ -1570,6 +1575,89 @@ void testFsAndPluginData() {
     fs::remove_all(tmpDir, cleanupEc);
 }
 
+/// 19) 会话库损坏时 `session.list` 仍要回执
+///
+/// 服务端取数是协程 + 线程池卸载: 一旦抛异常而没人接, 请求就永远没有响应,
+/// 调用方只能等到超时 (也看不出原因)。这里往会话库目录里放一个坏掉的库,
+/// 断言分页与全量两种取数都能在限定时间内拿到回执。
+void testSessionListBrokenStore() {
+    namespace fs = std::filesystem;
+
+    FfiMockLLM mock;
+    uint16_t   port = 0;
+    if (!mock.start(port)) {
+        TEST_FAIL << "mock LLM server start failed" << std::endl;
+        g_ffi_failed++;
+        return;
+    }
+
+    const auto tmpDir
+        = fs::temp_directory_path()
+          / ("ffi_broken_store_"
+             + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code ec;
+    const auto      dataDir = tmpDir / "data";
+    fs::create_directories(dataDir, ec);
+
+    const std::string configJson
+        = utilxx_base::Json{
+              {"dataDir",            dataDir.generic_string()},
+              {"workDir",            tmpDir.generic_string() },
+              {"enableSessionStore", true                     },
+              {"permissionMode",     "pass"                   },
+    }
+              .dump();
+
+    FfiTestClient client;
+    XX_TEST_EXPECT_TRUE(ffiCreate(client, configJson.c_str(), mock.modelJson()));
+    XX_TEST_EXPECT_EQ(client.start(), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(client.ready());
+
+    // 跑一轮让会话库目录建起来
+    XX_TEST_EXPECT_TRUE(client.call("input.send", utilxx_base::Json{{"text", "broken store seed"}}).ok);
+    XX_TEST_EXPECT_TRUE(client.rec.wait(AGENTXX_FFI_EVT_TURN_END, 30000));
+
+    // 注入一个损坏的会话库: 目录像会话, 里面的 session.db 是垃圾字节
+    {
+        const auto      sessionsRoot = dataDir / "sqlite" / "sessions";
+        std::error_code injectEc;
+        const auto      brokenDir = sessionsRoot / "zz-broken-session";
+        fs::create_directories(brokenDir, injectEc);
+        std::ofstream bad(brokenDir / "session.db", std::ios::binary | std::ios::trunc);
+        bad << "this is not a sqlite database";
+        bad.close();
+        XX_TEST_EXPECT_TRUE(fs::exists(brokenDir / "session.db"));
+    }
+
+    // 分页 (limit > 0) 与全量 (limit == 0) 两条取数路径
+    for (int64_t limit : {int64_t{50}, int64_t{0}}) {
+        auto reply = client.call(
+            "session.list",
+            utilxx_base::Json{{"limit", limit}},
+            -1,
+            30000
+        );
+        XX_TEST_EXPECT_TRUE(reply.ok);
+        if (!reply.ok) {
+            std::cout << "[ffi_c_api] session.list (limit=" << limit
+                      << ") failed: name=" << reply.name << " message=" << reply.message
+                      << std::endl;
+        }
+        XX_TEST_EXPECT_TRUE(reply.result.contains("sessions"));
+        if (reply.result.contains("sessions")) {
+            XX_TEST_EXPECT_TRUE(reply.result["sessions"].is_array());
+        }
+    }
+
+    XX_TEST_EXPECT_EQ(client.stop(), AGENTXX_FFI_OK);
+    XX_TEST_EXPECT_TRUE(client.waitStopped(30000));
+    XX_TEST_EXPECT_EQ(client.destroy(), AGENTXX_FFI_OK);
+    mock.stop();
+
+    std::error_code cleanupEc;
+    fs::remove_all(tmpDir, cleanupEc);
+}
+
 /// 14) HIL 权限中断: 首轮工具调用 → 权限询问 → interrupt.respond op → 轮次恢复
 void testHilInterrupt() {
     FfiMockLLM mock;
@@ -1918,6 +2006,7 @@ agentxx::test::TestResult testFfiCApi() {
     testMultipleRuntimesConcurrent();
     testHeadless();
     testSessionStoreOps();
+    testSessionListBrokenStore();
     return agentxx::test::TestResult(g_ffi_passed, g_ffi_failed);
 }
 
