@@ -1259,6 +1259,15 @@ agent/script/build_plugins.sh --config Release --jobs 8 --list
   "值不值得重试"。不要在错误文本/状态码上加"这类不重试"的判断，也不要按 400/413 与
   `context length` 一类字样推断"上下文超限 → 先压缩再重试"（误判代价是白压一次历史，
   而上下文长度只由默认超过上限 75% 触发的自动压缩处理）。两条警告原文在该文件头部
+- **"卡在 llm 节点很久、既不超时也不重试、日志什么都没有"** 先看块间超时为什么没触发:
+  `read_chunk_timeout` 按"这次读有没有收到字节"重置, 上游/网关的保活心跳 (SSE 注释
+  `: ping`、Anthropic 的 `{"type":"ping"}`、空 delta 事件) 就能让它永不到期。补的判据是
+  **语义空闲**: `provider_common.h` 的 `StreamOutputWatchdog` 只把解析出的正文/思考/工具参数
+  分片算进展, 上限取 `model.list[].output_idle_timeout` (秒, 默认 600, 0=关闭), 到点由既有的
+  读超时机制关连接 → modelcall 按传输失败重试 (错误文本 `LLM stream idle timeout: ...`);
+  等待期间每 60 s 一条 WARN (单请求最多 8 条)。新增 provider 流式解析时必须在
+  正文/思考/工具参数分片处调 `StreamProgress::noteOutput()`, 否则该 provider 只剩心跳时
+  又会被判成"一直在等"
 - Windows/MSVC 禁止添加 `/FS` `/MP` 编译选项: 命令行出现重复 `/FS` 时
   VS18/MSVC 14.51 的 FileTracker 会失效 (子编译进程不写 per-file 跟踪记录),
   导致每次构建都全部重编 (增量编译完全失效)。参数经 superbuild 多层 CMake

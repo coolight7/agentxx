@@ -412,6 +412,31 @@ asio::awaitable<void> test_callback_budget() {
     }));
     XX_TEST_EXPECT_EQ(stats.overBudget.load(), uint64_t{1});
     XX_TEST_EXPECT_TRUE(stats.maxMicros.load() >= 1000);
+
+    // 超预算告警按 (插件, 回调名) 限频, 但计数与诊断记录每次都更新:
+    // 同一 label 再跑两次后, 记录里应当是 count=2 的新窗口累计 (总次数 3)
+    for (int i = 0; i < 2; ++i) {
+        std::atomic<bool> again{false};
+        pluginxx::dispatchToPlugin(f.inst, "test slow", [&] {
+            std::this_thread::sleep_for(8ms);
+            again.store(true);
+        });
+        XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+            return again.load();
+        }));
+    }
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return stats.overBudget.load() == 3;
+    }));
+    {
+        const auto top = stats.overBudgetTop(4);
+        XX_TEST_EXPECT_EQ(top.size(), size_t{1});
+        if (!top.empty()) {
+            XX_TEST_EXPECT_EQ(top[0].first, std::string{"provider|test slow"});
+            XX_TEST_EXPECT_EQ(top[0].second.count, uint64_t{3});
+            XX_TEST_EXPECT_TRUE(top[0].second.maxMicros >= 7000);
+        }
+    }
     f.mgr->setPluginCallbackBudget(100);
 }
 

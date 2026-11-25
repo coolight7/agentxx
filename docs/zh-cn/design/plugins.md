@@ -1714,9 +1714,13 @@ Closing → CloseFailed → Closing (可重试)
 - 没配插件执行器的主程序（测试、直接 new 管理器的嵌入方程序）行为与改造前一致：
   `dispatchToPlugin` 就地执行，插件代码与 io 同线程；
 - 可观测性：单次插件回调超过预算（框架默认 100 ms，嵌入方经 `setPluginCallbackBudget`
-  可改；目前没有 yaml 配置键）记 WARN，
-  计数在 `PluginManagerBase::pluginCallbackStats()`（callbacks / 平均 / 最大 /
-  overBudget / dropped / unschedulable）—— 排查“谁在拖慢执行器”看这一组数；
+  可改；目前没有 yaml 配置键）计入 `overBudget`，并按 (插件, 回调名) **限频告警** ——
+  这里量的是墙钟时间，单次超预算分不清“插件真的干了这么久”与“这条线程被系统调度挂起”，
+  而只有周期很短的回调（如 `agentxx_system_monitor` 每 5 秒一次的 usage 广播）才会统计到
+  这种抖动；所以窗口（5 分钟）内第一次只记 DEBUG，重复出现才 WARN，并给出次数与最长耗时。
+  全貌看 `PluginManagerBase::pluginCallbackStats()`（callbacks / 平均 / 最大 / overBudget /
+  dropped / unschedulable）与加载快照的 `plugin_executor.over_budget_top`（按最长耗时降序，
+  最多 5 条）—— 排查“谁在拖慢执行器”看这两处；
 - `scheduler.is_io_thread` 成员名未变（避免 ABI 换代），语义是“当前线程是不是**该插件
   的执行线程**”（没配插件线程时等于 io 线程）—— 它回答“在这里阻塞会不会把插件自己
   卡住”，kit 与 `netCall` 一类阻塞助手用它做安全闸。

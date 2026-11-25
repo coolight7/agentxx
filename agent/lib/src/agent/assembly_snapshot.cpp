@@ -68,8 +68,9 @@ utilxx_base::Json modelSnapshotJson(const ModelConfig& mc) {
     j["api_key_set"]          = !mc.apiKey.empty() && mc.apiKey != "EMPTY";
     j["context_max_token"]    = mc.modelContextMaxToken;
     j["max_connections"]      = mc.maxConcurrentConnections;
-    j["connect_timeout_s"]    = mc.connectTimeoutSeconds;
-    j["read_chunk_timeout_s"] = mc.readChunkTimeoutSeconds;
+    j["connect_timeout_s"]     = mc.connectTimeoutSeconds;
+    j["read_chunk_timeout_s"]  = mc.readChunkTimeoutSeconds;
+    j["output_idle_timeout_s"] = mc.outputIdleTimeoutSeconds;
     j["send_thinking"]        = mc.sendThinking;
     j["reasoning_summary"]    = mc.requestReasoningSummary;
     j["image_input"]          = mc.imageInput;
@@ -413,7 +414,18 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
         executor["over_budget"]    = stats.overBudget.load(std::memory_order_relaxed);
         executor["dropped"]        = stats.dropped.load(std::memory_order_relaxed);
         executor["unschedulable"]  = stats.unschedulable.load(std::memory_order_relaxed);
-        root["plugin_executor"]    = std::move(executor);
+        // 哪些回调在超预算 (按窗口内最长耗时降序): 单次超预算多为线程被调度挂起,
+        // 重复出现的才是真在占着插件线程 (告警已按同样的判据限频)
+        utilxx_base::Json overTop = utilxx_base::Json::array();
+        for (const auto& [key, record] : stats.overBudgetTop(5)) {
+            overTop.push_back({
+                {"callback",   key             },
+                {"count",      record.count    },
+                {"max_micros", record.maxMicros},
+            });
+        }
+        executor["over_budget_top"] = std::move(overTop);
+        root["plugin_executor"]     = std::move(executor);
     }
 
     // ---- 执行图 ----
@@ -742,6 +754,22 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
             ex.value("dropped", uint64_t{0}),
             ex.value("unschedulable", uint64_t{0})
         ));
+        // 超预算的回调名 (按最长耗时降序, 最多 3 条): 告警限频后靠这里定位
+        if (ex.contains("over_budget_top") && ex["over_budget_top"].is_array()) {
+            size_t shown = 0;
+            for (const auto& item : ex["over_budget_top"]) {
+                if (shown >= 3) {
+                    break;
+                }
+                add(fmt::format(
+                    "  over budget: {} x{} max={}ms",
+                    item.value("callback", std::string{}),
+                    item.value("count", uint64_t{0}),
+                    item.value("max_micros", uint64_t{0}) / 1000
+                ));
+                ++shown;
+            }
+        }
     }
     // 本 agent 角度: 本挂载装了哪些插件、各自注册了多少东西
     if (snapshot.contains("plugins_agent") && snapshot["plugins_agent"].is_object()) {

@@ -469,6 +469,12 @@ model:
       ssl_verify: null            # Explicitly toggle TLS certificate verification (true/false); omitted uses default
       connect_timeout: 16
       read_chunk_timeout: 60
+      output_idle_timeout: 600    # Abort (and retry) when no real output (content / thinking /
+                                  # tool-argument fragments) arrives for this many seconds
+                                  # (0 = disabled, default 600). The chunk timeout above resets on
+                                  # any byte, so upstream keep-alive heartbeats (`: ping` comments,
+                                  # `{"type":"ping"}`, empty deltas) can hold a request open forever;
+                                  # this limit catches that and logs one WARN per 60 s while waiting
       max_concurrent_connections: 5   # Maximum concurrent HTTP connections for this model endpoint (default 5, 0=unlimited)
                                       # LLM requests use an HTTP keep-alive connection pool: idle connections are reused;
                                       # excess concurrent requests queue for available connections

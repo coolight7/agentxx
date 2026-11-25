@@ -872,6 +872,12 @@ model:
                                   #   后改用收尾宽限 max(10s, 本值/5) (且不超过本值):
                                   #   默认 60 -> 12 秒, 只等正式结束标记;
                                   #   宽限到点或连接断开都按"已完整"收尾
+      output_idle_timeout: 600    # 多久没有**有效输出** (正文/思考/工具参数分片) 就按超时处理
+                                  # (秒; 0 = 关闭, 默认 600)。块间超时按"收到任意字节"
+                                  # 重置, 上游/网关持续发保活心跳 (: ping 注释、
+                                  # `{"type":"ping"}`、空 delta) 时它永远不到期 —— 这种
+                                  # 情况下请求会一直挂在 llm 节点上, 本上限负责打断并重试;
+                                  # 等待期间每 60 秒记一条 WARN (最多 8 条)
       max_concurrent_connections: 5   # 该模型 API 端点的最大并发连接数 (默认 5, 0=不限制)
                                       # LLM 请求启用 HTTP keep-alive 连接池: 空闲连接复用,
                                       # 超过上限的并发请求排队等待空闲连接
@@ -1826,7 +1832,8 @@ AgentContext
 
 LLM 请求路径上没有总时长上限, 只有三个期限 (都在 `utilxx::RequestConfig`):
 `connectTimeout` (DNS+TCP+TLS)、`sendTimeout` (写请求体)、`readChunkTimeout`
-(相邻数据块间隔)。`readChunkTimeout` **是块间超时而不是总时长**: 每个到达的字节都会重新
+(相邻数据块间隔); 另有一条**语义**上限 `output_idle_timeout` (多久没有有效输出,
+见下文 "无有效输出上限")。`readChunkTimeout` **是块间超时而不是总时长**: 每个到达的字节都会重新
 计时, SSE 注释心跳 (`: ping`)、`event: ping`、`tool_calls.function.arguments` 增量都算数据,
 所以“上游在生成较长工具参数期间一个字节不发”是唯一能把长工具调用判成超时的形态
 (实测会上报 `SSE read-body timeout after 60000 ms`, 见
@@ -1850,6 +1857,26 @@ LLM 请求路径上没有总时长上限, 只有三个期限 (都在 `utilxx::Re
   `| stream: recv=..B events=.. idle=..ms finish=.. tools=.. args=..B name=..`
   (`streamFailureSuffix`), 用于区分“上游一直没发字”与“发到一半停了”;
   `API error (HTTP ...)` 这类上游业务错误保持原文不加后缀。
+
+##### 无有效输出上限 (`output_idle_timeout`)
+
+块间超时按“这次读有没有返回字节”重置, 而网关/上游在等待生成时会持续发保活心跳
+(SSE 注释 `: ping`、Anthropic 的 `{"type":"ping"}`、空 delta 事件) —— 这些字节让
+`readChunkTimeout` **永远不到期**: 一次已经没有产出的请求可以无限期挂在 llm 节点上,
+既不超时也不重试, 日志里也不会有任何警告 (实测卡十几分钟, 只能手动取消)。
+
+补的判据是“语义空闲”: `StreamProgress::noteOutput()` 只在解析出**有效输出**时刷新
+(正文分片 / 思考分片 / 工具名与参数分片), 心跳不刷新:
+
+- `StreamOutputWatchdog::nextReadTimeout()` 把下一次读的超时压成
+  `min(块间超时, 距上限还剩多少)`; 上限已到时返回 1 ms, 由 HTTP 层既有机制关闭连接,
+  modelcall 按普通传输失败重试 (错误文本写作 `LLM stream idle timeout: no output for N ms`);
+- 等待期间每 60 s 记一条 WARN (`[llm] no output for N ms while streaming ... still waiting`),
+  单次请求最多 8 条 —— 下次再出现“卡住”时日志里能直接看出卡在哪一步;
+- 上限取 `model.list[].output_idle_timeout` (秒, 默认 600, 0 = 关闭); 收到结束原因后
+  仍按收尾宽限取样, 不会因本上限提前砍掉 `[DONE]` 的等待;
+- 已见结束原因 (`finishSeen`) 的那种“只剩心跳”的收尾阶段: 上限到点后按
+  “已完整”收尾 (salvage), 不重试。
 
 ### 连接与重连机制
 

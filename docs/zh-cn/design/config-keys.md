@@ -18,7 +18,7 @@
 
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-键数: 69
+键数: 70
 
 | 键路径 | 归属 | 类型 | 默认值 |
 |---|---|---|---|
@@ -64,6 +64,7 @@
 | `model.list[].cache_control` | 服务端 | bool (仅 anthropic 生效) | false |
 | `model.list[].connect_timeout` | 服务端 | int (秒) | 16 |
 | `model.list[].read_chunk_timeout` | 服务端 | int (秒) | 60 |
+| `model.list[].output_idle_timeout` | 服务端 | int (秒; 0 = 关闭) | 600 |
 | `model.list[].ssl_verify` | 服务端 | bool (省略 = 未指定, 用全局默认策略) | 未指定 (nullopt) |
 | `model.list[].max_concurrent_connections` | 服务端 | int (0 = 不限制) | 5 |
 | `model.list[].model_context_max_token` | 服务端 | int (0 = 未指定) | 0 |
@@ -415,6 +416,15 @@ model:
   list:
     - name: m1
       read_chunk_timeout: 7
+```
+
+### `model.list[].output_idle_timeout`
+
+```yaml
+model:
+  list:
+    - name: m1
+      output_idle_timeout: 120
 ```
 
 ### `model.list[].ssl_verify`

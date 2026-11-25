@@ -2,7 +2,7 @@
   "version": 1,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_CONFIG_KEYS=1 agentxx_test config_keys",
   "source": "agent/client/src/config_loader.cpp",
-  "count": 69,
+  "count": 70,
   "keys": [
     {
       "path": "data_dir",
@@ -297,6 +297,13 @@
       "type": "int (秒)",
       "default": "60",
       "sample": "model:\n  list:\n    - name: m1\n      read_chunk_timeout: 7"
+    },
+    {
+      "path": "model.list[].output_idle_timeout",
+      "owner": "server",
+      "type": "int (秒; 0 = 关闭)",
+      "default": "600",
+      "sample": "model:\n  list:\n    - name: m1\n      output_idle_timeout: 120"
     },
     {
       "path": "model.list[].ssl_verify",
