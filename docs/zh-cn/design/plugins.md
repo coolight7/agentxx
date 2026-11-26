@@ -493,8 +493,8 @@ C++ 侧有两种消费形态在插件 SDK (`agent_plugin_kit.h` / `client_plugin
 > `sleepAsync`、阻塞工作用 `offloadAsync` / `onWorkerAsync`、插件互调用 `callToolAsync` /
 > `callToolResultAsync`, 登记类用同名 `*Async` 入口。
 >
-> **插件执行线程上不等待**: kit 入口用默认的 `refuseOnPluginThread`, 在那里直接返回失败
-> 并带原因文本 (操作已提交但拿不到结果)。详见 §15.3。
+> **插件执行线程上不等待**: 没有同步等表形态 (`tableOpSyncWait` 与它的同步桥已删), 想拿结果只能写
+> 协程 (`co_await *Async(...)`) 或回调形态。详见 §15.3。
 >
 > **受控轮询工具体 (声明为 polled 的 `asio::awaitable` 体) 里只 `co_await` asio 形态入口**:
 > 那里是 asio 协程帧, 只用 `*Async` (`addShareStoreAsync` / `offloadAsync` / `sleepAsync` 等)。
@@ -807,7 +807,7 @@ cancel) + 1 张**网络表** `agentxx_plugin_net` (两侧都提供) + 6 张自�
 
 | IID | 版本 | 能力 |
 |-----|------|------|
-| `agentxx_client_ui` | 2 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay` |
+| `agentxx_client_ui` | 3 | 老成员: `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay`; v3 追加声明式界面 (与共享 UI 表同一形状): `register_ui_item/unregister_ui_item/list_ui_items`, `register_ui_content/unregister_ui_content/push_ui_content/list_ui_contents/update_ui_slot`, `define_ui_slot/undefine_ui_slot/list_ui_slots` |
 | `agentxx_client_session` | 2 | `get_client_state` (快照 JSON), `send_user_input`, `request_cancel` |
 | `agentxx_client_wire` | 2 | `send_plugin_data(topic, json)` → 服务端原样发到 agent 总线的同一个主题 (topic 必须是全名 `agentxx.client.plugin.<名字>.<事件>`, 不限定插件名) |
 | `agentxx_client_self` | 2 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
@@ -1726,8 +1726,9 @@ Closing → CloseFailed → Closing (可重试)
   固定标记 + 唤醒体、`OpCore` 识别标记后就地回调) 已删除; 运行时与后台任务的 `*Sync`
   便捷形态 (`mountRootSync` / `openChannelSync` / `submitAsyncWorkSync` ...) 同步删除。
   想等结果只能写协程, 不想等结果用提交即返回形态; `boundaries` 规则 16 拦回退;
-- **kit 入口在插件执行线程上直接拒绝** (`refuseOnPluginThread`): 返回失败并带上原因文本
-  (操作已提交, 但拿不到结果), 不会把插件卡在"自己等自己"上;
+- **kit 入口没有同步等待形态**: 想等结果只能写协程 (`co_await *Async(...)`), 不想等结果用
+  提交即返回形态; 旧的 `refuseOnPluginThread` 已不需要 (已没有可被拒的同步入口), 这样插件不会卡在
+  "自己等自己"上;
 - **插件代码一律用异步/提交即返回形态**：注册事务写 `finishLater(notify)` +
   `ctx.spawn(...)` + `return later.provider()`，表调用逐条 `co_await`；展示面更新用
   提交即返回的助手 (`setPanelJson` / `setStatusJson` / `publishPluginBroadcastNoWait`
@@ -1794,9 +1795,9 @@ Closing → CloseFailed → Closing (可重试)
 - **线程与运行时都属于 start 事务**：`create` 不启动线程；`start` 创建运行时并启动
   线程、提交运行时注册 (能力)；`stop` 停止线程并释放运行时；`destroy` 只释放本地状态，
   不调用主程序接口。
-- **start 里的能力登记走异步形态**：start 跑在插件执行线程上，那里不能等主程序
-  (kit 入口按 `refuseOnPluginThread` 直接拒绕)，所以登记时交完成回调并返回 provider
-  句柄，结论在回调里经 `notify.done` 交回；失败时先撤掉本次刚起动的引擎线程再报错。
+- **start 里的能力登记走异步形态**：start 跑在插件执行线程上，而且没有同步等表的入口，
+  所以登记时交完成回调并返回 provider 句柄，结论在回调里经 `notify.done` 交回；
+  失败时先撤掉本次刚起动的引擎线程再报错。
 - **stop 必须可重复且不能被调用线程自锁**：插件线程若可能反向调用主程序 vtable
   (主程序在非 IO 线程上发出的表调用会把工作体排队到 IO 线程，即 `startTableOp`)，
   则 `stop` 不得在 IO 线程直接
