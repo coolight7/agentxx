@@ -690,6 +690,8 @@ struct ClientCtx : agentxx::plugin::ClientPluginBase {
     /// CLI 等不支持时成员 NULL 降级: planning 仍推送内容, 只是按钮不可点)
     const AgentxxClientUiIface* ui = nullptr;
     std::string                 last_plan_json;    ///< 最近一次规划内容缓存 (Info 段落)
+    /// 声明式内容 (agentxx.client.info 上的 Plan) 是否已登记
+    bool content_registered = false;
     /// 进行中 planning 工具调用的参数缓存 (tool_call_id → arguments JSON;
     /// 工具行插入时缓存, 完成后摘除)
     std::map<std::string, std::string> pending_args;
@@ -993,15 +995,80 @@ static void clearToolDecors(ClientCtx& ctx) {
     agentxx::plugin::clientUpdateToolDecor(ctx.host, ctx.ui, {}, {});
 }
 
+/// 声明式内容 (agentxx.client.info 上的 Plan): 用最近缓存生成与段落同一份 items
+///
+/// 与 [refreshPlanSection] 同源 (都走 [buildPlanItems]), 所以两套写法显示一致;
+/// 差别只在“谁来算”: 内容路径由主程序在需要时问一次。
+static void PLUGINXX_CALL generatePlanContent(
+    const PluginxxHost*           /*host*/,
+    const PluginxxStringView*     /*ctx_json*/,
+    void*                         ud,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               /*error_out*/
+) {
+    auto* ctx = static_cast<ClientCtx*>(ud);
+    if (ctx == nullptr || notify == nullptr || notify->done == nullptr) {
+        return;
+    }
+    utilxx_base::Json items = utilxx_base::Json::array();
+    if (!ctx->last_plan_json.empty()) {
+        utilxx_base::Json plan;
+        try {
+            plan = utilxx_base::Json::parse(ctx->last_plan_json);
+        } catch (...) {
+            plan = utilxx_base::Json::object();
+        }
+        if (plan.is_object()) {
+            items = buildPlanItems(plan, /*graphAsButton=*/true);
+        }
+    }
+    utilxx_base::Json doc  = utilxx_base::Json::object();
+    doc["items"]           = items;
+    utilxx_base::Json body = utilxx_base::Json::object();
+    body["json"]           = doc;
+    const std::string        payload = body.dump();
+    const PluginxxStringView view{payload.data(), payload.size()};
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
+}
+
 /// 懒注册 Info 栏段落 (主程序不支持 info_section 时保持 NULL 静默降级)
 ///
 /// 注册是表调用: 这里**提交即返回**, 句柄受理后写回实例槽位 (见
 /// `ClientPluginBase::ensureInfoSection`) —— 插件执行线程上不等 client io 线程。
 static void ensureSection(ClientCtx& ctx) {
-    if (!ctx.ui || !ctx.ui->register_info_section || !ctx.host) {
+    if (!ctx.ui || !ctx.host) {
         return;
     }
-    ctx.ensureInfoSection(kSectionId, R"_({"title":"Plan"})_");
+    if (ctx.ui->register_info_section) {
+        ctx.ensureInfoSection(kSectionId, R"_({"title":"Plan"})_");
+    }
+    // 声明式内容: 同一 id 的段落内容 (新写法; 旧段落继续推, 主程序优先画内容)
+    if (!ctx.content_registered && ctx.ui->register_ui_item && ctx.ui->register_ui_content) {
+        const auto idSv = agentxx::plugin::PluginStringView::fromCstr(kSectionId);
+        const auto slotSv = agentxx::plugin::PluginStringView::fromCstr("info");
+        constexpr std::string_view kProps = R"_({"title":"Plan"})_";
+        const auto                 propsSv
+            = agentxx::plugin::PluginStringView::from(kProps.data(), kProps.size());
+
+        PluginxxUiEntrySpec entry{};
+        entry.version     = 1;
+        entry.struct_size = sizeof(PluginxxUiEntrySpec);
+        entry.item_id     = idSv;
+        entry.type        = slotSv;
+        entry.data_json   = propsSv;
+        ctx.ui->register_ui_item(ctx.host, &entry, nullptr, nullptr, nullptr);
+
+        PluginxxUiContentSpec content{};
+        content.version     = 1;
+        content.struct_size = sizeof(PluginxxUiContentSpec);
+        content.id          = idSv;
+        content.slot        = slotSv;
+        content.title       = propsSv;
+        content.generate    = &generatePlanContent;
+        content.user_data   = &ctx;
+        ctx.ui->register_ui_content(ctx.host, &content, nullptr, nullptr, nullptr);
+        ctx.content_registered = true;
+    }
 }
 
 /// 注销 Info 段落并清空缓存 (回到 "无规划" 态: 无 plan 时侧栏不显示空段落)
@@ -1043,6 +1110,13 @@ static void refreshPlanSection(ClientCtx& ctx) {
     payload["items"]          = items;
     const std::string json    = payload.dump();
     agentxx::plugin::clientUpdateInfoSection(ctx.host, ctx.ui, section, json);
+    // 声明式内容同步刷新 (主程序优先画内容; 不支持新成员的客户端会忽略)
+    if (ctx.ui->update_ui_slot && ctx.content_registered) {
+        const auto        slotSv = agentxx::plugin::PluginStringView::fromCstr("info");
+        const std::string ids    = fmt::format(R"(["{}"])", kSectionId);
+        const auto        idsSv  = agentxx::plugin::PluginStringView::from(ids.data(), ids.size());
+        ctx.ui->update_ui_slot(ctx.host, &slotSv, &idsSv, nullptr, nullptr, nullptr);
+    }
 }
 
 /// 规划频道 (`plugin.agentxx_planning.planning`): 对端发布的规划 JSON
