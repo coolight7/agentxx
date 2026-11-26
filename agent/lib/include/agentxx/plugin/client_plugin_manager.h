@@ -111,17 +111,45 @@ struct ClientCommand {
     void*                         ud      = nullptr;
 };
 
-/// 工具特化渲染器注册记录 (UI 注册表快照条目)
+/// 一次工具行渲染的输入 (主程序内部; 插件侧只有在生成函数的 ctx 里看到这些字段)
 ///
+/// - 字符串全部只在本函数调用期间借用 (内容生成会立刻拷成 ctx JSON)
+/// - 折叠 / 展开各请求一次, `part` 告诉生成函数这次要哪一部分
+struct ClientToolRenderInput {
+    std::string_view toolCallId;
+    std::string_view toolName;
+    std::string_view argsJson;
+    std::string_view resultText;
+    bool             finished = false;
+    bool             error    = false;
+    int              maxWidth = 0;
+    bool             summary  = true; ///< true = 折叠头, false = 展开体
+};
+
+/// 工具行渲染回调 (主程序内部)
+///
+/// 异步操作契约: 返回 0 = 已受理, 内容经 `notify` 恰好一次交回 (折叠头是一行文本,
+/// 展开体是 items JSON); 返回非 0 = 没受理, 按默认渲染处理。
+using ClientToolRenderFn = int32_t(PLUGINXX_CALL*)(
+    void*                         user_data,
+    const ClientToolRenderInput*  input,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
+);
+
+/// 工具行渲染记录 (UI 注册表快照条目)
+///
+/// - **只有一份来源**: `agentxx.client.tool` 上注册的内容 (生成函数); 主程序内置工具行
+///   用同一条记录 (builtin = true, 由主程序内部注册)
 /// - `displayName` 在注册时归一 (空 → 工具名), 因此命中项的显示名恒非空 ——
 ///   UI 线程同步读得到, 首帧即可显示
-/// - 两个内容回调都可空: 折叠内容 (一行文本) 与展开内容 (items) 分开渲染、各自缓存
+/// - 折叠头与展开体共用一份内容的生成函数, 各自缓存
 struct ClientToolRenderReg {
     std::string                 plugin;
     std::string                 toolName;
     std::string                 displayName; ///< 归一后恒非空
-    AgentxxToolCollapsedRenderFn collapsedFn = nullptr;
-    AgentxxToolExpandedRenderFn  expandedFn  = nullptr;
+    ClientToolRenderFn          collapsedFn = nullptr;
+    ClientToolRenderFn          expandedFn  = nullptr;
     void*                       userData    = nullptr; ///< 两个回调共用
     std::shared_ptr<ClientToolRendererLease> lease;
     /// 主程序内置渲染器标记 (lib 内置工具无对应插件, 由主程序自身注册;
@@ -504,8 +532,6 @@ public:
     std::vector<ClientKeybind> keybindRegs;
     /// 工具消息装饰 (disable 保留, enable 恢复; 无句柄 —— 以 plugin+toolCallId 键控)
     std::vector<ClientToolDecor> toolDecorRegs;
-    /// 工具特化渲染器 (disable 保留, enable 恢复; 以 plugin+toolName 键控)
-    std::vector<ClientToolRenderReg> toolRenderRegs;
     /// 通用动作绑定 (disable 保留, enable 恢复; 以 plugin+targetId 键控)
     std::vector<ClientActionBinding> actionRegs;
     /// 定时器 (client 自有 `agentxx.client.timer` 表): 实例级运行时资源
@@ -882,24 +908,6 @@ public:
 
     /// 工具特化渲染 (Tool Renderer)
     ///
-    /// 两种写法共用一条执行与缓存路径 (按调用分键、折叠/展开各一份):
-    /// - 新写法: 向 `agentxx.client.tool` 注册声明项 + 内容 (生成函数拿这次调用的变量,
-    ///   见 `client_ui_content.h` 的 `agentxx.client.tool.*`);
-    /// - 旧写法 (本成员): 直接给折叠/展开两个回调。
-    ///
-    /// 两者按“后注册的生效”互相覆盖; 显示名先取声明项 `data.displayName`, 再取回调式
-    /// 注册项的 `display_name`。
-    ///
-    /// 注册工具特化渲染器 (io 线程); 返回 0 成功
-    int registerToolRenderer(ClientPluginInstance* inst, const AgentxxToolRenderSpec* spec);
-
-    /// 注销工具特化渲染器 (io 线程); 返回 0 成功
-    int unregisterToolRenderer(ClientPluginInstance* inst, PluginxxStringView tool_name);
-
-    int unregisterToolRenderer(ClientPluginInstance* inst, std::string_view tool_name) {
-        return unregisterToolRenderer(inst, strToSv(tool_name));
-    }
-
     /// 注册主程序内置工具特化渲染器 (非插件; lib 内置工具无对应插件, 由主程序自身声明)
     /// - 存入 [ClientUiRegistry::builtinToolRenderers], 归属名固定为
     ///   [kBuiltinRendererOwner]; 匹配优先级低于插件注册项 (插件可覆盖内置渲染)
@@ -909,11 +917,11 @@ public:
     /// - 任意线程可调 (uiMutex_ 保护); 同一 tool_name 重复注册覆盖旧项
     /// 返回 0 成功
     int registerBuiltinToolRenderer(
-        std::string_view             toolName,
-        std::string_view             displayName,
-        AgentxxToolCollapsedRenderFn collapsedFn = nullptr,
-        AgentxxToolExpandedRenderFn  expandedFn  = nullptr,
-        void*                        userData    = nullptr
+        std::string_view    toolName,
+        std::string_view    displayName,
+        ClientToolRenderFn  collapsedFn = nullptr,
+        ClientToolRenderFn  expandedFn  = nullptr,
+        void*               userData    = nullptr
     );
 
     /// 绑定动作处理器 (io 线程; cb 空则失败; 同 (plugin,targetId) 覆盖)
@@ -1344,20 +1352,20 @@ private:
 
     /// 折叠头 / 展开体的适配回调 (主程序自己调: `ClientToolRenderReg` 的函数指针)
     static int32_t PLUGINXX_CALL toolContentRenderCollapsed(
-        void*                         user_data,
-        const AgentxxToolRenderInput* input,
+        void*                        user_data,
+        const ClientToolRenderInput* input,
         const PluginxxOperatorNotify* notify,
         PluginxxString*               error_out
     );
     static int32_t PLUGINXX_CALL toolContentRenderExpanded(
-        void*                         user_data,
-        const AgentxxToolRenderInput* input,
+        void*                        user_data,
+        const ClientToolRenderInput* input,
         const PluginxxOperatorNotify* notify,
         PluginxxString*               error_out
     );
     static int32_t toolContentRender(
-        void*                         user_data,
-        const AgentxxToolRenderInput* input,
+        void*                        user_data,
+        const ClientToolRenderInput* input,
         const PluginxxOperatorNotify* notify,
         PluginxxString*               error_out,
         bool                          summary

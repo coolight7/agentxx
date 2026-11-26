@@ -40,9 +40,9 @@ public:
             std::string{pi::ClientToast},
             std::string{pi::ClientInfoSection},
             std::string{pi::ClientCommand},
-            // 工具消息装饰与特化渲染 (ui 表 v2 update_tool_decor /
-            // register_tool_renderer): 消息列表按装饰 items 通用渲染插件推送的
-            // 工具体内容, 并按插件注册的渲染定义生成折叠头/展开体
+            // 工具消息装饰与工具行内容 (ui 表 update_tool_decor 与
+            // `agentxx.client.tool` 上的声明项 + 内容): 消息列表按装饰 items 通用渲染
+            // 插件推送的工具体内容, 并按工具行内容生成折叠头/展开体
             std::string{pi::ClientMsgDecor},
             // 通用交互 (ui 表 v3 bind/unbind + button 拾取派发)
             std::string{pi::ClientAction},

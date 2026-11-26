@@ -479,147 +479,224 @@ inline int32_t fillClientPluginInfo(
 
 } // namespace detail
 
-/* ==================== Client 侧工具特化渲染适配器 ==================== */
+/* ==================== 工具行: 声明项 + 内容 ==================== */
 
-struct ToolRenderInput {
-    std::string_view toolCallId;
-    std::string_view toolName;
-    std::string_view argsJson;
-    std::string_view resultText;
-    bool             isFinished = false;
-    bool             isError    = false;
-    int              maxWidth   = 0;
-};
-
-/// C ABI 输入 → kit 输入 (全部 string_view 借用, 只在本次回调内有效)
-inline ToolRenderInput toolRenderInputOf(const AgentxxToolRenderInput& input) {
-    return ToolRenderInput{
-        .toolCallId = PluginStringView::str(input.tool_call_id),
-        .toolName   = PluginStringView::str(input.tool_name),
-        .argsJson   = PluginStringView::str(input.args_json),
-        .resultText = PluginStringView::str(input.result_text),
-        .isFinished = input.is_finished != 0,
-        .isError    = input.is_error != 0,
-        .maxWidth   = input.max_width,
-    };
-}
-
-/// 折叠内容 (工具行折叠态 ` · ` 之后的一行文本; 不带分隔符)
-struct ToolCollapsedOutput {
-    std::string text;
-};
-
-/// 展开内容 (工具行展开态首行之后的 items; 界面描述层 schema)
-struct ToolExpandedOutput {
-    utilxx_base::Json items = utilxx_base::Json::array();
-};
-
-/// 工具特化渲染的两个内容回调 (都可空; 空 = 该部分走默认渲染)
+/// 一次工具行的输入 (折叠头与展开体各调用一次)
 ///
-/// - 折叠回调只给一行文本, 折叠行不会触发展开回调 (展开体可能是差异对比/状态图)
-/// - 回调内抛出的异常由适配层吞掉, 本部分按"无自定义内容"处理
-struct ToolRenderers {
-    std::function<void(const ToolRenderInput&, ToolCollapsedOutput&)> collapsed;
-    std::function<void(const ToolRenderInput&, ToolExpandedOutput&)>  expanded;
+/// - 参数可能还没输出完 (运行中), 按"缺值就给默认展示"处理
+/// - `summary` 为真时只要一行文字, 为假时给整块内容
+struct ToolRowInput {
+    std::string toolName;   ///< 工具名 (如 `agentxx_filesystem_read`)
+    std::string argsJson;   ///< 这次调用的参数原文
+    std::string resultText; ///< 结果文本 (运行中为空)
+    int         width    = 0;     ///< 可用的显示宽度 (列; 0 = 未知)
+    bool        summary  = true;  ///< true = 折叠头, false = 展开体
+    bool        finished = false; ///< 这次调用已结束
+    bool        error    = false; ///< 这次调用以失败结束
 };
 
-/// 注册工具特化渲染器 (显示名 + 折叠内容回调 + 展开内容回调)
+/// 工具行内容: 两个可选部分, 都不给内容时界面走默认渲染
+struct ToolRowSpec {
+    /// 折叠头一行 (空串 = 本次没有内容)
+    std::function<std::string(const ToolRowInput&)> summary;
+    /// 展开体 (界面描述层的块数组; 一项也不加 = 默认展开体)
+    std::function<void(const ToolRowInput&, utilxx_base::Json&)> body;
+};
+
+/// 已注册的工具行 (生成函数的状态; 插件实例持它到卸载)
 ///
-/// - `displayName` 注册时确定, UI 线程直接读 (首帧即可显示); 空 = 用工具名
-/// - 两个回调都空 = 只改名, 内容全走默认渲染
-/// - 回调在 client io 线程执行; shim 持有 `renderers` 副本, 随 `shimStorage` 释放
-inline int32_t registerToolRenderer(
-    const PluginxxHost*                                  host,
-    const AgentxxClientUiIface*                          ui,
-    std::string_view                                     toolName,
-    std::string_view                                     displayName,
-    ToolRenderers                                        renderers,
-    std::vector<std::unique_ptr<void, void (*)(void*)>>& shimStorage
-) {
-    if (!host || !ui || !ui->register_tool_renderer) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+/// 注册走 `agentxx.client.tool` 上的**声明项 + 内容**, 不再是单独的回调注册:
+/// 主程序按 (调用, 折叠 / 展开) 各请一份并缓存, 插件只管把这次调用变成内容。
+class ToolRow {
+public:
+
+    /// `agentxx.client.tool` 槽位的短名
+    static constexpr std::string_view kSlot = "tool";
+
+    ToolRow(std::string toolName, std::string displayName, ToolRowSpec spec) :
+        toolName_(std::move(toolName)),
+        displayName_(displayName.empty() ? toolName_ : std::move(displayName)),
+        spec_(std::move(spec)) {}
+
+    const std::string& toolName() const noexcept {
+        return toolName_;
     }
 
-    struct RenderShim {
-        const PluginxxHost* host = nullptr;
-        ToolRenderers       renderers;
-    };
+    const std::string& displayName() const noexcept {
+        return displayName_;
+    }
 
-    auto* shim = new RenderShim{host, std::move(renderers)};
-    shimStorage.emplace_back(shim, [](void* p) {
-        delete static_cast<RenderShim*>(p);
-    });
+    /// 声明项的 `data` (`{"tool":…,"displayName":…}`: 主程序据此知道这份内容对应哪个工具)
+    std::string declarationDataJson() const {
+        utilxx_base::Json data = utilxx_base::Json::object();
+        data["tool"]           = toolName_;
+        data["displayName"]    = displayName_;
+        return data.dump();
+    }
 
-    auto collapsedCb
-        = [](void*                         user_data,
-             const AgentxxToolRenderInput* input,
-             const PluginxxOperatorNotify* notify,
-             PluginxxString*               error_out) -> int32_t {
-        (void)error_out;
-        if (!user_data || !input || !notify || !notify->done) {
-            return AGENTXX_RESULT_ERR_ARG;
+    /// 内容生成函数 (主程序调; 内容契约 `{"json": <界面文档>}`)
+    ///
+    /// - 拿不到内容时交空文档: 界面走自己的默认渲染, 不算失败
+    /// - 在插件执行线程上跑 (与工具 execute 同一个线程)
+    static void PLUGINXX_CALL generate(
+        const PluginxxHost*           host,
+        const PluginxxStringView*     ctx_json,
+        void*                         user_data,
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
+    ) {
+        if (notify == nullptr || notify->done == nullptr) {
+            PluginString::set(host, error_out, "tool row needs a completion callback");
+            return;
         }
-        auto* shim = static_cast<RenderShim*>(user_data);
-        if (!shim->renderers.collapsed) {
-            return 0; // 无自定义内容 (payload 留空)
+        auto* self = static_cast<ToolRow*>(user_data);
+        if (self == nullptr) {
+            PluginString::set(host, error_out, "tool row is gone");
+            return;
         }
-        ToolCollapsedOutput out;
+        std::string payload = "{\"json\":{}}";
         try {
-            shim->renderers.collapsed(toolRenderInputOf(*input), out);
+            utilxx_base::Json ctx = utilxx_base::Json::object();
+            if (ctx_json != nullptr && ctx_json->data != nullptr && ctx_json->size > 0) {
+                auto parsed = utilxx_base::Json::parse(
+                    std::string_view{ctx_json->data, static_cast<size_t>(ctx_json->size)}
+                );
+                if (parsed.is_object()) {
+                    ctx = std::move(parsed);
+                }
+            }
+            auto stringOf = [&ctx](const char* key) -> std::string {
+                const auto it = ctx.find(key);
+                return (it != ctx.end() && it->is_string()) ? it->get<std::string>()
+                                                            : std::string{};
+            };
+            ToolRowInput in;
+            in.toolName   = self->toolName_;
+            in.argsJson   = stringOf("agentxx.client.tool.args");
+            in.resultText = stringOf("agentxx.client.tool.result");
+            if (const auto w = ctx.find("agentxx.client.tool.width");
+                w != ctx.end() && w->is_number()) {
+                in.width = w->get<int>();
+            }
+            in.summary        = stringOf("agentxx.client.tool.part") != "body";
+            const std::string state = stringOf("agentxx.client.tool.state");
+            in.finished       = state != "running";
+            in.error          = state == "error";
+            if (in.summary) {
+                const std::string line = self->spec_.summary ? self->spec_.summary(in)
+                                                             : std::string{};
+                if (!line.empty()) {
+                    utilxx_base::Json block = utilxx_base::Json::object();
+                    block["kind"]           = "Text";
+                    block["text"]           = line;
+                    utilxx_base::Json doc   = utilxx_base::Json::object();
+                    doc["blocks"]           = utilxx_base::Json::array({block});
+                    payload = std::string{"{\"json\":"} + doc.dump() + "}";
+                }
+            } else if (self->spec_.body) {
+                utilxx_base::Json blocks = utilxx_base::Json::array();
+                self->spec_.body(in, blocks);
+                if (blocks.is_array() && !blocks.empty()) {
+                    payload = std::string{"{\"json\":{\"blocks\":"} + blocks.dump() + "}}";
+                }
+            }
         } catch (...) {
-            return AGENTXX_RESULT_ERR_INTERNAL;
+            // 生成失败按“没有内容”处理 (界面走默认渲染), 不打扰用户
+            payload = "{\"json\":{}}";
         }
-        // 回调内立即完成 = 与改造前一样当帧拿到内容
-        const PluginxxStringView view{out.text.data(), static_cast<uint64_t>(out.text.size())};
+        const PluginxxStringView view{payload.data(), static_cast<uint64_t>(payload.size())};
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
-        return 0;
-    };
+    }
 
-    auto expandedCb
-        = [](void*                         user_data,
-             const AgentxxToolRenderInput* input,
-             const PluginxxOperatorNotify* notify,
-             PluginxxString*               error_out) -> int32_t {
-        (void)error_out;
-        if (!user_data || !input || !notify || !notify->done) {
-            return AGENTXX_RESULT_ERR_ARG;
-        }
-        auto* shim = static_cast<RenderShim*>(user_data);
-        if (!shim->renderers.expanded) {
-            return 0; // 无自定义内容 (payload 留空)
-        }
-        ToolExpandedOutput out;
-        try {
-            shim->renderers.expanded(toolRenderInputOf(*input), out);
-        } catch (...) {
-            return AGENTXX_RESULT_ERR_INTERNAL;
-        }
-        const std::string        json = (out.items.is_array() && !out.items.empty())
-                                            ? out.items.dump()
-                                            : std::string{};
-        const PluginxxStringView view{json.data(), static_cast<uint64_t>(json.size())};
-        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
-        return 0;
-    };
+private:
 
-    AgentxxToolRenderSpec spec{};
-    spec.struct_size  = sizeof(AgentxxToolRenderSpec);
-    spec.version      = 2;
-    spec.tool_name    = PluginStringView::from(toolName.data(), toolName.size());
-    spec.display_name = PluginStringView::from(displayName.data(), displayName.size());
-    spec.collapsed_fn = shim->renderers.collapsed ? collapsedCb : nullptr;
-    spec.expanded_fn  = shim->renderers.expanded ? expandedCb : nullptr;
-    spec.user_data    = shim;
+    std::string toolName_;
+    std::string displayName_;
+    ToolRowSpec spec_;
+};
 
-    auto res = clientTableCall(
-        host,
-        ClientIfaces::query(host),
+/// 注册一个工具行 (声明项 + 内容); 返回的句柄要由插件实例持有
+///
+/// - 主程序不支持声明式界面时返回 `nullptr` (界面保持默认渲染)
+/// - 两条表调用都要等, 所以只能写在协程里:
+///
+/// ```cpp
+/// ctx.toolRows.push_back(
+///     co_await clientRegisterToolRowAsync(ctx, "agentxx_fs_read", "Read", spec));
+/// ```
+template<typename Ctx>
+inline asio::awaitable<std::shared_ptr<ToolRow>> clientRegisterToolRowAsync(
+    Ctx&           ctx,
+    std::string_view toolName,
+    std::string_view displayName,
+    ToolRowSpec    spec
+) {
+    const auto* ui = ctx.iface.ui;
+    if (!ctx.host || !ui || !ui->register_ui_item || !ui->register_ui_content) {
+        co_return nullptr;
+    }
+    if (toolName.empty()) {
+        co_return nullptr;
+    }
+    auto row = std::make_shared<ToolRow>(
+        std::string{toolName},
+        std::string{displayName},
+        std::move(spec)
+    );
+    std::string data   = row->declarationDataJson();
+    std::string title  = row->displayName();
+    auto        idSv   = PluginStringView::from(toolName);
+    auto        slotSv = PluginStringView::from(ToolRow::kSlot);
+    auto        dataSv = PluginStringView::from(data);
+
+    PluginxxUiEntrySpec entry{};
+    entry.version     = 1;
+    entry.struct_size = sizeof(PluginxxUiEntrySpec);
+    entry.item_id     = idSv;
+    entry.type        = slotSv;
+    entry.data_json   = dataSv;
+    auto entryResult  = co_await detail::clientTableAwaitAsync(
+        ctx,
         [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->register_tool_renderer(host, &spec, cb, ud, err);
+            return ui->register_ui_item(ctx.host, &entry, cb, ud, err);
         }
     );
-    return res ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_INTERNAL;
+    if (!entryResult.ok()) {
+        co_return nullptr;
+    }
+
+    auto        titleSv = PluginStringView::from(title);
+    std::string deps    = "[\"agentxx.client.tool.name\",\"agentxx.client.tool.args\","
+                          "\"agentxx.client.tool.result\",\"agentxx.client.tool.width\","
+                          "\"agentxx.client.tool.part\",\"agentxx.client.tool.state\"]";
+    auto        depsSv  = PluginStringView::from(deps);
+    PluginxxUiContentSpec content{};
+    content.version     = 1;
+    content.struct_size = sizeof(PluginxxUiContentSpec);
+    content.id          = idSv;
+    content.slot        = slotSv;
+    content.title       = titleSv;
+    content.deps_json   = depsSv;
+    content.generate    = &ToolRow::generate;
+    content.user_data   = row.get();
+    auto contentResult  = co_await detail::clientTableAwaitAsync(
+        ctx,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->register_ui_content(ctx.host, &content, cb, ud, err);
+        }
+    );
+    if (!contentResult.ok()) {
+        // 内容没注册上就撤销声明项, 不留一个画不出来的位置
+        PluginxxString err{nullptr, 0};
+        ui->unregister_ui_item(ctx.host, &idSv, nullptr, nullptr, &err);
+        if (err.data != nullptr) {
+            PluginString::free(ctx.host, &err);
+        }
+        co_return nullptr;
+    }
+    co_return row;
 }
+
 
 /* ==================== Client 侧通用交互: ActionController (header-only) ====================
  *
@@ -961,21 +1038,6 @@ public:
         }
         auto sidSv = PluginStringView::from(sessionId.data(), sessionId.size());
         iface.session->request_cancel(host, &sidSv, nullptr, nullptr, nullptr);
-    }
-
-    void registerRenderer(
-        std::string_view tool,
-        std::string_view displayName,
-        ToolRenderers    renderers
-    ) {
-        registerToolRenderer(
-            host,
-            iface.ui,
-            tool,
-            displayName,
-            std::move(renderers),
-            shims_
-        );
     }
 
     // ==================== 展示扩展便捷方法 ====================
@@ -1595,19 +1657,9 @@ public:
         co_return (r.ok() && !r.text().empty()) ? std::string{r.text()} : std::string{"[]"};
     }
 
-    template<typename T>
-    T* storeShim(std::unique_ptr<T> shim) {
-        T* raw = shim.get();
-        shims_.emplace_back(shim.release(), [](void* ptr) {
-            delete static_cast<T*>(ptr);
-        });
-        return raw;
-    }
-
 private:
 
     std::shared_ptr<std::atomic<bool>> lifeToken_ = std::make_shared<std::atomic<bool>>(true);
-    std::vector<std::unique_ptr<void, void (*)(void*)>> shims_;
     /// 懒注册的 Info 段落槽位 (id → 句柄; 句柄由主程序受理后写回, 只在插件执行线程上读写)
     std::map<std::string, std::shared_ptr<std::atomic<AgentxxInfoSection*>>> infoSections_;
     /// 界面能力段解析结果 (能力在客户端生命周期内不变; 见 [uiCapabilities])

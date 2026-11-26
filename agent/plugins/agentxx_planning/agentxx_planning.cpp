@@ -11,7 +11,7 @@
 ///     [plugins.md](/docs/zh-cn/design/plugins.md) 7.3.1)
 ///   - client 侧入口 (agentxx_client_plugin_create): Plan 渲染完全由插件驱动 ——
 ///     ① 工具消息渲染两条路径, 内容同源 (同一构建函数):
-///        a. 类型级渲染器 (register_tool_renderer, 按 tool_name): 由消息自带的
+///        a. 工具行内容 (`agentxx.client.tool` 声明项 + 内容, 按工具名): 由消息自带的
 ///           参数/结果推导折叠头显示名/摘要与展开体 items (状态图/todos/notes),
 ///           **实时调用与历史回溯 (重启/重连/切换会话后 Sync 回放) 统一生效**;
 ///        b. 运行时装饰 (update_tool_decor, 订阅 `agentxx.client.delta` 频道): 仅覆盖本进程实时
@@ -670,10 +670,10 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
 /// 消息列表特化 + Info 侧边栏段落全部拆分至本插件, TUI 无任何 plan 概念)
 ///
 /// - 工具消息渲染 (两条路径内容同源, 见 buildPlanDecorParts):
-///   ① 类型级渲染器 (register_tool_renderer, 按 tool_name): 显示名注册时定下,
-///      折叠内容与展开体各一个回调 (todos 摘要 / 状态图 + 待办 + 备忘)。
+///   ① 工具行内容 (`agentxx.client.tool` 上的声明项 + 内容, 按工具名): 显示名在声明项
+///      里定下, 生成函数给出折叠头 (todos 摘要) 与展开体 (状态图 + 待办 + 备忘)。
 ///      历史回溯路径走这里 —— 重启恢复/重连/切换会话后, 工具消息由 Sync 回放,
-///      没有 update_tool_decor 推送, 依赖类型级渲染器才能特化渲染
+///      没有 update_tool_decor 推送, 依赖这份内容才能特化渲染
 ///   ② 运行时装饰 (update_tool_decor): 订阅 EVT_DELTA, 工具行插入/更新时
 ///      推送装饰 (显示名 + 折叠内容 + 展开体 items)
 /// - Info 栏段落 "Plan" (懒注册): EVT_PLUGIN_DATA planning 事件驱动,
@@ -697,9 +697,9 @@ struct ClientCtx : agentxx::plugin::ClientPluginBase {
     std::map<std::string, std::string> pending_args;
     /// 通用交互动作控制器 (action_id → handler; dispatch 经 ud 恢复本实例)
     agentxx::plugin::kit::ActionController actions;
-    /// 类型级渲染器回调 shim 存储 (registerToolRenderer 创建; 实例销毁时释放。
-    /// 主程序在插件停止/卸载时先摘除渲染器注册, 不会回调已释放的 shim)
-    std::vector<std::unique_ptr<void, void (*)(void*)>> renderShims;
+    /// 工具行句柄 (生成函数的状态; 重新注册时旧的留在这里:
+    /// 已投递的生成回调还会读它, 实例销毁才释放)
+    std::vector<std::shared_ptr<agentxx::plugin::ToolRow>> toolRows;
 };
 
 /// planning 状态图动作 id (Info 段/decor 按钮共用; bind 一次永久生效)
@@ -962,7 +962,7 @@ static void
 ///
 /// 折叠内容与展开内容分两个薄封装 (共用 [buildPlanDecorParts]): 折叠行只算
 /// todos 摘要, 状态图与待办 items 只在用户展开那一行时才算
-static std::string buildPlanningCollapsedText(const agentxx::plugin::ToolRenderInput& in) {
+static std::string buildPlanningCollapsedText(const agentxx::plugin::ToolRowInput& in) {
     utilxx_base::Json plan;
     bool              readPlaceholder = false;
     if (!planFromToolCall(in.argsJson, in.resultText, plan, readPlaceholder)) {
@@ -974,7 +974,7 @@ static std::string buildPlanningCollapsedText(const agentxx::plugin::ToolRenderI
     return buildPlanDecorParts(plan).summary;
 }
 
-static utilxx_base::Json buildPlanningExpandedItems(const agentxx::plugin::ToolRenderInput& in) {
+static utilxx_base::Json buildPlanningExpandedItems(const agentxx::plugin::ToolRowInput& in) {
     utilxx_base::Json plan;
     bool              readPlaceholder = false;
     if (!planFromToolCall(in.argsJson, in.resultText, plan, readPlaceholder)) {
@@ -1231,7 +1231,48 @@ extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL agentxx_client_plugin_get_info(
     );
 }
 
-/// client 侧注册事务 (start 的实际内容): 动作绑定 + 工具渲染器 + client 事件订阅。
+/// 注册工具行内容 (按 tool_name 注册)
+///
+/// 由工具参数/结果直接推导折叠内容与展开体, **重启恢复/重连/切换会话后由 Sync 回放
+/// 的历史工具消息同样特化渲染** (这些消息没有 EVT_DELTA 装饰推送)。
+/// 主程序无消息渲染面 (cli) 或未加载 ui 表时拿到空句柄 → 仅记日志,
+/// 工具行保持默认展示, 不影响其他功能。
+static asio::awaitable<void> registerPlanningToolRow(ClientCtx& ctx) {
+    auto row = co_await agentxx::plugin::clientRegisterToolRowAsync(
+        ctx,
+        kNamePlanning,
+        kDisplayName,
+        {
+            .summary
+            = [](const agentxx::plugin::ToolRowInput& in) {
+                  return buildPlanningCollapsedText(in);
+              },
+            .body
+            = [](const agentxx::plugin::ToolRowInput& in, utilxx_base::Json& items) {
+                  auto expanded = buildPlanningExpandedItems(in);
+                  if (expanded.is_array()) {
+                      items = std::move(expanded);
+                  }
+              },
+        }
+    );
+    if (!row) {
+        if (ctx.host && ctx.iface.log && ctx.iface.log->log) {
+            auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
+                "agentxx_planning client: register tool row failed "
+                "(restored history keeps generic tool body)"
+            );
+            ctx.iface.log->log(ctx.host, 3, &warnSv);
+        }
+        co_return;
+    }
+    ctx.toolRows.push_back(std::move(row));
+    co_return;
+}
+
+/// client 侧注册事务 (start 的实际内容): 动作绑定 + client 事件订阅。
+/// 工具行内容是异步注册 (要等两条表调用), 由 create 那一侧另起一条协程, 见
+/// [registerPlanningToolRow]。
 static int planningClientSetup(ClientCtx* ctx) {
     const PluginxxHost* host = ctx->host;
 
@@ -1239,41 +1280,6 @@ static int planningClientSetup(ClientCtx* ctx) {
     // 规划事件到达时通常已经就绪
     ensureSection(*ctx);
 
-    // 类型级工具渲染器 (按 tool_name 注册): 由工具参数/结果直接推导折叠内容与
-    // 展开体, **重启恢复/重连/切换会话后由 Sync 回放的历史工具消息同样特化
-    // 渲染** (这些消息没有 EVT_DELTA 装饰推送)。显示名注册时定下, 折叠内容与
-    // 展开内容各一个回调 (折叠行不算展开体)。主程序无消息渲染面 (cli) 或未加载
-    // ui 表时注册失败 → 仅记日志, 不影响其他功能
-    if (ctx->ui && ctx->ui->register_tool_renderer) {
-        const int32_t rc = agentxx::plugin::registerToolRenderer(
-            host,
-            ctx->ui,
-            kNamePlanning,
-            kDisplayName,
-            {
-                .collapsed =
-                    [](const agentxx::plugin::ToolRenderInput& in,
-                       agentxx::plugin::ToolCollapsedOutput&   out) {
-                        out.text = buildPlanningCollapsedText(in);
-                    },
-                .expanded =
-                    [](const agentxx::plugin::ToolRenderInput& in,
-                       agentxx::plugin::ToolExpandedOutput&    out) {
-                        out.items = buildPlanningExpandedItems(in);
-                    },
-            },
-            ctx->renderShims
-        );
-        if (rc != 0) {
-            if (ctx->iface.log && ctx->iface.log->log) {
-                auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
-                    "agentxx_planning client: register tool renderer failed "
-                    "(restored history keeps generic tool body)"
-                );
-                ctx->iface.log->log(host, 3, &warnSv);
-            }
-        }
-    }
     // 通用交互绑定 (方案 A fallback: target_id="" 本实例默认绑定, 一次永久生效):
     // - Info 段 / decor 按钮均以 action_id="planning.open_graph" 声明,
     //   owner_id 由主程序组装 (section_id / tool_call_id), 此处无需逐个 bind
@@ -1390,9 +1396,20 @@ extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL agentxx_client_plugin_create(
                 }
                 return;
             }
-            if (n && n->done) {
-                n->done(n->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+            if (!n || !n->done) {
+                return;
             }
+            auto later = agentxx::plugin::finishLater(n);
+            if (!c.iface.tasks || !c.iface.tasks->register_task) {
+                // 没有后台任务表: 工具行保持主程序的默认展示
+                later.ok();
+                return;
+            }
+            c.spawn([later](ClientCtx& inst, pluginxx::OpCtl&) -> asio::awaitable<void> {
+                co_await registerPlanningToolRow(inst);
+                later.ok();
+                co_return;
+            });
         }
     );
 }

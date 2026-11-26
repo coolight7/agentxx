@@ -137,8 +137,8 @@ std::string subagentTaskText(const utilxx_base::Json& args) {
 /// - update: "update #3"
 /// - 区间只由 get 展示 (offset/limit 只对 get 生效; new/update 整段原样存储, 不带区间)
 /// - 未识别的 opt (协议扩展) 原样展示; 参数未就绪时返回空串
-std::string renderShareStoreCollapsed(const AgentxxToolRenderInput& in) {
-    auto args = parseToolArgs(PluginStringView::str(in.args_json));
+std::string renderShareStoreCollapsed(const ClientToolRenderInput& in) {
+    auto args = parseToolArgs(in.argsJson);
     if (!args) {
         return {};
     }
@@ -166,8 +166,8 @@ std::string renderShareStoreCollapsed(const AgentxxToolRenderInput& in) {
 
         // id: get/update 来自参数; new 的新增 id 只在结果里 (参数无 id), 完成后才有
         uint64_t shownId = (id > 0) ? static_cast<uint64_t>(id) : uint64_t{0};
-        if (opt == "new" && in.is_finished != 0) {
-            shownId = shareStoreResultId(PluginStringView::str(in.result_text));
+        if (opt == "new" && in.finished) {
+            shownId = shareStoreResultId(in.resultText);
         }
         if (shownId > 0) {
             addPart(fmt::format("#{}", shownId));
@@ -182,8 +182,8 @@ std::string renderShareStoreCollapsed(const AgentxxToolRenderInput& in) {
 /// - 批量 (tasks 非空): "3 tasks: explorer, coder" (子代理名最多列 3 个)
 /// - 单发: "explorer · 修复登录失败的问题" (任务文本取首行并按宽度截断);
 ///   无子代理名时只有任务文本
-std::string renderSubagentCollapsed(const AgentxxToolRenderInput& in) {
-    auto args = parseToolArgs(PluginStringView::str(in.args_json));
+std::string renderSubagentCollapsed(const ClientToolRenderInput& in) {
+    auto args = parseToolArgs(in.argsJson);
     if (!args) {
         return {};
     }
@@ -223,7 +223,7 @@ std::string renderSubagentCollapsed(const AgentxxToolRenderInput& in) {
 
     const std::string name = args->value("subagent", std::string{});
     const std::string task
-        = oneLinePreview(subagentTaskText(*args), summaryPreviewCols(in.max_width));
+        = oneLinePreview(subagentTaskText(*args), summaryPreviewCols(in.maxWidth));
 
     if (!name.empty() && !task.empty()) {
         return name + " · " + task;
@@ -236,11 +236,11 @@ std::string renderSubagentCollapsed(const AgentxxToolRenderInput& in) {
 /// - 回调内部立即 `done` 就是同步完成, 与改造前一样当帧拿到内容
 template<typename Fn>
 int32_t runCollapsedRenderer(
-    void*                         userData,
-    const AgentxxToolRenderInput* input,
+    void*                        userData,
+    const ClientToolRenderInput* input,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out,
-    Fn&&                          fn
+    PluginxxString*              error_out,
+    Fn&&                         fn
 ) {
     (void)error_out;
     if (!input || !notify || !notify->done) {
@@ -258,7 +258,7 @@ int32_t runCollapsedRenderer(
 
 int32_t PLUGINXX_CALL builtinRenderShareStoreCollapsed(
     void*                         userData,
-    const AgentxxToolRenderInput* input,
+    const ClientToolRenderInput*  input,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {
@@ -267,7 +267,7 @@ int32_t PLUGINXX_CALL builtinRenderShareStoreCollapsed(
 
 int32_t PLUGINXX_CALL builtinRenderSubagentCollapsed(
     void*                         userData,
-    const AgentxxToolRenderInput* input,
+    const ClientToolRenderInput*  input,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {

@@ -982,29 +982,29 @@ std::string ClientPluginManager::toolContentContextJson(
 }
 
 int32_t PLUGINXX_CALL ClientPluginManager::toolContentRenderCollapsed(
-    void*                         user_data,
-    const AgentxxToolRenderInput* input,
+    void*                        user_data,
+    const ClientToolRenderInput* input,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
+    PluginxxString*              error_out
 ) {
     return toolContentRender(user_data, input, notify, error_out, /*summary=*/true);
 }
 
 int32_t PLUGINXX_CALL ClientPluginManager::toolContentRenderExpanded(
-    void*                         user_data,
-    const AgentxxToolRenderInput* input,
+    void*                        user_data,
+    const ClientToolRenderInput* input,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
+    PluginxxString*              error_out
 ) {
     return toolContentRender(user_data, input, notify, error_out, /*summary=*/false);
 }
 
 int32_t ClientPluginManager::toolContentRender(
-    void*                         user_data,
-    const AgentxxToolRenderInput* input,
+    void*                        user_data,
+    const ClientToolRenderInput* input,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out,
-    bool                          summary
+    PluginxxString*              error_out,
+    bool                         summary
 ) {
     auto* binding = static_cast<ClientToolContentBinding*>(user_data);
     if (binding == nullptr || binding->manager == nullptr || binding->generate == nullptr
@@ -1017,12 +1017,12 @@ int32_t ClientPluginManager::toolContentRender(
         return AGENTXX_RESULT_ERR_ARG;
     }
     ClientUiToolScope scope;
-    scope.toolName   = viewToStr(input->tool_name);
-    scope.argsJson   = viewToStr(input->args_json);
-    scope.resultText = viewToStr(input->result_text);
-    scope.width      = input->max_width;
-    scope.finished   = input->is_finished != 0;
-    scope.error      = input->is_error != 0;
+    scope.toolName   = std::string{input->toolName};
+    scope.argsJson   = std::string{input->argsJson};
+    scope.resultText = std::string{input->resultText};
+    scope.width      = input->maxWidth;
+    scope.finished   = input->finished;
+    scope.error      = input->error;
     scope.summary    = summary;
     const std::string contextJson = binding->manager->toolContentContextJson(*binding, scope);
 

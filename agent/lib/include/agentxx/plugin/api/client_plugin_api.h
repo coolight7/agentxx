@@ -128,78 +128,15 @@ typedef struct AgentxxStatusItem  AgentxxStatusItem;  ///< 状态栏项句柄
 typedef struct AgentxxPanel       AgentxxPanel;       ///< 侧边栏面板句柄
 typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段落句柄
 
-/* ==================== 工具特化渲染器 (Tool Renderer) ==================== */
+/* ==================== 工具行: 只有声明式内容 ==================== */
 
-/// 工具渲染输入 (主程序填, 插件读; 全部只读借用)
-///
-/// 读取方 (插件) 只需认识自己的前缀字段; 以后主程序在尾部追加字段时, 插件读该字段前
-/// 用 `agentxx::plugin::specHas<&AgentxxToolRenderInput::字段>(input->struct_size)` 判定。
-typedef struct AgentxxToolRenderInput {
-    uint32_t           struct_size;  ///< 主程序填 sizeof; 0 = 基线布局
-    int32_t            version;      ///< 结构体版本 (当前 == 1)
-    PluginxxStringView tool_call_id; ///< 工具调用 ID
-    PluginxxStringView tool_name;    ///< 工具名
-    PluginxxStringView args_json;    ///< 参数 JSON 字符串
-    PluginxxStringView result_text;  ///< 执行结果文本 (未完成时为空)
-    int32_t            is_finished;  ///< 0=运行中, 1=已完成
-    int32_t            is_error;     ///< 0=正常, 1=错误
-    int32_t            max_width;    ///< 渲染内容区可用列宽预算 (<=0 表示不限)
-    uint32_t           _pad;         ///< 8 字节对齐
-} AgentxxToolRenderInput;
+/// 工具行（折叠头 + 展开体）由声明式界面提供，不再有回调注册：
+/// - 向 `agentxx.client.tool` 注册声明项（`data` = `{"tool":"<工具名>","displayName":"…"}`）
+/// - 再注册一份内容（生成函数拿 `agentxx.client.tool.*` 变量），主程序按
+///   （调用, 折叠 / 展开）各请求一份并缓存
+/// - 主程序内置工具行（`agentxx_share_store` / `agentxx_subagent`）由主程序内部注册，
+///   不经过这张表
 
-/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
-#define AGENTXX_TOOL_RENDER_INPUT_BASELINE_SIZE sizeof(AgentxxToolRenderInput)
-
-/// 折叠内容渲染回调 (插件执行线程调用; 不得抛异常出边界, 主程序统一保护)
-///
-/// 异步操作契约 (与工具 `execute_start` 同构):
-/// - 返回 0 = 已受理, 内容经 [notify] 恰好一次交回:
-///   `status = PLUGINXX_OPERATOR_OK` 且 `payload` 非空 = **一行纯文本**
-///   (工具行折叠态 `+ [工具] <显示名> · <内容>` 的 `<内容>`, 不带分隔符 `" · "`;
-///   换行与超长由主程序按剩余列宽截断); 其它 `status` 或空 `payload` = 这次没有
-///   自定义内容 (主程序走默认渲染: 未完成 `正在调用工具...` / 已完成 结果首行)
-/// - 返回非 0 = 没受理 (原因写 `error_out`), 按默认渲染处理
-/// - **回调内部立刻 `notify->done(...)` 就是同步完成**, 与改造前「同步出参」的行为
-///   完全一致; 也可以返回后稍晚再 `done` —— 主程序先用默认内容/上一份内容渲染,
-///   结果到达时刷新该行
-typedef int32_t(PLUGINXX_CALL* AgentxxToolCollapsedRenderFn)(
-    void*                         user_data,
-    const AgentxxToolRenderInput* input,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
-);
-
-/// 展开内容渲染回调 (插件执行线程调用; 只在用户展开该工具行时调用)
-///
-/// 契约同 [AgentxxToolCollapsedRenderFn], 区别只在 `payload`: 这里是 items JSON 数组
-/// (界面描述层 schema, 如 Text/Button/Diagram/Divider/Diff); 空 = 走默认展开体
-/// (参数 JSON + 运行中提示或结果文本)
-typedef int32_t(PLUGINXX_CALL* AgentxxToolExpandedRenderFn)(
-    void*                         user_data,
-    const AgentxxToolRenderInput* input,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
-);
-
-/// 工具特化渲染注册项: 一个显示名 + 两个可选的内容回调
-///
-/// - 显示名在注册时确定 (UI 线程同步可读, 首帧即可显示); 按调用改名/装饰走
-///   `update_tool_decor`
-/// - 两个回调都为空 = 只改名, 内容全走默认渲染
-/// - 折叠内容与展开内容分开渲染、各自缓存: 折叠行不会触发展开内容渲染
-///   (展开体可能是差异对比、状态图这类开销较大的内容)
-typedef struct AgentxxToolRenderSpec {
-    uint32_t                    struct_size;  ///< sizeof(AgentxxToolRenderSpec); 0 = 基线布局
-    int32_t                     version;      ///< 结构体版本 (当前 == 2; 1 = 同步出参形态, 已删)
-    PluginxxStringView          tool_name;    ///< 目标工具名 (必填, 如 "agentxx_filesystem_read")
-    PluginxxStringView          display_name; ///< 显示名 (空 = 用 tool_name)
-    AgentxxToolCollapsedRenderFn collapsed_fn; ///< 折叠内容渲染 (可 NULL)
-    AgentxxToolExpandedRenderFn  expanded_fn;  ///< 展开内容渲染 (可 NULL)
-    void*                       user_data;    ///< 两个回调共用的上下文
-} AgentxxToolRenderSpec;
-
-/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
-#define AGENTXX_TOOL_RENDER_SPEC_BASELINE_SIZE sizeof(AgentxxToolRenderSpec)
 
 /* ==================== 通用交互: 动作回调与 overlay ==================== */
 
@@ -274,8 +211,10 @@ typedef struct AgentxxOverlaySpec {
 #define AGENTXX_IFACE_CLIENT_UI             AGENTXX_TABLE_ID("client_ui")
 /* v2: 全部成员改成异步操作契约 (句柄经完成回调 payload 交回), 见文件头 */
 /* v3: 追加声明式界面 (声明项 / 内容 / 插件自建槽位), 与共享 UI 表同一形状 */
-#define AGENTXX_IFACE_CLIENT_UI_VERSION     3 /* 追加成员 / 语义变化 -> +1 */
-#define AGENTXX_IFACE_CLIENT_UI_MIN_VERSION 2 /* 只在破坏性改动时 +1 (优先换 IID) */
+/* v4: 删掉工具行回调 (register_tool_renderer / unregister_tool_renderer): 工具行只走
+ *     `agentxx.client.tool` 上的声明项 + 内容, 不保留回调注册 */
+#define AGENTXX_IFACE_CLIENT_UI_VERSION     4 /* 追加成员 / 语义变化 -> +1 */
+#define AGENTXX_IFACE_CLIENT_UI_MIN_VERSION 4 /* 只在破坏性改动时 +1 (优先换 IID) */
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_IFACE_CLIENT_UI_BASELINE_SIZE sizeof(AgentxxClientUiIface)
 
@@ -465,36 +404,6 @@ typedef struct AgentxxClientUiIface {
         PluginxxString*           error_out
     );
 
-    /* ---- 工具特化渲染器 (按 tool_name 注册) ---- */
-    /// 注册工具特化渲染器 (按 tool_name 键控):
-    /// - 主程序在渲染该工具消息时调用, 无论实时流式还是历史消息
-    /// - 注册项 = 显示名 + 折叠内容回调 + 展开内容回调 (见 AgentxxToolRenderSpec):
-    ///   显示名在注册时确定 (UI 首帧即可显示); 两个回调都空 = 只改名;
-    ///   未给的那部分 (或回调没给内容) 走默认渲染
-    /// - 折叠内容 = 一行纯文本 (主程序补 " · " 分隔符);
-    ///   展开内容 = items JSON 数组 (如 {"kind":"Diff","path":"...","oldStr":"..."})
-    /// - 折叠内容与展开内容分开渲染、各自缓存: 折叠行不触发展开内容渲染
-    /// - 插件卸载/禁用时主程序自动注销
-    /* ---- 工具特化渲染器 ---- */
-    /// 注册工具特化渲染器: 一个显示名 + 两个可选内容回调 (折叠体 / 展开体)
-    /// - **新写法优先用声明式界面**: 向 `agentxx.client.tool` 注册声明项 (data 给
-    ///   `{"tool","displayName"}`) + 内容 (生成函数拿 `agentxx.client.tool.*` 变量),
-    ///   一个生成函数同时管折叠头与展开体; 两者共用同一条执行与缓存路径
-    /// - tool_name: 目标工具名 (必填)
-    PluginxxOperatorHandle*(PLUGINXX_CALL* register_tool_renderer)(
-        const PluginxxHost*          host,
-        const AgentxxToolRenderSpec* spec,
-        PluginxxOperatorCallback     cb,
-        void*                        ud,
-        PluginxxString*              error_out
-    );
-    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_tool_renderer)(
-        const PluginxxHost*       host,
-        const PluginxxStringView* tool_name,
-        PluginxxOperatorCallback  cb,
-        void*                     ud,
-        PluginxxString*           error_out
-    );
 
     /* ---- 通用交互 (动作回调与 overlay)
      *

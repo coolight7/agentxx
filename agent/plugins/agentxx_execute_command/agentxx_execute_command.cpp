@@ -379,23 +379,36 @@ AGENTXX_AGENT_PLUGIN_EXPORT(
     execUnmount
 );
 
-struct ExecClientCtx : public ClientPluginBase {};
+struct ExecClientCtx : public ClientPluginBase {
+    /// 工具行句柄: 生成函数的状态由它们持有, 活到实例卸载
+    std::vector<std::shared_ptr<ToolRow>> toolRows;
+};
 
 /// client 侧注册事务 (start 的实际内容)。
 /// - 两条命令工具共用一个折叠内容: 命令正文首行前缀 (完整命令在展开体里看)
-static int32_t setupExecClient(ExecClientCtx& ctx) {
-    auto commandCollapsed = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+static asio::awaitable<void> setupExecClientAsync(ExecClientCtx& ctx) {
+    auto commandSummary = [](const ToolRowInput& in) -> std::string {
         ArgReader   args(in.argsJson);
         std::string command = args.value("command", "");
         if (command.empty()) {
-            return;
+            return {};
         }
         const auto nl = command.find('\n');
-        out.text      = (nl == std::string::npos) ? command : command.substr(0, nl) + " ...";
+        return (nl == std::string::npos) ? command : command.substr(0, nl) + " ...";
     };
-    ctx.registerRenderer(kNameBash, "Bash", {.collapsed = commandCollapsed});
-    ctx.registerRenderer(kNameWindows, "Bash", {.collapsed = commandCollapsed});
-    return 0;
+    ctx.toolRows.push_back(co_await clientRegisterToolRowAsync(
+        ctx,
+        kNameBash,
+        "Bash",
+        {.summary = commandSummary}
+    ));
+    ctx.toolRows.push_back(co_await clientRegisterToolRowAsync(
+        ctx,
+        kNameWindows,
+        "Bash",
+        {.summary = commandSummary}
+    ));
+    co_return;
 }
 
 static void execClientStart(
@@ -413,18 +426,23 @@ static void execClientStart(
         }
         return;
     }
-    if (setupExecClient(ctx) != 0) {
-        if (error) {
-            PluginString::set(
-                ctx.host,
-                error,
-                "agentxx_execute_command client start: registration failed"
-            );
-        }
+    auto later = finishLater(notify);
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        later.failed(
+            "agentxx_execute_command client start: host has no pluginxx.tasks (spawn unavailable)"
+        );
         return;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return;
+    // 声明项与内容都要等表调用, 交给一条协程
+    ctx.spawn([later](ExecClientCtx& c, OpCtl&) -> asio::awaitable<void> {
+        try {
+            co_await setupExecClientAsync(c);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
 }
 
 static void execClientStop(ExecClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {

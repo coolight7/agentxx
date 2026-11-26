@@ -7,7 +7,7 @@
 /// |---|---|---|---|---|
 /// | 插件填 → 主程序读 | spec (`AgentxxPluginToolSpec` / `AgentxxOverlaySpec` …) | 插件 | 主程序 |
 /// 老插件 (短) + 新主程序 (长): 读尾部字段前必须判长度 | | 主程序填 → 插件读 | input
-/// (`AgentxxToolRenderInput` / `AgentxxUiActionContext`) | 主程序 | 插件 | 新插件 (认识长布局) +
+/// (`AgentxxUiActionContext` 一类) | 主程序 | 插件 | 新插件 (认识长布局) +
 /// 老主程序 (填得短): 读尾部字段前必须判长度 |
 ///
 /// (反方向都天然安全: 读取方只认识自己的前缀字段, 偏移与填充方逐字节一致。)
@@ -112,8 +112,6 @@ AGENTXX_DECLARE_SPEC_BASELINE(
     AGENTXX_PLUGIN_TIMER_SPEC_BASELINE_SIZE
 );
 
-AGENTXX_DECLARE_SPEC_BASELINE(AgentxxToolRenderInput, AGENTXX_TOOL_RENDER_INPUT_BASELINE_SIZE);
-AGENTXX_DECLARE_SPEC_BASELINE(AgentxxToolRenderSpec, AGENTXX_TOOL_RENDER_SPEC_BASELINE_SIZE);
 AGENTXX_DECLARE_SPEC_BASELINE(AgentxxUiActionContext, AGENTXX_UI_ACTION_CONTEXT_BASELINE_SIZE);
 AGENTXX_DECLARE_SPEC_BASELINE(AgentxxOverlaySpec, AGENTXX_OVERLAY_SPEC_BASELINE_SIZE);
 AGENTXX_DECLARE_SPEC_BASELINE(AgentxxTimerSpec, AGENTXX_TIMER_SPEC_BASELINE_SIZE);

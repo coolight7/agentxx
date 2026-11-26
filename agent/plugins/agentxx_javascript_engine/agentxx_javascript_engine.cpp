@@ -341,8 +341,13 @@ enum BridgeMagic {
     B_CLIENT_SEND_PLUGIN_DATA,
     B_CLIENT_SHOW_TOAST,
     B_CLIENT_UPDATE_TOOL_DECOR,
-    B_CLIENT_REGISTER_TOOL_RENDERER,
-    B_CLIENT_UNREGISTER_TOOL_RENDERER,
+    // client 侧声明式界面 (声明项 / 内容 / 插件自建槽位)
+    B_CLIENT_REGISTER_UI_ITEM,
+    B_CLIENT_UNREGISTER_UI_ITEM,
+    B_CLIENT_REGISTER_UI_CONTENT,
+    B_CLIENT_UNREGISTER_UI_CONTENT,
+    B_CLIENT_PUSH_UI_CONTENT,
+    B_CLIENT_UPDATE_UI_SLOT,
     B_CLIENT_OPEN_OVERLAY,
     B_CLIENT_CLOSE_OVERLAY,
     // client 侧展示面 (状态栏项 / 面板 / Info 段落 / 命令 / 动作绑定 / 定时器 / 快捷键)
@@ -567,21 +572,15 @@ struct JsCallbackHook {
     int64_t     token = 0; ///< JS 侧回调表的键
 };
 
-/// 一次渲染调用 (client io 线程创建, 交给 JS 线程执行)
+/// 一次内容生成调用 (client io 线程创建, 交给 JS 线程执行)
 ///
-/// - 输入是主程序给的只读借用视图, 跨线程后生命周期不保证: 必须在这里拷一份
-/// - 结果不在这里等: 回调返回后由 [JsReply] 经完成通知交回主程序 (可能立即,
+/// - 上下文是主程序给的只读借用视图, 跨线程后生命周期不保证: 必须在这里拷一份
+/// - 结果不在这里等: 生成函数返回后由 [JsReply] 经完成通知交回主程序 (可能立即,
 ///   也可能等脚本 Promise resolve)
-struct JsRenderCall {
-    bool        collapsed = true; ///< true = 折叠内容, false = 展开内容
-    // 输入拷贝
-    std::string toolCallId;
-    std::string toolName;
-    std::string argsJson;
-    std::string resultText;
-    bool        finished = false;
-    bool        isError  = false;
-    int32_t     maxWidth = 0;
+struct JsContentCall {
+    std::string slot;
+    std::string id;
+    std::string ctxJson; ///< 生成函数的上下文 (只含内容声明的变量)
 };
 
 /// 回答型回调 (工具渲染 / 命令 execute) 的收尾凭据
@@ -596,24 +595,26 @@ struct JsReply {
     PluginxxOperatorNotify notify{};      ///< 主程序的完成通知
     bool                   collapsed = true; ///< 折叠内容只认文本
     bool                   command   = false; ///< 命令: 任意值转 JSON 文本
+    /// 界面内容: 返回值包成 `{"json": <界面文档>}` (见 contentPayloadText)
+    bool content = false;
 };
 
-/// client 侧工具特化渲染注册项
+/// client 侧内容注册项
 ///
-/// - 注册/注销在 JS 线程, 回调查找在 client io 线程
+/// - 注册/注销在 JS 线程, 生成调用由主程序在插件执行线程发起
 /// - **不含 JSValue**: 脚本函数按 token 存在 `JsPluginCtx::clientCallbacks` 里,
 ///   因此本对象可被任意线程释放 (满足"JSValue 只在 JS 线程释放")
 /// - 生命周期覆盖引擎: 它作为 `user_data` 被主程序持有, 摘除时移进
-///   `retiredRenders_` 而不就地释放
-struct JsRenderReg {
+///   `retiredContents_` 而不就地释放
+struct JsContentReg {
     JsEngine*   engine = nullptr;
     std::string instanceKey;
-    std::string toolName;
-    /// 脚本函数 token (0 = 脚本没给该回调)
-    /// - 原子: io 线程的回调会读它们, JS 线程会写 (抹零)
-    std::atomic<int64_t> collapsedToken{0};
-    std::atomic<int64_t> expandedToken{0};
-    std::atomic<bool>    dead{false}; ///< JS 侧已释放: 回调直接失败
+    std::string slot; ///< 槽位全名
+    std::string id;   ///< 内容短名
+    /// 生成函数 token (0 = 已释放)
+    /// - 原子: 生成调用会读它, JS 线程会抹零
+    std::atomic<int64_t> fnToken{0};
+    std::atomic<bool>    dead{false}; ///< JS 侧已释放: 生成调用直接失败
 };
 
 /// client 侧脚本回调登记 (命令 / 动作 / 定时器 / 快捷键共用)
@@ -2246,15 +2247,14 @@ private:
             }
         }
         timers_.clear();
-        // 2. client 侧渲染注册: 先标记失效 (io 线程的回调据此直接失败),
+        // 2. client 侧内容注册: 先标记失效 (生成调用据此直接失败),
         //    脚本函数留在实例里随 JSContext 一起释放
         {
-            std::lock_guard<std::mutex> lk(renderMtx_);
-            for (auto& [tool, reg] : renders_) {
-                (void)tool;
+            std::lock_guard<std::mutex> lk(contentMtx_);
+            for (auto& [key, reg] : contents_) {
+                (void)key;
                 reg->dead.store(true, std::memory_order_release);
-                reg->collapsedToken.store(0, std::memory_order_release);
-                reg->expandedToken.store(0, std::memory_order_release);
+                reg->fnToken.store(0, std::memory_order_release);
             }
         }
         // 2b. client 侧脚本回调 (命令/动作/定时器/快捷键): 同样只能标失效
@@ -2978,6 +2978,47 @@ private:
         return s;
     }
 
+    /// 界面内容载荷: `{"json": <界面文档>}` (脚本给 `{json, data}` 形态时原样用)
+    ///
+    /// - 对象 / 数组: 当成界面文档, 外面补一层 `json`
+    /// - 字符串: 是 JSON 就当文档, 否则当成一段文字 (内容契约允许脚本只给一行字)
+    /// - 其它形态: 空串 (= 本次没有内容)
+    static std::string contentPayloadText(JSContext* ctx, JSValueConst value) {
+        auto wrap = [](const std::string& docText) {
+            return std::string{"{\"json\":"} + docText + "}";
+        };
+        if (JS_IsString(value)) {
+            const std::string text = jsToCppString(ctx, value);
+            if (text.empty()) {
+                return {};
+            }
+            bool parsedOk = false;
+            try {
+                (void)utilxx_base::Json::parse(text);
+                parsedOk = true;
+            } catch (...) {
+            }
+            if (parsedOk) {
+                return wrap(text);
+            }
+            utilxx_base::Json line = utilxx_base::Json::object();
+            line["kind"]           = "Text";
+            line["text"]           = text;
+            utilxx_base::Json doc  = utilxx_base::Json::object();
+            doc["blocks"]          = utilxx_base::Json::array({line});
+            return wrap(doc.dump());
+        }
+        if (JS_IsObject(value) && !JS_IsFunction(ctx, value)) {
+            JSValue    jv      = JS_GetPropertyStr(ctx, value, "json");
+            const bool hasJson = !JS_IsUndefined(jv) && !JS_IsNull(jv);
+            JS_FreeValue(ctx, jv);
+            const std::string text = valueToJsonString(ctx, value);
+            return hasJson ? text : wrap(text);
+        }
+        return {};
+    }
+
+
     /// 值 → 字符串 (对象 JSON 序列化; 字符串原样; 其他 String() 转换)
     static std::string valueToJsonString(JSContext* ctx, JSValueConst v) {
         if (JS_IsString(v) || JS_IsUndefined(v) || JS_IsNull(v) || JS_IsBool(v) || JS_IsNumber(v)) {
@@ -3406,8 +3447,7 @@ private:
         );
         if (isClientSide()) {
             // client 侧桥子集: 展示 / 会话 / 自有信息 / 广播。
-            // 注意: 渲染内容回调在 client io 线程同步进入 JS 线程, 脚本必须同步
-            // 返回结果 (返回 Promise 按"没有自定义内容"处理)。
+            // 内容生成函数可以当场返回, 也可以返回 Promise (结果到了再交回主程序)。
             def("log", B_LOG, 2);
             def("getOwnInfo", B_CLIENT_GET_OWN_INFO, 0);
             def("getPluginArgs", B_GET_PLUGIN_ARGS, 0);
@@ -3420,8 +3460,13 @@ private:
             def("sendPluginData", B_CLIENT_SEND_PLUGIN_DATA, 2);
             def("showToast", B_CLIENT_SHOW_TOAST, 2);
             def("updateToolDecor", B_CLIENT_UPDATE_TOOL_DECOR, 2);
-            def("registerToolRenderer", B_CLIENT_REGISTER_TOOL_RENDERER, 1);
-            def("unregisterToolRenderer", B_CLIENT_UNREGISTER_TOOL_RENDERER, 1);
+            // 声明式界面: 声明项 / 内容 / 自建槽位 (与 C++ 插件同一套表)
+            def("registerUiItem", B_CLIENT_REGISTER_UI_ITEM, 1);
+            def("unregisterUiItem", B_CLIENT_UNREGISTER_UI_ITEM, 1);
+            def("registerUiContent", B_CLIENT_REGISTER_UI_CONTENT, 1);
+            def("unregisterUiContent", B_CLIENT_UNREGISTER_UI_CONTENT, 1);
+            def("pushUiContent", B_CLIENT_PUSH_UI_CONTENT, 2);
+            def("updateUiSlot", B_CLIENT_UPDATE_UI_SLOT, 2);
             def("openOverlay", B_CLIENT_OPEN_OVERLAY, 1);
             def("closeOverlay", B_CLIENT_CLOSE_OVERLAY, 0);
             def("subscribe", B_SUBSCRIBE, 2);
@@ -3640,40 +3685,43 @@ private:
         const PluginxxNetIface* net
     );
 
-    // ==================== client 侧工具特化渲染 (io 线程 → JS 线程) ====================
+    // ==================== client 侧内容生成 (io 线程 → JS 线程) ====================
 
-    /// 折叠内容回调 (client io 线程调用; 异步操作契约)
-    static int32_t PLUGINXX_CALL renderCollapsed(
-        void*                         ud,
-        const AgentxxToolRenderInput* input,
-        const PluginxxOperatorNotify* notify,
-        PluginxxString*               error_out
-    );
-
-    /// 展开内容回调 (client io 线程; 只在用户展开该工具行时调用)
-    static int32_t PLUGINXX_CALL renderExpanded(
-        void*                         ud,
-        const AgentxxToolRenderInput* input,
-        const PluginxxOperatorNotify* notify,
-        PluginxxString*               error_out
-    );
-
-    /// 把一次渲染调用投递到 JS 线程 (不等结果)
+    /// 内容生成函数 (主程序在需要内容时调用; 异步操作契约)
     ///
-    /// - 返回 false = 没投递 (引擎停止); 调用方按“本次没有自定义内容”收尾
-    /// - `reg` 的生命周期覆盖引擎 (摘除时移进 `retiredRenders_`, 不就地释放)
+    /// - `host` / `ctx_json` 由主程序给; `user_data` 是注册时的 [JsContentReg]
+    /// - 与 `PluginxxUiContentSpec::generate` 同签名 (成功 / 失败都经 `notify` 交回)
+    static void PLUGINXX_CALL contentGenerate(
+        const PluginxxHost*           host,
+        const PluginxxStringView*     ctx_json,
+        void*                         user_data,
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
+    );
+
+    /// 把一次生成调用投递到 JS 线程 (不等结果)
+    ///
+    /// - 返回 false = 没投递 (引擎停止); 调用方按"本次没有内容"收尾
+    /// - `reg` 的生命周期覆盖引擎 (摘除时移进 `retiredContents_`, 不就地释放)
     /// - 结果经 `JsReply` 交回: 脚本直接返回时就在本次任务里 `done`,
     ///   返回 Promise 时在 resolve 后的微任务里 `done`
-    bool postRenderCall(JsRenderReg* reg, std::unique_ptr<JsRenderCall> call, JsReply* reply);
+    bool postContentCall(JsContentReg* reg, std::unique_ptr<JsContentCall> call, JsReply* reply);
 
-    /// 在 JS 线程执行一次渲染调用 (查实例 → 取脚本函数 → 调用 → 交回结果)
-    void runRenderCallOnJsThread(JsRenderReg* reg, JsRenderCall* call, JsReply* reply) noexcept;
+    /// 在 JS 线程执行一次生成调用 (查实例 → 取脚本函数 → 调用 → 交回内容)
+    void runContentCallOnJsThread(JsContentReg* reg, JsContentCall* call, JsReply* reply) noexcept;
 
-    /// 摘除一份渲染注册 (JS 线程调用): 标记失效并从索引里删除
-    void retireRenderOnJsThread(const std::string& toolName);
+    /// 摘除内容注册 (JS 线程调用): 标记失效并从索引里删除
+    /// - `slot` 为空 = 该实例下这个 id 的全部槽位;
+    ///   `id` 为空 = 该实例该槽位上的全部内容
+    /// - `instanceKey` 为空 = 任意实例 (只在确实不知道实例时用)
+    void retireContentOnJsThread(
+        const std::string& instanceKey,
+        const std::string& slot,
+        const std::string& id
+    );
 
-    /// 释放一份渲染注册占用的脚本函数 (JS 线程调用)
-    static void dropRenderCallbacksOnJsThread(JsPluginCtx* pctx, JsRenderReg* reg);
+    /// 释放一份内容注册占用的脚本函数 (JS 线程调用)
+    static void dropContentCallbackOnJsThread(JsPluginCtx* pctx, JsContentReg* reg);
 
     // ==================== client 侧脚本回调 (命令 / 动作 / 定时器 / 快捷键) ====================
 
@@ -3749,14 +3797,15 @@ private:
     /// (io 线程等 JS 线程, JS 线程等 io 线程处理它的表调用)。
     std::atomic<int> jsHostCallDepth_{0};
 
-    /// client 侧工具特化渲染注册索引 (工具名 → 注册项)
+    /// client 侧内容注册索引 (实例键 + '\x1f' + 槽位 + '\x1f' + 短名 → 注册项)
     ///
-    /// 注册/注销在 JS 线程, 回调查找在 client io 线程, 因此用互斥保护。
-    /// 摘除的注册项移进 `retiredRenders_` 而不就地释放: 它作为 `user_data`
-    /// 被主程序持有, 可能还有回调在路上。
-    std::mutex renderMtx_;
-    std::map<std::string, std::shared_ptr<JsRenderReg>, std::less<>> renders_;
-    std::vector<std::shared_ptr<JsRenderReg>>                      retiredRenders_;
+    /// - 注册/注销在 JS 线程, 生成调用在插件执行线程, 因此用互斥保护
+    /// - 键里带实例键: 同一个脚本挂在多个 agent 上时各有一份, 互不覆盖
+    /// - 摘除的注册项移进 `retiredContents_` 而不就地释放: 它作为 `user_data`
+    ///   被主程序持有, 可能还有调用在路上
+    std::mutex contentMtx_;
+    std::map<std::string, std::shared_ptr<JsContentReg>, std::less<>> contents_;
+    std::vector<std::shared_ptr<JsContentReg>>                        retiredContents_;
 
     /// client 侧回调登记项 (命令 / 动作 / 定时器 / 快捷键)
     ///
@@ -8699,89 +8748,173 @@ JSValue JsEngine::clientBridgeCall(
             return JS_UNDEFINED;
         }
 
-        case B_CLIENT_REGISTER_TOOL_RENDERER: {
-            if (!iface.ui || !iface.ui->register_tool_renderer) {
-                return JS_FALSE; ///< 主程序不支持工具行定制: 附加能力, 忽略
+        // ---- 声明式界面: 声明项 / 内容 / 插件自建槽位 ----
+        // 与 C++ 插件用同一批表: 声明项只说"有这个位置", 画什么由内容给出。
+        // 内容生成函数按 token 存在实例的 clientCallbacks 里, 由 contentGenerate 调用。
+        case B_CLIENT_REGISTER_UI_ITEM: {
+            if (!iface.ui || !iface.ui->register_ui_item) {
+                return JS_FALSE; ///< 主程序不支持声明式界面: 附加能力, 忽略
             }
             if (argc < 1 || !JS_IsObject(argv[0])) {
-                return JS_ThrowTypeError(ctx, "registerToolRenderer: spec object required");
+                return JS_ThrowTypeError(ctx, "registerUiItem: spec object required");
             }
             const JSValueConst specObj = argv[0];
-            std::string        toolName = strField(specObj, "tool");
-            if (toolName.empty()) {
-                toolName = strField(specObj, "toolName");
+            const std::string  id      = strField(specObj, "id");
+            std::string        slot    = strField(specObj, "slot");
+            if (slot.empty()) {
+                slot = strField(specObj, "type");
             }
-            if (toolName.empty()) {
-                return JS_ThrowTypeError(ctx, "registerToolRenderer: tool name required");
+            if (id.empty() || slot.empty()) {
+                return JS_ThrowTypeError(ctx, "registerUiItem: id and slot required");
             }
-            const std::string displayName = strField(specObj, "displayName");
-            JSValue           collapsed   = JS_GetPropertyStr(ctx, specObj, "collapsed");
-            JSValue           expanded    = JS_GetPropertyStr(ctx, specObj, "expanded");
-            const bool        hasCollapsed = JS_IsFunction(ctx, collapsed);
-            const bool        hasExpanded  = JS_IsFunction(ctx, expanded);
+            std::string data = jsonField(specObj, "data");
+            if (data.empty()) {
+                data = "{}";
+            }
+            int32_t order = 0;
+            {
+                JSValue ov = JS_GetPropertyStr(ctx, specObj, "order");
+                if (JS_IsNumber(ov)) {
+                    JS_ToInt32(ctx, &order, ov);
+                }
+                JS_FreeValue(ctx, ov);
+            }
+            PluginxxUiEntrySpec spec{};
+            spec.version     = 1;
+            spec.struct_size = sizeof(PluginxxUiEntrySpec);
+            spec.item_id     = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+            spec.type        = agentxx::plugin::PluginStringView::from(slot.data(), slot.size());
+            spec.data_json   = agentxx::plugin::PluginStringView::from(data.data(), data.size());
+            spec.order       = order;
+            return tableOkPromise(
+                ctx,
+                host,
+                engine,
+                [iface, host, &spec](
+                    PluginxxOperatorCallback cb,
+                    void*                     ud,
+                    PluginxxString*           err
+                ) { return iface.ui->register_ui_item(host, &spec, cb, ud, err); }
+            );
+        }
 
-            auto reg         = std::make_shared<JsRenderReg>();
+        case B_CLIENT_UNREGISTER_UI_ITEM: {
+            if (argc < 1 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "unregisterUiItem: id required");
+            }
+            const std::string id = jsToCppString(ctx, argv[0]);
+            if (id.empty() || !iface.ui || !iface.ui->unregister_ui_item) {
+                return JS_FALSE;
+            }
+            auto idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+            return tableOkPromise(
+                ctx,
+                host,
+                engine,
+                [iface, host, idSv](
+                    PluginxxOperatorCallback cb,
+                    void*                     ud,
+                    PluginxxString*           err
+                ) { return iface.ui->unregister_ui_item(host, &idSv, cb, ud, err); }
+            );
+        }
+
+        case B_CLIENT_REGISTER_UI_CONTENT: {
+            if (!iface.ui || !iface.ui->register_ui_content) {
+                return JS_FALSE;
+            }
+            if (argc < 1 || !JS_IsObject(argv[0])) {
+                return JS_ThrowTypeError(ctx, "registerUiContent: spec object required");
+            }
+            const JSValueConst specObj = argv[0];
+            const std::string  id      = strField(specObj, "id");
+            std::string        slot    = strField(specObj, "slot");
+            if (slot.empty()) {
+                slot = strField(specObj, "type");
+            }
+            if (id.empty() || slot.empty()) {
+                return JS_ThrowTypeError(ctx, "registerUiContent: slot and id required");
+            }
+            JSValue gen = JS_GetPropertyStr(ctx, specObj, "generate");
+            if (!JS_IsFunction(ctx, gen)) {
+                JS_FreeValue(ctx, gen);
+                return JS_ThrowTypeError(ctx, "registerUiContent: generate function required");
+            }
+            auto reg         = std::make_shared<JsContentReg>();
             reg->engine      = engine;
             reg->instanceKey = pctx->instanceKey;
-            reg->toolName    = toolName;
-            if (hasCollapsed) {
-                const int64_t token = ++pctx->nextCallbackToken;
-                reg->collapsedToken.store(token, std::memory_order_release);
-                pctx->clientCallbacks[token] = JS_DupValue(ctx, collapsed);
-            }
-            if (hasExpanded) {
-                const int64_t token = ++pctx->nextCallbackToken;
-                reg->expandedToken.store(token, std::memory_order_release);
-                pctx->clientCallbacks[token] = JS_DupValue(ctx, expanded);
-            }
-            JS_FreeValue(ctx, collapsed);
-            JS_FreeValue(ctx, expanded);
+            reg->slot        = slot;
+            reg->id          = id;
+            const int64_t token = ++pctx->nextCallbackToken;
+            reg->fnToken.store(token, std::memory_order_release);
+            // 接管 JS_GetPropertyStr 给出的引用 (不再 Dup / Free, 随实例释放)
+            pctx->clientCallbacks[token] = gen;
 
-            AgentxxToolRenderSpec spec{};
-            spec.struct_size  = sizeof(AgentxxToolRenderSpec);
-            spec.version      = 2;
-            spec.tool_name
-                = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-            spec.display_name
-                = agentxx::plugin::PluginStringView::from(displayName.data(), displayName.size());
-            spec.collapsed_fn = hasCollapsed ? &JsEngine::renderCollapsed : nullptr;
-            spec.expanded_fn  = hasExpanded ? &JsEngine::renderExpanded : nullptr;
-            spec.user_data    = reg.get();
+            const std::string title  = strField(specObj, "title");
+            const std::string depict = strField(specObj, "depict");
+            std::string       deps   = jsonField(specObj, "deps");
+            if (deps.empty()) {
+                deps = "[]";
+            }
+            std::string routes = jsonField(specObj, "routes");
+            int32_t     order  = 0;
+            {
+                JSValue ov = JS_GetPropertyStr(ctx, specObj, "order");
+                if (JS_IsNumber(ov)) {
+                    JS_ToInt32(ctx, &order, ov);
+                }
+                JS_FreeValue(ctx, ov);
+            }
+            PluginxxUiContentSpec spec{};
+            spec.version     = 1;
+            spec.struct_size = sizeof(PluginxxUiContentSpec);
+            spec.id          = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+            spec.slot        = agentxx::plugin::PluginStringView::from(slot.data(), slot.size());
+            spec.title       = agentxx::plugin::PluginStringView::from(title.data(), title.size());
+            spec.depict      = agentxx::plugin::PluginStringView::from(depict.data(), depict.size());
+            spec.routes_json = agentxx::plugin::PluginStringView::from(routes.data(), routes.size());
+            spec.deps_json   = agentxx::plugin::PluginStringView::from(deps.data(), deps.size());
+            spec.order       = order;
+            spec.generate    = &JsEngine::contentGenerate;
+            spec.user_data   = reg.get();
             return tableOpPromise(
                 ctx,
                 host,
                 engine,
-                [iface, host, &spec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                    return iface.ui->register_tool_renderer(host, &spec, cb, ud, err);
-                },
-                [engine, iface, host, pctx, reg, toolName](JSContext*, const JsTableResult& r)
+                [iface, host, &spec](
+                    PluginxxOperatorCallback cb,
+                    void*                     ud,
+                    PluginxxString*           err
+                ) { return iface.ui->register_ui_content(host, &spec, cb, ud, err); },
+                [engine, iface, host, pctx, reg, slot, id](JSContext*, const JsTableResult& r)
                     -> JSValue {
                     if (!r.ok()) {
-                        // 主程序拒绝 (重复注册 / 参数非法): 不留下无人用的脚本函数
-                        dropRenderCallbacksOnJsThread(pctx, reg.get());
+                        // 主程序拒绝 (参数非法 / 槽位不存在): 不留下无人用的脚本函数
+                        dropContentCallbackOnJsThread(pctx, reg.get());
                         return JS_FALSE;
                     }
                     {
-                        std::lock_guard<std::mutex> lk(engine->renderMtx_);
-                        auto                        old = engine->renders_.find(toolName);
-                        if (old != engine->renders_.end()) {
-                            // 旧注册项不能就地释放: user_data 可能还有回调在用
+                        const std::string           key = slot + '\x1f' + id;
+                        std::lock_guard<std::mutex> lk(engine->contentMtx_);
+                        auto                        old = engine->contents_.find(key);
+                        if (old != engine->contents_.end()) {
+                            // 旧注册项不能就地释放: user_data 可能还有调用在用
                             old->second->dead.store(true, std::memory_order_release);
-                            engine->retiredRenders_.push_back(old->second);
-                            engine->renders_.erase(old);
+                            engine->retiredContents_.push_back(old->second);
+                            engine->contents_.erase(old);
                         }
-                        engine->renders_[toolName] = reg;
+                        engine->contents_[key] = reg;
                     }
                     // 脚本先卸载时也要撤销 (主程序在插件实例卸载时同样会摘除)
                     pctx->rollbackActions.push_back(
-                        [engine, ui = iface.ui, host, toolName]() {
-                            engine->retireRenderOnJsThread(toolName);
-                            if (ui && ui->unregister_tool_renderer) {
-                                auto tn = agentxx::plugin::PluginStringView::from(
-                                    toolName.data(),
-                                    toolName.size()
+                        [engine, ui = iface.ui, host, instanceKey = pctx->instanceKey, slot, id]() {
+                            engine->retireContentOnJsThread(instanceKey, slot, id);
+                            if (ui && ui->unregister_ui_content) {
+                                auto idSv = agentxx::plugin::PluginStringView::from(
+                                    id.data(),
+                                    id.size()
                                 );
-                                ui->unregister_tool_renderer(host, &tn, nullptr, nullptr, nullptr);
+                                ui->unregister_ui_content(host, &idSv, nullptr, nullptr, nullptr);
                             }
                         }
                     );
@@ -8790,30 +8923,82 @@ JSValue JsEngine::clientBridgeCall(
             );
         }
 
-        case B_CLIENT_UNREGISTER_TOOL_RENDERER: {
+        case B_CLIENT_UNREGISTER_UI_CONTENT: {
             if (argc < 1 || !JS_IsString(argv[0])) {
-                return JS_ThrowTypeError(ctx, "unregisterToolRenderer: tool name required");
+                return JS_ThrowTypeError(ctx, "unregisterUiContent: id required");
             }
-            const std::string toolName = jsToCppString(ctx, argv[0]);
-            if (toolName.empty()) {
+            const std::string id = jsToCppString(ctx, argv[0]);
+            if (id.empty() || !iface.ui || !iface.ui->unregister_ui_content) {
                 return JS_FALSE;
             }
-            engine->retireRenderOnJsThread(toolName);
-            if (!iface.ui || !iface.ui->unregister_tool_renderer) {
-                return JS_FALSE;
-            }
-            auto tn = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
+            engine->retireContentOnJsThread(pctx->instanceKey, std::string{}, id);
+            auto idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
             return tableOkPromise(
                 ctx,
                 host,
                 engine,
-                [iface, host, tn](
+                [iface, host, idSv](
                     PluginxxOperatorCallback cb,
                     void*                     ud,
                     PluginxxString*           err
-                ) {
-                    return iface.ui->unregister_tool_renderer(host, &tn, cb, ud, err);
-                }
+                ) { return iface.ui->unregister_ui_content(host, &idSv, cb, ud, err); }
+            );
+        }
+
+        case B_CLIENT_PUSH_UI_CONTENT: {
+            if (argc < 2 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "pushUiContent: id and content required");
+            }
+            if (!iface.ui || !iface.ui->push_ui_content) {
+                return JS_FALSE;
+            }
+            const std::string id      = jsToCppString(ctx, argv[0]);
+            const std::string payload = contentPayloadText(ctx, argv[1]);
+            if (id.empty() || payload.empty()) {
+                return JS_FALSE;
+            }
+            auto idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+            auto payloadSv
+                = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
+            return tableOkPromise(
+                ctx,
+                host,
+                engine,
+                [iface, host, idSv, payloadSv](
+                    PluginxxOperatorCallback cb,
+                    void*                     ud,
+                    PluginxxString*           err
+                ) { return iface.ui->push_ui_content(host, &idSv, &payloadSv, cb, ud, err); }
+            );
+        }
+
+        case B_CLIENT_UPDATE_UI_SLOT: {
+            if (argc < 1 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "updateUiSlot: slot required");
+            }
+            if (!iface.ui || !iface.ui->update_ui_slot) {
+                return JS_FALSE;
+            }
+            const std::string slot = jsToCppString(ctx, argv[0]);
+            if (slot.empty()) {
+                return JS_FALSE;
+            }
+            std::string ids = "[]";
+            if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+                ids = JS_IsString(argv[1]) ? jsToCppString(ctx, argv[1])
+                                           : valueToJsonString(ctx, argv[1]);
+            }
+            auto slotSv = agentxx::plugin::PluginStringView::from(slot.data(), slot.size());
+            auto idsSv  = agentxx::plugin::PluginStringView::from(ids.data(), ids.size());
+            return tableOkPromise(
+                ctx,
+                host,
+                engine,
+                [iface, host, slotSv, idsSv](
+                    PluginxxOperatorCallback cb,
+                    void*                     ud,
+                    PluginxxString*           err
+                ) { return iface.ui->update_ui_slot(host, &slotSv, &idsSv, cb, ud, err); }
             );
         }
 
@@ -10001,97 +10186,60 @@ std::unique_ptr<JsReply> takeReply(const PluginxxOperatorNotify* notify) {
 
 } // namespace
 
-int32_t PLUGINXX_CALL JsEngine::renderCollapsed(
-    void*                         ud,
-    const AgentxxToolRenderInput* input,
+void PLUGINXX_CALL JsEngine::contentGenerate(
+    const PluginxxHost*           host,
+    const PluginxxStringView*     ctx_json,
+    void*                         user_data,
     const PluginxxOperatorNotify* notify,
     PluginxxString*               error_out
 ) {
-    (void)error_out;
-    if (!ud || !input) {
-        return AGENTXX_RESULT_ERR_ARG;
+    (void)host;
+    if (user_data == nullptr || notify == nullptr) {
+        agentxx::plugin::PluginString::set(
+            host,
+            error_out,
+            "content generate needs input and notify"
+        );
+        return;
     }
-    auto* reg    = static_cast<JsRenderReg*>(ud);
+    auto* reg    = static_cast<JsContentReg*>(user_data);
     auto* engine = reg->engine;
     if (!engine || reg->dead.load(std::memory_order_acquire)
-        || reg->collapsedToken.load(std::memory_order_acquire) == 0) {
-        return AGENTXX_RESULT_ERR_STATE;
+        || reg->fnToken.load(std::memory_order_acquire) == 0) {
+        agentxx::plugin::PluginString::set(
+            host,
+            error_out,
+            "content registration is gone"
+        );
+        return;
     }
     auto reply = takeReply(notify);
     if (!reply) {
-        return AGENTXX_RESULT_ERR_ARG;
+        return;
     }
-    reply->collapsed = true;
+    reply->content = true;
     try {
-        auto call        = std::make_unique<JsRenderCall>();
-        call->collapsed  = true;
-        call->toolCallId = std::string(agentxx::plugin::PluginStringView::str(input->tool_call_id));
-        call->toolName   = std::string(agentxx::plugin::PluginStringView::str(input->tool_name));
-        call->argsJson   = std::string(agentxx::plugin::PluginStringView::str(input->args_json));
-        call->resultText
-            = std::string(agentxx::plugin::PluginStringView::str(input->result_text));
-        call->finished = input->is_finished != 0;
-        call->isError  = input->is_error != 0;
-        call->maxWidth = input->max_width;
-        JsReply* raw   = reply.release();
-        if (!engine->postRenderCall(reg, std::move(call), raw)) {
-            // 引擎已停止: 按"没有自定义内容"收尾
+        auto call     = std::make_unique<JsContentCall>();
+        call->slot    = reg->slot;
+        call->id      = reg->id;
+        call->ctxJson = (ctx_json != nullptr && ctx_json->data != nullptr)
+                            ? std::string{ctx_json->data, static_cast<size_t>(ctx_json->size)}
+                            : std::string{"{}"};
+        JsReply* raw  = reply.release();
+        if (!engine->postContentCall(reg, std::move(call), raw)) {
+            // 引擎已停止: 按"本次没有内容"收尾
             failReply(raw, "js engine stopped");
         }
-        return 0;
+        return;
     } catch (...) {
-        failReply(reply.release(), "render callback failed");
-        return AGENTXX_RESULT_ERR_INTERNAL;
+        failReply(reply.release(), "content generate failed");
     }
 }
 
-int32_t PLUGINXX_CALL JsEngine::renderExpanded(
-    void*                         ud,
-    const AgentxxToolRenderInput* input,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
-) {
-    (void)error_out;
-    if (!ud || !input) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    auto* reg    = static_cast<JsRenderReg*>(ud);
-    auto* engine = reg->engine;
-    if (!engine || reg->dead.load(std::memory_order_acquire)
-        || reg->expandedToken.load(std::memory_order_acquire) == 0) {
-        return AGENTXX_RESULT_ERR_STATE;
-    }
-    auto reply = takeReply(notify);
-    if (!reply) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    reply->collapsed = false;
-    try {
-        auto call        = std::make_unique<JsRenderCall>();
-        call->collapsed  = false;
-        call->toolCallId = std::string(agentxx::plugin::PluginStringView::str(input->tool_call_id));
-        call->toolName   = std::string(agentxx::plugin::PluginStringView::str(input->tool_name));
-        call->argsJson   = std::string(agentxx::plugin::PluginStringView::str(input->args_json));
-        call->resultText
-            = std::string(agentxx::plugin::PluginStringView::str(input->result_text));
-        call->finished = input->is_finished != 0;
-        call->isError  = input->is_error != 0;
-        call->maxWidth = input->max_width;
-        JsReply* raw   = reply.release();
-        if (!engine->postRenderCall(reg, std::move(call), raw)) {
-            failReply(raw, "js engine stopped");
-        }
-        return 0;
-    } catch (...) {
-        failReply(reply.release(), "render callback failed");
-        return AGENTXX_RESULT_ERR_INTERNAL;
-    }
-}
-
-bool JsEngine::postRenderCall(
-    JsRenderReg*                 reg,
-    std::unique_ptr<JsRenderCall> call,
-    JsReply*                     reply
+bool JsEngine::postContentCall(
+    JsContentReg*                  reg,
+    std::unique_ptr<JsContentCall> call,
+    JsReply*                       reply
 ) {
     if (!reg || !call || !reply) {
         return false;
@@ -10099,23 +10247,23 @@ bool JsEngine::postRenderCall(
     // 任务自己持有输入与凭据 (堆上), 不引用调用方栈
     auto* raw = call.release();
     return post([this, reg, raw, reply]() {
-        std::unique_ptr<JsRenderCall> own(raw);
-        runRenderCallOnJsThread(reg, raw, reply);
+        std::unique_ptr<JsContentCall> own(raw);
+        runContentCallOnJsThread(reg, raw, reply);
     });
 }
 
-void JsEngine::runRenderCallOnJsThread(
-    JsRenderReg*    reg,
-    JsRenderCall*   call,
-    JsReply*        reply
+void JsEngine::runContentCallOnJsThread(
+    JsContentReg*  reg,
+    JsContentCall* call,
+    JsReply*       reply
 ) noexcept {
     if (!reg || !call || !reply) {
-        failReply(reply, "bad render call");
+        failReply(reply, "bad content call");
         return;
     }
     try {
         if (reg->dead.load(std::memory_order_acquire) || stopping()) {
-            failReply(reply, "renderer retired");
+            failReply(reply, "content retired");
             return;
         }
         auto pctx = findPlugin(reg->instanceKey);
@@ -10123,16 +10271,14 @@ void JsEngine::runRenderCallOnJsThread(
             failReply(reply, "plugin instance gone");
             return;
         }
-        const int64_t token = call->collapsed
-                                  ? reg->collapsedToken.load(std::memory_order_acquire)
-                                  : reg->expandedToken.load(std::memory_order_acquire);
+        const int64_t token = reg->fnToken.load(std::memory_order_acquire);
         if (token == 0) {
-            failReply(reply, "renderer not registered");
+            failReply(reply, "content not registered");
             return;
         }
         auto fit = pctx->clientCallbacks.find(token);
         if (fit == pctx->clientCallbacks.end()) {
-            failReply(reply, "renderer callback gone");
+            failReply(reply, "content callback gone");
             return;
         }
         JSContext* ctx = pctx->ctx;
@@ -10148,54 +10294,28 @@ void JsEngine::runRenderCallOnJsThread(
             }
         } guard(pctx.get());
 
-        JSValue input = JS_NewObject(ctx);
-        JS_SetPropertyStr(
-            ctx,
-            input,
-            "toolCallId",
-            JS_NewStringLen(ctx, call->toolCallId.data(), call->toolCallId.size())
-        );
-        JS_SetPropertyStr(
-            ctx,
-            input,
-            "toolName",
-            JS_NewStringLen(ctx, call->toolName.data(), call->toolName.size())
-        );
-        JS_SetPropertyStr(
-            ctx,
-            input,
-            "argsJson",
-            JS_NewStringLen(ctx, call->argsJson.data(), call->argsJson.size())
-        );
-        JS_SetPropertyStr(ctx, input, "args", jsonTextToValue(ctx, call->argsJson, "<tool_args>"));
-        JS_SetPropertyStr(
-            ctx,
-            input,
-            "resultText",
-            JS_NewStringLen(ctx, call->resultText.data(), call->resultText.size())
-        );
-        JS_SetPropertyStr(ctx, input, "finished", call->finished ? JS_TRUE : JS_FALSE);
-        JS_SetPropertyStr(ctx, input, "isError", call->isError ? JS_TRUE : JS_FALSE);
-        JS_SetPropertyStr(ctx, input, "maxWidth", JS_NewInt32(ctx, call->maxWidth));
-
-        JSValue argv[1] = {input};
-        JSValue ret     = JS_Call(ctx, fit->second, JS_UNDEFINED, 1, argv);
-        JS_FreeValue(ctx, input);
+        JSValue ctxValue = jsonTextToValue(ctx, call->ctxJson, "<ui_content_ctx>");
+        JSValue argv[1]  = {ctxValue};
+        JSValue ret      = JS_Call(ctx, fit->second, JS_UNDEFINED, 1, argv);
+        JS_FreeValue(ctx, ctxValue);
         if (JS_IsException(ret)) {
             JSValue exc = JS_GetException(ctx);
             logAt(
                 3,
-                fmt::format("interpreter.js: tool renderer threw: {}", valueToJsonString(ctx, exc))
+                fmt::format(
+                    "interpreter.js: ui content generate threw: {}",
+                    valueToJsonString(ctx, exc)
+                )
                     .c_str()
             );
             JS_FreeValue(ctx, exc);
             JS_FreeValue(ctx, ret);
-            failReply(reply, "tool renderer threw");
+            failReply(reply, "ui content generate threw");
             return;
         }
         finishJsReply(ctx, reply, ret);
     } catch (...) {
-        failReply(reply, "tool renderer failed");
+        failReply(reply, "ui content generate failed");
     }
 }
 
@@ -10206,6 +10326,10 @@ void JsEngine::runRenderCallOnJsThread(
 std::string JsEngine::replyText(JSContext* ctx, const JsReply& reply, JSValueConst value) {
     if (JS_IsNull(value) || JS_IsUndefined(value)) {
         return {};
+    }
+    if (reply.content) {
+        // 内容契约: `{"json": <界面文档>}` (字符串 / 对象 / 数组都接受)
+        return contentPayloadText(ctx, value);
     }
     if (JS_IsString(value)) {
         return jsToCppString(ctx, value);
@@ -10317,43 +10441,52 @@ JSValue JsEngine::jsReplySettled(
     return JS_UNDEFINED;
 }
 
-void JsEngine::retireRenderOnJsThread(const std::string& toolName) {
-    std::shared_ptr<JsRenderReg> reg;
+void JsEngine::retireContentOnJsThread(
+    const std::string& instanceKey,
+    const std::string& slot,
+    const std::string& id
+) {
+    std::vector<std::shared_ptr<JsContentReg>> dropped;
     {
-        std::lock_guard<std::mutex> lk(renderMtx_);
-        auto                        it = renders_.find(toolName);
-        if (it == renders_.end()) {
-            return;
+        std::lock_guard<std::mutex> lk(contentMtx_);
+        for (auto it = contents_.begin(); it != contents_.end();) {
+            const auto& reg = it->second;
+            // 空 instanceKey = 任意实例 (脚本卸载回滚时只按槽位与 id 找)
+            if ((!instanceKey.empty() && reg->instanceKey != instanceKey)
+                || (!slot.empty() && reg->slot != slot) || (!id.empty() && reg->id != id)) {
+                ++it;
+                continue;
+            }
+            reg->dead.store(true, std::memory_order_release);
+            dropped.push_back(reg);
+            // 注册项不就地释放: user_data 可能还有调用在用, 留到引擎析构
+            retiredContents_.push_back(reg);
+            it = contents_.erase(it);
         }
-        reg = it->second;
-        reg->dead.store(true, std::memory_order_release);
-        // 注册项不就地释放: user_data 可能还有回调在用, 留到引擎析构
-        retiredRenders_.push_back(reg);
-        renders_.erase(it);
     }
-    if (auto pctx = findPlugin(reg->instanceKey)) {
-        dropRenderCallbacksOnJsThread(pctx.get(), reg.get());
+    if (dropped.empty()) {
+        return;
+    }
+    for (const auto& reg : dropped) {
+        if (auto pctx = findPlugin(reg->instanceKey)) {
+            dropContentCallbackOnJsThread(pctx.get(), reg.get());
+        }
     }
 }
 
-void JsEngine::dropRenderCallbacksOnJsThread(JsPluginCtx* pctx, JsRenderReg* reg) {
+void JsEngine::dropContentCallbackOnJsThread(JsPluginCtx* pctx, JsContentReg* reg) {
     if (!pctx || !pctx->ctx || !reg) {
         return;
     }
-    auto dropOne = [&](std::atomic<int64_t>& tokenRef) {
-        const int64_t token = tokenRef.load(std::memory_order_acquire);
-        if (token == 0) {
-            return;
-        }
-        auto it = pctx->clientCallbacks.find(token);
-        if (it != pctx->clientCallbacks.end()) {
-            JS_FreeValue(pctx->ctx, it->second);
-            pctx->clientCallbacks.erase(it);
-        }
-        tokenRef.store(0, std::memory_order_release);
-    };
-    dropOne(reg->collapsedToken);
-    dropOne(reg->expandedToken);
+    const int64_t token = reg->fnToken.exchange(0, std::memory_order_acq_rel);
+    if (token == 0) {
+        return;
+    }
+    auto it = pctx->clientCallbacks.find(token);
+    if (it != pctx->clientCallbacks.end()) {
+        JS_FreeValue(pctx->ctx, it->second);
+        pctx->clientCallbacks.erase(it);
+    }
 }
 
 // =====================================================================

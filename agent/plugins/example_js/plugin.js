@@ -3,12 +3,12 @@
 //
 // 同一份脚本在两侧都会执行:
 // - `agentxx.side === "agent"`: 注册工具 / 通知点 / 事件 (agent 侧)
-// - `agentxx.side === "client"`: 注册工具行特化渲染 (client 侧)
+// - `agentxx.side === "client"`: 注册工具行内容 / 展示面 / 命令 / 动作 (client 侧)
 //
 // **脚本按 ES module 执行**: 表调用 (注册/查询/发布/...) 一律返回 Promise,
 // 需要生效或取值时 `await`; 顶层 `await` 可用。同步返回的只有纯本地函数
 // (`log` / `jsonEscape` / `jsonGetString` / `scope` / `setTimeout` / `showToast`
-// 这类提交即返回的动作) 与"必须当场回答"的回调 (`collapsed` / `expanded` / 命令 execute)。
+// 这类提交即返回的动作) 与"必须当场回答"的回调 (内容生成函数 / 命令 execute)。
 const SIDE =
   typeof agentxx !== "undefined" && typeof agentxx.side === "string"
     ? agentxx.side
@@ -16,34 +16,56 @@ const SIDE =
 
 if (SIDE === "client") {
 
-  // ---- client 侧: 工具行特化渲染 ----
-  // 注册后消息列表里该工具的折叠头用 displayName, 折叠内容与展开体由回调给出。
-  // 两个回调都要**同步**返回内容 (返回 Promise 等于"没有自定义内容"):
-  // - collapsed(input) 给一行文本 (不带 " · " 分隔符); 返回空 = 用默认渲染
-  // - expanded(input) 给 items 数组 (界面描述层 schema)
-  // - input = {toolCallId, toolName, args, argsJson, resultText, finished, isError, maxWidth}
-  const rendererOk = await agentxx.registerToolRenderer({
-    tool: "js_hello",
-    displayName: "JS Hello",
-    collapsed: (input) => {
-      const who = (input.args && input.args.name) || "world";
-      return input.finished ? "greeted " + who : "greeting " + who + "...";
-    },
-    expanded: (input) => {
-      const who = (input.args && input.args.name) || "world";
-      return [
-        { kind: "Text", text: "JS Hello (client side)", type: "title" },
-        { kind: "Text", text: "target: " + who, color: "hint" },
-        {
-          kind: "Text",
-          text: input.finished ? "result: " + (input.resultText || "") : "(running)",
-        },
-      ];
+  // ---- client 侧: 工具行内容 (声明项 + 内容) ----
+  // 工具行 = `tool` 槽位上的一份声明项 + 一份内容:
+  // - 声明项的 data 带工具名与显示名: {tool, displayName}
+  // - 内容生成函数拿到 `agentxx.client.tool.*` 变量 (deps 里声明的那些);
+  //   part === "summary" 时只要一行文字 (主程序取文档里的纯文本),
+  //   否则给整块内容 (blocks / items)
+  // - 生成函数可以当场返回, 也可以返回 Promise (结果到了再交回)
+  const itemOk = await agentxx.registerUiItem({
+    slot: "tool",
+    id: "js_hello",
+    data: { tool: "js_hello", displayName: "JS Hello" },
+  });
+  const contentOk = await agentxx.registerUiContent({
+    slot: "tool",
+    id: "js_hello",
+    deps: [
+      "agentxx.client.tool.args",
+      "agentxx.client.tool.part",
+      "agentxx.client.tool.state",
+    ],
+    generate: (ctx) => {
+      let args = {};
+      try {
+        args = JSON.parse(ctx["agentxx.client.tool.args"] || "{}");
+      } catch (e) {
+        args = {};
+      }
+      const who = args.name || "world";
+      const state = ctx["agentxx.client.tool.state"];
+      if (ctx["agentxx.client.tool.part"] === "summary") {
+        return state === "running" ? "greeting " + who + "..." : "greeted " + who;
+      }
+      return {
+        blocks: [
+          { kind: "Text", text: "JS Hello (client side)", type: "title" },
+          { kind: "Text", text: "target: " + who, color: "hint" },
+          { kind: "Text", text: "state: " + state, color: "hint" },
+        ],
+      };
     },
   });
   agentxx.log(
     2,
-    "example_js: client side ready (side=" + SIDE + ", renderer=" + rendererOk + ")",
+    "example_js: client side ready (side=" +
+      SIDE +
+      ", tool row=" +
+      itemOk +
+      "/" +
+      contentOk +
+      ")",
   );
 
   // ---- client 侧: 展示面 (状态栏项 / Info 段落 / 侧边栏面板) ----
@@ -118,6 +140,16 @@ if (SIDE === "client") {
     },
   );
 
+  // ---- client 侧: 主动推内容 / 按变量重新生成 ----
+  // - pushUiContent 直接给一份已算好的内容 (不等主程序来问; 内容要已注册)
+  // - updateUiSlot 让主程序按当前变量把槽位上的内容重新生成一遍
+  //   (第二个参数不给 = 该槽位上本插件的全部内容)
+  const pushOk = await agentxx.pushUiContent("js.demo.info", {
+    blocks: [{ kind: "Text", text: "pushed from JS", color: "hint" }],
+  });
+  const slotOk = await agentxx.updateUiSlot("tool", ["js_hello"]);
+  agentxx.log(2, "example_js: push=" + pushOk + " slot=" + slotOk);
+
   // ---- client 侧: 注销与查询入口 ----
   await agentxx.registerKeybind(
     { keys: "ctrl+alt+u", description: "example_js: 注销展示项" },
@@ -138,6 +170,11 @@ if (SIDE === "client") {
       }
       if (tickBind) {
         await agentxx.unregisterKeybind(tickBind);
+      }
+      if (status) {
+        await agentxx.updateStatusItem(status, {
+          text: "js: key " + keyTicks + " (cleanup)",
+        });
       }
       agentxx.showToast(
         "cleanup: binds=" + binds.length + " visible=" + visible,

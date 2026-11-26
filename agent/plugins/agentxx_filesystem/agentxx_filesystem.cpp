@@ -992,37 +992,46 @@ AGENTXX_AGENT_PLUGIN_EXPORT(
     fsUnmount
 );
 
-struct FsClientCtx : public ClientPluginBase {};
+struct FsClientCtx : public ClientPluginBase {
+    /// 工具行句柄: 生成函数的状态由它们持有, 活到实例卸载 (主程序按它调生成函数)
+    std::vector<std::shared_ptr<ToolRow>> toolRows;
+};
+
+/// 折叠内容 = 参数里的路径 (参数还没到时为空, 界面走默认渲染)
+static std::string fsPathSummary(const ToolRowInput& in) {
+    ArgReader args(in.argsJson);
+    return args.value("path", "");
+}
 
 /// client 侧注册事务 (start 的实际内容)。
 ///
-/// 注册项 = 显示名 + 折叠内容回调 (+ 必要时的展开内容回调):
-/// - 显示名注册时定下, 首帧即可显示 (不再等回调)
-/// - 折叠内容是一行纯文本, **不带**分隔符 " · " (头行格式由界面统一拼装)
-/// - 展开内容只在用户展开该工具行时算 (如 Edit 的逐段差异)
-static int32_t fsClientSetup(FsClientCtx& ctx) {
-    // 折叠内容 = 参数里的路径 (参数还没到时为空, 界面走默认渲染)
-    auto pathCollapsed = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
-        ArgReader args(in.argsJson);
-        out.text = args.value("path", "");
-    };
-
+/// 每个工具注册一份 `agentxx.client.tool` 声明项 + 一份内容:
+/// - 显示名注册时定下, 首帧即可显示 (不再等生成函数)
+/// - 折叠头是一行纯文本, **不带**分隔符 " · " (头行格式由界面统一拼装)
+/// - 展开体只在用户展开该工具行时算 (如 Edit 的逐段差异)
+static asio::awaitable<void> fsClientSetupAsync(FsClientCtx& ctx) {
     // 1. List
-    ctx.registerRenderer(kNameList, "List", {.collapsed = pathCollapsed});
+    ctx.toolRows.push_back(
+        co_await clientRegisterToolRowAsync(ctx, kNameList, "List", {.summary = fsPathSummary})
+    );
 
     // 2. Write
-    ctx.registerRenderer(kNameWrite, "Write", {.collapsed = pathCollapsed});
+    ctx.toolRows.push_back(
+        co_await clientRegisterToolRowAsync(ctx, kNameWrite, "Write", {.summary = fsPathSummary})
+    );
 
     // 3. Read: 折叠内容 "[0, 100] /a.cpp" (行区间 + 路径)
-    ctx.registerRenderer(
+    ctx.toolRows.push_back(co_await clientRegisterToolRowAsync(
+        ctx,
         kNameRead,
         "Read",
-        {.collapsed
-         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+        {.summary
+         = [](const ToolRowInput& in) -> std::string {
                ArgReader   args(in.argsJson);
                std::string path = args.value("path", "");
                int64_t     off  = args.value("offset", -1);
                int64_t     lim  = args.value("limit", -1);
+               std::string text;
                std::string rangeStr;
                if (off <= 0 && lim <= 0) {
                } else if (off <= 0) {
@@ -1033,23 +1042,25 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
                    rangeStr = fmt::format("{}, {}", off, off + lim);
                }
                if (!rangeStr.empty()) {
-                   out.text = "[" + rangeStr + "]";
+                   text = "[" + rangeStr + "]";
                }
                if (!path.empty()) {
-                   if (!out.text.empty()) {
-                       out.text += ' ';
+                   if (!text.empty()) {
+                       text += ' ';
                    }
-                   out.text += path;
+                   text += path;
                }
+               return text;
            }}
-    );
+    ));
 
     // 4. Glob: 折叠内容 = 参数里的文件模式 (最多列 2 个)
-    ctx.registerRenderer(
+    ctx.toolRows.push_back(co_await clientRegisterToolRowAsync(
+        ctx,
         kNameGlob,
         "Glob",
-        {.collapsed
-         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+        {.summary
+         = [](const ToolRowInput& in) -> std::string {
                ArgReader   args(in.argsJson);
                auto        files = agentxx_fs_plugin::stringListArg(args.raw(), "file_patterns");
                std::string joined;
@@ -1063,16 +1074,17 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
                if (files.size() > 2) {
                    joined += ", ...";
                }
-               out.text = std::move(joined);
+               return joined;
            }}
-    );
+    ));
 
     // 5. Grep: 折叠内容 "[\"pat\"] file_patterns"
-    ctx.registerRenderer(
+    ctx.toolRows.push_back(co_await clientRegisterToolRowAsync(
+        ctx,
         kNameGrep,
         "Grep",
-        {.collapsed
-         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+        {.summary
+         = [](const ToolRowInput& in) -> std::string {
                ArgReader args(in.argsJson);
                auto      textPats  = agentxx_fs_plugin::stringListArg(args.raw(), "text_patterns");
                auto      regexPats = agentxx_fs_plugin::stringListArg(args.raw(), "regex_patterns");
@@ -1111,9 +1123,9 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
                if (files.size() > 2) {
                    filesStr += ", ...";
                }
-               out.text = fmt::format("[{}] {}", quoted, filesStr);
+               return fmt::format("[{}] {}", quoted, filesStr);
            }}
-    );
+    ));
 
     // 6. Edit
     // 展开体按替换段展开: 界面描述层的 `Diff` 组件只描述一段 `oldStr`/`newStr`,
@@ -1123,28 +1135,27 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
     // 折叠内容: git 风格的 "+行 -行" 提示在前, 路径在后 (如 "[+3 -1] /home/user/a.cpp")
     // - 行数统计见 [diffStatTextOfSegments]: 各段各替换一处, 逐行 diff 求和
     //   (与展开体渲染的差异同源, 因此显示的行数就是展开后能看到的)
-    ctx.registerRenderer(
+    ctx.toolRows.push_back(co_await clientRegisterToolRowAsync(
+        ctx,
         kNameEdit,
         "Edit",
-        {.collapsed
-         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+        {.summary
+         = [](const ToolRowInput& in) -> std::string {
                ArgReader   args(in.argsJson);
                std::string path     = args.value("path", "");
                auto        segments = agentxx_fs_plugin::editSegmentsArg(args.raw());
 
-               const std::string diffStat = agentxx_fs_plugin::diffStatTextOfSegments(segments);
-               if (!diffStat.empty()) {
-                   out.text = diffStat;
-               }
+               std::string text = agentxx_fs_plugin::diffStatTextOfSegments(segments);
                if (!path.empty()) {
-                   if (!out.text.empty()) {
-                       out.text += ' ';
+                   if (!text.empty()) {
+                       text += ' ';
                    }
-                   out.text += path;
+                   text += path;
                }
+               return text;
            },
-         .expanded
-         = [](const ToolRenderInput& in, ToolExpandedOutput& out) {
+         .body
+         = [](const ToolRowInput& in, utilxx_base::Json& items) {
                ArgReader   args(in.argsJson);
                std::string path     = args.value("path", "");
                auto        segments = agentxx_fs_plugin::editSegmentsArg(args.raw());
@@ -1157,74 +1168,85 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
                    if (!firstSegment) {
                        utilxx_base::Json divider;
                        divider["kind"] = "Divider";
-                       out.items.push_back(std::move(divider));
+                       items.push_back(std::move(divider));
                    }
                    utilxx_base::Json diffItem;
                    diffItem["kind"]   = "Diff";
                    diffItem["path"]   = firstSegment ? std::string{path} : std::string{};
                    diffItem["oldStr"] = seg.oldStr;
                    diffItem["newStr"] = seg.newStr;
-                   out.items.push_back(std::move(diffItem));
+                   items.push_back(std::move(diffItem));
                    firstSegment = false;
                }
            }}
-    );
+    ));
 
     // 7. Move
-    ctx.registerRenderer(
+    ctx.toolRows.push_back(co_await clientRegisterToolRowAsync(
+        ctx,
         kNameMove,
         "Move",
-        {.collapsed
-         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+        {.summary
+         = [](const ToolRowInput& in) -> std::string {
                ArgReader   args(in.argsJson);
                std::string src = args.value("src", "");
                std::string dst = args.value("dst", "");
-               if (!src.empty() || !dst.empty()) {
-                   out.text = fmt::format("{} -> {}", src, dst);
+               if (src.empty() && dst.empty()) {
+                   return {};
                }
+               return fmt::format("{} -> {}", src, dst);
            }}
-    );
+    ));
 
     // 8. Copy
-    ctx.registerRenderer(
+    ctx.toolRows.push_back(co_await clientRegisterToolRowAsync(
+        ctx,
         kNameCopy,
         "Copy",
-        {.collapsed
-         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+        {.summary
+         = [](const ToolRowInput& in) -> std::string {
                ArgReader   args(in.argsJson);
                std::string src = args.value("src", "");
                std::string dst = args.value("dst", "");
-               if (!src.empty() || !dst.empty()) {
-                   out.text = fmt::format("{} -> {}", src, dst);
+               if (src.empty() && dst.empty()) {
+                   return {};
                }
+               return fmt::format("{} -> {}", src, dst);
            }}
-    );
+    ));
 
     // 9. Remove
-    ctx.registerRenderer(kNameRemove, "Remove", {.collapsed = pathCollapsed});
+    ctx.toolRows.push_back(
+        co_await clientRegisterToolRowAsync(ctx, kNameRemove, "Remove", {.summary = fsPathSummary})
+    );
 
-    return 0;
+    co_return;
 }
 
-static void    fsClientStart(FsClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+static void fsClientStart(FsClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
     if (!notify) {
         if (error) {
             PluginString::set(ctx.host, error, "agentxx_filesystem client start: notify required");
         }
         return;
     }
-    if (fsClientSetup(ctx) != 0) {
-        if (error) {
-            PluginString::set(
-                ctx.host,
-                error,
-                "agentxx_filesystem client start: registration failed"
-            );
-        }
+    auto later = finishLater(notify);
+    if (!ctx.iface.tasks || !ctx.iface.tasks->register_task) {
+        later.failed(
+            "agentxx_filesystem client start: host has no pluginxx.tasks (spawn unavailable)"
+        );
         return;
     }
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    return;
+    // 注册事务交给协程: 声明项与内容都要等表调用
+    ctx.spawn([later](FsClientCtx& c, OpCtl&) -> asio::awaitable<void> {
+        try {
+            co_await fsClientSetupAsync(c);
+            later.ok();
+        } catch (const std::exception& e) {
+            later.failed(e.what());
+        }
+        co_return;
+    });
 }
 
 static void fsClientStop(FsClientCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {

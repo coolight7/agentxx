@@ -151,14 +151,14 @@ std::vector<pluginxx::PluginxxKindSpec> buildAgentxxKindSpecs() {
     nativeSpec.requiresPluginAbi   = true;
     nativeSpec.interfaceVersion    = PLUGINXX_API_VERSION;
     nativeSpec.minInterfaceVersion = PLUGINXX_MIN_API_VERSION;
-    nativeSpec.describe            = "动态库插件 (框架加载)";
+    nativeSpec.describe            = "native library plugin (loaded by the framework)";
     specs.push_back(std::move(nativeSpec));
 
     pluginxx::PluginxxKindSpec scriptSpec;
     scriptSpec.kind              = "js";
     scriptSpec.builtin           = true;
     scriptSpec.requiresPluginAbi = false;
-    scriptSpec.describe          = "脚本插件 (由运行器插件执行)";
+    scriptSpec.describe          = "script plugin (run by a runner plugin)";
     specs.push_back(std::move(scriptSpec));
     return specs;
 }

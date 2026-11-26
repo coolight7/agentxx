@@ -123,8 +123,8 @@ inline constexpr std::string_view ClientPromptModal = "agentxx.client.prompt_mod
 /// 定时器: 主程序提供 `agentxx.client.timer` 表 (一次性/周期定时器 + 区域可见性查询);
 /// 主程序动画等级为 Disabled 时拒绝注册 (插件据此降级为静态展示)
 inline constexpr std::string_view ClientTimer = AGENTXX_IFACE_CLIENT_TIMER;
-/// 工具消息装饰与特化渲染 (ui 表 v2 update_tool_decor / register_tool_renderer;
-/// TUI 声明, CLI 无消息渲染面不声明)
+/// 工具消息装饰与工具行内容 (ui 表 update_tool_decor 与 `agentxx.client.tool` 上的
+/// 声明项 + 内容; TUI 声明, CLI 无消息渲染面不声明)
 inline constexpr std::string_view ClientMsgDecor    = "agentxx.client.msg_decor";
 inline constexpr std::string_view ClientInfoSection = "agentxx.client.info_section";
 inline constexpr std::string_view ClientCommand     = "agentxx.client.command";

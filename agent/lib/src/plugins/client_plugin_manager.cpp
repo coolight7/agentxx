@@ -354,14 +354,14 @@ std::vector<pluginxx::PluginxxKindSpec> buildClientKindSpecs() {
     nativeSpec.requiresPluginAbi   = true;
     nativeSpec.interfaceVersion    = AGENTXX_CLIENT_PLUGIN_API_VERSION;
     nativeSpec.minInterfaceVersion = AGENTXX_CLIENT_PLUGIN_API_VERSION;
-    nativeSpec.describe            = "动态库插件 (框架加载)";
+    nativeSpec.describe            = "native library plugin (loaded by the framework)";
     specs.push_back(std::move(nativeSpec));
 
     pluginxx::PluginxxKindSpec scriptSpec;
     scriptSpec.kind              = "js";
     scriptSpec.builtin           = true;
     scriptSpec.requiresPluginAbi = false;
-    scriptSpec.describe          = "脚本插件 (由运行器插件执行)";
+    scriptSpec.describe          = "script plugin (run by a runner plugin)";
     specs.push_back(std::move(scriptSpec));
     return specs;
 }
@@ -1323,16 +1323,15 @@ void ClientPluginManager::performToolRender(
         entry.generation = owner->lifetime ? owner->lifetime->generation() : 0;
     }
 
-    AgentxxToolRenderInput input{};
-    input.struct_size  = sizeof(AgentxxToolRenderInput);
-    input.version      = 1;
-    input.tool_call_id = agentxx::plugin::PluginStringView::from(req.toolCallId);
-    input.tool_name    = agentxx::plugin::PluginStringView::from(req.toolName);
-    input.args_json    = agentxx::plugin::PluginStringView::from(req.argsJson);
-    input.result_text  = agentxx::plugin::PluginStringView::from(req.resultText);
-    input.is_finished  = req.isFinished ? 1 : 0;
-    input.is_error     = req.isError ? 1 : 0;
-    input.max_width    = req.maxWidth;
+    ClientToolRenderInput input{};
+    input.toolCallId = req.toolCallId;
+    input.toolName   = req.toolName;
+    input.argsJson   = req.argsJson;
+    input.resultText = req.resultText;
+    input.finished   = req.isFinished;
+    input.error      = req.isError;
+    input.maxWidth   = req.maxWidth;
+    input.summary    = wantCollapsedFlag;
 
     const std::string toolCallId    = req.toolCallId;
     const std::string toolName      = req.toolName;
@@ -1420,17 +1419,16 @@ void ClientPluginManager::performToolRender(
     const bool queued   = pluginxx::dispatchToPlugin(
         owner,
         "client tool render " + toolName,
-        [renderUd, cb, req, notify, owner, raw, toolCallId, toolName]() mutable {
-            AgentxxToolRenderInput view{};
-            view.struct_size  = sizeof(AgentxxToolRenderInput);
-            view.version      = 1;
-            view.tool_call_id = agentxx::plugin::PluginStringView::from(toolCallId);
-            view.tool_name    = agentxx::plugin::PluginStringView::from(toolName);
-            view.args_json    = agentxx::plugin::PluginStringView::from(req.argsJson);
-            view.result_text  = agentxx::plugin::PluginStringView::from(req.resultText);
-            view.is_finished  = req.isFinished ? 1 : 0;
-            view.is_error     = req.isError ? 1 : 0;
-            view.max_width    = req.maxWidth;
+        [renderUd, cb, req, notify, owner, raw, toolCallId, toolName, wantCollapsed]() mutable {
+            ClientToolRenderInput view;
+            view.toolCallId = toolCallId;
+            view.toolName   = toolName;
+            view.argsJson   = req.argsJson;
+            view.resultText = req.resultText;
+            view.finished   = req.isFinished;
+            view.error      = req.isError;
+            view.maxWidth   = req.maxWidth;
+            view.summary    = wantCollapsed;
             PluginxxString err{nullptr, 0};
             int32_t        rc = AGENTXX_RESULT_ERR_INTERNAL;
             try {
@@ -1815,11 +1813,6 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
     detachUiContent(inst->name);
     // 网络资源跟着实例: 服务、连接与未完成请求一起收掉 (未完成按"已取消"结算)
     netShutdownPlugin(inst->name);
-    for (auto& renderer : inst->toolRenderRegs) {
-        if (renderer.lease) {
-            renderer.lease->alive.store(false, std::memory_order_release);
-        }
-    }
     // 定时器全部取消 (运行时资源; enable 后由插件 start 事务重新注册)
     for (auto& timer : inst->timers) {
         if (timer) {
@@ -1874,7 +1867,6 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
     inst->commandRegs.clear();
     inst->keybindRegs.clear();
     inst->toolDecorRegs.clear();
-    inst->toolRenderRegs.clear();
     inst->actionRegs.clear();
     // 快捷键句柄与 panel/status 句柄同规则: 不在此释放 (插件的 stop 回调可能仍在
     // 注销它们), 由 ~ClientPluginInstance 统一回收
@@ -2350,82 +2342,6 @@ PluginxxOperatorHandle* PLUGINXX_CALL xx_cupdate_tool_decor(
             return clientStatusResult(
                 mgr->updateToolDecor(inst, tcid, decor),
                 "update_tool_decor"
-            );
-        }
-    );
-}
-
-PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_tool_renderer(
-    const PluginxxHost*          host,
-    const AgentxxToolRenderSpec* spec,
-    PluginxxOperatorCallback     cb,
-    void*                        ud,
-    PluginxxString*              error_out
-) {
-    if (!spec) {
-        pluginxx::setTableOpError(error_out, "register_tool_renderer: spec is required");
-        return nullptr;
-    }
-    // spec 里的字符串视图是借用视图: 投递前拷一份, 与 spec 一起交给工作体
-    struct SpecKeep {
-        AgentxxToolRenderSpec spec{};
-        std::string           toolName;
-        std::string           displayName;
-
-        explicit SpecKeep(const AgentxxToolRenderSpec* in) {
-            spec = *in;
-            if (in->tool_name.data != nullptr && in->tool_name.size > 0) {
-                toolName.assign(in->tool_name.data, static_cast<size_t>(in->tool_name.size));
-            }
-            if (in->display_name.data != nullptr && in->display_name.size > 0) {
-                displayName.assign(
-                    in->display_name.data,
-                    static_cast<size_t>(in->display_name.size)
-                );
-            }
-            spec.tool_name    = agentxx::plugin::PluginStringView::from(toolName);
-            spec.display_name = agentxx::plugin::PluginStringView::from(displayName);
-        }
-    };
-    auto keep = std::make_shared<SpecKeep>(spec);
-    return asyncClientTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        "client.ui.register_tool_renderer",
-        [keep](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
-            return clientStatusResult(
-                mgr->registerToolRenderer(inst, &keep->spec),
-                "register_tool_renderer"
-            );
-        }
-    );
-}
-
-PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_tool_renderer(
-    const PluginxxHost*       host,
-    const PluginxxStringView* tool_name,
-    PluginxxOperatorCallback  cb,
-    void*                     ud,
-    PluginxxString*           error_out
-) {
-    if (!tool_name || !tool_name->data) {
-        pluginxx::setTableOpError(error_out, "unregister_tool_renderer: tool_name is required");
-        return nullptr;
-    }
-    auto tname = copyView(*tool_name);
-    return asyncClientTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        "client.ui.unregister_tool_renderer",
-        [tname = std::move(tname)](ClientPluginInstance* inst, ClientPluginManager* mgr)
-            -> std::string {
-            return clientStatusResult(
-                mgr->unregisterToolRenderer(inst, tname),
-                "unregister_tool_renderer"
             );
         }
     );
@@ -3441,8 +3357,6 @@ static const AgentxxClientUiIface* clientUiIface() {
         /* unregister_command */ xx_cunregister_command,
         /* show_toast */ xx_cshow_toast,
         /* update_tool_decor */ xx_cupdate_tool_decor,
-        /* register_tool_renderer */ xx_cregister_tool_renderer,
-        /* unregister_tool_renderer */ xx_cunregister_tool_renderer,
         /* bind_action_handler */ xx_cbind_action_handler,
         /* unbind_action_handler */ xx_cunbind_action_handler,
         /* open_overlay */ xx_copen_overlay,
@@ -5005,11 +4919,11 @@ namespace {
 } // namespace
 
 int ClientPluginManager::registerBuiltinToolRenderer(
-    std::string_view             toolName,
-    std::string_view             displayName,
-    AgentxxToolCollapsedRenderFn collapsedFn,
-    AgentxxToolExpandedRenderFn  expandedFn,
-    void*                        userData
+    std::string_view   toolName,
+    std::string_view   displayName,
+    ClientToolRenderFn collapsedFn,
+    ClientToolRenderFn expandedFn,
+    void*              userData
 ) {
     if (toolName.empty()) {
         return AGENTXX_RESULT_ERR_ARG;
@@ -5022,8 +4936,7 @@ int ClientPluginManager::registerBuiltinToolRenderer(
     reg.expandedFn  = expandedFn;
     reg.userData    = userData;
     reg.builtin     = true;
-    // 内置渲染器无插件实例与 lease: 不做租约登记, 也不进入实例的
-    // toolRenderRegs (disable/enable 不涉及进程级内置渲染器)
+    // 内置渲染器无插件实例与租约: 不做租约登记, 也不随插件禁用/卸载失效
     std::lock_guard<std::mutex> lock(uiMutex_);
     auto                        cur      = std::make_shared<ClientUiRegistry>(*uiRegistry_);
     bool                        replaced = false;
@@ -5038,116 +4951,6 @@ int ClientPluginManager::registerBuiltinToolRenderer(
         cur->builtinToolRenderers.push_back(std::move(reg));
     }
     uiRegistry_ = std::move(cur);
-    return AGENTXX_RESULT_OK;
-}
-
-int ClientPluginManager::registerToolRenderer(
-    ClientPluginInstance*        inst,
-    const AgentxxToolRenderSpec* spec
-) {
-    if (!inst || !spec || spec->version != 2
-        || !agentxx::plugin::specSizeOk<AgentxxToolRenderSpec>(spec->struct_size)
-        || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    if (!acceptsRegistration(inst)) {
-        XX_LOGW(
-            "[client_plugin] `{}` registerToolRenderer rejected: closing or disabled",
-            inst->name
-        );
-        return AGENTXX_RESULT_ERR_STATE;
-    }
-    const std::string   tname = svToStr(spec->tool_name);
-    ClientToolRenderReg reg;
-    reg.plugin      = inst->name;
-    reg.toolName    = tname;
-    // 显示名注册时定下 (空则用工具名), UI 线程同步读: 首帧就能显示名字
-    reg.displayName = agentxx::plugin::PluginStringView::empty(&spec->display_name)
-                          ? tname
-                          : svToStr(spec->display_name);
-    reg.collapsedFn = spec->collapsed_fn;
-    reg.expandedFn  = spec->expanded_fn;
-    reg.userData    = spec->user_data;
-    if (reg.collapsedFn || reg.expandedFn) {
-        reg.lease           = std::make_shared<ClientToolRendererLease>();
-        reg.lease->instance = inst->self;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur      = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        bool                        replaced = false;
-        for (auto& r : cur->toolRenderers) {
-            if (r.plugin == inst->name && r.toolName == tname) {
-                if (r.lease) {
-                    r.lease->alive.store(false, std::memory_order_release);
-                }
-                r        = reg;
-                replaced = true;
-                break;
-            }
-        }
-        if (!replaced) {
-            cur->toolRenderers.push_back(reg);
-        }
-        uiRegistry_ = std::move(cur);
-    }
-
-    bool replacedInst = false;
-    for (auto& r : inst->toolRenderRegs) {
-        if (r.toolName == tname) {
-            if (r.lease) {
-                r.lease->alive.store(false, std::memory_order_release);
-            }
-            r            = reg;
-            replacedInst = true;
-            break;
-        }
-    }
-    if (!replacedInst) {
-        inst->toolRenderRegs.push_back(reg);
-    }
-    return AGENTXX_RESULT_OK;
-}
-
-int ClientPluginManager::unregisterToolRenderer(
-    ClientPluginInstance* inst,
-    PluginxxStringView    tool_name
-) {
-    if (!inst || agentxx::plugin::PluginStringView::empty(&tool_name)) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    const std::string tname = svToStr(tool_name);
-    for (auto& r : inst->toolRenderRegs) {
-        if (r.toolName == tname && r.lease) {
-            r.lease->alive.store(false, std::memory_order_release);
-        }
-    }
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        cur->toolRenderers.erase(
-            std::remove_if(
-                cur->toolRenderers.begin(),
-                cur->toolRenderers.end(),
-                [&](const auto& r) {
-                    return r.plugin == inst->name && r.toolName == tname;
-                }
-            ),
-            cur->toolRenderers.end()
-        );
-        uiRegistry_ = std::move(cur);
-    }
-    inst->toolRenderRegs.erase(
-        std::remove_if(
-            inst->toolRenderRegs.begin(),
-            inst->toolRenderRegs.end(),
-            [&](const auto& r) {
-                return r.toolName == tname;
-            }
-        ),
-        inst->toolRenderRegs.end()
-    );
     return AGENTXX_RESULT_OK;
 }
 
@@ -5469,29 +5272,25 @@ const ClientToolRenderReg* findToolRenderReg(
 }
 
 /// 构造传给渲染回调的输入 (字段全部 string_view 借用, 只在本次回调内有效)
-AgentxxToolRenderInput makeRenderInput(
+ClientToolRenderInput makeRenderInput(
     std::string_view toolCallId,
     std::string_view toolName,
     std::string_view argsJson,
     std::string_view resultText,
     bool             isFinished,
     bool             isError,
-    int              maxWidth
+    int              maxWidth,
+    bool             summary
 ) {
-    AgentxxToolRenderInput input{};
-    input.struct_size  = sizeof(AgentxxToolRenderInput);
-    input.version      = 1;
-    input.tool_call_id = agentxx::plugin::PluginStringView::from(
-        toolCallId.data(),
-        toolCallId.size()
-    );
-    input.tool_name = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-    input.args_json = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
-    input.result_text
-        = agentxx::plugin::PluginStringView::from(resultText.data(), resultText.size());
-    input.is_finished = isFinished ? 1 : 0;
-    input.is_error    = isError ? 1 : 0;
-    input.max_width   = maxWidth;
+    ClientToolRenderInput input{};
+    input.toolCallId = toolCallId;
+    input.toolName   = toolName;
+    input.argsJson   = argsJson;
+    input.resultText = resultText;
+    input.finished   = isFinished;
+    input.error      = isError;
+    input.maxWidth   = maxWidth;
+    input.summary    = summary;
     return input;
 }
 
@@ -5523,7 +5322,7 @@ void PLUGINXX_CALL immediateReplyDone(
 
 /// 直接调用一个渲染回调, 只收当场交回的内容 (`RendererFn` = 折叠或展开回调)
 template<typename RendererFn>
-std::string callRendererNow(RendererFn fn, void* userData, const AgentxxToolRenderInput* input) {
+std::string callRendererNow(RendererFn fn, void* userData, const ClientToolRenderInput* input) {
     if (fn == nullptr || input == nullptr) {
         return {};
     }
@@ -5613,7 +5412,8 @@ ClientToolCollapsedResult renderClientToolCollapsed(
             resultText,
             isFinished,
             isError,
-            maxWidth
+            maxWidth,
+            /*summary=*/true
         );
         res.text = callRendererNow(r->collapsedFn, r->userData, &input);
         return res;
@@ -5695,7 +5495,8 @@ ClientToolExpandedResult renderClientToolExpanded(
             resultText,
             isFinished,
             isError,
-            maxWidth
+            maxWidth,
+            /*summary=*/false
         );
         const auto text  = callRendererNow(r->expandedFn, r->userData, &input);
         if (acceptUiJsonSize(text, "tool_renderer output", r->plugin)) {
