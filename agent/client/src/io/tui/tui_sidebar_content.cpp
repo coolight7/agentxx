@@ -204,14 +204,27 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     //   [handleSidebarRegionClick] 定位后派发 (滚动容器内不用 reflect 判定)
     if (auto mgr = pluginManager_) {
         auto reg = mgr->uiRegistrySnapshot();
+        // 声明式内容 (插件用 register_ui_content 注册在 agentxx.client.info 上的)
+        std::shared_ptr<const agentxx::plugin::ClientUiSnapshot> uiSnap
+            = mgr->uiContentSnapshot();
         if (reg && !reg->infoSections.empty()) {
             for (const auto& sec : reg->infoSections) {
                 auto collapseCb
                     = [this, ownerId = sec.id](const std::string& id, bool defaultValue) {
                           return collapseExpanded(ownerId, id, defaultValue);
                       };
+                // 声明式内容优先: 同一 id 有内容就画内容 (还没到时画旧 items)
+                const agentxx::plugin::ClientUiContentView* content = nullptr;
+                if (uiSnap) {
+                    content = uiSnap->contentOf(agentxx::plugin::kClientUiSlotInfo, sec.id);
+                }
+                const bool useContent = content != nullptr && content->hasResult;
                 // 表单状态: 按最新描述初始化并保留用户已编辑的值
-                auto& form = formFor(sec.id, sec.plugin, pluginxx::ui::parseBlocks(sec.items));
+                auto& form = formFor(
+                    sec.id,
+                    sec.plugin,
+                    pluginxx::ui::parseBlocks(useContent ? content->json : sec.items)
+                );
                 std::vector<ScrollItem> secItems;
                 const size_t            secLines = appendPluginItems(
                     form.items,

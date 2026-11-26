@@ -378,6 +378,9 @@ ClientPluginManager::ClientPluginManager(asio::any_io_executor ex, size_t worker
     setKindRegistry(
         pluginxx::PluginxxKindRegistry(buildClientKindSpecs(), AGENTXX_CLIENT_PLUGIN_API_VERSION)
     );
+    // 声明式界面: 槽位目录与初始快照 (界面线程随时可以读)
+    uiSlotCatalog_ = buildClientUiSlotCatalog();
+    publishUiContentSnapshot();
     // 客户端频道: 插件在 start 里就会订阅, 因此管理器构造时就声明好 (幂等)
     declareClientChannels();
     // 工作池与插件执行线程: 构造即起 (没有 client 插件也建有), 与 agent 侧同一模型
@@ -1808,6 +1811,8 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
     if (!inst) {
         return;
     }
+    // 声明式界面: 声明项 / 内容 / 自建槽位跟着实例走 (重新启用时由 start 事务重新声明)
+    detachUiContent(inst->name);
     // 网络资源跟着实例: 服务、连接与未完成请求一起收掉 (未完成按"已取消"结算)
     netShutdownPlugin(inst->name);
     for (auto& renderer : inst->toolRenderRegs) {
@@ -2858,6 +2863,379 @@ PluginxxOperatorHandle* PLUGINXX_CALL xx_cclose_overlay(
     );
 }
 
+// ---- 声明式界面 (声明项 / 内容 / 自建槽位) ----
+//
+// 与 agent 侧的 `musicxx.ui` 同一形状: 声明项只带数据, 内容是一个生成函数 (或直接 push)。
+// 客户端的槽位只有 status / panel / info 三个分类, 具体是谁由内容 id 表达。
+
+namespace {
+
+/// 业务码 → 表操作结果 (OK 给空 payload; 其余抛 TableOpError)
+std::string uiResultOrThrow(const char* what, int32_t rc) {
+    if (rc == PLUGINXX_RESULT_OK) {
+        return {};
+    }
+    const char* reason = "state";
+    switch (rc) {
+        case PLUGINXX_RESULT_ERR_ARG:
+            reason = "arg";
+            break;
+        case PLUGINXX_RESULT_ERR_PERMISSION:
+            reason = "namespace";
+            break;
+        case PLUGINXX_RESULT_ERR_NOT_DECLARED:
+            reason = "unknown_slot";
+            break;
+        case PLUGINXX_RESULT_ERR_NOT_FOUND:
+            reason = "not_found";
+            break;
+        default:
+            reason = "state";
+            break;
+    }
+    throw pluginxx::TableOpError(std::string{what} + ": " + reason);
+}
+
+/// 自有字符串 → ABI 视图 (借用, 只在本次调用的 lambda 生效)
+PluginxxStringView uiViewOf(const std::string& text) {
+    return PluginxxStringView{text.data(), static_cast<uint64_t>(text.size())};
+}
+
+} // namespace
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_ui_item(
+    const PluginxxHost*        host,
+    const PluginxxUiEntrySpec* spec,
+    PluginxxOperatorCallback   cb,
+    void*                      ud,
+    PluginxxString*            error_out
+) {
+    if (!spec) {
+        pluginxx::setTableOpError(error_out, "register_ui_item: spec is required");
+        return nullptr;
+    }
+    if (spec->version != 1) {
+        pluginxx::setTableOpError(error_out, "register_ui_item: spec version must be 1");
+        return nullptr;
+    }
+    auto itemId = copyView(spec->item_id);
+    auto type   = copyView(spec->type);
+    auto data   = copyView(spec->data_json);
+    if (itemId.empty() || type.empty()) {
+        pluginxx::setTableOpError(error_out, "register_ui_item: id and type are required");
+        return nullptr;
+    }
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.register_ui_item",
+        [itemId = std::move(itemId), type = std::move(type), data = std::move(data), order =
+                                                                                        spec->order](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            PluginxxUiEntrySpec owned{};
+            owned.version     = 1;
+            owned.struct_size = sizeof(PluginxxUiEntrySpec);
+            owned.item_id     = uiViewOf(itemId);
+            owned.type        = uiViewOf(type);
+            owned.data_json   = uiViewOf(data);
+            owned.order       = order;
+            return uiResultOrThrow("register_ui_item", mgr->registerUiEntry(inst, &owned));
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_ui_item(
+    const PluginxxHost*       host,
+    const PluginxxStringView* item_id,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    if (!item_id || !item_id->data || item_id->size == 0) {
+        pluginxx::setTableOpError(error_out, "unregister_ui_item: id is required");
+        return nullptr;
+    }
+    auto id = copyView(*item_id);
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.unregister_ui_item",
+        [id = std::move(id)](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return uiResultOrThrow("unregister_ui_item", mgr->unregisterUiEntry(inst, id));
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_clist_ui_items(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.list_ui_items",
+        [](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return mgr->listUiEntries(inst);
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_ui_content(
+    const PluginxxHost*          host,
+    const PluginxxUiContentSpec* spec,
+    PluginxxOperatorCallback     cb,
+    void*                        ud,
+    PluginxxString*              error_out
+) {
+    if (!spec || !spec->generate) {
+        pluginxx::setTableOpError(error_out, "register_ui_content: spec with generate is required");
+        return nullptr;
+    }
+    if (spec->version != 1) {
+        pluginxx::setTableOpError(error_out, "register_ui_content: spec version must be 1");
+        return nullptr;
+    }
+    auto id     = copyView(spec->id);
+    auto slot   = copyView(spec->slot);
+    auto title  = copyView(spec->title);
+    auto depict = copyView(spec->depict);
+    auto routes = copyView(spec->routes_json);
+    auto deps   = copyView(spec->deps_json);
+    if (id.empty() || slot.empty()) {
+        pluginxx::setTableOpError(error_out, "register_ui_content: id and slot are required");
+        return nullptr;
+    }
+    // 生成函数与 user_data 由插件提供: 属于这个实例, 实例卸载前一直有效
+    auto generate = spec->generate;
+    auto userData = spec->user_data;
+    const int32_t order = spec->order;
+    const int32_t minInterval = spec->min_interval_ms;
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.register_ui_content",
+        [id = std::move(id),
+         slot = std::move(slot),
+         title = std::move(title),
+         depict = std::move(depict),
+         routes = std::move(routes),
+         deps = std::move(deps),
+         generate,
+         userData,
+         order,
+         minInterval](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            PluginxxUiContentSpec owned{};
+            owned.version         = 1;
+            owned.struct_size     = sizeof(PluginxxUiContentSpec);
+            owned.id              = uiViewOf(id);
+            owned.slot            = uiViewOf(slot);
+            owned.title           = uiViewOf(title);
+            owned.depict          = uiViewOf(depict);
+            owned.routes_json     = uiViewOf(routes);
+            owned.deps_json       = uiViewOf(deps);
+            owned.order           = order;
+            owned.min_interval_ms = minInterval;
+            owned.generate        = generate;
+            owned.user_data       = userData;
+            return uiResultOrThrow("register_ui_content", mgr->registerUiContent(inst, &owned));
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_ui_content(
+    const PluginxxHost*       host,
+    const PluginxxStringView* id,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    if (!id || !id->data || id->size == 0) {
+        pluginxx::setTableOpError(error_out, "unregister_ui_content: id is required");
+        return nullptr;
+    }
+    auto idCopy = copyView(*id);
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.unregister_ui_content",
+        [idCopy = std::move(idCopy)](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return uiResultOrThrow("unregister_ui_content", mgr->unregisterUiContent(inst, idCopy));
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cpush_ui_content(
+    const PluginxxHost*       host,
+    const PluginxxStringView* id,
+    const PluginxxStringView* content_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    if (!id || !id->data || id->size == 0) {
+        pluginxx::setTableOpError(error_out, "push_ui_content: id is required");
+        return nullptr;
+    }
+    auto idCopy   = copyView(*id);
+    auto jsonCopy = content_json && content_json->data ? copyView(*content_json) : std::string{"{}"};
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.push_ui_content",
+        [idCopy = std::move(idCopy), jsonCopy = std::move(jsonCopy)](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            return uiResultOrThrow(
+                "push_ui_content",
+                mgr->pushUiContent(inst, idCopy, jsonCopy)
+            );
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_clist_ui_contents(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.list_ui_contents",
+        [](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return mgr->listUiContents(inst);
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cupdate_ui_slot(
+    const PluginxxHost*       host,
+    const PluginxxStringView* slot,
+    const PluginxxStringView* ids_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    if (!slot || !slot->data || slot->size == 0) {
+        pluginxx::setTableOpError(error_out, "update_ui_slot: slot is required");
+        return nullptr;
+    }
+    auto slotCopy = copyView(*slot);
+    auto idsCopy  = ids_json && ids_json->data ? copyView(*ids_json) : std::string{};
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.update_ui_slot",
+        [slotCopy = std::move(slotCopy), idsCopy = std::move(idsCopy)](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            return uiResultOrThrow("update_ui_slot", mgr->updateUiSlot(inst, slotCopy, idsCopy));
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cdefine_ui_slot(
+    const PluginxxHost*       host,
+    const PluginxxUiSlotSpec* spec,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    if (!spec) {
+        pluginxx::setTableOpError(error_out, "define_ui_slot: spec is required");
+        return nullptr;
+    }
+    if (spec->version != 1) {
+        pluginxx::setTableOpError(error_out, "define_ui_slot: spec version must be 1");
+        return nullptr;
+    }
+    auto id   = copyView(spec->id);
+    auto kind = copyView(spec->kind);
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.define_ui_slot",
+        [id = std::move(id), kind = std::move(kind)](
+            ClientPluginInstance* inst,
+            ClientPluginManager*  mgr
+        ) -> std::string {
+            PluginxxUiSlotSpec owned{};
+            owned.version     = 1;
+            owned.struct_size = sizeof(PluginxxUiSlotSpec);
+            owned.id          = uiViewOf(id);
+            owned.kind        = uiViewOf(kind);
+            return uiResultOrThrow("define_ui_slot", mgr->defineUiSlot(inst, &owned));
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_cundefine_ui_slot(
+    const PluginxxHost*       host,
+    const PluginxxStringView* slot,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    if (!slot || !slot->data || slot->size == 0) {
+        pluginxx::setTableOpError(error_out, "undefine_ui_slot: slot is required");
+        return nullptr;
+    }
+    auto slotCopy = copyView(*slot);
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.undefine_ui_slot",
+        [slotCopy = std::move(slotCopy)](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return uiResultOrThrow("undefine_ui_slot", mgr->undefineUiSlot(inst, slotCopy));
+        }
+    );
+}
+
+PluginxxOperatorHandle* PLUGINXX_CALL xx_clist_ui_slots(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out
+) {
+    return asyncClientTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        "client.ui.list_ui_slots",
+        [](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
+            return mgr->listUiSlots(inst);
+        }
+    );
+}
+
 // ---- 定时器 (agentxx.client.timer) ----
 
 PluginxxOperatorHandle* PLUGINXX_CALL xx_cset_timer(
@@ -3069,6 +3447,17 @@ static const AgentxxClientUiIface* clientUiIface() {
         /* unbind_action_handler */ xx_cunbind_action_handler,
         /* open_overlay */ xx_copen_overlay,
         /* close_overlay */ xx_cclose_overlay,
+        /* register_ui_item */ xx_cregister_ui_item,
+        /* unregister_ui_item */ xx_cunregister_ui_item,
+        /* list_ui_items */ xx_clist_ui_items,
+        /* register_ui_content */ xx_cregister_ui_content,
+        /* unregister_ui_content */ xx_cunregister_ui_content,
+        /* push_ui_content */ xx_cpush_ui_content,
+        /* list_ui_contents */ xx_clist_ui_contents,
+        /* update_ui_slot */ xx_cupdate_ui_slot,
+        /* define_ui_slot */ xx_cdefine_ui_slot,
+        /* undefine_ui_slot */ xx_cundefine_ui_slot,
+        /* list_ui_slots */ xx_clist_ui_slots,
     };
     return &table;
 }

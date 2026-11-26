@@ -382,7 +382,14 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
     }
 
     // 表单状态: 按最新描述初始化并保留用户已编辑的值 (含控件状态清理)
-    auto  parsed = pluginxx::ui::parseBlocks(panel->items);
+    // - 声明式内容优先: 插件给同一 id 注册了内容就画它 (内容还没到时画旧 items)
+    std::shared_ptr<const agentxx::plugin::ClientUiSnapshot> uiSnap = mgr->uiContentSnapshot();
+    const agentxx::plugin::ClientUiContentView*              content = nullptr;
+    if (uiSnap) {
+        content = uiSnap->contentOf(agentxx::plugin::kClientUiSlotPanel, panel->id);
+    }
+    const bool useContent = content != nullptr && content->hasResult;
+    auto  parsed = pluginxx::ui::parseBlocks(useContent ? content->json : panel->items);
     auto& form   = formFor(panel->id, panel->plugin, std::move(parsed));
 
     agentxx::client::UiRenderCtx rc;

@@ -210,6 +210,90 @@ Element StatusBarComponent::OnRender() {
         }
     }
 
+    // ---- 声明式状态栏项 (register_ui_entry + register_ui_content) ----
+    // - 位置信息在声明项的 data 里 ({"align":0|1,"order":n}), 画什么来自内容的最近一次结果;
+    // - 内容还没到时不画 (不占位、不阻塞); 画法走共享组件层 (与面板 / Info 同一实现)
+    if (auto mgr = ctx_.pluginManager) {
+        if (auto uiSnap = mgr->uiContentSnapshot()) {
+            // 按钮动作绑定与可点区域要用它 (与本函数上文同一来源)
+            std::shared_ptr<const agentxx::plugin::ClientUiRegistry> uiReg
+                = ctx_.frameState ? ctx_.frameState->pluginRegistry : nullptr;
+            if (!uiReg) {
+                uiReg = mgr->uiRegistrySnapshot();
+            }
+            struct DeclItem {
+                int32_t align = 0;
+                int32_t order = 0;
+                uint64_t seq  = 0;
+                Element el;
+            };
+            std::vector<DeclItem> declItems;
+            for (const auto& entry : uiSnap->entries) {
+                if (entry.type != agentxx::plugin::kClientUiSlotStatus) {
+                    continue;
+                }
+                const auto* content = uiSnap->contentOf(
+                    agentxx::plugin::kClientUiSlotStatus,
+                    entry.shortId
+                );
+                if (content == nullptr || !content->hasResult) {
+                    continue;
+                }
+                utilxx_base::Json data = utilxx_base::Json::object();
+                try {
+                    data = utilxx_base::Json::parse(entry.dataJson);
+                } catch (...) {
+                    data = utilxx_base::Json::object();
+                }
+                if (!data.is_object()) {
+                    data = utilxx_base::Json::object();
+                }
+                DeclItem item;
+                item.align = data.value("align", 0) == 0 ? 0 : 1;
+                item.order = data.value("order", 0);
+                item.seq   = entry.seq;
+
+                auto doc = pluginxx::ui::parseBlocks(content->json);                agentxx::client::UiRenderCtx rc;
+                rc.theme   = &theme;
+                rc.width   = std::max(12, ctx_.terminalSize().dimx / 3);
+                rc.plugin  = entry.plugin;
+                rc.ownerId = entry.shortId;
+                rc.registry = uiReg.get();
+                agentxx::client::UiRenderResult res;
+                agentxx::client::renderItems(doc, rc, res);
+                Elements parts;
+                for (auto& row : res.rows) {
+                    parts.push_back(std::move(row.element));
+                }
+                if (parts.empty()) {
+                    continue;
+                }
+                item.el = hbox(std::move(parts)) | xflex_shrink;
+                declItems.push_back(std::move(item));
+            }
+            std::sort(
+                declItems.begin(),
+                declItems.end(),
+                [](const DeclItem& a, const DeclItem& b) {
+                    if (a.align != b.align) {
+                        return a.align < b.align;
+                    }
+                    if (a.order != b.order) {
+                        return a.order < b.order;
+                    }
+                    return a.seq < b.seq;
+                }
+            );
+            for (auto& item : declItems) {
+                if (item.align == 0) {
+                    leftPluginItems.push_back(std::move(item.el));
+                } else {
+                    rightPluginItems.push_back(std::move(item.el));
+                }
+            }
+        }
+    }
+
     // Sessions 按钮: 可点击打开会话选择弹窗 (F3), 位于 Settings 左侧
     auto sessionsText = hits_.add(
         text(tr("status.sessions")) | color(theme.hintColor),

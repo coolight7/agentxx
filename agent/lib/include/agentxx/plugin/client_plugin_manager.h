@@ -6,6 +6,7 @@
 // 主程序侧 vtable/管理器实现使用 SDK 提供的跨边界字符串工具 (PluginStringView /
 // PluginString); 该头后续会拆为 pluginxx/kit/kit.h (通用部分) + 本头的业务 helper
 #include "agentxx/plugin/api/client_plugin_kit.h"
+#include "agentxx/plugin/client_ui_content.h"
 #include "agentxx/plugin/net_service.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
@@ -13,6 +14,9 @@
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
+#include "pluginxx/api/ui.h"
+#include "pluginxx/host/ui_content.h"
+#include "pluginxx/host/ui_slots.h"
 #include "pluginxx/runtime/plugin_thread.h"
 #include "utilxx_base/json.h"
 #include <atomic>
@@ -704,6 +708,34 @@ public:
         return toolRenderCache_;
     }
 
+    // ==================== 声明式界面 (io 线程写, 界面线程读快照) ====================
+    //
+    // 与 agent 侧共用共享库的声明式界面规则 (`pluginxx/api/ui.h` + `host/ui_content.h`):
+    // 插件先登记声明项 (只带数据), 再给同一 id 登记一份内容 (generate 函数按变量现算)
+    // 或直接 push 一份。客户端的槽位只有 status / panel / info 三个分类, 具体是谁
+    // 由内容 id 表达 (见 `client_ui_content.h`)。
+    //
+    // 界面线程只读 [uiContentSnapshot]: 渲染不跑插件代码, 也没有任何同步等待;
+    // 内容到得晚时界面先用上一份, 没有就画主程序自己的默认界面。
+
+    /// 声明式界面快照 (任意线程)
+    std::shared_ptr<const ClientUiSnapshot> uiContentSnapshot() const;
+
+    /// 声明项 / 内容 / 槽位的注册入口 (io 线程; 返回 `PLUGINXX_RESULT_*`)
+    int32_t registerUiEntry(ClientPluginInstance* inst, const PluginxxUiEntrySpec* spec);
+    int32_t unregisterUiEntry(ClientPluginInstance* inst, std::string_view itemId);
+    std::string listUiEntries(ClientPluginInstance* inst) const;
+    int32_t registerUiContent(ClientPluginInstance* inst, const PluginxxUiContentSpec* spec);
+    int32_t unregisterUiContent(ClientPluginInstance* inst, std::string_view id);
+    int32_t
+        pushUiContent(ClientPluginInstance* inst, std::string_view id, std::string_view contentJson);
+    std::string listUiContents(ClientPluginInstance* inst) const;
+    int32_t
+        updateUiSlot(ClientPluginInstance* inst, std::string_view slot, std::string_view idsJson);
+    int32_t defineUiSlot(ClientPluginInstance* inst, const PluginxxUiSlotSpec* spec);
+    int32_t undefineUiSlot(ClientPluginInstance* inst, std::string_view slot);
+    std::string listUiSlots(ClientPluginInstance* inst) const;
+
     /// 取工具语义渲染结果 (UI 线程):
     /// - 命中缓存 (同输入特征) → 返回主程序拥有的结果, 不进入插件代码
     /// - 未命中 → 拷贝输入并派发到插件执行线程执行自定义 renderer, 本次返回
@@ -1212,6 +1244,21 @@ private:
     /// [ClientUiRegistry::instanceGenerations])
     void setRegistryGeneration(std::string_view plugin, uint64_t generation, bool present);
 
+    /// 重建声明式界面快照 (io 线程; 注册表改动后调一次)
+    void publishUiContentSnapshot();
+
+    /// 一个变量的当前值 (JSON 文本; 未知变量给 `null`)
+    std::string clientUiVariableJson(std::string_view id) const;
+
+    /// 让某个内容按当前变量生成一次 (io 线程; 投递到插件执行线程, 界面不等)
+    void requestUiContent(std::string_view fullId);
+
+    /// 一次生成结束 (io 线程): 写注册表 + 推快照 + 通知适配器
+    void finishUiGeneration(std::string fullId, std::string json, std::string error);
+
+    /// 停用 / 卸载: 声明项、内容、自建槽位一起撤销 (io 线程)
+    void detachUiContent(std::string_view instanceName);
+
     /// 本管理器唯一的工作池 (构造即建; dlopen/dlclose、插件阻塞工作共用)
     ///
     /// 与 agent 侧同一模型: 一个端只有一个池, 数量由 `plugin.thread_pool_workers`
@@ -1272,6 +1319,15 @@ private:
     /// 展示区域尺寸快照 (UI 线程写, 任意线程读; 见 reportRegionSize)
     mutable std::mutex                                   regionMutex_;
     std::map<std::string, ClientRegionSize, std::less<>> regionSizes_;
+
+    /// 声明式界面注册表 (client io 线程写; 共享库提供存储 / 快照 / 版本号 / 摘除)
+    pluginxx::host::UiRegistry     uiContent_;
+    pluginxx::host::UiSlotCatalog  uiSlotCatalog_;
+    /// 界面线程读的快照 (io 线程重建, 短锁拷贝 shared_ptr)
+    mutable std::mutex                      uiContentMutex_;
+    std::shared_ptr<const ClientUiSnapshot> uiContentSnapshot_;
+    /// 正在生成的内容 (全 id; 同一内容同时只跑一次)
+    std::set<std::string> uiGenerating_;
 
     /// 展示区域可见性快照 (UI 线程写, 任意线程读; 见 reportRegionVisible)
     /// - 供 `pause_when_hidden` 定时器门控与 `agentxx.client.timer` 的 is_visible 使用
@@ -1468,6 +1524,10 @@ public:
     /// 渲染从 toolRenderCache() 读取语义快照, 不在 UI 线程执行插件回调)
     virtual void
         onToolRenderUpdated(const std::string& /*toolCallId*/, const std::string& /*toolName*/) {}
+
+    /// 一份声明式内容有了新结果 (client io 线程; 触发重绘即可)
+    /// - 渲染从 `ClientPluginManager::uiContentSnapshot()` 读, 不在 UI 线程执行插件回调
+    virtual void onContentUpdated(const std::string& /*slot*/, const std::string& /*shortId*/) {}
 };
 
 } // namespace plugin

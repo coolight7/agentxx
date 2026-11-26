@@ -74,6 +74,7 @@
 
 #include "pluginxx/api/abi.h"
 #include "pluginxx/api/tables.h"
+#include "pluginxx/api/ui.h"
 
 #include "agentxx/plugin/api/agentxx_result.h"
 
@@ -272,7 +273,8 @@ typedef struct AgentxxOverlaySpec {
 
 #define AGENTXX_IFACE_CLIENT_UI             AGENTXX_TABLE_ID("client_ui")
 /* v2: 全部成员改成异步操作契约 (句柄经完成回调 payload 交回), 见文件头 */
-#define AGENTXX_IFACE_CLIENT_UI_VERSION     2 /* 追加成员 / 语义变化 -> +1 */
+/* v3: 追加声明式界面 (声明项 / 内容 / 插件自建槽位), 与共享 UI 表同一形状 */
+#define AGENTXX_IFACE_CLIENT_UI_VERSION     3 /* 追加成员 / 语义变化 -> +1 */
 #define AGENTXX_IFACE_CLIENT_UI_MIN_VERSION 2 /* 只在破坏性改动时 +1 (优先换 IID) */
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_IFACE_CLIENT_UI_BASELINE_SIZE sizeof(AgentxxClientUiIface)
@@ -524,6 +526,118 @@ typedef struct AgentxxClientUiIface {
     );
     /// 关闭当前 overlay (任何插件都可关; manager 传插件名仅记日志/鉴权预留)
     PluginxxOperatorHandle*(PLUGINXX_CALL* close_overlay)(
+        const PluginxxHost*      host,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
+    );
+
+    /* ---- 声明式界面: 声明项 (只带数据, 外观由主程序决定) ---- */
+    ///
+    /// 客户端的槽位是固定几个, 插件用短名写:
+    /// - `status` (`agentxx.client.status`): 状态栏项; `data_json` = {"align":0|1,"order":n}
+    /// - `panel` (`agentxx.client.panel`): 侧边栏面板; `data_json` = {"title":"..."}
+    /// - `info` (`agentxx.client.info`): Info 栏段落; `data_json` = {"title":"..."}
+    ///
+    /// 声明项只说"有这个位置", 画什么用 [register_ui_content] 注册的内容; 内容 id 就是
+    /// 声明项的 id。声明项与内容都跟着插件实例走 (禁用到禁用、卸载即撤销).
+    PluginxxOperatorHandle*(PLUGINXX_CALL* register_ui_item)(
+        const PluginxxHost*        host,
+        const PluginxxUiEntrySpec* spec,
+        PluginxxOperatorCallback   cb,
+        void*                      ud,
+        PluginxxString*            error_out
+    );
+    /// 注销声明项 (`item_id` 可短名; 不存在按失败交回)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_ui_item)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* item_id,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 列出本插件注册的声明项 (JSON 数组, 经完成回调 payload 交回)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* list_ui_items)(
+        const PluginxxHost*      host,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
+    );
+
+    /* ---- 声明式界面: 内容 ---- */
+    /// 注册 / 替换一份内容
+    ///
+    /// - `slot` 同上 (`status` / `panel` / `info`), 也可以是插件自己声明的
+    ///   `plugin.<自己>.ui.<名字>`;
+    /// - `id` 是这份内容的短名, 同一 (槽位, 短名) 重复注册即替换;
+    /// - `deps_json` 列出要订阅的变量 (`["agentxx.client.state", ...]`), 生成函数拿到的
+    ///   上下文只含这些变量的当前值;
+    /// - `generate` 是异步操作契约: 可以当场 `notify`, 也可以稍后再交回; 主程序**不等**
+    ///   它 —— 界面先用上一份内容, 结果到了再重画;
+    /// - 内容 JSON 是界面描述层的文档 (`{title, blocks}` 或一棵块), 主程序按自身能力
+    ///   降级渲染, 未支持的块走 fallback。
+    PluginxxOperatorHandle*(PLUGINXX_CALL* register_ui_content)(
+        const PluginxxHost*          host,
+        const PluginxxUiContentSpec* spec,
+        PluginxxOperatorCallback     cb,
+        void*                        ud,
+        PluginxxString*              error_out
+    );
+    /// 注销一份内容 (`id` 可短名或全名; 不存在按失败交回)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_ui_content)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* id,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 主动推一份内容, 不等主程序来问: `content_json` = {"json":…,"data":…}
+    PluginxxOperatorHandle*(PLUGINXX_CALL* push_ui_content)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* id,
+        const PluginxxStringView* content_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 列出本插件注册的内容 (JSON 数组: slot / id / deps / order / rev)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* list_ui_contents)(
+        const PluginxxHost*      host,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error_out
+    );
+    /// 按当前变量重新生成 (`slot` 可短名; `ids_json` 空 = 该槽位上本插件的全部内容)
+    /// - 槽位没挂界面时也能用 (先备好内容, 打开时直接有东西画)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* update_ui_slot)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* slot,
+        const PluginxxStringView* ids_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+
+    /* ---- 声明式界面: 插件自建槽位 ---- */
+    /// 声明一个槽位 (`id` 必须是 `plugin.<自己>.ui.<名字>`, kind 只能是 insert / replace)
+    /// - 别的插件可以往这个槽位里放内容, 自己也可以放
+    PluginxxOperatorHandle*(PLUGINXX_CALL* define_ui_slot)(
+        const PluginxxHost*       host,
+        const PluginxxUiSlotSpec* spec,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 撤销自己声明的槽位 (挂在该槽位上的内容一起失效)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* undefine_ui_slot)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* slot,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 列出槽位表 (主程序保留的 + 插件声明的)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* list_ui_slots)(
         const PluginxxHost*      host,
         PluginxxOperatorCallback cb,
         void*                    ud,

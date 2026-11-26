@@ -1292,6 +1292,30 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      `tool_call_id` 无限增长。
    - `toolDecors` (实例级装饰) 是纯主程序数据, 仍在 UI 线程直接读 (取 summary / items 两部分)。
 
+### 9.6 声明式界面：声明项 + 内容 (`agentxx.client.ui` v3)
+
+与 agent 侧同一套规则（`pluginxx/api/ui.h` + `pluginxx/host/ui_content.h`），差在槽位与变量：
+
+- **槽位只有三个分类**，具体是谁由内容 id 表达（与声明项同名）：
+  - `status` (`agentxx.client.status`)：状态栏项；声明项的 `data_json` = `{"align":0|1,"order":n}`
+  - `panel` (`agentxx.client.panel`)：侧边栏面板；`data_json` = `{"title":"…"}`
+  - `info` (`agentxx.client.info`)：Info 栏段落；`data_json` = `{"title":"…"}`
+  - 插件也可以自己声明槽位（`define_ui_slot`，id 必须是 `plugin.<自己>.ui.<名字>`，kind 仅 `insert` / `replace`），
+    别家插件就能往里放内容
+- **变量**：`agentxx.client.state`（`{"sessionId","connState","startupProgress"}`）与
+  `agentxx.client.regions`（`[{"id","w","h"}]`）；内容在 `deps_json` 里声明要哪些，生成函数只拿到这些
+- **表成员**（v3 追加，均在 `agentxx.client.ui` 末尾）：`register_ui_item` / `unregister_ui_item` /
+  `list_ui_items`、`register_ui_content` / `unregister_ui_content` / `push_ui_content` / `list_ui_contents` /
+  `update_ui_slot`、`define_ui_slot` / `undefine_ui_slot` / `list_ui_slots`
+- **生成函数是异步操作契约**：可以当场 `notify`，也可以稍后再交回；主程序把它投到**插件执行线程**上跑，
+  界面**不等**它 —— 上一次的内容一直用着，结果到了再重画；失败保留上一份内容（只推进 `rev` 并记一条警告）。
+  所以生成函数里不要做重活：先给一份占位内容，数据到了再 `update_ui_slot` / `push_ui_content`。
+- **界面线程只读快照**（`ClientPluginManager::uiContentSnapshot()`）：渲染永远不跑插件代码，也没有同步等待。
+  停用 / 卸载时声明项、内容与自建槽位一起撤销（重新启用时由插件 `start` 事务重新登记）。
+- **与旧成员的关系**：面板 / Info 段落 / 状态栏项的老写法（`register_panel` + `update_panel` 等）仍然可用，
+  渲染时**声明式内容优先**（同一 id 有内容就画内容，内容还没到就画旧 items）。迁移中的插件可以两套并存。
+- 回归测试：`client_plugins` 第 35 段（注册 / 列表 / 生成 / 推送 / 重新生成 / 失败保留 / 生成慢不阻塞 / 停用撤销）。
+
 ---
 
 ## 10. 会话资源贡献 (Skill / Memory / MCP)

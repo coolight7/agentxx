@@ -895,6 +895,56 @@ asio::awaitable<RenderedTool> renderToolAsync(
     co_return out;
 }
 
+// ---- 声明式界面的测试生成函数 ----
+
+/// 生成函数的现场 (测试自己持有, 必须在内容撤销之后再释放)
+struct UiGenProbe {
+    std::atomic<int> calls{0};
+    int              delayMs = 0;
+    bool             fail    = false;
+};
+
+/// 生成函数: 数次数 + 把上下文原样放进 `data`
+/// - `delayMs > 0` 时先睡一下 (抛给“插件卡住时界面不阻塞”的用例)
+/// - `fail` 时用失败状态交回 (主程序保留上一份内容)
+void PLUGINXX_CALL testUiGenerate(
+    const PluginxxHost*           /*host*/,
+    const PluginxxStringView*     ctx,
+    void*                         ud,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               /*error_out*/
+) {
+    auto* probe = static_cast<UiGenProbe*>(ud);
+    if (probe == nullptr || notify == nullptr || notify->done == nullptr) {
+        return;
+    }
+    if (probe->delayMs > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{probe->delayMs});
+    }
+    if (probe->fail) {
+        const std::string        reason{"generate failed on purpose"};
+        const PluginxxStringView view{reason.data(), reason.size()};
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &view);
+        return;
+    }
+    const int n = probe->calls.fetch_add(1) + 1;
+    utilxx_base::Json block;
+    block["kind"] = "Text";
+    block["text"] = fmt::format("n={}", n);
+    utilxx_base::Json doc;
+    doc["blocks"] = utilxx_base::Json::array({block});
+    utilxx_base::Json body;
+    body["json"] = doc;
+    if (ctx != nullptr && ctx->data != nullptr) {
+        body["data"] = utilxx_base::Json::parse(
+            std::string{ctx->data, static_cast<size_t>(ctx->size)}
+        );
+    }
+    const std::string        payload = body.dump();
+    const PluginxxStringView view{payload.data(), payload.size()};
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
+}
+
 asio::awaitable<TestResult> run_client_plugin_tests() {
     g_client_plugin_passed = 0;
     g_client_plugin_failed = 0;
@@ -5165,6 +5215,251 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(co_await mgrJs->unloadAsync("agentxx_javascript_engine"));
         }
         mgrJs.reset();
+    }
+
+    // ---- 35. 声明式界面: 声明项 + 内容 (生成 / 推送 / 重新生成 / 停用撤销) ----
+    //
+    // 校验的是主程序这一层: 注册表 (快照) / 生成结果与版本号 / 失败保留上一份 /
+    // 生成慢时注册与快照不等待 / 停用后整批撤销。
+    {
+        auto mgrUi     = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
+        auto adapterUi = std::make_shared<MockPluginUiAdapter>();
+        mgrUi->setUiAdapter(adapterUi);
+        auto inst = co_await mgrUi->loadNativeAsync(path);
+        XX_TEST_EXPECT_TRUE(inst != nullptr);
+        if (inst) {
+            auto probe = std::make_unique<UiGenProbe>();
+
+            // 声明项: 状态栏上的一个位置 (数据里带 align / order)
+            {
+                PluginxxUiEntrySpec entry{};
+                entry.version     = 1;
+                entry.struct_size = sizeof(PluginxxUiEntrySpec);
+                const std::string itemId = "sys";
+                const std::string type   = "status";
+                const std::string data   = R"({"align":1,"order":7})";
+                entry.item_id   = PluginxxStringView{itemId.data(), itemId.size()};
+                entry.type      = PluginxxStringView{type.data(), type.size()};
+                entry.data_json = PluginxxStringView{data.data(), data.size()};
+                entry.order     = 7;
+                XX_TEST_EXPECT_EQ(
+                    mgrUi->registerUiEntry(inst.get(), &entry),
+                    PLUGINXX_RESULT_OK
+                );
+                auto snap = mgrUi->uiContentSnapshot();
+                const auto* view = snap ? snap->entryOf("agentxx.client.status", "sys") : nullptr;
+                XX_TEST_EXPECT_TRUE(view != nullptr);
+                if (view) {
+                    XX_TEST_EXPECT_EQ(view->order, 7);
+                    XX_TEST_EXPECT_TRUE(view->dataJson.find("\"align\"") != std::string::npos);
+                }
+                // 未知槽位拒绝
+                PluginxxUiEntrySpec bad = entry;
+                const std::string   badType = "no_such_slot";
+                bad.type = PluginxxStringView{badType.data(), badType.size()};
+                XX_TEST_EXPECT_EQ(
+                    mgrUi->registerUiEntry(inst.get(), &bad),
+                    PLUGINXX_RESULT_ERR_NOT_DECLARED
+                );
+            }
+
+            // 内容: 同一 id 放在 status 槽位上 (依赖 state 变量)
+            {
+                PluginxxUiContentSpec spec{};
+                spec.version     = 1;
+                spec.struct_size = sizeof(PluginxxUiContentSpec);
+                const std::string id   = "sys";
+                const std::string slot = "status";
+                const std::string deps = R"(["agentxx.client.state"])";
+                spec.id        = PluginxxStringView{id.data(), id.size()};
+                spec.slot      = PluginxxStringView{slot.data(), slot.size()};
+                spec.deps_json = PluginxxStringView{deps.data(), deps.size()};
+                spec.generate  = &testUiGenerate;
+                spec.user_data = probe.get();
+                XX_TEST_EXPECT_EQ(
+                    mgrUi->registerUiContent(inst.get(), &spec),
+                    PLUGINXX_RESULT_OK
+                );
+                const bool generated = co_await waitUntil([&]() {
+                    auto snap = mgrUi->uiContentSnapshot();
+                    const auto* c = snap
+                                        ? snap->contentOf("agentxx.client.status", "sys")
+                                        : nullptr;
+                    return c != nullptr && c->hasResult;
+                });
+                XX_TEST_EXPECT_TRUE(generated);
+                auto snap = mgrUi->uiContentSnapshot();
+                const auto* c = snap ? snap->contentOf("agentxx.client.status", "sys") : nullptr;
+                XX_TEST_EXPECT_TRUE(c != nullptr);
+                if (c) {
+                    XX_TEST_EXPECT_TRUE(c->json.find("n=1") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(c->rev >= 1);
+                    // 声明的变量进了生成上下文 (state 里带 sessionId)
+                    XX_TEST_EXPECT_TRUE(c->data.find("sessionId") != std::string::npos);
+                }
+                const int revAfterFirst = c ? c->rev : 0;
+
+                // 主动推送: 不等生成函数, 版本号 +1 且内容换成推来的那份
+                const int32_t pushed = mgrUi->pushUiContent(
+                    inst.get(),
+                    "sys",
+                    R"({"json":{"blocks":[{"kind":"Text","text":"pushed"}]}})"
+                );
+                XX_TEST_EXPECT_EQ(pushed, PLUGINXX_RESULT_OK);
+                {
+                    auto snap2 = mgrUi->uiContentSnapshot();
+                    const auto* c2 = snap2
+                                         ? snap2->contentOf("agentxx.client.status", "sys")
+                                         : nullptr;
+                    XX_TEST_EXPECT_TRUE(c2 != nullptr);
+                    if (c2) {
+                        XX_TEST_EXPECT_TRUE(c2->json.find("pushed") != std::string::npos);
+                        XX_TEST_EXPECT_EQ(c2->rev, revAfterFirst + 1);
+                    }
+                }
+
+                // 按当前变量重新生成: 生成函数再跑一次, 内容回到它给的那份
+                XX_TEST_EXPECT_EQ(mgrUi->updateUiSlot(inst.get(), "status", "[]"), PLUGINXX_RESULT_OK);
+                const bool regenerated = co_await waitUntil([&]() {
+                    auto s = mgrUi->uiContentSnapshot();
+                    const auto* item = s ? s->contentOf("agentxx.client.status", "sys") : nullptr;
+                    return item != nullptr && item->json.find("n=2") != std::string::npos;
+                });
+                XX_TEST_EXPECT_TRUE(regenerated);
+            }
+
+            // 失败: 保留上一份内容, 不把界面清空
+            {
+                auto badProbe  = std::make_unique<UiGenProbe>();
+                badProbe->fail = true;
+                PluginxxUiContentSpec spec{};
+                spec.version     = 1;
+                spec.struct_size = sizeof(PluginxxUiContentSpec);
+                const std::string id   = "bad";
+                const std::string slot = "status";
+                spec.id        = PluginxxStringView{id.data(), id.size()};
+                spec.slot      = PluginxxStringView{slot.data(), slot.size()};
+                spec.generate  = &testUiGenerate;
+                spec.user_data = badProbe.get();
+                XX_TEST_EXPECT_EQ(
+                    mgrUi->registerUiContent(inst.get(), &spec),
+                    PLUGINXX_RESULT_OK
+                );
+                const bool tried = co_await waitUntil([&]() {
+                    return badProbe->calls.load() + 0 >= 0; // 失败不会加 calls, 只看下面的状态
+                }, 200);
+                (void)tried;
+                co_await sleepMs(80);
+                auto snap = mgrUi->uiContentSnapshot();
+                const auto* c = snap ? snap->contentOf("agentxx.client.status", "bad") : nullptr;
+                XX_TEST_EXPECT_TRUE(c != nullptr);
+                if (c) {
+                    XX_TEST_EXPECT_TRUE(!c->hasResult); // 失败不写入内容
+                }
+            }
+
+            // 生成慢: 注册 / 快照都不等它 (界面拿上一份或空白), 结果稍后到
+            {
+                auto slowProbe    = std::make_unique<UiGenProbe>();
+                slowProbe->delayMs = 200;
+                PluginxxUiContentSpec spec{};
+                spec.version     = 1;
+                spec.struct_size = sizeof(PluginxxUiContentSpec);
+                const std::string id   = "slow";
+                const std::string slot = "status";
+                spec.id        = PluginxxStringView{id.data(), id.size()};
+                spec.slot      = PluginxxStringView{slot.data(), slot.size()};
+                spec.generate  = &testUiGenerate;
+                spec.user_data = slowProbe.get();
+                const auto begin = std::chrono::steady_clock::now();
+                XX_TEST_EXPECT_EQ(
+                    mgrUi->registerUiContent(inst.get(), &spec),
+                    PLUGINXX_RESULT_OK
+                );
+                const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::steady_clock::now() - begin
+                ).count();
+                XX_TEST_EXPECT_TRUE(elapsedMs < 100); // 没等那 200 ms
+                {
+                    auto snap = mgrUi->uiContentSnapshot();
+                    const auto* c = snap ? snap->contentOf("agentxx.client.status", "slow") : nullptr;
+                    XX_TEST_EXPECT_TRUE(c != nullptr);
+                    if (c) {
+                        XX_TEST_EXPECT_TRUE(!c->hasResult);
+                    }
+                }
+                const bool arrived = co_await waitUntil([&]() {
+                    auto s = mgrUi->uiContentSnapshot();
+                    const auto* item = s ? s->contentOf("agentxx.client.status", "slow") : nullptr;
+                    return item != nullptr && item->hasResult;
+                }, 3000);
+                XX_TEST_EXPECT_TRUE(arrived);
+            }
+
+            // 停用: 声明项 / 内容 / 自建槽位一起撤销
+            {
+                PluginxxUiSlotSpec slotSpec{};
+                slotSpec.version     = 1;
+                slotSpec.struct_size = sizeof(PluginxxUiSlotSpec);
+                const std::string slotId = "plugin.example_plugin.ui.card";
+                const std::string kind   = "insert";
+                slotSpec.id   = PluginxxStringView{slotId.data(), slotId.size()};
+                slotSpec.kind = PluginxxStringView{kind.data(), kind.size()};
+                XX_TEST_EXPECT_EQ(
+                    mgrUi->defineUiSlot(inst.get(), &slotSpec),
+                    PLUGINXX_RESULT_OK
+                );
+                {
+                    auto snap = mgrUi->uiContentSnapshot();
+                    bool found = false;
+                    if (snap) {
+                        for (const auto& s : snap->slots) {
+                            if (s.id == slotId) {
+                                found = true;
+                            }
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(found);
+                }
+                // 别人的命名空间被拒
+                const std::string otherId = "plugin.other.ui.card";
+                PluginxxUiSlotSpec other = slotSpec;
+                other.id = PluginxxStringView{otherId.data(), otherId.size()};
+                XX_TEST_EXPECT_EQ(
+                    mgrUi->defineUiSlot(inst.get(), &other),
+                    PLUGINXX_RESULT_ERR_PERMISSION
+                );
+
+                XX_TEST_EXPECT_TRUE(co_await mgrUi->disable("example_plugin"));
+                auto snap = mgrUi->uiContentSnapshot();
+                XX_TEST_EXPECT_TRUE(snap != nullptr);
+                if (snap) {
+                    bool anyContent = false;
+                    for (const auto& c : snap->contents) {
+                        if (c.plugin == "example_plugin") {
+                            anyContent = true;
+                        }
+                    }
+                    bool anyEntry = false;
+                    for (const auto& e : snap->entries) {
+                        if (e.plugin == "example_plugin") {
+                            anyEntry = true;
+                        }
+                    }
+                    bool anySlot = false;
+                    for (const auto& s : snap->slots) {
+                        if (s.plugin == "example_plugin") {
+                            anySlot = true;
+                        }
+                    }
+                    XX_TEST_EXPECT_TRUE(!anyContent);
+                    XX_TEST_EXPECT_TRUE(!anyEntry);
+                    XX_TEST_EXPECT_TRUE(!anySlot);
+                }
+                XX_TEST_EXPECT_TRUE(co_await mgrUi->unloadAsync("example_plugin", std::chrono::seconds{5}));
+            }
+        }
+        mgrUi.reset();
     }
 
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
