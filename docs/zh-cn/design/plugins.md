@@ -2827,3 +2827,18 @@ timeoutMs / maxBytes / followRedirects / maxRedirects / tlsVerify。
 - 限制: 服务端默认只监听回环 (`127.0.0.1`), 要同网段访问必须显式给 `host: "0.0.0.0"`;
   每个属主同时最多 16 条 HTTP 客户端请求、连接与服务数量有上限 (`net.info` 可查);
   单次 `call` 等网络线程的上界是 5 秒 (超时返回 `PLUGINXX_RESULT_ERR_TIMEOUT`)。
+
+## 23. 与 `musicxx_extern_plugin` 共用的四条口径
+
+约定来自 musicxx 仓库的 `docs/history/plugin-framework-compare/plan.md`，两边文档互相引用；能共用的实现下沉到
+子模块 `cxx_pluginxx`，不在两个项目里各写一份。
+
+| 口径 | 这里怎么写 | 落点 |
+|---|---|---|
+| **超时与取消** | 超时归调用方（`timeoutMs <= 0` = 不限）；取消立刻结算并丢弃晚到应答；停机先结算未完成请求再发 `EVT_STOPPED`；受理 ⇒ 恰好一条回执 | [`ffi.md`](ffi.md) §8.2；`cxx_pluginxx/host/ffi_bridge.h` |
+| **界面契约** | client 侧改成“注册声明项 + 注册内容生成函数”，渲染线程只读缓存、`rev` 丢弃晚到结果；块树 / 槽位 / 变量 id 与 musicxx 同一份定义，下沉时不改名 | [`ffi.md`](ffi.md) §8.4；`cxx_pluginxx/api/ui.h` |
+| **形态表** | `native` 由框架实现且不可接管；`js` 默认由框架实现、可被插件接管（撤销后回到预置）；其它形态由插件登记，带自己的接口代次对与 `validateCapability`；框架不按形态名写分支 | `cxx_pluginxx/api/kinds.h`、`host/kind_registry.h` |
+| **日志英文** | 运行期字符串（日志 / 错误原因 / 事件正文）一律英文；中文只在注释与本地化表里 | `agent/script/check_log_language.sh` |
+
+补充：多目标（系统 / 架构分支）清单解析也下沉到 `cxx_pluginxx/host/manifest_targets.h`，
+打包脚本与加载路径按需接；安装预检（`plugin.inspect` 类 op）用同一份解析结果，不要另写一套判定。

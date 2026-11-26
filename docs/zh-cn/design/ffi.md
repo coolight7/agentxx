@@ -605,3 +605,34 @@ await client.dispose();                                // destroy + 释放回调
   (schema 见 `agent/middlewares/interrupt_ui.h`), 渲染指引见 4.7
 - **跨 CRT 堆**: 所有 `AgentxxString` 出参与事件 payload 均经 `agentxx_ffi_malloc`
   分配, 用后 `agentxx_ffi_string_free`; `agentxx_ffi_strdup_n` 为统一拷贝入口
+
+---
+
+## 8. 与 `musicxx_extern_plugin` 共用的口径
+
+四条约定由 musicxx 仓库的 `docs/history/plugin-framework-compare/plan.md` 定稿，两边文档互相引用；
+通用实现下沉在子模块 `cxx_pluginxx`（`host/ffi_bridge.h`、`api/ui.h`、`host/ui_content.h`、
+`host/ui_slots.h`、`host/kind_registry.h`、`host/manifest_targets.h`）。
+
+### 8.1 事件 `type` 与 `seq`
+
+`AgentxxFFIEventType` 枚举保留（现有绑定不破），但**新事件的判定以 payload 里的 `type` 字符串为准**：
+宿主按名字路由，不认识的忽略；`seq` 单调递增，用来发现丢事件。老宿主不认识新事件也不会崩。
+
+### 8.2 超时与取消
+
+- 超时归调用方：`agentxx_ffi_call(..., timeoutMs <= 0)` = 不限，op 表的默认值只是默认；
+  到点由 `CallRegistry` 产生一条 `timeout` 回执。
+- `agentxx_ffi_call_cancel(reqId)` 立刻以 `canceled` 收尾，晚到应答丢弃；`reqId` 不存在返回 OK（幂等）。
+- 停机时先结算全部未完成请求（`canceled`），**然后**才发 `EVT_STOPPED`。
+- 不变量：受理成功 ⇒ 恰好一条回执；不受理 ⇒ 不推回执；事件队列满要显式回 `busy`，不静默丢。
+
+### 8.3 日志英文
+
+运行期字符串（日志、错误原因、事件里的 `message` / `reason`）一律英文；中文只在代码注释与本地化表里。
+检查脚本 `agent/script/check_log_language.sh`。
+
+### 8.4 界面
+
+client 侧界面改成“注册声明项 + 注册内容生成函数”，渲染线程只读缓存；块树 / 槽位契约与 musicxx 共用
+（`cxx_pluginxx/api/ui.h`、`host/ui_content.h`、`host/ui_slots.h`）。渲染器各写各的（FTXUI / Flutter）。
