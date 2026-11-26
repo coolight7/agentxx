@@ -1259,6 +1259,27 @@ private:
     /// 停用 / 卸载: 声明项、内容、自建槽位一起撤销 (io 线程)
     void detachUiContent(std::string_view instanceName);
 
+    /// 旧注册项 (状态栏项 / 面板 / Info 段落) 的镜像: 登记声明项 + 一份内容
+    ///
+    /// - 旧成员 (`register_status_item` 一类) 与声明式接口共用一套存储: 这个函数给同名
+    ///   的声明项写入位置信息 (`data_json`), 再推一份内容;
+    /// - `json` 是已经算好的界面描述层 JSON —— 这类内容没有生成函数, 每次变化推一份;
+    /// - 同一名字重复登记只更新, 不新建 (注册顺序保留); 返回全名 (空 = 名字不合法)。
+    std::string upsertLegacyUi(
+        ClientPluginInstance* inst,
+        std::string_view      rawId,
+        std::string_view      slot,
+        std::string_view      entryDataJson,
+        std::string_view      title,
+        std::string_view      json
+    );
+
+    /// 推一份旧注册项的内容 (写结果 + 版本号 + 重发快照; 全名不存在时什么也不做)
+    void pushLegacyUi(std::string_view fullId, std::string_view json);
+
+    /// 撤销一条旧注册项的声明项与内容 (全名)
+    void dropLegacyUi(std::string_view fullId);
+
     /// 本管理器唯一的工作池 (构造即建; dlopen/dlclose、插件阻塞工作共用)
     ///
     /// 与 agent 侧同一模型: 一个端只有一个池, 数量由 `plugin.thread_pool_workers`

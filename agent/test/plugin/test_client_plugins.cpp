@@ -996,6 +996,28 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
             }
             XX_TEST_EXPECT_TRUE(hasInfo);
+            // 旧注册项同样落在声明式注册表里: 同一份存储, 界面只有一条绘制路径
+            if (auto uiSnap = mgr->uiContentSnapshot()) {
+                const auto* status = uiSnap->contentOf(
+                    agentxx::plugin::kClientUiSlotStatus,
+                    "example_plugin.turns"
+                );
+                XX_TEST_EXPECT_TRUE(status != nullptr);
+                if (status != nullptr) {
+                    XX_TEST_EXPECT_TRUE(status->hasResult);
+                    // 文本形态的状态栏项按一行文本给出
+                    XX_TEST_EXPECT_TRUE(status->parsed.contains("blocks"));
+                    XX_TEST_EXPECT_TRUE(status->json.find("turns: 0") != std::string::npos);
+                }
+                XX_TEST_EXPECT_TRUE(
+                    uiSnap->contentOf(agentxx::plugin::kClientUiSlotPanel, "example_plugin.panel")
+                    != nullptr
+                );
+                XX_TEST_EXPECT_TRUE(
+                    uiSnap->contentOf(agentxx::plugin::kClientUiSlotInfo, "example_plugin.info")
+                    != nullptr
+                );
+            }
             bool hasCmd1 = false, hasCmd2 = false;
             for (const auto& c : reg->commands) {
                 if (c.name == "example") {

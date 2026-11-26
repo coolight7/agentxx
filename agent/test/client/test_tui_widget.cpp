@@ -491,6 +491,57 @@ void test_hidden_button_not_clickable() {
     XX_TEST_EXPECT_TRUE(opened);
 }
 
+/// 一条测试用状态栏内容 (短名 + 位置 + 内容)
+struct TestStatusContent {
+    std::string id;              ///< 短名 (声明项与内容同名)
+    int         align = 0;       ///< 0=左 1=右
+    int         order = 0;       ///< 组内排序
+    std::string json;            ///< 描述层 JSON (parsed=true) 或一行文本 (parsed=false)
+    bool        parsed = false;  ///< true: json 已是描述层 JSON
+};
+
+/// 造一份只含状态栏内容的声明式界面快照 (与管理器推快照的形状一致)
+///
+/// 旧 `register_status_item` 由管理器写进同一套注册表: 有富片段时内容是一行横排块,
+/// 否则是一行 Text 块。这里按同样两种形状造数据, 驱动渲染路径。
+std::shared_ptr<agentxx::plugin::ClientUiSnapshot> makeStatusSnapshot(
+    const std::vector<TestStatusContent>& items
+) {
+    auto snap = std::make_shared<agentxx::plugin::ClientUiSnapshot>();
+    for (const auto& item : items) {
+        agentxx::plugin::ClientUiEntryView entry;
+        entry.plugin   = "test_plugin";
+        entry.id       = "plugin.test_plugin." + item.id;
+        entry.shortId  = item.id;
+        entry.type     = std::string{agentxx::plugin::kClientUiSlotStatus};
+        utilxx_base::Json data;
+        data["align"]  = item.align;
+        data["order"]  = item.order;
+        entry.dataJson = data.dump();
+        snap->entries.push_back(std::move(entry));
+
+        agentxx::plugin::ClientUiContentView content;
+        content.plugin    = "test_plugin";
+        content.fullId    = "plugin.test_plugin." + item.id;
+        content.id        = item.id;
+        content.slot      = std::string{agentxx::plugin::kClientUiSlotStatus};
+        content.hasResult = true;
+        if (item.parsed) {
+            content.parsed = utilxx_base::Json::parse(item.json);
+        } else {
+            utilxx_base::Json block;
+            block["kind"] = "Text";
+            block["text"] = item.json;
+            utilxx_base::Json doc;
+            doc["blocks"] = utilxx_base::Json::array({block});
+            content.parsed = std::move(doc);
+        }
+        content.json = content.parsed.dump();
+        snap->contents.push_back(std::move(content));
+    }
+    return snap;
+}
+
 void test_status_bar_click_actions() {
     TUISharedState sharedState;
     TUITheme       theme = TUITheme::darkTheme();
@@ -555,32 +606,20 @@ void test_status_bar_click_actions() {
     XX_TEST_EXPECT_EQ(sessionClicks, 1);
     XX_TEST_EXPECT_EQ(settingsClicks, 1);
 
-    // ---- 插件状态栏项的富展示片段 (segments / sparkline / meter) ----
+    // ---- 插件状态栏项的内容渲染 (segments / sparkline / meter 对应的块树) ----
+    // 旧 `register_status_item` 的富片段由管理器改写成一行横排块; 这里直接给同样的内容
+    const std::string richJson = R"({"blocks":[{"kind":"Row","gap":8,"children":[)"
+                                 R"({"kind":"Text","text":"CPU","color":"hint"},)"
+                                 R"({"kind":"Text","text":"55%","color":"accent"},)"
+                                 R"({"kind":"Sparkline","data":[1,3,2,5,4],)"
+                                 R"("color":"accent","height":1},)"
+                                 R"({"kind":"Progress","value":55,"total":100,"width":8,"unit":"%"})"
+                                 R"(]}]})";
     {
-        auto registry = std::make_shared<agentxx::plugin::ClientUiRegistry>();
-        agentxx::plugin::ClientStatusItem rich;
-        rich.plugin = "test_plugin";
-        rich.id     = "test_plugin.rich";
-        rich.text   = "降级文本";
-        rich.align  = 0;
-        rich.order  = 0;
-        rich.rich   = utilxx_base::Json::parse(
-            R"({"segments":[{"text":"CPU","color":"hint"},{"text":"55%","color":"accent"}],)"
-              R"("sparkline":{"data":[1,3,2,5,4],"color":"accent"},)"
-              R"("meter":{"value":55,"total":100,"width":8,"unit":"%"}})"
-        );
-        registry->statusItems.push_back(rich);
-
-        agentxx::plugin::ClientStatusItem plain;
-        plain.plugin = "test_plugin";
-        plain.id     = "test_plugin.plain";
-        plain.text   = "plain-item";
-        plain.align  = 1;
-        registry->statusItems.push_back(plain);
-
-        auto bound                     = TUISharedState{};
-        ctx.frameState                 = bound.readSnapshot();
-        ctx.frameState->pluginRegistry = registry;
+        std::vector<TestStatusContent> contents;
+        contents.push_back(TestStatusContent{"test_plugin.rich", 0, 0, richJson, true});
+        contents.push_back(TestStatusContent{"test_plugin.plain", 1, 0, "plain-item", false});
+        ctx.frameState->uiContent = makeStatusSnapshot(contents);
 
         auto screen
             = ftxui::Screen::Create(ftxui::Dimension::Fixed(100), ftxui::Dimension::Fixed(3));
@@ -589,20 +628,14 @@ void test_status_bar_click_actions() {
         XX_TEST_EXPECT_TRUE(text.find("CPU") != std::string::npos);
         XX_TEST_EXPECT_TRUE(text.find("55%") != std::string::npos);
         XX_TEST_EXPECT_TRUE(text.find("plain-item") != std::string::npos);
-        // 富片段渲染成功时不显示降级文本
+        // 富片段一项都用不上时管理器才退回文本: 这里的内容只有一块横排, 没有降级文本
         XX_TEST_EXPECT_TRUE(text.find("降级文本") == std::string::npos);
     }
     {
-        // 无富片段时仍按纯文本渲染 (原行为不变)
-        auto registry = std::make_shared<agentxx::plugin::ClientUiRegistry>();
-        agentxx::plugin::ClientStatusItem plain;
-        plain.plugin = "test_plugin";
-        plain.id     = "test_plugin.text";
-        plain.text   = "text-only";
-        registry->statusItems.push_back(plain);
-        auto bound                     = TUISharedState{};
-        ctx.frameState                 = bound.readSnapshot();
-        ctx.frameState->pluginRegistry = registry;
+        // 无富片段时按纯文本渲染 (被管理器改写成一行 Text 块)
+        std::vector<TestStatusContent> contents;
+        contents.push_back(TestStatusContent{"test_plugin.text", 0, 0, "text-only", false});
+        ctx.frameState->uiContent = makeStatusSnapshot(contents);
 
         auto screen
             = ftxui::Screen::Create(ftxui::Dimension::Fixed(100), ftxui::Dimension::Fixed(3));

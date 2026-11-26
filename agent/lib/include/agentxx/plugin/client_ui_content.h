@@ -40,6 +40,16 @@ inline constexpr std::string_view kClientUiVarRegions = "agentxx.client.regions"
 /// 客户端槽位目录 (三个保留槽位 + 两个变量; 插件自建槽位由注册表另存)
 pluginxx::host::UiSlotCatalog buildClientUiSlotCatalog();
 
+/// 短名归一为全名 `plugin.<插件 id>.<短名>` (client 侧的插件 id 就是实例名)
+///
+/// - 已带自己的命名空间前缀 → 原样返回;
+/// - 带别人的前缀 → 空串 (拒绝);
+/// - 没有前缀 → 补上。
+///
+/// 旧注册项 (`register_status_item` 一类) 也走这条规则, 这样两类接口给同一个名字时
+/// 落在同一条内容上。
+std::string clientUiFullName(std::string_view instanceName, std::string_view raw);
+
 /// 一条声明项 (界面线程读的拷贝)
 struct ClientUiEntryView {
     std::string plugin;   ///< 实例名
@@ -65,7 +75,10 @@ struct ClientUiContentView {
     uint64_t    seq   = 0;
     bool        hasResult = false; ///< 还没有成功结果时界面不画它
     std::string json;              ///< 最近一次成功的内容 (界面描述层的 JSON)
-    std::string data;              ///< 同一次的附带数据 (原样保留)
+    /// 同 [json] 解析后的结果 (推快照时解析一次; 界面每帧直接交给块树渲染器,
+    /// 不再逐帧解析文本)。解析失败时是空数组 (= 什么都不画)。
+    utilxx_base::Json parsed = utilxx_base::Json::array();
+    std::string       data;    ///< 同一次的附带数据 (原样保留)
 };
 
 /// 插件自己声明的槽位 (界面线程读的拷贝)

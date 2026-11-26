@@ -290,6 +290,10 @@ typedef struct AgentxxClientUiIface {
     /// - initialJson: {"text": "...", "tooltip": "..."} (text 必填)
     /// - align: 0=左侧 1=右侧; order: 组内排序 (小在前)
     /// - 主程序不支持该子能力 (函数指针 NULL) 或 id 冲突时按失败交回
+    /// - **与声明式界面同一份存储**: 主程序把它写成 `agentxx.client.status` 上的一个
+    ///   声明项 (`data` = `{"align","order"}`) 加一份内容, 界面画的是那份内容;
+    ///   新插件直接用下文的 `register_ui_item` + `register_ui_content` 即可
+    ///   (同一个 id 用两套接口时后写的生效)
     PluginxxOperatorHandle*(PLUGINXX_CALL* register_status_item)(
         const PluginxxHost*       host,
         const PluginxxStringView* id,
@@ -322,6 +326,8 @@ typedef struct AgentxxClientUiIface {
     /// 注册侧边栏面板; 句柄经完成回调交回 (形态同 register_status_item)
     /// - id: 全局唯一, 建议 "{插件名}.{面板名}"
     /// - propsJson: {"title": "..."} (title 必填; 显示在 tab 栏)
+    /// - 与声明式界面同一份存储 (tab 也按同一个 id 建); 新插件用
+    ///   `register_ui_item` + `register_ui_content` 写到 `agentxx.client.panel` 上
     PluginxxOperatorHandle*(PLUGINXX_CALL* register_panel)(
         const PluginxxHost*       host,
         const PluginxxStringView* id,
@@ -363,6 +369,8 @@ typedef struct AgentxxClientUiIface {
     /// 注册 Info 栏段落; 句柄经完成回调交回 (形态同 register_status_item)
     /// - id: 全局唯一, 建议 "{插件名}.{段名}"
     /// - propsJson: {"title": "..."} (title 可选; 空则无段落标题)
+    /// - 与声明式界面同一份存储; 新插件用 `register_ui_item` +
+    ///   `register_ui_content` 写到 `agentxx.client.info` 上
     PluginxxOperatorHandle*(PLUGINXX_CALL* register_info_section)(
         const PluginxxHost*       host,
         const PluginxxStringView* id,

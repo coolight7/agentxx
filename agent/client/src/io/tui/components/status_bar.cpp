@@ -25,81 +25,6 @@ const agentxx::client::UiHitMap::Entry*
 
 } // namespace
 
-namespace {
-
-/// 状态栏富展示片段 → 单行元素 ([ui_components] 的共享实现渲染)
-///
-/// 输入形态 (与 `update_status_item` 的 JSON 一致): 每个片段都是界面描述层的组件项
-/// (字段名同描述层, 见 `pluginxx/ui.h`):
-/// - `segments`: `[{text,color}]` 文本片段 (状态栏常见的"分色多段"写法)
-/// - `sparkline`: 迷你趋势图参数 (`data` 必需; 高度强制 1 行, 即 `glyphHeight: 1`)
-/// - `meter`: 进度/计量条参数 (`value`/`total`/`width`/`label`/`unit`/`thresholds`/`color`)
-///
-/// 三者可任意组合, 按 `segments → sparkline → meter` 顺序以单个空格拼接为一行;
-/// 状态栏高度固定一行, 因此 sparkline 的图形高度恒为 1。
-/// 无可用片段时返回 nullptr (调用方回退纯文本)。
-ftxui::Element
-    statusRichElement(const utilxx_base::Json& rich, const TUITheme& theme, int maxWidth) {
-    using pluginxx::ui::Item;
-
-    std::vector<Item> cells;
-    if (const auto segs = rich.find("segments"); segs != rich.end() && segs->is_array()) {
-        for (const auto& seg : *segs) {
-            if (!seg.is_object()) {
-                continue;
-            }
-            const std::string text = seg.value("text", std::string{});
-            if (text.empty()) {
-                continue;
-            }
-            Item cell = pluginxx::ui::build::text(text);
-            cell.color = seg.value("color", std::string{"hint"});
-            cells.push_back(std::move(cell));
-        }
-    }
-    if (const auto sp = rich.find("sparkline"); sp != rich.end() && sp->is_object()) {
-        // 状态栏只有一行: 图形高度恒为 1
-        Item item        = pluginxx::ui::parseBlock(utilxx_base::Json{
-                   {"kind", "Sparkline"},
-            *sp
-        });
-        item.glyphHeight = 1;
-        cells.push_back(std::move(item));
-    }
-    if (const auto mt = rich.find("meter"); mt != rich.end() && mt->is_object()) {
-        cells.push_back(pluginxx::ui::parseBlock(utilxx_base::Json{
-            {"kind", "Progress"},
-            *mt
-        }));
-    }
-    if (cells.empty()) {
-        return nullptr;
-    }
-
-    // 片段按横排组装 (共享实现负责间距与宽度分配; 间距 1 列 ≈ 8u)
-    Item row     = pluginxx::ui::build::row({});
-    row.children = std::move(cells);
-    row.hasGap   = true;
-    row.gap      = pluginxx::ui::SizeValue::of(pluginxx::ui::gen::kDefaultCellWidth);
-
-    client::UiRenderCtx rc;
-    rc.theme  = &theme;
-    rc.width  = (maxWidth > 0) ? maxWidth : 0;
-    rc.indent = 0;
-    UiRenderResult res;
-    renderItem(row, rc, res);
-    if (res.rows.empty()) {
-        return nullptr;
-    }
-    ftxui::Elements els;
-    for (auto& rendered : res.rows) {
-        els.push_back(std::move(rendered.element));
-    }
-    return ftxui::vbox(std::move(els)) | ftxui::xflex_shrink;
-}
-
-} // namespace
-
 ftxui::Box StatusBarComponent::hitBox(std::string_view id) const {
     const auto* entry = findEntry(hits_, id);
     return entry ? *entry->box : agentxx::client::kNoBox;
@@ -156,70 +81,28 @@ Element StatusBarComponent::OnRender() {
     auto modelInfo
         = hits_.add(hbox(std::move(modelChildren)) | xflex_shrink, std::string{kModelHitId});
 
-    // ---- 插件状态栏项 (client 插件注册; 左侧 align=0 / 右侧 align=1) ----
-    // 从插件 UI 注册表快照读取 (短锁拷贝 shared_ptr, 渲染无锁);
-    // 按 order 排序, 文本过长时裁剪 (UTF-8 安全截断)
+    // ---- 插件状态栏项 (左侧 align=0 / 右侧 align=1) ----
+    // 只有一条绘制路径: 位置与画什么都在声明式注册表里 (`register_ui_entry` +
+    // `register_ui_content`; 旧 `register_status_item` 由管理器写进同一套注册表)
     std::vector<Element> leftPluginItems;
     std::vector<Element> rightPluginItems;
     {
-        // 注册表来源: 优先用本帧快照 (主渲染器帧首写入), 否则短锁取管理器快照
-        std::shared_ptr<const agentxx::plugin::ClientUiRegistry> reg
-            = ctx_.frameState ? ctx_.frameState->pluginRegistry : nullptr;
-        if (!reg) {
+        // 快照来源: 优先用本帧快照 (主渲染器帧首写入), 否则短锁取管理器快照
+        std::shared_ptr<const agentxx::plugin::ClientUiSnapshot> uiSnap
+            = ctx_.frameState ? ctx_.frameState->uiContent : nullptr;
+        if (!uiSnap) {
             if (auto mgr = ctx_.pluginManager) {
-                reg = mgr->uiRegistrySnapshot();
+                uiSnap = mgr->uiContentSnapshot();
             }
         }
-        if (reg) {
-            // 按 (align, order) 排序: 同侧 order 小在前
-            auto items = reg->statusItems;
-            std::sort(items.begin(), items.end(), [](const auto& a, const auto& b) {
-                if (a.align != b.align) {
-                    return a.align < b.align;
-                }
-                return a.order < b.order;
-            });
-            for (const auto& item : items) {
-                // 富展示片段 (segments/sparkline/meter): 交共享组件层渲染为单行;
-                // 无富片段或渲染为空时回退纯文本 (含 24 字截断)
-                Element el;
-                if (item.rich.is_object() && !item.rich.empty()) {
-                    // 单侧最多占屏幕宽度的 1/3, 避免插件项挤掉状态栏核心信息
-                    const int avail = std::max(12, ctx_.terminalSize().dimx / 3);
-                    el              = statusRichElement(item.rich, theme, avail);
-                }
-                if (!el) {
-                    std::string textStr = item.text;
-                    const auto  nl      = textStr.find('\n');
-                    if (nl != std::string::npos) {
-                        textStr.resize(nl);
-                    }
-                    if (auto idx = utilxx_base::findIndexByUtf8Length(textStr, 24);
-                        idx > 0 && idx < textStr.size()) {
-                        textStr.resize(idx);
-                        textStr += "...";
-                    }
-                    el = text(textStr) | color(theme.hintColor) | theme.dim() | xflex_shrink;
-                }
-                if (item.align == 0) {
-                    leftPluginItems.push_back(std::move(el));
-                } else {
-                    rightPluginItems.push_back(std::move(el));
-                }
-            }
-        }
-    }
-
-    // ---- 声明式状态栏项 (register_ui_entry + register_ui_content) ----
-    // - 位置信息在声明项的 data 里 ({"align":0|1,"order":n}), 画什么来自内容的最近一次结果;
-    // - 内容还没到时不画 (不占位、不阻塞); 画法走共享组件层 (与面板 / Info 同一实现)
-    if (auto mgr = ctx_.pluginManager) {
-        if (auto uiSnap = mgr->uiContentSnapshot()) {
+        if (uiSnap) {
             // 按钮动作绑定与可点区域要用它 (与本函数上文同一来源)
             std::shared_ptr<const agentxx::plugin::ClientUiRegistry> uiReg
                 = ctx_.frameState ? ctx_.frameState->pluginRegistry : nullptr;
             if (!uiReg) {
-                uiReg = mgr->uiRegistrySnapshot();
+                if (auto mgr = ctx_.pluginManager) {
+                    uiReg = mgr->uiRegistrySnapshot();
+                }
             }
             struct DeclItem {
                 int32_t align = 0;
@@ -253,7 +136,9 @@ Element StatusBarComponent::OnRender() {
                 item.order = data.value("order", 0);
                 item.seq   = entry.seq;
 
-                auto doc = pluginxx::ui::parseBlocks(content->json);                agentxx::client::UiRenderCtx rc;
+                auto doc = pluginxx::ui::parseBlocks(content->parsed);
+
+                agentxx::client::UiRenderCtx rc;
                 rc.theme   = &theme;
                 rc.width   = std::max(12, ctx_.terminalSize().dimx / 3);
                 rc.plugin  = entry.plugin;

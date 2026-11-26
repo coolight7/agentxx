@@ -1075,6 +1075,13 @@ static void ensureSection(ClientCtx& ctx) {
 static void clearSection(ClientCtx& ctx) {
     ctx.clearInfoSection(kSectionId);
     ctx.last_plan_json.clear();
+    // 内容路径同一份数据: 让主程序按"无规划"重新生成一次 (两边写同一个内容, 不能只清一边)
+    if (ctx.content_registered && ctx.ui && ctx.host && ctx.ui->update_ui_slot) {
+        const auto        slotSv = agentxx::plugin::PluginStringView::fromCstr("info");
+        const std::string ids    = fmt::format(R"(["{}"])", kSectionId);
+        const auto        idsSv  = agentxx::plugin::PluginStringView::from(ids.data(), ids.size());
+        ctx.ui->update_ui_slot(ctx.host, &slotSv, &idsSv, nullptr, nullptr, nullptr);
+    }
 }
 
 /// 用最近缓存内容刷新 Info 段落 (client io 线程调用)
@@ -1110,8 +1117,8 @@ static void refreshPlanSection(ClientCtx& ctx) {
     payload["items"]          = items;
     const std::string json    = payload.dump();
     agentxx::plugin::clientUpdateInfoSection(ctx.host, ctx.ui, section, json);
-    // 声明式内容同步刷新 (主程序优先画内容; 不支持新成员的客户端会忽略)
-    if (ctx.ui->update_ui_slot && ctx.content_registered) {
+    // 声明式内容同步刷新: 与旧段落写同一份内容 (主程序画的是它; 老客户端没有这个成员)
+    if (ctx.content_registered && ctx.ui->update_ui_slot) {
         const auto        slotSv = agentxx::plugin::PluginStringView::fromCstr("info");
         const std::string ids    = fmt::format(R"(["{}"])", kSectionId);
         const auto        idsSv  = agentxx::plugin::PluginStringView::from(ids.data(), ids.size());

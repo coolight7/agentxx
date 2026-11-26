@@ -291,18 +291,16 @@ void TUIClientAgentIO::reportSidebarRegionVisibility() {
     if (!mgr || !sidebar_) {
         return;
     }
-    auto reg = mgr->uiRegistrySnapshot();
-    if (!reg) {
-        return;
-    }
     // 面板: 只有当前激活 tab 的内容被渲染 (其余"不可见" → 关联定时器暂停)
-    for (const auto& p : reg->panels) {
-        mgr->reportRegionVisible(p.id, sidebar_->isTabActive(p.id));
-    }
-    // Info 段落: 侧边栏 Info tab 激活时整体可见
-    const bool infoVisible = sidebar_->isTabActive(kInfoTabId);
-    for (const auto& s : reg->infoSections) {
-        mgr->reportRegionVisible(s.id, infoVisible);
+    if (auto uiSnap = mgr->uiContentSnapshot()) {
+        for (const auto& content : uiSnap->contentsOn(agentxx::plugin::kClientUiSlotPanel)) {
+            mgr->reportRegionVisible(content->id, sidebar_->isTabActive(content->id));
+        }
+        // Info 段落: 侧边栏 Info tab 激活时整体可见
+        const bool infoVisible = sidebar_->isTabActive(kInfoTabId);
+        for (const auto& content : uiSnap->contentsOn(agentxx::plugin::kClientUiSlotInfo)) {
+            mgr->reportRegionVisible(content->id, infoVisible);
+        }
     }
 }
 
@@ -310,9 +308,12 @@ void TUIClientAgentIO::refreshRenderContext() {
     ctx_.state      = &sharedState_;
     ctx_.frameState = sharedState_.readSnapshot();
     if (ctx_.frameState) {
-        // client 插件 UI 注册表快照 (面板/Info/状态栏/工具消息装饰; 渲染期无锁读)
+        // client 插件 UI 注册表快照 (命令/快捷键/动作绑定/工具消息装饰; 渲染期无锁读)
         ctx_.frameState->pluginRegistry
             = pluginManager_ ? pluginManager_->uiRegistrySnapshot() : nullptr;
+        // 声明式界面快照 (状态栏 / 面板 / Info 段落的内容)
+        ctx_.frameState->uiContent
+            = pluginManager_ ? pluginManager_->uiContentSnapshot() : nullptr;
     }
 }
 
@@ -356,17 +357,11 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
         return out;
     }
     auto reg = mgr->uiRegistrySnapshot();
-    if (!reg) {
-        return out;
-    }
-    const agentxx::plugin::ClientPanel* panel = nullptr;
-    for (const auto& p : reg->panels) {
-        if (p.id == panelId) {
-            panel = &p;
-            break;
-        }
-    }
-    if (!panel) {
+    // 内容来源: 声明式注册表 (旧 register_panel 写的就是这里, 面板 tab 也按同一个 id 建)
+    std::shared_ptr<const agentxx::plugin::ClientUiSnapshot> uiSnap = mgr->uiContentSnapshot();
+    const agentxx::plugin::ClientUiContentView* content
+        = uiSnap ? uiSnap->contentOf(agentxx::plugin::kClientUiSlotPanel, panelId) : nullptr;
+    if (content == nullptr) {
         return out;
     }
 
@@ -382,25 +377,18 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
     }
 
     // 表单状态: 按最新描述初始化并保留用户已编辑的值 (含控件状态清理)
-    // - 声明式内容优先: 插件给同一 id 注册了内容就画它 (内容还没到时画旧 items)
-    std::shared_ptr<const agentxx::plugin::ClientUiSnapshot> uiSnap = mgr->uiContentSnapshot();
-    const agentxx::plugin::ClientUiContentView*              content = nullptr;
-    if (uiSnap) {
-        content = uiSnap->contentOf(agentxx::plugin::kClientUiSlotPanel, panel->id);
-    }
-    const bool useContent = content != nullptr && content->hasResult;
-    auto  parsed = pluginxx::ui::parseBlocks(useContent ? content->json : panel->items);
-    auto& form   = formFor(panel->id, panel->plugin, std::move(parsed));
+    auto parsed = pluginxx::ui::parseBlocks(content->parsed);
+    auto& form  = formFor(content->id, content->plugin, std::move(parsed));
 
     agentxx::client::UiRenderCtx rc;
     rc.theme            = &theme_;
     rc.width            = avail;
     rc.indent           = 0;
-    rc.plugin           = panel->plugin;
-    rc.ownerId          = panel->id;
+    rc.plugin           = content->plugin;
+    rc.ownerId          = content->id;
     rc.registry         = reg.get();
     rc.form             = &form.state;
-    rc.collapseExpanded = [this, ownerId = panel->id](const std::string& id, bool defaultValue) {
+    rc.collapseExpanded = [this, ownerId = content->id](const std::string& id, bool defaultValue) {
         return collapseExpanded(ownerId, id, defaultValue);
     };
 
@@ -421,7 +409,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
     }
     // 上报可用尺寸: 值变化时主程序会向插件投递 UI_LAYOUT 事件 (插件按宽度重排)
     if (mgr) {
-        mgr->reportRegionSize(panel->id, avail, static_cast<int>(lines));
+        mgr->reportRegionSize(content->id, avail, static_cast<int>(lines));
     }
     return out;
 }

@@ -196,40 +196,34 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         pushPlain(text(""));
     }
 
-    // 插件扩展的 Info 段落 (插件经 register_info_section 注入; UI 线程渲染,
-    // 每帧从 client 插件注册表快照读取, 无需缓存):
-    // - 段落在 Append 之后按注册顺序展示 (标题 + items, items schema 同面板)
-    // - 若段落无内容项则跳过，避免仅显示孤立标题
+    // 插件扩展的 Info 段落 (插件经 Info 槽位上的内容注入; UI 线程渲染,
+    // 每帧从 client 插件的声明式界面快照读取, 无需缓存):
+    // - 段落在 Append 之后按注册顺序展示 (标题 + 内容块)
+    // - 内容为空时跳过, 避免仅显示孤立标题
     // - 含可点内容的子项登记可命中区域 (owner=段落 id), 点击经
     //   [handleSidebarRegionClick] 定位后派发 (滚动容器内不用 reflect 判定)
     if (auto mgr = pluginManager_) {
         auto reg = mgr->uiRegistrySnapshot();
-        // 声明式内容 (插件用 register_ui_content 注册在 agentxx.client.info 上的)
+        // 内容来源: 声明式注册表 (旧 register_info_section 也写这里)
         std::shared_ptr<const agentxx::plugin::ClientUiSnapshot> uiSnap
             = mgr->uiContentSnapshot();
-        if (reg && !reg->infoSections.empty()) {
-            for (const auto& sec : reg->infoSections) {
+        if (reg && uiSnap) {
+            for (const auto& content : uiSnap->contentsOn(agentxx::plugin::kClientUiSlotInfo)) {
                 auto collapseCb
-                    = [this, ownerId = sec.id](const std::string& id, bool defaultValue) {
+                    = [this, ownerId = content->id](const std::string& id, bool defaultValue) {
                           return collapseExpanded(ownerId, id, defaultValue);
                       };
-                // 声明式内容优先: 同一 id 有内容就画内容 (还没到时画旧 items)
-                const agentxx::plugin::ClientUiContentView* content = nullptr;
-                if (uiSnap) {
-                    content = uiSnap->contentOf(agentxx::plugin::kClientUiSlotInfo, sec.id);
-                }
-                const bool useContent = content != nullptr && content->hasResult;
                 // 表单状态: 按最新描述初始化并保留用户已编辑的值
                 auto& form = formFor(
-                    sec.id,
-                    sec.plugin,
-                    pluginxx::ui::parseBlocks(useContent ? content->json : sec.items)
+                    content->id,
+                    content->plugin,
+                    pluginxx::ui::parseBlocks(content->parsed)
                 );
                 std::vector<ScrollItem> secItems;
                 const size_t            secLines = appendPluginItems(
                     form.items,
-                    sec.plugin,
-                    sec.id,
+                    content->plugin,
+                    content->id,
                     reg.get(),
                     theme_,
                     avail,
@@ -244,10 +238,10 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 // 上报可用尺寸 (值变化时主程序投递 UI_LAYOUT 事件; 高度按内容行数,
                 // 与面板计数方式一致 —— 插件据此决定是否折叠/分页)
                 if (mgr) {
-                    mgr->reportRegionSize(sec.id, avail, static_cast<int>(secLines));
+                    mgr->reportRegionSize(content->id, avail, static_cast<int>(secLines));
                 }
-                if (!sec.title.empty()) {
-                    pushPlain(text(sec.title) | color(theme_.accentColor));
+                if (!content->title.empty()) {
+                    pushPlain(text(content->title) | color(theme_.accentColor));
                 }
                 items.insert(
                     items.end(),

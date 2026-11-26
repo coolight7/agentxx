@@ -132,6 +132,10 @@ const char* uiReasonOf(int32_t rc) {
 // 槽位目录与快照 (界面线程只读)
 // =====================================================================
 
+std::string clientUiFullName(std::string_view instanceName, std::string_view raw) {
+    return fullUiIdOf(uiInstancePluginId(instanceName), raw);
+}
+
 pluginxx::host::UiSlotCatalog buildClientUiSlotCatalog() {
     std::vector<pluginxx::host::UiSlotDecl> slots;
     slots.push_back({"agentxx.client.status", "insert"});
@@ -230,7 +234,14 @@ void ClientPluginManager::publishUiContentSnapshot() {
         view.seq       = content.seq;
         view.hasResult = content.hasResult;
         view.json      = content.lastJson;
-        view.data      = content.lastData;
+        if (!content.lastJson.empty()) {
+            // 界面每帧都用它: 推快照时解析一次, 不在渲染线程里反复解析文本
+            view.parsed = parseSafe(content.lastJson);
+            if (!view.parsed.is_array() && !view.parsed.is_object()) {
+                view.parsed = Json::array();
+            }
+        }
+        view.data = content.lastData;
         snapshot->contents.push_back(std::move(view));
     }
     std::sort(

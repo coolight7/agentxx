@@ -3630,6 +3630,194 @@ const PluginxxHostVtable* ClientPluginManager::hostVtable() {
 // ClientPluginManager 内部实现 (vtable 强类型入口)
 // =====================================================================
 
+namespace {
+
+/// 旧状态栏项文本的可见长度 (与旧绘制一致: 只取第一行, 超长补 "...")
+constexpr size_t kLegacyStatusTextMaxChars = 24;
+
+/// 状态栏文本按旧绘制的方式裁剪 (第一行 + 最多 [kLegacyStatusTextMaxChars] 个字符)
+std::string legacyStatusText(std::string_view text) {
+    std::string out{text};
+    const auto  nl = out.find('\n');
+    if (nl != std::string::npos) {
+        out.resize(nl);
+    }
+    if (const auto idx = utilxx_base::findIndexByUtf8Length(out, kLegacyStatusTextMaxChars);
+        idx > 0 && idx < out.size()) {
+        out.resize(idx);
+        out += "...";
+    }
+    return out;
+}
+
+/// 旧状态栏项 → 界面描述层 JSON
+///
+/// - 有 `segments` / `sparkline` / `meter` 时给一行横排组件 (趋势图高度固定一行);
+/// - 否则给一行文本; 富片段一项都用不上时也退回文本 (与旧绘制的回退一致)。
+std::string legacyStatusContentJson(
+    const utilxx_base::Json& props,
+    bool                     hasRich,
+    std::string_view         text
+) {
+    using utilxx_base::Json;
+    Json blocks = Json::array();
+    if (hasRich) {
+        Json children = Json::array();
+        if (const auto segs = props.find("segments"); segs != props.end() && segs->is_array()) {
+            for (const auto& seg : *segs) {
+                if (!seg.is_object()) {
+                    continue;
+                }
+                const std::string segText = seg.value("text", std::string{});
+                if (segText.empty()) {
+                    continue;
+                }
+                Json cell;
+                cell["kind"]  = "Text";
+                cell["text"]  = segText;
+                cell["color"] = seg.value("color", std::string{"hint"});
+                children.push_back(std::move(cell));
+            }
+        }
+        if (const auto sp = props.find("sparkline"); sp != props.end() && sp->is_object()) {
+            Json item = *sp;
+            item["kind"]   = "Sparkline";
+            item["height"] = 1; // 状态栏只有一行高
+            children.push_back(std::move(item));
+        }
+        if (const auto mt = props.find("meter"); mt != props.end() && mt->is_object()) {
+            Json item = *mt;
+            item["kind"] = "Progress";
+            children.push_back(std::move(item));
+        }
+        if (!children.empty()) {
+            Json row;
+            row["kind"]     = "Row";
+            row["gap"]      = 8;
+            row["children"] = std::move(children);
+            blocks.push_back(std::move(row));
+        }
+    }
+    if (blocks.empty()) {
+        Json line;
+        line["kind"] = "Text";
+        line["text"] = legacyStatusText(text);
+        line["dim"]  = true; // 旧绘制: 纯文本项用 theme.dim()
+        blocks.push_back(std::move(line));
+    }
+    Json doc;
+    doc["blocks"] = std::move(blocks);
+    return doc.dump();
+}
+
+/// 旧 items (面板 / Info 段落) → 界面描述层 JSON
+/// - 旧 items 就是描述层的块数组, 原样交给渲染器
+std::string legacyItemsContentJson(const utilxx_base::Json& items) {
+    utilxx_base::Json doc = utilxx_base::Json::object();
+    doc["items"]          = items;
+    return doc.dump();
+}
+
+/// 旧注册项的全名 (注册 / 更新 / 注销三处必须算出同一个名字)
+///
+/// 名字带了自己的 `plugin.` 前缀就原样用; 带了别人的前缀时旧接口没有校验,
+/// 仍然挂在当前插件名下 (旧接口不因此丢项)。
+std::string legacyUiFullId(std::string_view instanceName, std::string_view rawId) {
+    std::string id = clientUiFullName(instanceName, rawId);
+    if (id.empty()) {
+        id = "plugin." + std::string{instanceName} + "." + std::string{rawId};
+    }
+    return id;
+}
+
+} // namespace
+
+std::string ClientPluginManager::upsertLegacyUi(
+    ClientPluginInstance* inst,
+    std::string_view      rawId,
+    std::string_view      slot,
+    std::string_view      entryDataJson,
+    std::string_view      title,
+    std::string_view      json
+) {
+    if (!inst || rawId.empty()) {
+        return {};
+    }
+    const std::string fullId = legacyUiFullId(inst->name, rawId);
+    // 声明项: 位置信息 (align / order / 标题) 进 data, 界面按它排序与定位
+    auto entryIt = uiContent_.entries().find(fullId);
+    if (entryIt != uiContent_.entries().end()) {
+        entryIt->second.type     = std::string{slot};
+        entryIt->second.dataJson = std::string{entryDataJson};
+        entryIt->second.rev += 1;
+    } else {
+        pluginxx::host::UiEntry entry;
+        entry.plugin   = inst->name;
+        entry.pluginId = inst->name;
+        entry.id       = fullId;
+        entry.type     = std::string{slot};
+        entry.dataJson = std::string{entryDataJson};
+        entry.seq      = uiContent_.nextEntrySeq();
+        uiContent_.entries().emplace(fullId, std::move(entry));
+    }
+    // 内容: 没有生成函数, 每次变化推一份 (注册时先给一份, 界面因此不会空着)
+    auto contentIt = uiContent_.contents().find(fullId);
+    if (contentIt != uiContent_.contents().end()) {
+        contentIt->second.slot  = std::string{slot};
+        contentIt->second.title = std::string{title};
+    } else {
+        pluginxx::host::UiContent content;
+        content.plugin   = inst->name;
+        content.pluginId = inst->name;
+        content.id       = std::string{rawId};
+        content.fullId   = fullId;
+        content.slot     = std::string{slot};
+        content.title    = std::string{title};
+        content.depsJson = "[]";
+        content.seq      = uiContent_.nextContentSeq();
+        uiContent_.contents().emplace(fullId, std::move(content));
+    }
+    pushLegacyUi(fullId, json);
+    return fullId;
+}
+
+void ClientPluginManager::pushLegacyUi(std::string_view fullId, std::string_view json) {
+    if (fullId.empty()) {
+        return;
+    }
+    const std::string payload = uiContent_.buildContentPayload(fullId, json, {});
+    if (payload.empty()) {
+        return;
+    }
+    publishUiContentSnapshot();
+}
+
+void ClientPluginManager::dropLegacyUi(std::string_view fullId) {
+    if (fullId.empty()) {
+        return;
+    }
+    bool changed = false;
+    // 内容: 插件自己给它注册过生成函数时保留 (那一份由声明式接口管, 不随旧句柄失效);
+    // 旧注册项建出来的内容 (没有生成函数) 跟着句柄一起摘
+    bool contentKept = false;
+    if (auto it = uiContent_.contents().find(fullId); it != uiContent_.contents().end()) {
+        if (it->second.spec.generate != nullptr) {
+            contentKept = true;
+        } else {
+            uiContent_.contents().erase(it);
+            uiGenerating_.erase(std::string{fullId});
+            changed = true;
+        }
+    }
+    // 声明项与内容同名: 内容已由插件接手时声明项也留着 (它记的是位置信息)
+    if (!contentKept && uiContent_.entries().erase(std::string{fullId}) > 0) {
+        changed = true;
+    }
+    if (changed) {
+        publishUiContentSnapshot();
+    }
+}
+
 void* ClientPluginManager::registerStatusItem(
     ClientPluginInstance* inst,
     PluginxxStringView    id,
@@ -3708,6 +3896,18 @@ void* ClientPluginManager::registerStatusItem(
     if (uiAdapter_) {
         uiAdapter_->onStatusItemRegistered(handle->id, props, align, order);
     }
+    // 镜像到声明式注册表: 位置信息进声明项, 画什么由内容给出 (两边同一套存储)
+    utilxx_base::Json entryData;
+    entryData["align"] = align;
+    entryData["order"] = order;
+    (void)upsertLegacyUi(
+        inst,
+        idStr,
+        kClientUiSlotStatus,
+        entryData.dump(),
+        std::string{},
+        legacyStatusContentJson(props, hasRich, text)
+    );
     return handle.get();
 }
 
@@ -3765,6 +3965,10 @@ int ClientPluginManager::updateStatusItem(
     if (uiAdapter_) {
         uiAdapter_->onStatusItemUpdated(h->id, props);
     }
+    pushLegacyUi(
+        legacyUiFullId(inst->name, h->id),
+        legacyStatusContentJson(props, hasRich, text)
+    );
     return AGENTXX_RESULT_OK;
 }
 
@@ -3799,6 +4003,7 @@ void ClientPluginManager::unregisterStatusItem(ClientPluginInstance* inst, void*
     if (uiAdapter_) {
         uiAdapter_->onStatusItemRemoved(h->id);
     }
+    dropLegacyUi(legacyUiFullId(inst->name, h->id));
     h->inst = nullptr; // 句柄失效
 }
 
@@ -3865,6 +4070,17 @@ void* ClientPluginManager::registerPanel(
     if (uiAdapter_) {
         uiAdapter_->onPanelRegistered(handle->id, props);
     }
+    // 镜像到声明式注册表 (注册时还没有内容项, 先给一份空列表)
+    utilxx_base::Json entryData;
+    entryData["title"] = title;
+    (void)upsertLegacyUi(
+        inst,
+        idStr,
+        kClientUiSlotPanel,
+        entryData.dump(),
+        title,
+        legacyItemsContentJson(utilxx_base::Json::array())
+    );
     return handle.get();
 }
 
@@ -3915,6 +4131,7 @@ int ClientPluginManager::updatePanel(
     if (uiAdapter_) {
         uiAdapter_->onPanelUpdated(h->id, payload);
     }
+    pushLegacyUi(legacyUiFullId(inst->name, h->id), legacyItemsContentJson(items));
     return AGENTXX_RESULT_OK;
 }
 
@@ -3949,6 +4166,7 @@ void ClientPluginManager::unregisterPanel(ClientPluginInstance* inst, void* pane
     if (uiAdapter_) {
         uiAdapter_->onPanelRemoved(h->id);
     }
+    dropLegacyUi(legacyUiFullId(inst->name, h->id));
     h->inst = nullptr;
 }
 
@@ -4015,6 +4233,17 @@ void* ClientPluginManager::registerInfoSection(
     if (uiAdapter_) {
         uiAdapter_->onInfoSectionRegistered(handle->id, props);
     }
+    // 镜像到声明式注册表 (段落标题同时进声明项 data 与内容 title)
+    utilxx_base::Json entryData;
+    entryData["title"] = title;
+    (void)upsertLegacyUi(
+        inst,
+        idStr,
+        kClientUiSlotInfo,
+        entryData.dump(),
+        title,
+        legacyItemsContentJson(utilxx_base::Json::array())
+    );
     return handle.get();
 }
 
@@ -4065,6 +4294,7 @@ int ClientPluginManager::updateInfoSection(
     if (uiAdapter_) {
         uiAdapter_->onInfoSectionUpdated(h->id, payload);
     }
+    pushLegacyUi(legacyUiFullId(inst->name, h->id), legacyItemsContentJson(items));
     return AGENTXX_RESULT_OK;
 }
 
@@ -4099,6 +4329,7 @@ void ClientPluginManager::unregisterInfoSection(ClientPluginInstance* inst, void
     if (uiAdapter_) {
         uiAdapter_->onInfoSectionRemoved(h->id);
     }
+    dropLegacyUi(legacyUiFullId(inst->name, h->id));
     h->inst = nullptr;
 }
 
