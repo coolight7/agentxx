@@ -243,7 +243,7 @@ client 侧插件包含 `client_plugin_kit.h`，双端插件两个都包含 (两�
 | 通用 (与主程序业务无关) | `pluginxx/kit/kit.h`、`pluginxx/kit/guard.h` | `PluginStringView`/`PluginString`、通用接口表查询与聚合 `PluginIfaceCore`、`Logger`、asio 协程驱动桥 (`PollOneBridge`/`PolledRoot`)、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏、边界异常守卫 |
 | agentxx 业务 (两端共用) | `agentxx/plugin/api/plugin_kit.h` | 框架通用名引入、广播 / 网络便捷入口、生命周期入口公共实现 (`createCtxEntry` / `destroyCtxEntry`)、`agentxx::ui` 别名 |
 | agentxx 业务 (agent 侧) | `agentxx/plugin/api/agent_plugin_kit.h` | 接口表聚合 `AgentIfaces`、工具注册 `toolAsync`（体一律 `asio::awaitable`，阻塞工作经 `onWorkerAsync` 交给工作池）、`ToolSchemaBuilder`、`providePoint`、图节点、工具权限声明、`callToolAsync`、会话运行时 / 后台任务、`PluginBase`、`AGENTXX_AGENT_PLUGIN_*_EXPORT` |
-| agentxx 业务 (client 侧) | `agentxx/plugin/api/client_plugin_kit.h` + `plugin_guard.h` | 接口表聚合 `ClientIfaces`、client 六张表调用、界面组件与 `ClientPluginBase`、`ActionController`、工具特化渲染适配器、`AGENTXX_CLIENT_PLUGIN_*_EXPORT` |
+| agentxx 业务 (client 侧) | `agentxx/plugin/api/client_plugin_kit.h` + `plugin_guard.h` | 接口表聚合 `ClientIfaces`、client 六张表调用、界面组件与 `ClientPluginBase`、`ActionController`、工具行内容 (`clientRegisterToolRowAsync` / `ToolRow`)、`AGENTXX_CLIENT_PLUGIN_*_EXPORT` |
 
 `agentxx::plugin::PluginBase` 即 `pluginxx::PluginBaseT<AgentIfaces>` 的 agentxx 派生类
 (补业务 helper 并在 `onHostReady()` 中挂钩会话轮次开始事件), `ClientPluginBase` 同理以
@@ -807,7 +807,7 @@ cancel) + 1 张**网络表** `agentxx_plugin_net` (两侧都提供) + 6 张自�
 
 | IID | 版本 | 能力 |
 |-----|------|------|
-| `agentxx_client_ui` | 3 | 老成员: `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay`; v3 追加声明式界面 (与共享 UI 表同一形状): `register_ui_item/unregister_ui_item/list_ui_items`, `register_ui_content/unregister_ui_content/push_ui_content/list_ui_contents/update_ui_slot`, `define_ui_slot/undefine_ui_slot/list_ui_slots` |
+| `agentxx_client_ui` | 4 | 老成员: `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay`; v3 追加声明式界面 (与共享 UI 表同一形状): `register_ui_item/unregister_ui_item/list_ui_items`, `register_ui_content/unregister_ui_content/push_ui_content/list_ui_contents/update_ui_slot`, `define_ui_slot/undefine_ui_slot/list_ui_slots`; v4 删除工具行回调 `register_tool_renderer/unregister_tool_renderer` (工具行只走 `tool` 槽位的内容) |
 | `agentxx_client_session` | 2 | `get_client_state` (快照 JSON), `send_user_input`, `request_cancel` |
 | `agentxx_client_wire` | 2 | `send_plugin_data(topic, json)` → 服务端原样发到 agent 总线的同一个主题 (topic 必须是全名 `agentxx.client.plugin.<名字>.<事件>`, 不限定插件名) |
 | `agentxx_client_self` | 2 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
@@ -870,7 +870,7 @@ cancel) + 1 张**网络表** `agentxx_plugin_net` (两侧都提供) + 6 张自�
   一律视为"主程序不支持" (保守失败)
 - `agentxx_client_ui` (ui 表 IID) 表示**表整体**: 只有覆盖表内全部子能力的主程序才声明
   它 (TUI); 插件声明表整体等价于"需要全部子能力", 子能力不全的主程序 (CLI) 会按缺失
-  处理 (`optional` 告警 / `require` 跳过加载)。因此只用到工具特化渲染的插件应声明
+  处理 (`optional` 告警 / `require` 跳过加载)。因此只用到工具行内容 / 工具装饰的插件应声明
   `agentxx.client.msg_decor`, 而不是表整体 —— 否则会被误报为"缺少 agentxx_client_ui,
   相关功能停用"
 - 展示扩展表另有细粒度能力名用于"组件集合"判断 (与表成员无关, 只作能力协商用):
@@ -1140,25 +1140,37 @@ typedef struct AgentxxClientKeybindIface {
 
 Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层完全解耦，不包含任何具体工具名称的硬编码：
 
-1. **类型级工具渲染器 (`register_tool_renderer`)**：
-   - 插件在 client 初始化时按 `tool_name` 注册特化渲染 (`AgentxxToolRenderSpec`)：
-     **显示名 + 折叠内容回调 + 展开内容回调**, TUI 渲染该工具消息 (实时流式或历史回溯) 时统一生效。
+1. **类型级工具行内容 (`agentxx.client.tool`)**：
+   - 插件在 client 初始化时向 `agentxx.client.tool` 注册**一份声明项 + 一份内容**
+     (`data_json` = `{"tool":"<工具名>","displayName":"<折叠头显示名>"}`); 生成函数每次拿到
+     "这次调用"的变量 (参数 / 结果 / 宽度 / `part` / `state`), TUI 渲染该工具消息
+     (实时流式或历史回溯) 时统一生效。**工具行没有单独的回调注册接口**: 折叠头与展开体
+     都出自这份内容 (`part = summary` 取纯文本首行, `body` 取 `blocks`)。
    - **显示名在注册时确定, UI 线程同步可读**：`displayName` 直接进注册表
-     (`toolDisplayNameFor`: 实例级装饰 > 注册名 > 原始工具名), 工具行**第一帧**就显示 `Read`
-     这类名字 —— 名字不再由内容回调返回, 回调跑了之后也不会再改名字; 按单次调用改名走
-     实例级装饰 (`update_tool_decor`)。
-   - **折叠内容与展开内容是两个回调、两份缓存**：
-     - 折叠回调 `AgentxxToolCollapsedRenderFn` 只给**一行文本** (`AgentxxToolCollapsedOutput.text`),
-       超宽由 TUI 截断;
-     - 展开回调 `AgentxxToolExpandedRenderFn` 只给界面描述层 items (`AgentxxToolExpandedOutput.items_json`),
-       **只在用户展开该工具行时才调用** —— `edit` 的逐段差异、`planning` 的状态图这类
-       开销大的内容不为折叠行付代价;
+     (`toolDisplayNameFor`: 实例级装饰 > 声明项显示名 > 原始工具名), 工具行**第一帧**就显示
+     `Read` 这类名字; 按单次调用改名走实例级装饰 (`update_tool_decor`)。
+   - **折叠头与展开体分开请求、分开缓存**：
+     - 折叠头只取内容的**纯文本首行** (`plainTextJson`), 超宽由 TUI 截断;
+     - 展开体只取文档里的 `blocks`, **只在用户展开该工具行时才生成** —— `edit` 的逐段差异、
+       `planning` 的状态图这类开销大的内容不为折叠行付代价;
      - 两部分各有自己的缓存键 (`#c` / `#e`)、输入特征与版本号, 一侧更新不让另一侧失效;
-     - 两个回调都可以为空 (空 = 该部分走默认渲染); 都空 = 只改名。
-   - **折叠内容里不要写分隔符**：折叠行骨架固定为 `+ [工具] <显示名> · <内容>`, `" · "`
-     由 TUI 统一加; 回调只返回内容本身, 返回空 = 该部分这次没有自定义内容 (走默认渲染)。
+     - 内容为空 = 该部分这次没有自定义内容 (走默认渲染)。
+   - **折叠头里不要写分隔符**：折叠行骨架固定为 `+ [工具] <显示名> · <内容>`, `" · "`
+     由 TUI 统一加; 生成函数只返回内容本身。
    - **历史回溯是主要场景之一**：会话重启恢复/重连/切换会话后回放的 `Tool` 消息没有实例级装饰
-     (见第 3 条), 特化渲染完全依赖此处注册的渲染器 (输入只有消息自带的 `args_json`/`result_text`)。
+     (见第 3 条), 渲染完全依赖这份内容 (输入只有消息自带的参数/结果)。
+   - **SDK 辅助 (`clientRegisterToolRowAsync`)**：`client_plugin_kit.h` 把声明项 + 内容一次注册,
+     插件只写"折叠头一行 + 展开体 items"两个函数:
+     ```cpp
+     ctx.toolRows.push_back(co_await clientRegisterToolRowAsync(
+         ctx, "agentxx_filesystem_edit", "Edit",
+         {
+             .summary = [](const ToolRowInput& in) { ... },   // 折叠头一行 (空 = 默认渲染)
+             .body    = [](const ToolRowInput& in, std::vector<pluginxx::ui::Item>& items) { ... },
+         }));
+     ```
+     两条表调用都要等, 所以写在 client `start` 的协程里 (`finishLater` + `ctx.spawn`);
+     返回的句柄由插件实例持有 (生成函数的状态在它身上, 重新注册时旧的也要留着)。
    - **参数已按工具 schema 自愈, 渲染器不需要再写类型兼容**：工具展示行的参数文本在
      **写入展示历史时 (EventBridge 建行) / 历史尾窗加载 / 分页读取** 三处都经
      `agentxx::util::autoFixedToolArgsJson` 处理过, schema 来自 `ToolRegistry::parametersOf`
@@ -1176,31 +1188,6 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      (未就绪帧/参数类型/结果依赖都不同)。现在只有回调一条路径 (短到一行的渲染器就写一个
      lambda), 模版机制已删除。
    - **通用 Diff 渲染**：展开体组件项支持 `{"kind":"Diff","path":"...","oldStr":"...","newStr":"..."}`（或直接用扩展 kit 的 `agentxx::ui::kit::pathDiffRow`），TUI 会通用化渲染为自适应屏幕宽度的 side-by-side 或统一差异对比，任何插件均可自由复用。
-   - **SDK 辅助函数 (`registerToolRenderer`)**：
-     `plugin_kit.h` 提供了基于现代 C++ Lambda 的辅助封装，抹平 C ABI 结构体与内存分配细节：
-     ```cpp
-     // 显示名 + 两个内容回调 (Edit: 折叠行给 ±行数/路径, 展开体给逐段差异)
-     agentxx::plugin::registerToolRenderer(
-         host, ui, "agentxx_filesystem_edit", "Edit",
-         {
-             .collapsed =
-                 [](const agentxx::plugin::ToolRenderInput& in,
-                    agentxx::plugin::ToolCollapsedOutput& out) {
-                     ArgReader args(in.argsJson);
-                     out.text = diffStatOf(args) + " " + args.get<std::string>("path").value_or("");
-                 },
-             .expanded =
-                 [](const agentxx::plugin::ToolRenderInput& in,
-                    agentxx::plugin::ToolExpandedOutput& out) {
-                     out.items = diffItemsOf(in); // {"kind":"Diff", ...}
-                 },
-         },
-         ctx.renderShims // 适配层持有回调副本, 随实例释放
-     );
-     // 只要一侧 (只改名/只给折叠内容): 另一侧留空
-     agentxx::plugin::registerToolRenderer(host, ui, "agentxx_filesystem_read", "Read",
-                                           {.collapsed = readCollapsed}, ctx.renderShims);
-     ```
 2. **主程序内置工具渲染器 (lib 内置工具, 无对应插件)**：
    - 少数工具由 **lib 内置实现**提供、没有对应插件 (当前为 `agentxx_share_store` 会话共享存储
      与 `agentxx_subagent` 子代理委派)，其特化渲染由主程序自身注册：
@@ -1219,7 +1206,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      仅给 offset 时 `[40, ~] get #12`），`new`/`update` 为 `opt #id`（`new #7` / `update #3`；
      `new` 的 id 取自结果 JSON，完成后才有，运行中只有 `new`）、`agentxx_subagent` →
      `Subagent` (`explorer · <任务首行>` / `4 tasks: explorer, coder, planner, ...`)；
-     两者都只注册折叠内容回调, 展开体走主程序通用展示。
+     两者都只给折叠头一行, 展开体走主程序通用展示。
 3. **实例级工具装饰 (`update_tool_decor`)**：
    - 订阅 `EVT_DELTA` 的 `insert_message` / `update_message` 后，按特定调用的 `tool_call_id` 推送语义 JSON (优先级高于类型级渲染器)；
      典型实现见 `agentxx_planning` (Mermaid 状态图 + 动态待办列表)。
@@ -1257,13 +1244,13 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
    - 结果契约: 中断结果恒为 `{"values": {"<控件 id>": 值}}` (空对象 = 未应答)。
 
 6. **语义渲染缓存**：
-   - 两个内容回调都**只在插件执行线程执行**（client 侧自动起，见 §15.3）：UI 线程按部分提交 `ClientToolRenderRequest`
+   - 内容的生成函数**只在插件执行线程执行**（client 侧自动起，见 §15.3）：UI 线程按部分提交 `ClientToolRenderRequest`
      (tool_call_id / tool_name / args / result / 宽度等拥有型拷贝, 带 `part` = 折叠/展开)，
-     主程序在 IO 线程复查 renderer lease、实例 `enabled` 与可注册状态后持 lease 调用,
-     把 `text` 或 `items` 拷成主程序对象写入 `ClientToolRenderCache`；
+     主程序在 IO 线程复查内容绑定、实例 `enabled` 与可注册状态后调用生成函数,
+     把纯文本或 `blocks` 拷成主程序对象写入 `ClientToolRenderCache`；
      输出字段在成功/失败/异常路径都由主程序释放。
    - **两部分各自独立**：键 `#c` (折叠) / `#e` (展开)、输入特征 (含终端宽度) 与版本号都按部分算,
-     折叠内容到达只让折叠条失效; 折叠行不查询展开内容, 因此展开回调只在用户展开时跑。
+     折叠内容到达只让折叠条失效; 折叠行不查询展开内容, 因此展开体只在用户展开时生成。
    - UI 线程只读缓存：未命中时提交请求, 结果写入后由
      `PluginUiAdapter::onToolRenderUpdated` 通知重绘；消息块缓存 key 计入两部分的
      `ClientToolRenderCache::version(key)` (折叠态只计折叠键) 与显示名, 因此
@@ -1278,12 +1265,12 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
        (键退化成 `#工具名`, 可能是另一次调用的结果)。
      - 显示名**不进缓存也不等回调**：注册时就有, 第一帧就可见 (见第 1 条)。早期那套
        "名称结果 (`#工具名` 键) / 模版同步算摘要"的做法已删除。
-     - 没注册该部分回调, 或回调返回空内容 (`pending == false` 且内容为空) → 默认渲染:
+     - 没有这份内容, 或它这次给了空内容 (`pending == false` 且内容为空) → 默认渲染:
        折叠行运行中 `正在调用工具...` (`msg.genToolCalling`) / 已完成结果首行;
        展开体参数 JSON + (运行中同一句提示 / 结果文本)。
      - 执行失败 (`ToolStatus::Failed`) 时两部分都走默认渲染 (折叠行显示错误结果首行)。
    - 没挂载 client 插件管理器 (单元测试/精简嵌入) 时没有语义缓存, 查询直接在 UI 线程
-     同步调用回调 (调用方自己保证不在渲染热路径上跑重活)。
+     同步调用生成函数 (调用方自己保证不在渲染热路径上跑重活)。
    - 回归测试：`agentxx_test tui_tool_header` 的 `testTuiToolHeaderPendingContent` 与
      `client_plugins` 的分部分缓存用例。
    - 缓存条目记录产出插件与实例代次；禁用/卸载按插件失效并递增版本号，会话切换清空。
@@ -1327,8 +1314,11 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
   - 交回的文档里**折叠头取纯文本第一行**（`plainTextJson`），**展开体取 `blocks`** ——
     一个生成函数同时管两处；结果按（调用, 折叠/展开）各自缓存，多次调用不会互相覆盖；
   - 插件不需要句柄：撤销内容就是卸掉这个工具的行渲染；
-  - 旧的 `register_tool_renderer`（折叠/展开两个回调）仍可用，两者按“后注册的生效”互相覆盖。
-    （例外：主程序内置渲染器始终排在插件后面，被同名的插件注册项盖住。）
+  - **工具行内容只有这一条注册路径**：回调式注册（`register_tool_renderer` / kit 的
+    `registerToolRenderer` / JS 的 `registerToolRenderer`）已删除，不保留别名。
+    C++ 插件用 kit 的 `clientRegisterToolRowAsync`，JS 插件用 `registerUiItem` +
+    `registerUiContent`。主程序内置工具行（`agentxx_share_store` / `agentxx_subagent`）
+    由主程序自身注册，同名时插件的覆盖内置的。
 - 回归测试：`client_plugins` 第 35 段（注册 / 列表 / 生成 / 推送 / 重新生成 / 失败保留 / 生成慢不阻塞 / 停用撤销）、
   第 36 段（工具行内容：显示名 / 折叠头纯文本 / 展开体 blocks / 多调用各算一份 / 撤销后摘掉）
 
@@ -1393,7 +1383,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
     - 业务失败 (未受理 / 执行期失败 / 取消) 一律 **resolve**, 值由各成员决定 (`null` / `false` / 空串 / 空数组); Promise **不会 reject**, 因此忘记 `await` 也不会攒出未处理的拒绝
     - **参数写错仍同步抛异常** (`TypeError` 一类): 那是脚本写错了, 不是调用失败
     - 纯本地函数保持**同步**: `log` / `jsonEscape` / `jsonGetString` / `scope()` / `setTimeout` / `clearTimeout`, client 侧另有 `showToast` / `closeOverlay` / `requestCancel`
-    - 需要“当场给内容”的回调仍然同步: 工具行渲染器的 `collapsed` / `expanded`、client 命令的 `execute` (要延后取结果就在里面 `.then` 后 `showToast`)
+    - 需要“当场给内容”的回调仍然同步: 内容生成函数 (`generate`)、client 命令的 `execute` (要延后取结果就在里面 `.then` 后 `showToast`)
 - **JS SDK 与 C++ 插件 SDK 同名同义**：`registerTool` / `unregisterTool` / `callTool`、`subscribe` / `unsubscribe` / `publish`、`addSkillDir` / `addMemoryFile` / `addMcpServer` (含 remove)、`registerToolPermission` / `registerReadPathPermission` / `registerWritePathPermission` / `unregisterToolPermission`、`getConfig` / `getPluginArgs` / `getLanguage` / `setLanguage`、`log`、`scope()` (返回 `{agentId, mountSeq}`，等同 C++ 侧的 `PluginxxScopeRef`)、`setTimeout` / `clearTimeout`、`jsonEscape(text)` / `jsonGetString(jsonText, key)` (对应 `pluginxx.json` 的两个成员；`jsonEscape` 与 C++ kit 一样返回**带引号**的 JSON 字符串字面量)。注册工具时与 C++ 侧 `toolAsync` 同一组可选项：`timeoutMs`（次调用的默认超时，0 = 不限）、`autoSummary` / `parallelSafe` / `repeatCallCheck`（对应 `AGENTXX_PLUGIN_TOOL_FLAG_*`）。工具回调的 `ctx` 是 `{sessionId, toolCallId, isCanceled()}`：**协作式取消**与 C++ SDK 同语义，主程序取消（会话取消 / 超时 / 后台任务取消）只置标记，脚本在回调里轮询 `ctx.isCanceled()` 才看得到，不看就一直跑到结束（那次的终态是 `canceled`，结果不再被采用）。
 - **网络 (`agentxx_plugin_net`) 已对齐**：`netCall(op, args)` / `netFetch(urlOrOptions)` / `netDownload(urlOrOptions, fileName)` / `netHttpServe(options)` / `netInfo()` 返回 **Promise**（总是 resolve 成结果对象，业务结论看 `ok`：连不上、超时都是 `ok:false` + `error`，不是异常）；`netWsConnect(urlOrOptions)` / `netWsSend(id, text)` / `netWsClose(id, code, reason)` / `netHttpRespond(options)` 提交即返回 `{ok:true, requestId}`（`ok` 只表示已提交，业务结果看 `ws.open` / `ws.close` 这类事件）；`netCancel(requestId)` 是表里的同步成员。同引擎里的脚本共享一份网络资源（归属是引擎这个插件实例，见 §22），连接 id 请自己带脚本名前缀；命令/渲染这类**同步回调**里拿不到 Promise 结果，请改成“先回一句 + `.then` 里再 `showToast`”
 - **后台任务已对齐**：`submitAsyncWork(options)` (返回 `asyncId`，被拒时为空串) / `cancelAsyncWork(id)` / `getAsyncWork(id)` / `listAsyncWork(sessionId?)`，只能操作本实例提交的任务；`options.onEvent(phase, payload)` 的 `phase` 取 `queued` / `started` / `finished` / `canceled`，payload 是解析后的对象。主程序在容器 io 线程发事件，引擎转投 JS 线程后才调脚本回调，脚本侧无需考虑线程
@@ -1406,7 +1396,29 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 - **会话运行时 (`agentxx_agent_runtime`) 已对齐**：`mountRoot({name, config, mountPlugins, includeCreator})` (返回 `rootId`，被拒为空串，需在容器级时机调，在 `mount` 里调会被拒)、`unmountRoot(rootId)`；`openChannel({rootId, sessionId?, title?, model?, maxQueue?, interruptTimeoutMs?, onEvent})` (返回 `channelId`，被拒为 0)、`closeChannel` / `cancelChannel` / `sendInput(channelId, textOrInput)` / `selectModel` / `respondInterrupt(channelId, interruptId, values)` / `getChannelState` / `getChannelMessages`；`registerTrigger({channelId, topic, policy?, debounceMs?, maxQueue?, delivery?})` / `unregisterTrigger`、`registerTimer({channelId, firstDelayMs, intervalMs?, policy?, input?})` / `unregisterTimer`、`emitEvent(topic, payload)`。`onEvent(ev)` 的 `ev` 是 `{channelId, kind, text?, interruptId?, payload}`，`kind` 取 `ready` / `turn_start` / `delta_text` / `delta_thinking` / `tool_start` / `tool_end` / `gen_status` / `turn_end` / `context_stats` / `input_ack` / `queue_state` / `interrupt` / `interrupt_expired` / `tip` / `error` / `closed`；与后台任务一样在主程序 io 线程收事件、转投 JS 线程后才调脚本（`closed` 是最后一条，到这就释放登记）。`listRuntime()` 返回清单对象 `{roots, triggers, timers}`（`roots[]` 每项带 `rootId` / `name` / `ready` / `configSummary` / `channels[]`）
 - **广播**：`declareBroadcast(decl)` (声明自己的频道，失败给 `false`，`id` 可短名) / `readBroadcast(id)` (没声明、没当前值或已结束都返回 `null`) / `publish` / `subscribe(topic, handler, options?)` (返回订阅 token) / `unsubscribe` / `endBroadcast(id, reason?)`。`options` 可给 `{intervalMs, mode, onEnd}`：`intervalMs`/`mode` 对应表成员的 `options_json`（每个订阅自己的通知频率），`onEnd(reason)` 对应 `subscribe_broadcast_ex` 的流结束回调（老主程序没有该成员时退回普通订阅，脚本收不到结束而已）。同一频道的多个订阅**各收一次**（派发按订阅下标，不再一次派发把所有同频道处理器都调一遍）；agent 与 client 两侧同一套语义。
 - **client 侧脚本 (`agentxx.side === "client"`)**：同一个动态库同时导出 `agentxx_client_plugin_*` 入口，因此脚本可以直接作为 **client 端插件**运行（客户端插件加载器给它一份 JS 实例，桥只暴露 client 侧接口）：
-    - 展示：`showToast(text, level)`、`updateToolDecor(toolCallId, decor)`、`openOverlay({type, title, payload, extra})` / `closeOverlay()`、**`registerToolRenderer({tool, displayName, collapsed, expanded})`** / `unregisterToolRenderer(tool)`（工具行特化渲染）
+    - 展示：`showToast(text, level)`、`updateToolDecor(toolCallId, decor)`、`openOverlay({type, title, payload, extra})` / `closeOverlay()`
+    - 声明式界面（与 C++ 插件同一批表，都返回 `Promise<boolean>`）：`registerUiItem({slot, id, data, order})` / `unregisterUiItem(id)`、`registerUiContent({slot, id, title, depict, deps, routes, order, generate})` / `unregisterUiContent(id)`、`pushUiContent(id, doc)`、`updateUiSlot(slot, ids?)`。**工具行内容就是 `slot: "tool"` 的声明项 + 内容**：`data` = `{tool, displayName}`，生成函数的 `ctx` 里是 `agentxx.client.tool.*` 变量，`part === "summary"` 时返回一行文字、否则返回界面文档
+      ```js
+      await agentxx.registerUiItem({
+        slot: "tool",
+        id: "js_hello",
+        data: { tool: "js_hello", displayName: "JS Hello" },
+      });
+      await agentxx.registerUiContent({
+        slot: "tool",
+        id: "js_hello",
+        deps: [
+          "agentxx.client.tool.args",
+          "agentxx.client.tool.part",
+          "agentxx.client.tool.state",
+        ],
+        generate: (ctx) =>
+          ctx["agentxx.client.tool.part"] === "summary"
+            ? "greeting " + who
+            : { blocks: [{ kind: "Text", text: "JS Hello" }] },
+      });
+      ```
+      生成函数可以当场返回，也可以返回 Promise（结果到了再交回）；`pushUiContent` 直接给一份算好的内容，`updateUiSlot` 让主程序按当前变量重新生成
     - 展示项（句柄是整数 token，0 = 主程序不支持或注册失败）：`registerStatusItem({id, props, align, order})` / `updateStatusItem(h, props)` / `unregisterStatusItem(h)`、`registerPanel({id, props})` / `updatePanel(h, items|itemsJson)` / `unregisterPanel(h)`、`registerInfoSection({id, props})` / `updateInfoSection(h, items)` / `unregisterInfoSection(h)`（`items` 可给数组，主程序自动包成 `{"items":[...]}`）
     - 交互：`registerCommand({name, description, execute})` / `unregisterCommand(name)`（`execute(args)` 同步返回动作 JSON，与 C++ 插件同格式：`{"action":"toast"|"send"|"none",...}`）、`bindAction(targetId, handler)` / `unbindAction(targetId)`（按钮动作，`handler({ownerId, actionId, args})`）、`registerKeybind({keys, description}, fn)` / `unregisterKeybind(h)` / `listKeybinds()`、`setClientTimer({intervalMs, repeat, pauseWhenHidden, ownerId}, fn)` / `cancelClientTimer(h)` / `isRegionVisible(ownerId)`
     - 句柄约定：client 表的句柄是不透明指针，JS 的 number 存不下 —— 桥把它们换成**整数 token**（`JsPluginCtx::clientHandles`），注销/更新用 token；类别不对或已注销一律返回 false，不报错
@@ -1417,11 +1429,11 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
     - **网络（`agentxx_plugin_net`，与 agent 插件同一张表）**：`netCall(op, args)` / `netFetch(urlOrOptions)` / `netDownload(urlOrOptions, fileName?)` / `netHttpServe` / `netInfo()` 返回 **Promise**；`netWsConnect` / `netWsSend` / `netWsClose` / `netHttpRespond` 提交即返回；`netCancel(requestId)` 是同步成员。语义与 C++ SDK / agent 侧脚本完全一致（表入口是异步操作契约，没有同步版本），资源归属是本插件实例（禁用/卸载整批收掉）
     - 实例模型：client 表成员**不带** `PluginxxScopeRef`，因此一份脚本一个实例（无 agent 挂载作用域），脚本全局状态天然按进程隔离；壳只用一份 `start`/`stop`，不需要 mount 入口
     - 不在 client 桥上：后台任务 / 会话运行时 / 图 / 提示词 / session 资源（Skill/Memory/MCP）—— 这些都是 agent 侧能力；客户端脚本要取数据就用 `sendPluginData` 通知 agent 侧插件，或者写成 C++ client 插件
-    - **渲染与命令回调是异步操作契约**：主程序传 `PluginxxOperatorNotify`，脚本回调**可以直接返回内容**（引擎立即 `notify`，等于同步完成），**也可以返回 Promise**，完好后再交回。client io 线程不再等 JS 线程（旧的 150 ms 同步桥 `invokeRenderSync` / `invokeCallbackSync` 已删），所以渲染/命令回调里调 client 表不会互等；代价是内容到得晚时界面先用默认渲染，结果到了再重绘。动作/定时器/快捷键回调仍是投递式的（fire-and-forget）
+    - **内容生成与命令回调是异步操作契约**：主程序传 `PluginxxOperatorNotify`，脚本回调**可以直接返回内容**（引擎立即 `notify`，等于同步完成），**也可以返回 Promise**，完好后再交回。client io 线程不再等 JS 线程（旧的 150 ms 同步桥 `invokeRenderSync` / `invokeCallbackSync` 已删），所以生成/命令回调里调 client 表不会互等；代价是内容到得晚时界面先用默认渲染，结果到了再重绘。动作/定时器/快捷键回调仍是投递式的（fire-and-forget）
     - **脚本里的表调用是 Promise, 引擎不再同步等主程序**：旧实现用 `tableOpSyncWait` 在 JS 线程上阻塞，现在改成“提交 → 返回 Promise → 完成回调投回 JS 线程结算”，JS 线程永不等主程序 io 线程；相应地**主程序 io 线程也不等 JS 线程**，两个方向都不再有可能互相等死
     - **Promise 续体由主循环泵**：动作/定时器/快捷键/渲染/命令回调里都可以写 `netFetch(...).then(...)`，JS 线程在每个任务与每个定时器之后泵一次微任务队列（单次上限 10000 个 job，到限记一条警告）
-    - 一次没拿到内容的渲染会按“没有自定义内容”缓存，界面用默认渲染；同一行输入不变时不会反复请求（参数/结果变化、行重建、重新注册后会再请求）
-    - 示例：`example_js` 的 `plugin.js` 用 `agentxx.side` 分支，client 侧注册了工具行特化渲染、状态栏项、Info 段落、面板、斜杠命令 `/jsdemo`、按钮动作、快捷键 `ctrl+alt+j` 与一个 60ms×2 的定时器；另有一个 `ctrl+alt+u` 演示注销与查询（`listKeybinds` / `isRegionVisible` / `unregister*` / `cancelClientTimer`）、命令 `/jsnet` 演示同步网络入口，动作 `js.demo.net` / `js.demo.sdk` 演示回环 HTTP（`http.serve` + `http.route` → `netFetch` → `.then`）与通用表（插件清单 / 配置 / 广播声明-发布-读-结束）。它的清单同时声明 agent 侧 `agentxx.agent.core` 与 client 侧 `agentxx.client.msg_decor`，两侧各自只比较自己那部分
+    - 一次没拿到内容的生成会按“没有自定义内容”缓存，界面用默认渲染；同一行输入不变时不会反复请求（参数/结果变化、行重建、重新注册后会再请求）
+    - 示例：`example_js` 的 `plugin.js` 用 `agentxx.side` 分支，client 侧注册了工具行内容（`tool` 槽位）、状态栏项、Info 段落、面板、斜杠命令 `/jsdemo`、按钮动作、快捷键 `ctrl+alt+j` 与一个 60ms×2 的定时器；另有一个 `ctrl+alt+u` 演示注销与查询（`listKeybinds` / `isRegionVisible` / `unregister*` / `cancelClientTimer`）、命令 `/jsnet` 演示同步网络入口，动作 `js.demo.net` / `js.demo.sdk` 演示回环 HTTP（`http.serve` + `http.route` → `netFetch` → `.then`）与通用表（插件清单 / 配置 / 广播声明-发布-读-结束）。它的清单同时声明 agent 侧 `agentxx.agent.core` 与 client 侧 `agentxx.client.msg_decor`，两侧各自只比较自己那部分
 - 可自研脚本 JS 运行时插件替换引擎：登记自己的形态（`agentxx.kind`）或接管预置的 `js`（`overrideBuiltin: true`），框架不需要改加载路径
 
 ---
@@ -1432,7 +1444,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 |------|------|
 | `example_plugin` | 原生 C++ 综合示例 (asio 协程体工具、`onWorkerAsync` 包装的阻塞工具、`callToolAsync`/`sleepAsync`、**协程驱动桥**、功能埋点订阅/事件/能力/client 入口) |
 | `example_graph_node` | Graph 扩展示例 (自定义节点类型 + set_graph_json 改图, 需 `agentxx_agent_graph` 接口) |
-| `example_js` | 纯脚本插件示例 (只有 `plugin.yaml` + `plugin.js`，清单写 `kind: js`): 由 `agentxx_javascript_engine` 以 `js` 形态运行器身份执行，脚本用 `agentxx.side` 分支，agent 与 client 两侧都经同一条路径加载；client 侧给 `js_hello` 注册工具特化渲染 (见 §12) |
+| `example_js` | 纯脚本插件示例 (只有 `plugin.yaml` + `plugin.js`，清单写 `kind: js`): 由 `agentxx_javascript_engine` 以 `js` 形态运行器身份执行，脚本用 `agentxx.side` 分支，agent 与 client 两侧都经同一条路径加载；client 侧给 `js_hello` 注册工具行内容 (`tool` 槽位，见 §9.6 / §12) |
 | `example_js_execute_command` | 带 C++ 壳的脚本插件示例: 壳在 start 里经 `interpreter.js` 能力把 `plugin.js` 交给引擎 |
 | `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
 | `example_multi_mount` | 多挂载示例 (每 agent 一份状态: 计数 + 挂载级 `config_json`; 见 §18) |
@@ -2219,7 +2231,7 @@ tool(ctx, ref, name, depict, schema,
 | 方向 | 结构体 | 填充方 | 读取方 | 何时需要 gate |
 |---|---|---|---|---|
 | 插件填 → 主程序读 | spec (`AgentxxPluginToolSpec` / `AgentxxOverlaySpec` …) | 插件 | 主程序 | 老插件 (短) + 新主程序 (长): 读尾部字段前必须判长度 |
-| 主程序填 → 插件读 | input (`AgentxxToolRenderInput` / `AgentxxUiActionContext`) | 主程序 | 插件 | 新插件 (认识长布局) + 老主程序 (填得短): 读尾部字段前必须判长度 |
+| 主程序填 → 插件读 | input (`AgentxxUiActionContext`) | 主程序 | 插件 | 新插件 (认识长布局) + 老主程序 (填得短): 读尾部字段前必须判长度 |
 
 判定 (`agentxx/plugin/api/plugin_spec.h`):
 `specSizeOk<Spec>(len)`: `0` (基线布局, 零初始化的默认值) 与 `>= 基线` 接受, 其余拒绝;

@@ -332,7 +332,8 @@ path/to/agentxx_test --log-level warn string_util regex
     `agentxx_plugin_client_*` (`JsEngine::Side::Client`), 一份脚本一个实例 (client 表不带
     `PluginxxScopeRef`, 实例键 = `脚本名@client`); 脚本按 `agentxx.side` (`"agent"`|`"client"`)
     分支注册。桥按面分组: 展示 (`showToast` / `updateToolDecor` / `openOverlay` / `closeOverlay` /
-    **`registerToolRenderer`** / `registerStatusItem` / `registerPanel` / `registerInfoSection`)、
+    **声明式界面 `registerUiItem` / `registerUiContent` / `unregisterUiItem` / `unregisterUiContent` /
+    `pushUiContent` / `updateUiSlot`** / `registerStatusItem` / `registerPanel` / `registerInfoSection`)、
     交互 (`registerCommand` / `bindAction` / `registerKeybind` / `setClientTimer` /
     `isRegionVisible`)、会话与跨端 (`getClientState` / `sendUserInput` / `requestCancel` /
     `sendPluginData`)、自身信息与通用表 (`getOwnInfo` / `getPluginArgs` / `getPluginConfigPath` /
@@ -1029,12 +1030,14 @@ path/to/agentxx_test --log-level warn string_util regex
     `util::autoFixToolArgsTypes` 是同一份实现 —— 特化渲染器 / 工具装饰 / 展开体看到的
     参数类型就是工具实际收到的, **渲染器里不要再写 string↔数组、单对象↔对象数组一类的兼容**;
     未登记 schema 的工具 (或插件已卸载后的历史) 保留模型原文即为正确行为
-  - **工具特化渲染的注册形状**: 显示名 + 折叠内容回调 + 展开内容回调
-    (`AgentxxToolRenderSpec`: `display_name` / `collapsed_fn` / `expanded_fn` / `user_data`,
-    64 字节)。显示名注册时确定、UI 线程同步可读 (第一帧就见名字, 回调不再改名,
-    按调用改名走 `update_tool_decor`); 折叠内容只给一行**不含 `" · "`** 的文本
-    (` · ` 由 TUI 统一加), 展开体只给 items 且**只在展开时调用**; 两部分各有缓存键
-    (`#c`/`#e`)、输入特征与版本号。已删除: 声明式模版 (`template_json`/`summaryKey`)、
+  - **工具行的内容形状**: `agentxx.client.tool` 上的**声明项 + 内容**(没有回调注册接口)
+    声明项 `data` = `{"tool":…,"displayName":…}`, 生成函数拿 `agentxx.client.tool.*` 变量。
+    显示名在声明项注册时确定、UI 线程同步可读 (第一帧就见名字, 按调用改名走
+    `update_tool_decor`); 折叠头只取内容纯文本首行的**不含 `" · "`** 文本 (` · ` 由 TUI 统一加),
+    展开体只取 `blocks` 且**只在展开时生成**; 两部分各有缓存键 (`#c`/`#e`)、输入特征与版本号。
+    C++ 插件用 kit 的 `clientRegisterToolRowAsync` (`ToolRowSpec{summary, body}`), JS 插件用
+    `registerUiItem` + `registerUiContent`。已删除: 回调式注册 (`register_tool_renderer` /
+    `registerToolRenderer`, 不保留别名)、声明式模版 (`template_json`/`summaryKey`)、
     “名称结果” (`#工具名` 键) 机制、运行中参数预览。布局变过, **旧插件 DLL 必须重建**
     (见 [plugins.md](docs/zh-cn/design/plugins.md) 的“工具特化渲染架构”)
   - **参数自愈的适用范围**: 凡是把参数交给工具的地方都用这一份实现 —— 前台工具调用
