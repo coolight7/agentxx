@@ -880,8 +880,19 @@ public:
         return updateToolDecor(inst, strToSv(tool_call_id), strToSv(decor_json));
     }
 
+    /// 工具特化渲染 (Tool Renderer)
+    ///
+    /// 两种写法共用一条执行与缓存路径 (按调用分键、折叠/展开各一份):
+    /// - 新写法: 向 `agentxx.client.tool` 注册声明项 + 内容 (生成函数拿这次调用的变量,
+    ///   见 `client_ui_content.h` 的 `agentxx.client.tool.*`);
+    /// - 旧写法 (本成员): 直接给折叠/展开两个回调。
+    ///
+    /// 两者按“后注册的生效”互相覆盖; 显示名先取声明项 `data.displayName`, 再取回调式
+    /// 注册项的 `display_name`。
+    ///
     /// 注册工具特化渲染器 (io 线程); 返回 0 成功
     int registerToolRenderer(ClientPluginInstance* inst, const AgentxxToolRenderSpec* spec);
+
     /// 注销工具特化渲染器 (io 线程); 返回 0 成功
     int unregisterToolRenderer(ClientPluginInstance* inst, PluginxxStringView tool_name);
 
@@ -1248,10 +1259,23 @@ private:
     void publishUiContentSnapshot();
 
     /// 一个变量的当前值 (JSON 文本; 未知变量给 `null`)
-    std::string clientUiVariableJson(std::string_view id) const;
+    /// - `scope` 非空时给工具行变量 (这次调用的数据)
+    std::string clientUiVariableJson(
+        std::string_view         id,
+        const ClientUiToolScope* scope = nullptr
+    ) const;
 
     /// 让某个内容按当前变量生成一次 (io 线程; 投递到插件执行线程, 界面不等)
-    void requestUiContent(std::string_view fullId);
+    ///
+    /// - `scope` 非空时: 工具行变量取这次调用的值 (同一个内容可按调用各生成一份)
+    /// - `onResult` 非空时: 结果在本进程 io 线程交给它, 不写这个内容自己的最近结果
+    ///   (工具行走这条: 结果进按调用分键的渲染缓存) ; 此时 `dedupe` 由调用方决定
+    void requestUiContent(
+        std::string_view   fullId,
+        const ClientUiToolScope* scope = nullptr,
+        std::function<void(int32_t, std::string_view)> onResult = {},
+        bool               dedupe = true
+    );
 
     /// 一次生成结束 (io 线程): 写注册表 + 推快照 + 通知适配器
     void finishUiGeneration(std::string fullId, std::string json, std::string error);
@@ -1279,6 +1303,71 @@ private:
 
     /// 撤销一条旧注册项的声明项与内容 (全名)
     void dropLegacyUi(std::string_view fullId);
+
+    /// 工具行内容 → 按调用渲染的适配数据
+    ///
+    /// 插件向 `agentxx.client.tool` 注册一份内容后, 主程序把它接成一条“按工具名”的
+    /// 渲染器 (`ClientToolRenderReg`): 每次工具调用各生成一份, 结果仍进按 (调用,
+    /// 折叠/展开) 分键的缓存。内容撤销后**不释放**它 (已投递的生成回调还会读),
+    /// 只把 `active` 置假; 同一个全名再注册时复用同一份。
+    struct ClientToolContentBinding {
+        ClientPluginManager*       manager    = nullptr;
+        std::string                plugin;      ///< 实例名 (缓存条目的归属)
+        std::string                toolName;    ///< 声明项 data 里的工具名
+        std::string                displayName; ///< 折叠头显示名 (空 = 工具名)
+        std::vector<std::string>   deps;        ///< 内容声明的变量 (生成时只给这些)
+        /// 生成函数 (与 `PluginxxUiContentSpec::generate` 同一契约)
+        void (PLUGINXX_CALL* generate)(
+            const PluginxxHost*           host,
+            const PluginxxStringView*     ctx_json,
+            void*                         user_data,
+            const PluginxxOperatorNotify* notify,
+            PluginxxString*               error_out
+        ) = nullptr;
+        void*                      generateUd = nullptr;
+        const PluginxxHost*        hostView   = nullptr; ///< 插件的主程序视图 (生成函数入参)
+        std::shared_ptr<ClientToolRendererLease> lease; ///< 实例租约 (卸载后不再渲染)
+        std::atomic<bool>          active{false};
+    };
+
+    /// 内容注册 / 变更后同步工具行渲染器 (io 线程; 非 `agentxx.client.tool` 槽位直接返回)
+    void syncToolContentRenderer(ClientPluginInstance* inst, std::string_view fullId);
+
+    /// 内容撤销时摘下工具行渲染器 (保留适配数据; io 线程)
+    void removeToolContentRenderer(std::string_view fullId);
+
+    /// 工具行内容的生成上下文 (只放内容声明的变量; 工具变量来自这次调用)
+    std::string toolContentContextJson(
+        const ClientToolContentBinding& binding,
+        const ClientUiToolScope&        scope
+    ) const;
+
+    /// 折叠头 / 展开体的适配回调 (主程序自己调: `ClientToolRenderReg` 的函数指针)
+    static int32_t PLUGINXX_CALL toolContentRenderCollapsed(
+        void*                         user_data,
+        const AgentxxToolRenderInput* input,
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
+    );
+    static int32_t PLUGINXX_CALL toolContentRenderExpanded(
+        void*                         user_data,
+        const AgentxxToolRenderInput* input,
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
+    );
+    static int32_t toolContentRender(
+        void*                         user_data,
+        const AgentxxToolRenderInput* input,
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out,
+        bool                          summary
+    );
+    /// 生成结果 → 渲染回调结果 (折叠头取纯文本一行, 展开体取 `blocks` 数组)
+    static void PLUGINXX_CALL toolContentDone(
+        void*                     user_data,
+        int32_t                   status,
+        const PluginxxStringView* payload
+    );
 
     /// 本管理器唯一的工作池 (构造即建; dlopen/dlclose、插件阻塞工作共用)
     ///
@@ -1349,6 +1438,11 @@ private:
     std::shared_ptr<const ClientUiSnapshot> uiContentSnapshot_;
     /// 正在生成的内容 (全 id; 同一内容同时只跑一次)
     std::set<std::string> uiGenerating_;
+
+    /// 工具行内容的适配数据 (全 id → 绑定; 内容撤销后保留并置 `active=false`,
+    /// 因为已投递的生成回调还会读它; 同一全名再注册时复用)
+    std::map<std::string, std::shared_ptr<ClientToolContentBinding>, std::less<>>
+        toolContentBindings_;
 
     /// 展示区域可见性快照 (UI 线程写, 任意线程读; 见 reportRegionVisible)
     /// - 供 `pause_when_hidden` 定时器门控与 `agentxx.client.timer` 的 is_visible 使用

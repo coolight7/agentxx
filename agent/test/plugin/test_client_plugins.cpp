@@ -945,10 +945,55 @@ void PLUGINXX_CALL testUiGenerate(
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
 }
 
+/// 工具行内容的测试生成函数 (声明式写法)
+/// - 折叠头 (`part == "summary"`) 给一行文本的块
+/// - 展开体 (`part == "body"`) 给一块 KV (带这次调用的参数)
+/// 同时把收到的上下文顺序记进 [g_toolRowContexts], 供用例检查“变量只给声明过的”。
+std::vector<std::string> g_toolRowContexts;
+
+void PLUGINXX_CALL testToolRowGenerate(
+    const PluginxxHost*           /*host*/,
+    const PluginxxStringView*     ctx,
+    void*                         /*ud*/,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               /*error_out*/
+) {
+    if (notify == nullptr || notify->done == nullptr) {
+        return;
+    }
+    const std::string ctxText
+        = (ctx != nullptr && ctx->data != nullptr)
+              ? std::string{ctx->data, static_cast<size_t>(ctx->size)}
+              : std::string{"{}"};
+    g_toolRowContexts.push_back(ctxText);
+    utilxx_base::Json parsed;
+    try {
+        parsed = utilxx_base::Json::parse(ctxText);
+    } catch (...) {
+        parsed = utilxx_base::Json::object();
+    }
+    const std::string part  = parsed.value("agentxx.client.tool.part", std::string{});
+    const std::string args  = parsed.value("agentxx.client.tool.args", std::string{});
+    utilxx_base::Json doc   = utilxx_base::Json::object();
+    utilxx_base::Json block = utilxx_base::Json::object();
+    if (part == "summary") {
+        block["kind"] = "Text";
+        block["text"] = "summary line";
+    } else {
+        block["kind"]  = "Text";
+        block["text"]  = "body " + args;
+    }
+    doc["blocks"] = utilxx_base::Json::array({block});
+    utilxx_base::Json body = utilxx_base::Json::object();
+    body["json"]           = doc;
+    const std::string        payload = body.dump();
+    const PluginxxStringView view{payload.data(), payload.size()};
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
+}
+
 asio::awaitable<TestResult> run_client_plugin_tests() {
     g_client_plugin_passed = 0;
     g_client_plugin_failed = 0;
-
     auto ex      = co_await asio::this_coro::executor;
     auto adapter = std::make_shared<MockPluginUiAdapter>();
     auto mgr     = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
@@ -5484,7 +5529,157 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         mgrUi.reset();
     }
 
+    // ---- 36. 工具行内容: 注册一份内容 = 该工具名的行渲染 (按调用各生成一份) ----
+    {
+        // 前面的用例已经把 example_plugin 卸载了, 这里重新加载一份来做注册
+        auto toolInst = co_await mgr->loadNativeAsync(path);
+        XX_TEST_EXPECT_TRUE(toolInst != nullptr);
+        if (toolInst) {
+            const std::string id      = "demo_tool_row";
+            const std::string slot    = "tool";
+            const std::string data    = R"({"tool":"demo_tool","displayName":"Demo"})";
+            const std::string deps    = R"(["agentxx.client.tool.args","agentxx.client.tool.part"])";
+
+            PluginxxUiEntrySpec entry{};
+            entry.version     = 1;
+            entry.struct_size = sizeof(PluginxxUiEntrySpec);
+            entry.item_id     = PluginxxStringView{id.data(), id.size()};
+            entry.type        = PluginxxStringView{slot.data(), slot.size()}; // 短名 = agentxx.client.tool
+            entry.data_json   = PluginxxStringView{data.data(), data.size()};
+            XX_TEST_EXPECT_EQ(mgr->registerUiEntry(toolInst.get(), &entry), PLUGINXX_RESULT_OK);
+
+            PluginxxUiContentSpec spec{};
+            spec.version     = 1;
+            spec.struct_size = sizeof(PluginxxUiContentSpec);
+            spec.id          = PluginxxStringView{id.data(), id.size()};
+            spec.slot        = PluginxxStringView{slot.data(), slot.size()};
+            spec.deps_json   = PluginxxStringView{deps.data(), deps.size()};
+            spec.generate    = &testToolRowGenerate;
+            XX_TEST_EXPECT_EQ(mgr->registerUiContent(toolInst.get(), &spec), PLUGINXX_RESULT_OK);
+
+            // 显示名来自声明项 data (UI 线程同步可读)
+            {
+                auto regName = mgr->uiRegistrySnapshot();
+                XX_TEST_EXPECT_EQ(
+                    std::string{agentxx::plugin::toolDisplayNameFor(regName.get(), {}, "demo_tool")},
+                    std::string{"Demo"}
+                );
+            }
+
+            auto cache = mgr->toolRenderCache();
+            const auto renderOnce
+                = [&](agentxx::plugin::ClientToolRenderPart part,
+                      const std::string&                     callId) -> asio::awaitable<std::shared_ptr<const agentxx::plugin::ClientToolRenderEntry>> {
+                agentxx::plugin::ClientToolRenderRequest req;
+                req.toolCallId = callId;
+                req.toolName   = "demo_tool";
+                req.argsJson   = R"({"q":"hello"})";
+                req.resultText = "done";
+                req.part       = part;
+                req.isFinished = true;
+                req.maxWidth   = 60;
+                const std::string key = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                    callId,
+                    "demo_tool",
+                    part
+                );
+                const uint64_t hash = req.inputHash();
+                mgr->requestToolRender(req);
+                for (int i = 0; i < 500 && !cache->lookup(key, hash); ++i) {
+                    co_await sleepMs(1);
+                }
+                co_return cache->lookup(key, hash);
+            };
+
+            // 折叠头: 内容是一块 Text, 主程序取纯文本作为那一行
+            {
+                g_toolRowContexts.clear();
+                const auto  hit = co_await renderOnce(
+                    agentxx::plugin::ClientToolRenderPart::Collapsed,
+                    "tool_row_call_1"
+                );
+                XX_TEST_EXPECT_TRUE(hit != nullptr);
+                if (hit != nullptr) {
+                    XX_TEST_EXPECT_TRUE(hit->matched);
+                    XX_TEST_EXPECT_EQ(hit->text, std::string{"summary line"});
+                    XX_TEST_EXPECT_EQ(hit->plugin, std::string{"example_plugin"});
+                }
+                // 上下文只给声明过的变量 (工具名 / 结果 / 宽度都没声明)
+                XX_TEST_EXPECT_EQ(g_toolRowContexts.size(), size_t{1});
+                if (!g_toolRowContexts.empty()) {
+                    const auto ctx = utilxx_base::Json::parse(g_toolRowContexts.front());
+                    XX_TEST_EXPECT_EQ(
+                        ctx.value("agentxx.client.tool.part", std::string{}),
+                        std::string{"summary"}
+                    );
+                    XX_TEST_EXPECT_TRUE(ctx.contains("agentxx.client.tool.args"));
+                    XX_TEST_EXPECT_TRUE(!ctx.contains("agentxx.client.tool.name"));
+                }
+            }
+
+            // 展开体: 内容里的 blocks 作为展开块
+            {
+                const auto  hit = co_await renderOnce(
+                    agentxx::plugin::ClientToolRenderPart::Expanded,
+                    "tool_row_call_1"
+                );
+                XX_TEST_EXPECT_TRUE(hit != nullptr);
+                if (hit != nullptr) {
+                    XX_TEST_EXPECT_TRUE(hit->matched);
+                    XX_TEST_EXPECT_TRUE(hit->items.is_array());
+                    XX_TEST_EXPECT_EQ(hit->items.size(), size_t{1});
+                    XX_TEST_EXPECT_TRUE(hit->items.dump().find("body") != std::string::npos);
+                }
+            }
+
+            // 另一次调用各算一份 (同一内容, 不同调用不互相覆盖)
+            {
+                const auto  first = co_await renderOnce(
+                    agentxx::plugin::ClientToolRenderPart::Collapsed,
+                    "tool_row_call_2"
+                );
+                XX_TEST_EXPECT_TRUE(first != nullptr);
+                const auto  firstCall = cache->lookup(
+                    agentxx::plugin::ClientToolRenderRequest::keyFor(
+                        "tool_row_call_1",
+                        "demo_tool",
+                        agentxx::plugin::ClientToolRenderPart::Collapsed
+                    ),
+                    agentxx::plugin::ClientToolRenderRequest::hashInputs(
+                        "demo_tool",
+                        "{\"q\":\"hello\"}",
+                        "done",
+                        true,
+                        false,
+                        60
+                    )
+                );
+                XX_TEST_EXPECT_TRUE(firstCall != nullptr);
+            }
+
+            // 撤销内容 → 渲染器跟着摘 (显示名回退空串, 请求不再命中)
+            XX_TEST_EXPECT_EQ(
+                mgr->unregisterUiContent(toolInst.get(), id),
+                PLUGINXX_RESULT_OK
+            );
+            {
+                auto regGone = mgr->uiRegistrySnapshot();
+                XX_TEST_EXPECT_TRUE(
+                    agentxx::plugin::toolDisplayNameFor(regGone.get(), {}, "demo_tool").empty()
+                );
+            }
+            XX_TEST_EXPECT_EQ(
+                mgr->unregisterUiEntry(toolInst.get(), id),
+                PLUGINXX_RESULT_OK
+            );
+        }
+        XX_TEST_EXPECT_TRUE(
+            co_await mgr->unloadAsync("example_plugin", std::chrono::seconds{5})
+        );
+    }
+
     co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
+
 }
 
 } // namespace test

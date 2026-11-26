@@ -355,31 +355,100 @@ AGENTXX_AGENT_PLUGIN_EXPORT(
 
 struct WebsearchClientCtx : public ClientPluginBase {};
 
-/// client 侧 start: 注册工具显示名与折叠内容 (stop 无需撤销, 主程序负责摘除)
-/// - 折叠内容是一行纯文本, **不带**分隔符 " · " (头行格式由界面统一拼装)
+/// 工具行内容的生成函数 (声明式写法)
+///
+/// - `ud` = 参数里取哪个字段做那一行 (`query` / `url`)
+/// - 生成函数跑在插件执行线程, 只读 `ctx_json` 里声明过的变量;
+///   主程序把内容的纯文本当折叠头那一行, `blocks` 当展开体
+static void PLUGINXX_CALL websearchRowGenerate(
+    const PluginxxHost*           /*host*/,
+    const PluginxxStringView*     ctx_json,
+    void*                         ud,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               /*error_out*/
+) {
+    if (notify == nullptr || notify->done == nullptr) {
+        return;
+    }
+    utilxx_base::Json ctx = utilxx_base::Json::object();
+    if (ctx_json != nullptr && ctx_json->data != nullptr) {
+        try {
+            ctx = utilxx_base::Json::parse(
+                std::string{ctx_json->data, static_cast<size_t>(ctx_json->size)}
+            );
+        } catch (...) {
+            ctx = utilxx_base::Json::object();
+        }
+    }
+    const auto* field = static_cast<const char*>(ud);
+    utilxx_base::Json block;
+    block["kind"] = "Text";
+    block["text"] = ArgReader(ctx.value("agentxx.client.tool.args", std::string{}))
+                         .value(field != nullptr ? field : "", "");
+    utilxx_base::Json doc;
+    doc["blocks"] = utilxx_base::Json::array({block});
+    utilxx_base::Json body;
+    body["json"]           = doc;
+    const std::string        payload = body.dump();
+    const PluginxxStringView view{payload.data(), payload.size()};
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
+}
+
+/// 把一个工具的行渲染注册成声明项 + 内容
+/// - 声明项: `type` = `tool` (短名 → `agentxx.client.tool`), data 给工具名与显示名
+/// - 内容: 只声明的变量是这次调用的参数与折叠/展开标识
+/// - 主程序不支持声明式界面时什么也不做 (界面退回默认渲染)
+static void registerToolRow(
+    WebsearchClientCtx& ctx,
+    std::string_view    tool,
+    std::string_view    displayName,
+    const char*         field
+) {
+    if (ctx.host == nullptr || ctx.iface.ui == nullptr
+        || ctx.iface.ui->register_ui_item == nullptr
+        || ctx.iface.ui->register_ui_content == nullptr) {
+        return;
+    }
+    const std::string data = utilxx_base::Json{
+                                 {"tool", std::string{tool}},
+                                 {"displayName", std::string{displayName}},
+    }
+                                 .dump();
+    const std::string deps
+        = R"_(["agentxx.client.tool.args","agentxx.client.tool.part"])_";
+
+    PluginxxUiEntrySpec entry{};
+    entry.version     = 1;
+    entry.struct_size = sizeof(PluginxxUiEntrySpec);
+    entry.item_id     = PluginxxStringView{tool.data(), tool.size()};
+    entry.type        = PluginxxStringView{"tool", 4};
+    entry.data_json   = PluginxxStringView{data.data(), data.size()};
+    if (ctx.iface.ui->register_ui_item(ctx.host, &entry, nullptr, nullptr, nullptr) == nullptr) {
+        return;
+    }
+
+    PluginxxUiContentSpec content{};
+    content.version     = 1;
+    content.struct_size = sizeof(PluginxxUiContentSpec);
+    content.id          = PluginxxStringView{tool.data(), tool.size()};
+    content.slot        = PluginxxStringView{"tool", 4};
+    content.title       = PluginxxStringView{displayName.data(), displayName.size()};
+    content.deps_json   = PluginxxStringView{deps.data(), deps.size()};
+    content.generate    = &websearchRowGenerate;
+    content.user_data   = const_cast<char*>(field);
+    ctx.iface.ui->register_ui_content(ctx.host, &content, nullptr, nullptr, nullptr);
+}
+
+/// client 侧 start: 注册工具行 (显示名 + 折叠内容都来自同一份声明)
+/// - 折叠内容是一行纯文本 (参数里的 `query` / `url`), **不带**分隔符 " · "
+///   (头行格式由界面统一拼装)
 static void websearchClientStart(
     WebsearchClientCtx&           ctx,
     const PluginxxOperatorNotify* notify,
     PluginxxString*
 ) {
-    ctx.registerRenderer(
-        kNameSearch,
-        "Search",
-        {.collapsed
-         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
-               ArgReader args(in.argsJson);
-               out.text = args.value("query", "");
-           }}
-    );
-    ctx.registerRenderer(
-        kNameFetch,
-        "Fetch",
-        {.collapsed
-         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
-               ArgReader args(in.argsJson);
-               out.text = args.value("url", "");
-           }}
-    );
+    registerToolRow(ctx, kNameSearch, "Search", "query");
+    registerToolRow(ctx, kNameFetch, "Fetch", "url");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return;
 }

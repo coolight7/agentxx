@@ -28,6 +28,12 @@ namespace plugin {
 inline constexpr std::string_view kClientUiSlotStatus = "agentxx.client.status";
 inline constexpr std::string_view kClientUiSlotPanel  = "agentxx.client.panel";
 inline constexpr std::string_view kClientUiSlotInfo   = "agentxx.client.info";
+/// 工具行: 一份内容 = 某个工具名下的行渲染 (`data` = `{"tool","displayName"}`)
+///
+/// 与上面三个不同, 这个位置**不是同时只画一份**: 每次工具调用各要一份, 所以生成函数
+/// 每次都会拿到"这次调用"的变量 (见下面的 `agentxx.client.tool.*`), 同一个内容会被
+/// 按 (调用, 折叠/展开) 缓存多份。声明项里的 `tool` 告诉主程序这份内容对应哪个工具。
+inline constexpr std::string_view kClientUiSlotTool = "agentxx.client.tool";
 
 /// 客户端槽位前缀 (短名 → 全名的规则由 `pluginxx::host::UiSlotCatalog` 给出)
 inline constexpr std::string_view kClientUiSlotPrefix = "agentxx.client.";
@@ -36,6 +42,33 @@ inline constexpr std::string_view kClientUiSlotPrefix = "agentxx.client.";
 inline constexpr std::string_view kClientUiVarState   = "agentxx.client.state";
 /// 变量: 展示区域尺寸快照 (`[{"id","w","h"},...]`)
 inline constexpr std::string_view kClientUiVarRegions = "agentxx.client.regions";
+
+/// 工具行变量 (只在工具行内容的生成里给值, 其它时候是 `null`)
+///
+/// 主程序按这次调用注入, 内容是同一个, 每份结果按 (调用, 折叠/展开) 分开缓存。
+inline constexpr std::string_view kClientUiVarToolName   = "agentxx.client.tool.name";
+inline constexpr std::string_view kClientUiVarToolArgs   = "agentxx.client.tool.args";
+inline constexpr std::string_view kClientUiVarToolResult = "agentxx.client.tool.result";
+inline constexpr std::string_view kClientUiVarToolWidth  = "agentxx.client.tool.width";
+/// `"summary"` (折叠头一行) 或 `"body"` (展开体)
+inline constexpr std::string_view kClientUiVarToolPart  = "agentxx.client.tool.part";
+/// `"running"` / `"finished"` / `"error"`
+inline constexpr std::string_view kClientUiVarToolState = "agentxx.client.tool.state";
+
+/// 一次工具行渲染的变量值 (主程序在请求渲染时注入)
+///
+/// - `summary` 为真时只要一行摘要: 生成函数可以只给一块 `Text`;
+///   主程序取内容的纯文本当作折叠头那一行
+/// - `summary` 为假时给整块内容: 主程序把文档里的 `blocks` 当作展开体
+struct ClientUiToolScope {
+    std::string toolName;   ///< 工具名
+    std::string argsJson;   ///< 这次调用的参数 (原始文本)
+    std::string resultText; ///< 结果 (未完成时为空)
+    int         width = 0;  ///< 可用宽度 (列; 0 = 未知)
+    bool        finished = true;
+    bool        error    = false;
+    bool        summary  = false; ///< 折叠头 (true) / 展开体 (false)
+};
 
 /// 客户端槽位目录 (三个保留槽位 + 两个变量; 插件自建槽位由注册表另存)
 pluginxx::host::UiSlotCatalog buildClientUiSlotCatalog();

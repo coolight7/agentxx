@@ -7,11 +7,13 @@
 #include "pluginxx/host/table_op.h"
 #include "pluginxx/host/ui_content.h"
 #include "pluginxx/runtime/instance_base.h"
+#include "pluginxx/ui/parse.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 
 #include <algorithm>
+#include <atomic>
 #include <exception>
 #include <utility>
 
@@ -79,7 +81,7 @@ std::string shortUiIdOf(std::string_view pluginId, std::string_view full) {
     return std::string{full};
 }
 
-/// 一次内容生成的完成等待 (插件调用 notify 时释放)
+/// 一次生成完成的等待者 (插件调用 notify 时释放)
 struct GenerateWaiter {
     std::function<void(int32_t, std::string_view)> finish;
 };
@@ -126,6 +128,16 @@ const char* uiReasonOf(int32_t rc) {
     throw pluginxx::TableOpError(std::string{what} + ": " + uiReasonOf(rc));
 }
 
+/// 工具行生成 → 渲染回调的一次交接
+///
+/// - `outer` 按值持有: 插件可以稍后才交回结果, 那时外层栈帧已经不在了
+/// - `called` 与调用方共享: 回调里已经把本对象释放了, 调用方只能看这个标记
+struct ToolContentDoneState {
+    PluginxxOperatorNotify             outer{};
+    bool                               summary = false;
+    std::shared_ptr<std::atomic<bool>> called  = std::make_shared<std::atomic<bool>>(false);
+};
+
 } // namespace
 
 // =====================================================================
@@ -141,9 +153,16 @@ pluginxx::host::UiSlotCatalog buildClientUiSlotCatalog() {
     slots.push_back({"agentxx.client.status", "insert"});
     slots.push_back({"agentxx.client.panel", "insert"});
     slots.push_back({"agentxx.client.info", "insert"});
+    slots.push_back({"agentxx.client.tool", "insert"});
     std::vector<std::string> variables;
     variables.emplace_back(kClientUiVarState);
     variables.emplace_back(kClientUiVarRegions);
+    variables.emplace_back(kClientUiVarToolName);
+    variables.emplace_back(kClientUiVarToolArgs);
+    variables.emplace_back(kClientUiVarToolResult);
+    variables.emplace_back(kClientUiVarToolWidth);
+    variables.emplace_back(kClientUiVarToolPart);
+    variables.emplace_back(kClientUiVarToolState);
     return pluginxx::host::UiSlotCatalog(kClientUiSlotPrefix, std::move(slots), std::move(variables));
 }
 
@@ -278,7 +297,10 @@ void ClientPluginManager::publishUiContentSnapshot() {
     }
 }
 
-std::string ClientPluginManager::clientUiVariableJson(std::string_view id) const {
+std::string ClientPluginManager::clientUiVariableJson(
+    std::string_view            id,
+    const ClientUiToolScope*    scope
+) const {
     if (id == kClientUiVarState) {
         Json state;
         state["sessionId"]       = sessionId_;
@@ -297,6 +319,31 @@ std::string ClientPluginManager::clientUiVariableJson(std::string_view id) const
         }
         return regions.dump();
     }
+    // 工具行变量: 只在工具行内容的生成里有值 (同一个内容按调用各算一份)
+    if (id == kClientUiVarToolName || id == kClientUiVarToolArgs
+        || id == kClientUiVarToolResult || id == kClientUiVarToolWidth
+        || id == kClientUiVarToolPart || id == kClientUiVarToolState) {
+        if (scope == nullptr) {
+            return "null";
+        }
+        if (id == kClientUiVarToolName) {
+            return Json(scope->toolName).dump();
+        }
+        if (id == kClientUiVarToolArgs) {
+            return Json(scope->argsJson).dump();
+        }
+        if (id == kClientUiVarToolResult) {
+            return Json(scope->resultText).dump();
+        }
+        if (id == kClientUiVarToolWidth) {
+            return Json(scope->width).dump();
+        }
+        if (id == kClientUiVarToolPart) {
+            return Json(scope->summary ? "summary" : "body").dump();
+        }
+        const char* state = !scope->finished ? "running" : (scope->error ? "error" : "finished");
+        return Json(state).dump();
+    }
     return "null";
 }
 
@@ -311,7 +358,6 @@ std::string clientUiContextJson(
     }
     return ctx.dump();
 }
-
 // =====================================================================
 // 声明项
 // =====================================================================
@@ -359,6 +405,8 @@ int32_t ClientPluginManager::registerUiEntry(
     publishUiContentSnapshot();
     // 有新位置了: 让它的内容按当前变量生成一次 (没有内容时什么也不做)
     requestUiContent(fullId);
+    // 工具行的位置信息 (data.tool / data.displayName) 变了, 同步一次渲染器
+    syncToolContentRenderer(inst, fullId);
     return PLUGINXX_RESULT_OK;
 }
 
@@ -391,8 +439,7 @@ std::string ClientPluginManager::listUiEntries(ClientPluginInstance* inst) const
 int32_t ClientPluginManager::registerUiContent(
     ClientPluginInstance*        inst,
     const PluginxxUiContentSpec* spec
-) {
-    if (!inst || !spec || !spec->generate) {
+) {    if (!inst || !spec || !spec->generate) {
         return PLUGINXX_RESULT_ERR_ARG;
     }
     const std::string_view pluginId = uiInstancePluginId(inst->name);
@@ -468,6 +515,8 @@ int32_t ClientPluginManager::registerUiContent(
     }
     publishUiContentSnapshot();
     requestUiContent(fullId);
+    // 工具行内容: 接成按工具名的渲染器 (结果进按调用分键的缓存)
+    syncToolContentRenderer(inst, fullId);
     return PLUGINXX_RESULT_OK;
 }
 
@@ -486,6 +535,7 @@ int32_t ClientPluginManager::unregisterUiContent(
         return PLUGINXX_RESULT_ERR_NOT_FOUND;
     }
     uiGenerating_.erase(fullId);
+    removeToolContentRenderer(fullId);
     publishUiContentSnapshot();
     return PLUGINXX_RESULT_OK;
 }
@@ -633,6 +683,7 @@ int32_t ClientPluginManager::undefineUiSlot(
          contentIt != uiContent_.contents().end();) {
         if (contentIt->second.slot == id) {
             uiGenerating_.erase(contentIt->first);
+            removeToolContentRenderer(contentIt->first);
             contentIt = uiContent_.contents().erase(contentIt);
         } else {
             ++contentIt;
@@ -650,30 +701,42 @@ std::string ClientPluginManager::listUiSlots(ClientPluginInstance* inst) const {
 // 生成 (投递到插件执行线程; 界面永远不等)
 // =====================================================================
 
-void ClientPluginManager::requestUiContent(std::string_view fullId) {
+void ClientPluginManager::requestUiContent(
+    std::string_view            fullId,
+    const ClientUiToolScope*    scope,
+    std::function<void(int32_t, std::string_view)> onResult,
+    bool                        dedupe
+) {
     auto* content = uiContent_.findContent(fullId);
     if (content == nullptr || !content->spec.generate) {
+        if (onResult) {
+            onResult(AGENTXX_RESULT_ERR_NOT_FOUND, {});
+        }
         return;
     }
     // 同一个内容同时只跑一次: 界面每帧都可能问, 没有这条会让生成函数堆积
-    if (!uiGenerating_.emplace(std::string{fullId}).second) {
+    // (工具行例外: 每次调用、折叠/展开各是一份结果, 去重交给按调用分键的渲染缓存)
+    if (dedupe && !uiGenerating_.emplace(std::string{fullId}).second) {
         return;
     }
     auto inst = find(content->plugin);
     if (!inst || !inst->enabled) {
         uiGenerating_.erase(std::string{fullId});
+        if (onResult) {
+            onResult(AGENTXX_RESULT_ERR_STATE, {});
+        }
         return;
     }
     const std::string contextJson = clientUiContextJson(
         *content,
-        [this](std::string_view dep) { return clientUiVariableJson(dep); }
+        [this, scope](std::string_view dep) { return clientUiVariableJson(dep, scope); }
     );
     auto generate  = content->spec.generate;
     void* userData = content->spec.user_data;
     auto  self     = shared_from_this();
     const std::string key{fullId};
     auto              waiter = new GenerateWaiter();
-    waiter->finish = [self, key](int32_t status, std::string_view payload) {
+    waiter->finish = [self, key, onResult](int32_t status, std::string_view payload) {
         std::string text{payload};
         std::string error;
         if (status != PLUGINXX_OPERATOR_OK) {
@@ -684,7 +747,12 @@ void ClientPluginManager::requestUiContent(std::string_view fullId) {
         }
         asio::post(
             self->ioExecutor(),
-            [self, key, text = std::move(text), error = std::move(error)]() {
+            [self, key, onResult, text = std::move(text), error = std::move(error)]() {
+                if (onResult) {
+                    // 只交给调用方 (工具行: 结果进按调用分键的缓存), 不写内容自己的最近结果
+                    onResult(error.empty() ? PLUGINXX_OPERATOR_OK : PLUGINXX_OPERATOR_FAILED, text);
+                    return;
+                }
                 self->finishUiGeneration(key, text, error);
             }
         );
@@ -779,6 +847,7 @@ void ClientPluginManager::detachUiContent(std::string_view instanceName) {
     for (auto it = uiContent_.contents().begin(); it != uiContent_.contents().end();) {
         if (it->second.plugin == instanceName) {
             uiGenerating_.erase(it->first);
+            removeToolContentRenderer(it->first);
             it = uiContent_.contents().erase(it);
         } else {
             ++it;
@@ -786,6 +855,250 @@ void ClientPluginManager::detachUiContent(std::string_view instanceName) {
     }
     uiContent_.detachOwner(instanceName);
     publishUiContentSnapshot();
+}
+
+// =====================================================================
+// 工具行内容: 注册一份内容 → 按 (调用, 折叠/展开) 各生成一份
+// =====================================================================
+
+void ClientPluginManager::syncToolContentRenderer(
+    ClientPluginInstance* inst,
+    std::string_view      fullId
+) {
+    if (!inst || fullId.empty()) {
+        return;
+    }
+    auto* content = uiContent_.findContent(fullId);
+    if (content == nullptr || content->spec.generate == nullptr
+        || content->slot != kClientUiSlotTool) {
+        removeToolContentRenderer(fullId);
+        return;
+    }
+    // 工具名与显示名在声明项的 data 里 ({"tool":"…","displayName":"…"})
+    std::string toolName;
+    std::string displayName;
+    if (const auto entryIt = uiContent_.entries().find(fullId);
+        entryIt != uiContent_.entries().end()) {
+        const Json data = parseSafe(entryIt->second.dataJson);
+        if (data.is_object()) {
+            toolName    = data.value("tool", std::string{});
+            displayName = data.value("displayName", std::string{});
+        }
+    }
+    if (toolName.empty()) {
+        XX_LOGW(
+            "[client_plugin] `{}` tool content `{}` ignored: its declaration item needs "
+            "{{\"tool\":\"…\"}}",
+            inst->name,
+            content->id
+        );
+        return;
+    }
+    // 适配数据按全名复用 (内容撤销后不释放: 已投递的生成回调还会读它)
+    auto& bound = toolContentBindings_[std::string{fullId}];
+    if (!bound) {
+        bound = std::make_shared<ClientToolContentBinding>();
+    }
+    if (bound->lease) {
+        bound->lease->alive.store(false, std::memory_order_release);
+    }
+    bound->manager         = this;
+    bound->plugin          = inst->name;
+    bound->toolName        = toolName;
+    bound->displayName     = displayName.empty() ? toolName : displayName;
+    bound->deps            = content->deps;
+    bound->generate        = content->spec.generate;
+    bound->generateUd      = content->spec.user_data;
+    bound->hostView        = inst->hostView();
+    bound->lease           = std::make_shared<ClientToolRendererLease>();
+    bound->lease->instance = inst->self;
+    bound->active.store(true, std::memory_order_release);
+
+    ClientToolRenderReg reg;
+    reg.plugin      = inst->name;
+    reg.toolName    = toolName;
+    reg.displayName = bound->displayName;
+    reg.collapsedFn = &ClientPluginManager::toolContentRenderCollapsed;
+    reg.expandedFn  = &ClientPluginManager::toolContentRenderExpanded;
+    reg.userData    = bound.get();
+    reg.lease       = bound->lease;
+    {
+        std::lock_guard<std::mutex> lock(uiMutex_);
+        auto                        cur      = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+        bool                        replaced = false;
+        for (auto& r : cur->toolRenderers) {
+            if (r.plugin == inst->name && r.toolName == toolName) {
+                // 后注册的生效 (与回调式注册项同一规则)
+                if (r.lease) {
+                    r.lease->alive.store(false, std::memory_order_release);
+                }
+                r        = reg;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            cur->toolRenderers.push_back(reg);
+        }
+        uiRegistry_ = std::move(cur);
+    }
+}
+
+void ClientPluginManager::removeToolContentRenderer(std::string_view fullId) {
+    const auto it = toolContentBindings_.find(std::string{fullId});
+    if (it == toolContentBindings_.end() || !it->second) {
+        return;
+    }
+    const auto& binding = it->second;
+    if (!binding->active.exchange(false, std::memory_order_acq_rel)) {
+        return; // 已经摘过了
+    }
+    if (binding->lease) {
+        binding->lease->alive.store(false, std::memory_order_release);
+    }
+    void* const raw = binding.get();
+    std::lock_guard<std::mutex> lock(uiMutex_);
+    auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
+    cur->toolRenderers.erase(
+        std::remove_if(
+            cur->toolRenderers.begin(),
+            cur->toolRenderers.end(),
+            [raw](const ClientToolRenderReg& r) { return r.userData == raw; }
+        ),
+        cur->toolRenderers.end()
+    );
+    uiRegistry_ = std::move(cur);
+}
+
+std::string ClientPluginManager::toolContentContextJson(
+    const ClientToolContentBinding& binding,
+    const ClientUiToolScope&        scope
+) const {
+    Json ctx = Json::object();
+    for (const auto& dep : binding.deps) {
+        ctx[dep] = parseSafe(clientUiVariableJson(dep, &scope));
+    }
+    return ctx.dump();
+}
+
+int32_t PLUGINXX_CALL ClientPluginManager::toolContentRenderCollapsed(
+    void*                         user_data,
+    const AgentxxToolRenderInput* input,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
+) {
+    return toolContentRender(user_data, input, notify, error_out, /*summary=*/true);
+}
+
+int32_t PLUGINXX_CALL ClientPluginManager::toolContentRenderExpanded(
+    void*                         user_data,
+    const AgentxxToolRenderInput* input,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
+) {
+    return toolContentRender(user_data, input, notify, error_out, /*summary=*/false);
+}
+
+int32_t ClientPluginManager::toolContentRender(
+    void*                         user_data,
+    const AgentxxToolRenderInput* input,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out,
+    bool                          summary
+) {
+    auto* binding = static_cast<ClientToolContentBinding*>(user_data);
+    if (binding == nullptr || binding->manager == nullptr || binding->generate == nullptr
+        || !binding->active.load(std::memory_order_acquire)) {
+        pluginxx::setTableOpError(error_out, "tool content renderer is not registered");
+        return AGENTXX_RESULT_ERR_STATE;
+    }
+    if (input == nullptr || notify == nullptr || notify->done == nullptr) {
+        pluginxx::setTableOpError(error_out, "tool content renderer needs input and notify");
+        return AGENTXX_RESULT_ERR_ARG;
+    }
+    ClientUiToolScope scope;
+    scope.toolName   = viewToStr(input->tool_name);
+    scope.argsJson   = viewToStr(input->args_json);
+    scope.resultText = viewToStr(input->result_text);
+    scope.width      = input->max_width;
+    scope.finished   = input->is_finished != 0;
+    scope.error      = input->is_error != 0;
+    scope.summary    = summary;
+    const std::string contextJson = binding->manager->toolContentContextJson(*binding, scope);
+
+    auto*                   state = new ToolContentDoneState();
+    state->outer                  = *notify;
+    state->summary                = summary;
+    auto                    called = state->called;
+    PluginxxOperatorNotify  forward{&ClientPluginManager::toolContentDone, state};
+    const PluginxxStringView ctxView{contextJson.data(), static_cast<uint64_t>(contextJson.size())};
+    PluginxxString          error{nullptr, 0};
+    try {
+        binding->generate(binding->hostView, &ctxView, binding->generateUd, &forward, &error);
+    } catch (const std::exception& e) {
+        pluginxx::setTableOpError(error_out, e.what());
+        if (!called->load(std::memory_order_acquire)) {
+            delete state;
+        }
+        return AGENTXX_RESULT_ERR_INTERNAL;
+    } catch (...) {
+        pluginxx::setTableOpError(error_out, "the generate function threw");
+        if (!called->load(std::memory_order_acquire)) {
+            delete state;
+        }
+        return AGENTXX_RESULT_ERR_INTERNAL;
+    }
+    if (error.data != nullptr) {
+        const std::string reason{error.data, static_cast<size_t>(error.size)};
+        pluginxx::hostMemoryFree(error.data);
+        pluginxx::setTableOpError(error_out, reason);
+        if (!called->load(std::memory_order_acquire)) {
+            delete state;
+        }
+        return AGENTXX_RESULT_ERR_INTERNAL;
+    }
+    return PLUGINXX_RESULT_OK;
+}
+
+void PLUGINXX_CALL ClientPluginManager::toolContentDone(
+    void*                     user_data,
+    int32_t                   status,
+    const PluginxxStringView* payload
+) {
+    std::unique_ptr<ToolContentDoneState> state{static_cast<ToolContentDoneState*>(user_data)};
+    if (!state) {
+        return;
+    }
+    state->called->store(true, std::memory_order_release);
+    std::string text;
+    if (status == PLUGINXX_OPERATOR_OK && payload != nullptr && payload->data != nullptr) {
+        const std::string_view raw{payload->data, static_cast<size_t>(payload->size)};
+        const Json             parsed = parseSafe(raw);
+        // 生成函数按内容契约交回 `{"json": <文档>}`; 裸文档也接受
+        const Json doc = (parsed.is_object() && parsed.contains("json")) ? parsed["json"] : parsed;
+        if (state->summary) {
+            // 折叠头只要一行: 取内容的纯文本
+            std::string plain = pluginxx::ui::plainTextJson(doc);
+            if (const auto nl = plain.find('\n'); nl != std::string::npos) {
+                plain.resize(nl);
+            }
+            text = std::move(plain);
+        } else if (doc.is_array()) {
+            text = doc.dump();
+        } else if (doc.is_object()) {
+            for (const char* key : {"blocks", "items"}) {
+                const auto it = doc.find(key);
+                if (it != doc.end() && it->is_array()) {
+                    text = it->dump();
+                    break;
+                }
+            }
+        }
+    }
+    const PluginxxStringView view{text.data(), static_cast<uint64_t>(text.size())};
+    if (state->outer.done != nullptr) {
+        state->outer.done(state->outer.host_ud, status, &view);
+    }
 }
 
 } // namespace plugin

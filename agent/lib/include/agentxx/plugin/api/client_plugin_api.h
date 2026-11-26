@@ -475,6 +475,12 @@ typedef struct AgentxxClientUiIface {
     ///   展开内容 = items JSON 数组 (如 {"kind":"Diff","path":"...","oldStr":"..."})
     /// - 折叠内容与展开内容分开渲染、各自缓存: 折叠行不触发展开内容渲染
     /// - 插件卸载/禁用时主程序自动注销
+    /* ---- 工具特化渲染器 ---- */
+    /// 注册工具特化渲染器: 一个显示名 + 两个可选内容回调 (折叠体 / 展开体)
+    /// - **新写法优先用声明式界面**: 向 `agentxx.client.tool` 注册声明项 (data 给
+    ///   `{"tool","displayName"}`) + 内容 (生成函数拿 `agentxx.client.tool.*` 变量),
+    ///   一个生成函数同时管折叠头与展开体; 两者共用同一条执行与缓存路径
+    /// - tool_name: 目标工具名 (必填)
     PluginxxOperatorHandle*(PLUGINXX_CALL* register_tool_renderer)(
         const PluginxxHost*          host,
         const AgentxxToolRenderSpec* spec,
