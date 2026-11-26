@@ -135,11 +135,45 @@ std::vector<std::shared_ptr<GraphTypeSlot>> PluginInstance::allGraphSlots() cons
 // 管理器构造 / 析构
 // =====================================================================
 
+namespace {
+
+/// 本主程序的预置形态
+///
+/// - `native`: 动态库插件, 由框架加载 DSO 与调生命周期入口, 接口代次对就是 C 接口那一对;
+/// - `js`: 脚本形态的**预置位置**, 框架自己不实现 —— 引擎插件经 `agentxx.kind` 接管后才
+///   能真正加载 (`requiresPluginAbi=false`, 代次对由登记它的运行器给)。
+///   引擎没装 / 被禁用时, 加载 `kind: js` 的插件会得到"缺运行器"而不是崩。
+std::vector<pluginxx::PluginxxKindSpec> buildAgentxxKindSpecs() {
+    std::vector<pluginxx::PluginxxKindSpec> specs;
+    pluginxx::PluginxxKindSpec              nativeSpec;
+    nativeSpec.kind                = "native";
+    nativeSpec.builtin             = true;
+    nativeSpec.requiresPluginAbi   = true;
+    nativeSpec.interfaceVersion    = PLUGINXX_API_VERSION;
+    nativeSpec.minInterfaceVersion = PLUGINXX_MIN_API_VERSION;
+    nativeSpec.describe            = "动态库插件 (框架加载)";
+    specs.push_back(std::move(nativeSpec));
+
+    pluginxx::PluginxxKindSpec scriptSpec;
+    scriptSpec.kind              = "js";
+    scriptSpec.builtin           = true;
+    scriptSpec.requiresPluginAbi = false;
+    scriptSpec.describe          = "脚本插件 (由运行器插件执行)";
+    specs.push_back(std::move(scriptSpec));
+    return specs;
+}
+
+} // namespace
+
 PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primaryAgent, size_t workerThreads) :
     primaryAgent_(std::move(primaryAgent)) {
     // 通用表 (capabilities / broadcasts / scheduler / tasks 等) 需要主程序数据的入口
     // 经本类取数 (见 pluginxx/host/domain_services.h): 在任何 vtable 入口被调用之前注入。
     setDomainServices(this);
+    // 插件形态表: 预置 `native` 与 `js` (后者只是位置, 由引擎插件接管)
+    setKindRegistry(
+        pluginxx::PluginxxKindRegistry(buildAgentxxKindSpecs(), PLUGINXX_API_VERSION)
+    );
     // 内置广播频道: 插件加载 (start) 时就会订阅, 早于事件中枢创建
     declareBuiltinBroadcasts();
     // 功能埋点: 能力声明 + 同名广播频道 (插件在 start 里就能登记实现行/订阅)
@@ -507,6 +541,9 @@ asio::awaitable<void> PluginManager::onInstanceDisabledAsync(
     if (!inst || inst->enabled) {
         co_return;
     }
+    // 解释执行的形态: 先让运行器停掉脚本 (脚本自己的计时器 / 回调要一并回收),
+    // 再走挂载拆除。
+    co_await stopInterpretedInstance(inst);
     co_await detachInstanceFromMountsAsync(inst);
     co_return;
 }
@@ -516,6 +553,8 @@ asio::awaitable<void> PluginManager::onInstanceUnloadingAsync(
 ) {
     // 卸载: 实例马上要 destroy, 挂载记录必须先拆干净 —— 留在挂载上会变成
     // "实例已 Closed 但挂载记录还在", 之后谁再拆都只能报 `provider is closing`。
+    // 解释执行的形态: 脚本先停 (此时实例还能被运行器代表), 再拆挂载。
+    co_await stopInterpretedInstance(inst);
     co_await detachInstanceFromMountsAsync(inst);
     co_return;
 }
@@ -529,6 +568,14 @@ asio::awaitable<void> PluginManager::onInstanceEnabledAsync(
     // [PluginMount::detachInstance]), 这里再拆一次会把 start 事务刚登记的注册又摘掉。
     if (!inst || !inst->enabled || mounts_.empty()) {
         co_return;
+    }
+    // 解释执行的形态: 脚本先重新加载, 才有东西可挂
+    if (!inst->kind.empty() && inst->kind != "native" && !inst->kindLoaded) {
+        std::string reason;
+        if (!co_await startInterpretedInstance(inst, reason)) {
+            XX_LOGE("Plugin `{}` could not be re-enabled: {}", inst->name, reason);
+            co_return;
+        }
     }
     auto snapshot = mounts_;
     for (const auto& mount : snapshot) {
@@ -961,6 +1008,39 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
     bool                        hasOptions = false;
     toLoadOptions(cfg, options, hasOptions);
     const std::string pathForAdvice = path;
+    // 形态分流: 清单声明了非 `native` 的 kind 时不碰动态库, 交给运行器插件接手
+    if (!isBuiltinScheme(path)) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(utilxx_base::utf8ToPath(path), ec)) {
+            std::string name, entry, manifestKind;
+            std::vector<std::string> depends, optionalDepends;
+            if (parsePluginManifest(
+                    utilxx_base::utf8ToPath(path),
+                    name,
+                    entry,
+                    depends,
+                    optionalDepends,
+                    nullptr,
+                    nullptr,
+                    &manifestKind
+                )
+                && !manifestKind.empty() && manifestKind != "native") {
+                auto inst = co_await loadInterpretedAsync(path, manifestKind, cfg);
+                if (!inst && !allowClientOnlySkip) {
+                    logLoadAdvice(*this, pathForAdvice);
+                }
+                if (inst && !mounts_.empty()) {
+                    auto snapshot = mounts_;
+                    for (const auto& mount : snapshot) {
+                        if (mount) {
+                            co_await mount->mountOneAsync(inst);
+                        }
+                    }
+                }
+                co_return inst;
+            }
+        }
+    }
     auto inst = co_await pluginxx::PluginHostLifecycle<PluginInstance>::loadPluginAsync(
         std::move(path),
         hasOptions ? &options : nullptr,

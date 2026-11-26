@@ -1338,10 +1338,13 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
 
 Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_javascript_engine` JS 运行时插件加载：
 
-- **统一插件模型**：所有插件都是 C++ 插件；JS 插件表现为标准 C++ 动态库外壳 (如 `example_js`) 附带 `plugin.js`。壳可以只导出 agent 侧入口、只导出 client 侧入口，或两套都导出（同一动态库两套符号）；脚本用 `agentxx.side`（`"agent"` / `"client"`）判断自己在哪一侧
-- **执行流程**：主程序加载 JS 插件壳 → 壳 `create` 只构造上下文 (解析自身 `plugin.js` 路径) → 壳 `start` 校验 `interpreter.js` 能力后经该能力把 `plugin.js` 交给引擎 → 引擎登记脚本并在**每个 agent 挂载作用域各建一份实例**(新建 JSContext 执行脚本)，把脚本声明的工具与广播订阅绑定到该 agent；脚本注册属于壳实例的挂载事务，因此壳的 start 只需等脚本**登记**完成 (异步 done)，失败由主程序回滚
-- **一插件多 agent 挂载 (= C++ 插件同一套生命周期)**：引擎在自己的 `mount` 里登记作用域 (`agent_id` + `mount_seq`)、对该 agent 补建全部脚本实例；`unmount` 时销毁该作用域的实例。因此脚本顶层代码就是“该 agent 的插件实例初始化”，脚本里的全局变量天然按 agent 隔离；进程级状态请放在 C++ 壳的 `start` 里。同一脚本在 N 个 agent 上注册同名工具互不冲突 (各自属于自己的挂载)
-- **引擎线程属于 start 事务**：`agentxx_javascript_engine` 的 `create` 只构造，`start` 才创建 JSRuntime 与专用 JS 线程并注册 `interpreter.js` 能力，`stop` 停止线程并释放 runtime (同时清空脚本登记与挂载作用域)；`disable → enable` 往返即一次 `stop + start`，引擎线程与脚本实例按事务重建 (壳插件在自身 start 中重新加载脚本)
+- **统一插件模型**：插件分两种形态 —— 动态库插件（清单不写 `kind`，或写 `native`）与脚本插件（`kind: js`，如 `example_js`）。脚本插件**没有动态库**：目录里只有 `plugin.yaml` 与 `plugin.js`，主程序把目录交给提供 `js` 形态的运行器插件（`agentxx_javascript_engine`）执行。脚本用 `agentxx.side`（`"agent"` / `"client"`）判断自己在哪一侧（这个值由运行器提供）
+- **形态表 (`agentxx.kind`)**：预置两种形态 —— `native` 由框架自己实现（加载动态库、调生命周期入口），`js` 只是一个**预置位置**，由引擎插件在 `start` 事务里用 `overrideBuiltin: true` 登记，同时交出一条加载 / 卸载 / 校验能力。引擎没装或被禁用时，加载 `kind: js` 的插件得到“缺运行器”而不会被加载；引擎装回后立刻又能加载（撤销登记即回到预置实现）。插件也可以用这张表登记自己的形态（例如 Python 运行器），框架不按形态名写分支
+- **脚本插件的执行流程**：主程序解析清单取 `kind` → 查形态表 → 用**目标插件的 host 视图**作为调用方调运行器的 `kind_load`（载荷 `{action:"load", kind, id, path, version, instance, side}`，`side` 是 `agent` / `client`）→ 引擎读 `plugin.js` 并在**每个 agent 挂载作用域各建一份实例**（新建 JSContext 执行脚本），把脚本声明的工具与广播订阅绑定到该 agent。脚本注册属于**目标插件实例**（不是引擎），所以卸载那个插件时整批撤销；加载前还会问一次 `kind_validate`（只看目录里有没有 `plugin.js`），拒绝的理由原样告诉用户
+- **脚本插件在两侧都加载**：agent 侧与 client 侧的管理器都预置 `js` 形态（各自的接口代次对），加载路径把目录交给同一个引擎插件。client 侧一份脚本一个实例（没有 agent 挂载作用域），脚本注册挂在目标插件实例上；停用 / 卸载时先让运行器卸掉脚本（脚本自己的定时器与回调一并回收），启用时重新加载。没装引擎或引擎被禁用时同样报“缺运行器”
+- **`interpreter.js` 能力保留**：带 C++ 壳的脚本插件（`example_js_execute_command` 与自定义壳）仍经该能力把脚本交给引擎（两侧都可用）；它和 `kind: js` 是同一引擎的两条入口 —— 区别只在“注册算谁的”：壳路径算壳实例，`kind` 路径算目标插件实例
+- **一插件多 agent 挂载 (= C++ 插件同一套生命周期)**：引擎在自己的 `mount` 里登记作用域 (`agent_id` + `mount_seq`)、对该 agent 补建全部脚本实例；`unmount` 时销毁该作用域的实例。因此脚本顶层代码就是“该 agent 的插件实例初始化”，脚本里的全局变量天然按 agent 隔离。同一脚本在 N 个 agent 上注册同名工具互不冲突 (各自属于自己的挂载)
+- **引擎线程属于 start 事务**：`agentxx_javascript_engine` 的 `create` 只构造，`start` 才创建 JSRuntime 与专用 JS 线程，然后按顺序登记四条能力（`interpreter.js` 与 `js` 形态的三条）与形态本身，任一步失败都停掉本次刚起的引擎并让主程序回滚；`stop` 停止线程并释放 runtime (同时清空脚本登记与挂载作用域)；`disable → enable` 往返即一次 `stop + start`
 - **stop 不阻塞 IO 线程**：JS 线程可能在主程序 vtable 调用中等待 IO 线程，因此 `stop` 由独立收尾线程完成 `join` 与 runtime 释放，完成通知从该线程上报；JS 线程空闲时走调用线程直接收尾的快路径，使紧邻的 stop→start 顺序确定。停止后不再执行插件 JS：新任务被拒绝，队列任务按 `CANCELLED`/`FAILED` 终结，事件投递丢弃
 - **`agentxx.callTool` 始终返回 Promise**：命中本引擎工具时同线程执行并把结果/内部 Promise 链到外层 Promise；命中主程序插件工具时经 `call_tool` 异步互调，完成/失败/取消事件投递回 JS 线程 settle。JS 线程不会同步等待主程序，A/B 脚本互调不存在线程自锁。resolve 形态：目标工具报了元数据（附件等）时给对象 `{...元数据, text: 正文}`（元数据里已有 `text` 则不覆盖），否则保持原行为（正文能解析成 JSON 就给值，否则给字符串）
 - **工具返回值可以是 `{status, text, attachments}`**：`text` 是给模型读的正文，`attachments`（数组，元素形如 `{type, display_name, mime_type, path_or_url, size_bytes}`）作为第二段元数据上报，主程序侧直接得到 `ToolResult.attachments`（多模态附件的传递流程）；不写 `text` 时整份返回值就是正文（此时附件也会出现在正文里，所以带附件就请同时给 `text`）
@@ -1379,7 +1382,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
     - **Promise 续体由主循环泵**：动作/定时器/快捷键/渲染/命令回调里都可以写 `netFetch(...).then(...)`，JS 线程在每个任务与每个定时器之后泵一次微任务队列（单次上限 10000 个 job，到限记一条警告）
     - 一次没拿到内容的渲染会按“没有自定义内容”缓存，界面用默认渲染；同一行输入不变时不会反复请求（参数/结果变化、行重建、重新注册后会再请求）
     - 示例：`example_js` 的 `plugin.js` 用 `agentxx.side` 分支，client 侧注册了工具行特化渲染、状态栏项、Info 段落、面板、斜杠命令 `/jsdemo`、按钮动作、快捷键 `ctrl+alt+j` 与一个 60ms×2 的定时器；另有一个 `ctrl+alt+u` 演示注销与查询（`listKeybinds` / `isRegionVisible` / `unregister*` / `cancelClientTimer`）、命令 `/jsnet` 演示同步网络入口，动作 `js.demo.net` / `js.demo.sdk` 演示回环 HTTP（`http.serve` + `http.route` → `netFetch` → `.then`）与通用表（插件清单 / 配置 / 广播声明-发布-读-结束）。它的清单同时声明 agent 侧 `agentxx.agent.core` 与 client 侧 `agentxx.client.msg_decor`，两侧各自只比较自己那部分
-- 可自研脚本JS 运行时插件 (Python/Lua 等) 替换或扩充脚本能力
+- 可自研脚本 JS 运行时插件替换引擎：登记自己的形态（`agentxx.kind`）或接管预置的 `js`（`overrideBuiltin: true`），框架不需要改加载路径
 
 ---
 
@@ -1389,7 +1392,8 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 |------|------|
 | `example_plugin` | 原生 C++ 综合示例 (asio 协程体工具、`onWorkerAsync` 包装的阻塞工具、`callToolAsync`/`sleepAsync`、**协程驱动桥**、功能埋点订阅/事件/能力/client 入口) |
 | `example_graph_node` | Graph 扩展示例 (自定义节点类型 + set_graph_json 改图, 需 `agentxx_agent_graph` 接口) |
-| `example_js` | JS 插件示例 (C++ 壳 + `plugin.js`；同一动态库双入口，脚本用 `agentxx.side` 分支，client 侧给 `js_hello` 注册工具特化渲染) |
+| `example_js` | 纯脚本插件示例 (只有 `plugin.yaml` + `plugin.js`，清单写 `kind: js`): 由 `agentxx_javascript_engine` 以 `js` 形态运行器身份执行，脚本用 `agentxx.side` 分支，agent 与 client 两侧都经同一条路径加载；client 侧给 `js_hello` 注册工具特化渲染 (见 §12) |
+| `example_js_execute_command` | 带 C++ 壳的脚本插件示例: 壳在 start 里经 `interpreter.js` 能力把 `plugin.js` 交给引擎 |
 | `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
 | `example_multi_mount` | 多挂载示例 (每 agent 一份状态: 计数 + 挂载级 `config_json`; 见 §18) |
 | `example_event` | 广播示例 (声明频道、发布值、订阅自己的与主程序的频道、读当前值; 见 §20) |
@@ -2828,12 +2832,12 @@ timeoutMs / maxBytes / followRedirects / maxRedirects / tlsVerify。
   每个属主同时最多 16 条 HTTP 客户端请求、连接与服务数量有上限 (`net.info` 可查);
   单次 `call` 等网络线程的上界是 5 秒 (超时返回 `PLUGINXX_RESULT_ERR_TIMEOUT`)。
 
-## 23. 与 `musicxx_extern_plugin` 共用的四条口径
+## 23. 与 `musicxx_extern_plugin` 共用的四条规则
 
 约定来自 musicxx 仓库的 `docs/history/plugin-framework-compare/plan.md`，两边文档互相引用；能共用的实现下沉到
 子模块 `cxx_pluginxx`，不在两个项目里各写一份。
 
-| 口径 | 这里怎么写 | 落点 |
+| 规则 | 这里怎么写 | 落点 |
 |---|---|---|
 | **超时与取消** | 超时归调用方（`timeoutMs <= 0` = 不限）；取消立刻结算并丢弃晚到应答；停机先结算未完成请求再发 `EVT_STOPPED`；受理 ⇒ 恰好一条回执 | [`ffi.md`](ffi.md) §8.2；`cxx_pluginxx/host/ffi_bridge.h` |
 | **界面契约** | client 侧改成“注册声明项 + 注册内容生成函数”，渲染线程只读缓存、`rev` 丢弃晚到结果；块树 / 槽位 / 变量 id 与 musicxx 同一份定义，下沉时不改名 | [`ffi.md`](ffi.md) §8.4；`cxx_pluginxx/api/ui.h` |

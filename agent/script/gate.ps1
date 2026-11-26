@@ -61,7 +61,22 @@ if ($Build) {
     Record-Result "build" "skip" "use -Build"
 }
 
-# ---------------- 2. 单元测试 (fail-fast) ----------------
+# ---------------- 2. id 头与声明一致 ----------------
+Write-Output "[gate] checking generated id headers ..."
+Push-Location $repoRoot
+try {
+    & dart run agent/tool/gen_ids.dart --check
+    if ($LASTEXITCODE -eq 0) {
+        Record-Result "id headers" "ok" "agent/schema/ids.def.json"
+    } else {
+        Record-Result "id headers" "fail" "run agent/script/gen_ids.ps1 and commit"
+    }
+}
+finally {
+    Pop-Location
+}
+
+# ---------------- 3. 单元测试 (fail-fast) ----------------
 if (-not (Test-Path $testExe)) {
     Record-Result "unit tests" "fail" "missing $testExe"
 } else {
@@ -79,7 +94,7 @@ if (-not (Test-Path $testExe)) {
     }
 }
 
-# ---------------- 3. 基准 (可选) ----------------
+# ---------------- 4. 基准 (可选) ----------------
 if ($Bench) {
     $benchExe = Join-Path $BuildDir "exec/agentxx_benchmark.exe"
     if (Test-Path $benchExe) {
@@ -97,7 +112,7 @@ if ($Bench) {
     Record-Result "benchmark" "skip" "use -Bench"
 }
 
-# ---------------- 4. 平台相关检查 (bash 脚本) ----------------
+# ---------------- 5. 平台相关检查 (bash 脚本) ----------------
 Record-Result "plugin exports" "skip" "run agent/script/gate.sh on Linux/macOS (needs nm)"
 Record-Result "sdk negative compile" "skip" "run agent/script/gate.sh on Linux/macOS (needs python3)"
 

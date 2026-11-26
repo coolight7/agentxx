@@ -23,6 +23,7 @@
 #include "agentxx/plugin/api/agent_plugin_kit.h"
 #include "agentxx/plugin/api/client_plugin_kit.h"
 #include "fmt/format.h"
+#include "pluginxx/api/kinds.h"
 #include "quickjs.h"
 
 #include <algorithm>
@@ -4709,8 +4710,7 @@ JSValue JsEngine::provideCapabilityRow(
     spec.phases      = phases;
     spec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
     spec.priority    = priority;
-    // 脚本回调在 JS 线程执行: 一律登记成**异步处理器** (返回 token, 稍后 notify->done)
-    spec.sync       = 0;
+    // 脚本回调在 JS 线程执行: 登记成普通处理器, 由 capImplStart 稍后 notify->done
     spec.timeout_ms = timeoutMs;
     spec.run_start  = &JsEngine::capImplStart;
     spec.cancel     = &JsEngine::capImplCancel;
@@ -10782,6 +10782,186 @@ static void* PLUGINXX_CALL jsCapStart(
     }
 }
 
+// =====================================================================
+// 形态 "js" 的运行器 (kind_validate / kind_load / kind_unload)
+// =====================================================================
+//
+// 主程序加载一个 `kind: js` 的插件时不再要动态库: 它把插件目录交给本引擎,
+// 本引擎执行目录里的 plugin.js。脚本里的注册挂到**调用方插件实例**上
+// (`caller_host` 就是那个插件的 host 视图), 所以卸载那个插件时注册整批撤销。
+//
+// 载荷与回答见 `pluginxx/api/kinds.h`: 请求带 `action` / `kind` / `id` / `path` /
+// `version` / `instance`; 回答 `{"ok":true}` 或 `{"ok":false,"error":"..."}`。
+
+namespace {
+
+/// 本引擎登记的能力与形态都在这个命名空间下 (清单名固定)
+constexpr const char* kJsKindNamespace = "plugin.agentxx_javascript_engine.";
+
+/// 形态能力的参数
+struct JsKindArgs {
+    std::string action;
+    std::string kind;
+    std::string id;
+    std::string path;
+    std::string version;
+};
+
+/// 脚本文件名 (插件目录下的入口脚本)
+constexpr const char* kJsScriptFileName = "plugin.js";
+
+/// 用主程序的 json 表读参数 (对转义 / 嵌套结构可靠)
+bool readJsKindArgs(
+    const PluginxxHost*                 selfHost,
+    const PluginxxStringView*           argsJson,
+    const agentxx::plugin::AgentIfaces& iface,
+    JsKindArgs&                         out,
+    std::string&                        why
+) {
+    if (selfHost == nullptr || iface.json == nullptr || iface.json->json_get_string == nullptr) {
+        why = "the host lacks the agentxx.agent.json interface";
+        return false;
+    }
+    const std::string raw = argsJson != nullptr && argsJson->data
+                                ? std::string{argsJson->data, static_cast<size_t>(argsJson->size)}
+                                : std::string{"{}"};
+    auto readField = [&](const char* key, std::string& value) -> bool {
+        PluginxxString v{nullptr, 0};
+        auto           argsSv = agentxx::plugin::PluginStringView::from(raw.data(), raw.size());
+        auto           keySv  = agentxx::plugin::PluginStringView::from(key, std::strlen(key));
+        iface.json->json_get_string(selfHost, &argsSv, &keySv, &v);
+        if (v.data == nullptr) {
+            return false;
+        }
+        value.assign(v.data, static_cast<size_t>(v.size));
+        agentxx::plugin::PluginString::free(selfHost, &v);
+        return true;
+    };
+    readField("action", out.action);
+    readField("kind", out.kind);
+    readField("id", out.id);
+    readField("path", out.path);
+    readField("version", out.version);
+    if (out.id.empty() || out.path.empty()) {
+        why = "the request must carry `id` and `path`";
+        return false;
+    }
+    return true;
+}
+
+/// 回一条 `{"ok":...}` 回答 (payload 只在本次调用内有效, 框架会自己复制)
+void answerKind(const PluginxxOperatorNotify& notify, const std::string& json) {
+    if (!notify.done) {
+        return;
+    }
+    auto sv = agentxx::plugin::PluginStringView::from(json.data(), json.size());
+    notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, &sv);
+}
+
+/// 脚本路径: 插件目录 + plugin.js
+std::string scriptPathOf(const std::string& dir) {
+    return (std::filesystem::path{dir} / kJsScriptFileName).string();
+}
+
+} // namespace
+
+/// 形态能力统一入口 (三条能力共用: 看请求里的 `action`)
+/// - `validate`: 只看目录里有没有入口脚本, 不执行;
+/// - `load`: 读脚本并交给引擎执行 (脚本里的注册挂到调用方实例上);
+/// - `unload`: 卸载脚本 (撤销它的注册与定时器)。
+static void* PLUGINXX_CALL jsKindStart(
+    void*                         ctx,
+    const PluginxxHost*           caller_host,
+    const PluginxxStringView*     method,
+    const PluginxxStringView*     args_json,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
+) {
+    auto* engine = static_cast<JsEngine*>(ctx); ///< 提升至 try 外 (catch 日志闭包使用)
+    try {
+        if (engine == nullptr || notify == nullptr || notify->done == nullptr) {
+            if (error_out && caller_host != nullptr) {
+                *error_out = agentxx::plugin::PluginString::fromCstr(
+                    caller_host,
+                    "js kind: invalid invoke"
+                );
+            }
+            return nullptr;
+        }
+        // 本实例的句柄: 查接口表、分配堆字符串一律用它
+        const PluginxxHost* selfHost = engine->host() != nullptr ? engine->host() : caller_host;
+        // 脚本里的注册归属于**调用方插件实例** (主程序把目标插件交给这里)
+        const PluginxxHost* scriptHost = caller_host != nullptr ? caller_host : selfHost;
+        const agentxx::plugin::AgentIfaces iface
+            = agentxx::plugin::AgentIfaces::query(selfHost);
+        JsKindArgs  args;
+        std::string why;
+        if (!readJsKindArgs(selfHost, args_json, iface, args, why)) {
+            answerKind(*notify, fmt::format(R"({{"ok":false,"error":"{}"}})", why));
+            return engine->capOpToken();
+        }
+        std::string action = args.action.empty() ? std::string{"load"} : args.action;
+        if (action == "validate") {
+            std::error_code ec;
+            const auto      script = scriptPathOf(args.path);
+            if (!std::filesystem::is_regular_file(script, ec)) {
+                answerKind(
+                    *notify,
+                    R"({"ok":false,"error":"the plugin directory has no plugin.js"})"
+                );
+                return engine->capOpToken();
+            }
+            answerKind(*notify, R"({"ok":true})");
+            return engine->capOpToken();
+        }
+        if (action == "load") {
+            const auto     script = scriptPathOf(args.path);
+            std::ifstream  f(script, std::ios::binary);
+            if (!f) {
+                answerKind(
+                    *notify,
+                    R"({"ok":false,"error":"cannot open plugin.js in the plugin directory"})"
+                );
+                return engine->capOpToken();
+            }
+            std::stringstream ss;
+            ss << f.rdbuf();
+            std::string code = ss.str();
+            if (code.empty()) {
+                answerKind(*notify, R"({"ok":false,"error":"plugin.js is empty"})");
+                return engine->capOpToken();
+            }
+            engine->loadScriptAsync(scriptHost, args.id, script, code, *notify);
+            return engine->capOpToken();
+        }
+        if (action == "unload") {
+            engine->unloadScriptAsync(args.id, *notify);
+            return engine->capOpToken();
+        }
+        answerKind(
+            *notify,
+            fmt::format(R"({{"ok":false,"error":"unknown action `{}`"}})", action)
+        );
+        return engine->capOpToken();
+    } catch (...) {
+        ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
+            if (engine) {
+                engine->guardLog(m);
+            }
+        });
+        if (error_out) {
+            const PluginxxHost* errHost = engine != nullptr ? engine->host() : caller_host;
+            if (errHost != nullptr) {
+                *error_out = agentxx::plugin::PluginString::fromCstr(
+                    errHost,
+                    "js kind: internal exception"
+                );
+            }
+        }
+        return nullptr;
+    }
+}
+
 extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
     const PluginxxHost*           host,
     void**                        plugin_ctx,
@@ -10851,39 +11031,184 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
 ///   完成回调会与"回调投回这条线程"互等; 所以入口返回 provider 句柄、结论在
 ///   [jsCapRegDone] 里交回。
 
-/// `interpreter.js` 能力登记的完成状态 (堆对象; 回调里释放)
+/// start 事务的步骤状态 (堆对象; 最后一步回调里释放)
+///
+/// start 按步骤串起来: 登记 4 条能力 (`interpreter.js` / `kind_validate` /
+/// `kind_load` / `kind_unload`) → 登记形态 `js` → 完成。每步都是异步登记,
+/// 上一步的完成回调发起下一步。
 ///
 /// 只存一份 `notify` 拷贝, 不在这里持有生命周期凭据: 凭据在完成回调里现构造,
 /// 这样"入口最后没受理"时不会提前发一次 done。
-struct JsCapRegState {
+struct JsStartState {
     JsEngine*              engine = nullptr;
     PluginxxOperatorNotify notify{};
+    int                    step   = 0;
 };
 
-/// 能力登记完成: 成功 → 记位 + 交 OK; 失败 → 停掉本次刚起的引擎 + 交 FAILED
+static void jsStartAdvance(JsStartState* st);
+
+/// 最后一步 (形态登记) 的收尾
 static void PLUGINXX_CALL
-    jsCapRegDone(void* ud, int32_t status, const PluginxxStringView* payload) {
-    std::unique_ptr<JsCapRegState> st(static_cast<JsCapRegState*>(ud));
+    jsStartDone(void* ud, int32_t status, const PluginxxStringView* payload);
+
+/// 一步登记完成: 失败 → 停引擎 + 交 FAILED; 成功 → 下一步
+static void PLUGINXX_CALL
+    jsStartStepDone(void* ud, int32_t status, const PluginxxStringView* payload) {
+    std::unique_ptr<JsStartState> st(static_cast<JsStartState*>(ud));
     if (!st || !st->engine) {
         return;
     }
-    auto  later  = agentxx::plugin::finishLater(&st->notify);
-    auto* engine = st->engine;
-    if (status == PLUGINXX_OPERATOR_OK) {
-        engine->setCapabilityRegistered(true);
-        engine->logAt(2, "agentxx_javascript_engine started (QuickJS interpreter.js)");
-        later.ok();
+    if (status != PLUGINXX_OPERATOR_OK) {
+        std::string reason = "interpreter.js start: capability registration failed";
+        if (payload && payload->data && payload->size > 0) {
+            reason.assign(payload->data, static_cast<size_t>(payload->size));
+        }
+        auto       later = agentxx::plugin::finishLater(&st->notify);
+        JsEngine*  engine = st->engine;
+        engine->guardLog(reason.c_str());
+        // start 事务失败: 撤销本事务已启动的引擎线程 (destroy 随后会等待收尾完成,
+        // 不留线程/运行时残留)
+        engine->requestStop(nullptr);
+        later.failed(reason);
         return;
     }
-    std::string reason = "interpreter.js start: capability registration failed";
-    if (payload && payload->data && payload->size > 0) {
-        reason.assign(payload->data, static_cast<size_t>(payload->size));
+    ++st->step;
+    jsStartAdvance(st.release());
+}
+
+/// 发起当前这一步的登记
+static void jsStartAdvance(JsStartState* st) {
+    if (st == nullptr) {
+        return;
     }
-    engine->guardLog(reason.c_str());
-    // start 事务失败: 撤销本事务已启动的引擎线程 (destroy 随后会等待收尾完成,
-    // 不留线程/运行时残留)
-    engine->requestStop(nullptr);
-    later.failed(reason);
+    auto fail = [](JsStartState* state, std::string reason) {
+        std::unique_ptr<JsStartState> holder{state};
+        auto                          later = agentxx::plugin::finishLater(&holder->notify);
+        if (holder->engine) {
+            holder->engine->guardLog(reason.c_str());
+            holder->engine->requestStop(nullptr);
+        }
+        later.failed(reason);
+    };
+    JsEngine*                           engine = st->engine;
+    const PluginxxHost*                 host   = engine->host();
+    const agentxx::plugin::AgentIfaces  iface  = agentxx::plugin::AgentIfaces::query(host);
+    if (!iface.capabilities || !iface.capabilities->register_capability) {
+        fail(st, "interpreter.js start: host lacks capabilities interface");
+        return;
+    }
+    // 能力登记表 (顺序即登记顺序)
+    struct Step {
+        const char*                      id;
+        PluginxxCapabilityStartFunction  fn;
+    };
+    static const Step kSteps[] = {
+        {"interpreter.js", &jsCapStart},
+        {"kind_validate",  &jsKindStart},
+        {"kind_load",      &jsKindStart},
+        {"kind_unload",    &jsKindStart},
+    };
+    const int stepCount = static_cast<int>(sizeof(kSteps) / sizeof(kSteps[0]));
+    if (st->step < stepCount) {
+        const Step& step = kSteps[st->step];
+        auto        idSv = agentxx::plugin::PluginStringView::fromCstr(step.id);
+        PluginxxCapabilitySpec spec{};
+        spec.version     = PLUGINXX_API_VERSION;
+        spec.struct_size = sizeof(PluginxxCapabilitySpec);
+        spec.id          = idSv;
+        spec.impls       = PLUGINXX_CAPABILITY_IMPLS_ONE;
+        spec.merge       = PLUGINXX_CAPABILITY_MERGE_NONE;
+        spec.phases      = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
+        spec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
+        spec.run_start   = step.fn;
+        spec.cancel      = nullptr;
+        spec.user_data   = engine;
+        PluginxxString regErr{};
+        auto*          handle = iface.capabilities->register_capability(
+            host,
+            nullptr,
+            &spec,
+            &jsStartStepDone,
+            st,
+            &regErr
+        );
+        if (handle == nullptr) {
+            std::string reason = regErr.data
+                                     ? std::string{regErr.data, static_cast<size_t>(regErr.size)}
+                                     : fmt::format(
+                                           "interpreter.js start: registering `{}` was not "
+                                           "accepted",
+                                           step.id
+                                       );
+            if (regErr.data) {
+                agentxx::plugin::PluginString::free(host, &regErr);
+            }
+            fail(st, std::move(reason));
+            return;
+        }
+        if (regErr.data) {
+            agentxx::plugin::PluginString::free(host, &regErr);
+        }
+        return; ///< 结论在 jsStartStepDone 里交回
+    }
+    // 最后一步: 登记形态 `js` (接管框架预置的脚本形态)
+    auto* kinds = pluginxx::queryInterface<PluginxxKindIface>(host, PLUGINXX_IFACE_KIND);
+    if (kinds == nullptr || kinds->register_kind == nullptr) {
+        fail(st, "interpreter.js start: host does not implement the plugin kind table");
+        return;
+    }
+    const std::string specJson = fmt::format(
+        "{{\"kind\":\"js\",\"requiresPluginAbi\":false,\"interfaceVersion\":1,"
+        "\"minInterfaceVersion\":1,\"loadCapability\":\"{}kind_load\","
+        "\"unloadCapability\":\"{}kind_unload\","
+        "\"validateCapability\":\"{}kind_validate\","
+        "\"describe\":\"JS script (QuickJS)\",\"overrideBuiltin\":true}}",
+        kJsKindNamespace,
+        kJsKindNamespace,
+        kJsKindNamespace
+    );
+    auto           specSv = agentxx::plugin::PluginStringView::from(specJson.data(), specJson.size());
+    PluginxxString regErr{};
+    auto*          handle
+        = kinds->register_kind(host, &specSv, &jsStartDone, st, &regErr);
+    if (handle == nullptr) {
+        std::string reason = regErr.data
+                                 ? std::string{regErr.data, static_cast<size_t>(regErr.size)}
+                                 : std::string{"interpreter.js start: registering kind `js` was "
+                                               "not accepted"};
+        if (regErr.data) {
+            agentxx::plugin::PluginString::free(host, &regErr);
+        }
+        fail(st, std::move(reason));
+        return;
+    }
+    if (regErr.data) {
+        agentxx::plugin::PluginString::free(host, &regErr);
+    }
+}
+
+/// 形态登记收尾 (最后一步): 记位 + 交 OK
+/// - 失败: 停掉本次刚起的引擎, 交 FAILED
+static void PLUGINXX_CALL
+    jsStartDone(void* ud, int32_t status, const PluginxxStringView* payload) {
+    std::unique_ptr<JsStartState> st(static_cast<JsStartState*>(ud));
+    if (!st || !st->engine) {
+        return;
+    }
+    auto later = agentxx::plugin::finishLater(&st->notify);
+    if (status != PLUGINXX_OPERATOR_OK) {
+        std::string reason = "interpreter.js start: registering kind `js` failed";
+        if (payload && payload->data && payload->size > 0) {
+            reason.assign(payload->data, static_cast<size_t>(payload->size));
+        }
+        st->engine->guardLog(reason.c_str());
+        st->engine->requestStop(nullptr);
+        later.failed(reason);
+        return;
+    }
+    st->engine->setCapabilityRegistered(true);
+    st->engine->logAt(2, "agentxx_javascript_engine started (QuickJS interpreter.js + kind js)");
+    later.ok();
 }
 
 static void PLUGINXX_CALL jsEngineStart(
@@ -10915,10 +11240,10 @@ static void PLUGINXX_CALL jsEngineStart(
             return setErr("interpreter.js start: host lacks capabilities interface");
         }
         if (engine->capabilityRegistered()) {
-            // 重复 start (幂等): 能力仍由本实例持有, 主程序尚未撤销
+            // 重复 start (幂等): 能力与形态仍由本实例持有, 主程序尚未撤销
             if (iface.log && iface.log->log) {
                 auto loadedSv = agentxx::plugin::PluginStringView::fromCstr(
-                    "agentxx_javascript_engine started (QuickJS interpreter.js)"
+                    "agentxx_javascript_engine started (QuickJS interpreter.js + kind js)"
                 );
                 iface.log->log(host, 2, &loadedSv);
             }
@@ -10926,44 +11251,15 @@ static void PLUGINXX_CALL jsEngineStart(
             return; ///< 同步完成 (没有要等的事)
         }
         {
-            // 能力 "interpreter.js" (异步方法处理器三件套): JS 插件 (C++ 壳) 经
-            // invoke_capability(_async) 把脚本代码交给本引擎执行 —— 插件间通信,
-            // 主程序不参与; load/unload 均为异步完成 (JS 线程执行)
-            auto capSv = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
-            // 登记形状: 短名 (主程序补成 `plugin.<本插件 id>.interpreter.js`) + 只实现
-            // impl 阶段 + 异步处理器 (jsCapStart 自己回调 notify)
-            PluginxxCapabilitySpec spec{};
-            spec.version     = PLUGINXX_API_VERSION;
-            spec.struct_size = sizeof(PluginxxCapabilitySpec);
-            spec.id          = capSv;
-            spec.impls       = PLUGINXX_CAPABILITY_IMPLS_ONE;
-            spec.merge       = PLUGINXX_CAPABILITY_MERGE_NONE;
-            spec.phases      = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
-            spec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
-            spec.sync        = 0;
-            spec.run_start   = &jsCapStart;
-            spec.cancel      = nullptr;
-            spec.user_data   = engine;
-            auto  state      = new (std::nothrow) JsCapRegState{engine, *notify};
+            // 登记事务: `interpreter.js` (C++ 壳的旧路径) + 形态 `js` 的三条能力,
+            // 最后登记形态本身。全部是异步登记, 由 jsStartAdvance 逐步串起来;
+            // 失败时停掉本次刚起的引擎并交 FAILED (主程序回滚本次加载)。
+            auto* state = new (std::nothrow) JsStartState{engine, *notify, 0};
             if (state == nullptr) {
                 engine->requestStop(nullptr);
                 return setErr("interpreter.js start: out of memory");
             }
-            auto* handle     = iface.capabilities->register_capability(
-                host,
-                nullptr,
-                &spec,
-                &jsCapRegDone,
-                state,
-                error_out
-            );
-            if (handle == nullptr) {
-                // 未受理 (参数错/实例正在关闭): 本次事务已启动的引擎要收回
-                delete state;
-                engine->requestStop(nullptr);
-                return setErr("interpreter.js start: capability registration was not accepted");
-            }
-            // 已受理: 结论在 jsCapRegDone 里交回 (堆对象同时充当 provider 句柄)
+            jsStartAdvance(state);
             return;
         }
     } catch (...) {

@@ -4,7 +4,9 @@
 #include "ffi_ops.h"
 #include "utilxx_base/log.h"
 #include <asio/post.hpp>
+#include <chrono>
 #include <utility>
+#include <vector>
 
 namespace agentxx {
 namespace ffi {
@@ -16,8 +18,7 @@ CallRegistry::CallRegistry(asio::io_context& ioCtx, EmitFn emit) :
 
 CallRegistry::~CallRegistry() {
     // 定时器随 io_context 一起收尾: 这里只保证回调不会再碰已析构的对象
-    std::lock_guard<std::mutex> lock(mutex_);
-    stopping_ = true;
+    stopping_.store(true, std::memory_order_release);
     generation_.fetch_add(1, std::memory_order_release);
     if (timer_) {
         timer_->cancel();
@@ -32,96 +33,56 @@ int64_t CallRegistry::nowMs() {
 }
 
 uint64_t CallRegistry::begin(const FfiOpDef& def, int32_t timeoutMs) {
-    auto    entry = std::make_shared<Entry>();
-    entry->def    = &def;
-    uint64_t reqId = 0;
+    int64_t reqId = 0;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
         // 收尾已开始: 表已被 failAll 清过一次, 此后登记的条目既不会被它命中, 也不会
         // 排超时定时器 (onTimeout 看到 stopping_ 直接返回) —— 调用方会永远等不到回执。
         // 未受理由调用方按状态错误返回 (不发回执), 与参数校验失败同一条路。
-        if (stopping_) {
+        // 判定与登记在同一把锁里, 才能保证 stop()/failAll() 之间不留缝。
+        std::lock_guard<std::mutex> lock(stopMutex_);
+        if (stopping_.load(std::memory_order_acquire)) {
             return 0;
         }
-        reqId = ++nextReqId_;
-        // 1 是第一个可用序号; 0 留给"没有 reqId"
-        if (reqId == 0) {
-            reqId = ++nextReqId_;
-        }
-        if (timeoutMs > 0) {
-            entry->deadlineMs = nowMs() + static_cast<int64_t>(timeoutMs);
-            deadlines_.emplace(entry->deadlineMs, reqId);
-        }
-        entries_.emplace(reqId, entry);
+        reqId = registry_.begin(def.name, {}, timeoutMs, nowMs());
     }
     if (timeoutMs > 0) {
         reschedule();
     }
-    return reqId;
+    return static_cast<uint64_t>(reqId);
 }
 
 bool CallRegistry::isStopping() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return stopping_;
+    return stopping_.load(std::memory_order_acquire);
 }
 
 void CallRegistry::abort(uint64_t reqId) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = entries_.find(reqId);
-    if (it == entries_.end()) {
-        return;
-    }
-    if (it->second->deadlineMs != 0) {
-        auto range = deadlines_.equal_range(it->second->deadlineMs);
-        for (auto i = range.first; i != range.second; ++i) {
-            if (i->second == reqId) {
-                deadlines_.erase(i);
-                break;
-            }
-        }
-    }
-    entries_.erase(it);
+    // 同步失败: 出表但不发回执
+    registry_.settle(static_cast<int64_t>(reqId));
 }
 
-bool CallRegistry::settle(uint64_t reqId, CallOutcome outcome) {
-    std::shared_ptr<Entry> entry;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto                        it = entries_.find(reqId);
-        if (it == entries_.end()) {
-            return false;
-        }
-        entry = it->second;
-        if (entry->deadlineMs != 0) {
-            auto range = deadlines_.equal_range(entry->deadlineMs);
-            for (auto i = range.first; i != range.second; ++i) {
-                if (i->second == reqId) {
-                    deadlines_.erase(i);
-                    break;
-                }
-            }
-        }
-        entries_.erase(it);
-    }
-
-    // 记录已出表, 正常路径下只有一个线程能拿到这条 entry; CAS 是兜底
-    // (超时检查与应答同时到达时, 仍只有一个赢家负责回执)
-    bool expected = false;
-    if (!entry->settled.compare_exchange_strong(expected, true)) {
-        return false;
-    }
+void CallRegistry::emitOutcome(const pluginxx::ffi::RequestEntry& entry, CallOutcome outcome) {
     if (!outcome.ok) {
         if (outcome.errorName.empty()) {
             outcome.errorName = "rejected";
         }
         if (outcome.code == 0) {
-            outcome.code = entry->def ? entry->def->failureCode : AGENTXX_FFI_ERR_REJECTED;
+            // 记账只留 op 名, 默认失败码要回查 op 定义
+            const FfiOpDef* def = findOp(entry.op);
+            outcome.code        = def ? def->failureCode : AGENTXX_FFI_ERR_REJECTED;
         }
     }
-    const std::string_view op = entry->def ? entry->def->name : std::string_view{};
     if (emit_) {
-        emit_(reqId, op, outcome);
+        emit_(static_cast<uint64_t>(entry.id), entry.op, outcome);
     }
+}
+
+bool CallRegistry::settle(uint64_t reqId, CallOutcome outcome) {
+    pluginxx::ffi::RequestEntry entry;
+    if (!registry_.settle(static_cast<int64_t>(reqId), &entry)) {
+        return false;
+    }
+    // 记账里只有一个线程能取出这条请求, 因此这里发出去的就是唯一的那条回执
+    emitOutcome(entry, std::move(outcome));
     return true;
 }
 
@@ -135,39 +96,33 @@ bool CallRegistry::cancel(uint64_t reqId) {
 }
 
 size_t CallRegistry::failAll(int32_t code, std::string_view errorName, std::string message) {
-    std::vector<uint64_t> ids;
+    std::vector<pluginxx::ffi::RequestEntry> pending;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        ids.reserve(entries_.size());
-        for (const auto& [id, entry] : entries_) {
-            ids.push_back(id);
-        }
+        // 与 "判定收尾 + 登记" 互斥: 这里取出之后不会再有人登记进来
+        std::lock_guard<std::mutex> lock(stopMutex_);
+        pending = registry_.failAll();
     }
-    size_t done = 0;
-    for (uint64_t id : ids) {
+    for (const auto& entry : pending) {
         CallOutcome outcome;
         outcome.ok        = false;
         outcome.code      = code;
         outcome.errorName = std::string{errorName};
         outcome.message   = message;
-        if (settle(id, std::move(outcome))) {
-            ++done;
-        }
+        emitOutcome(entry, std::move(outcome));
     }
-    return done;
+    return pending.size();
 }
 
 size_t CallRegistry::pendingCount() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return entries_.size();
+    return registry_.size();
 }
 
 void CallRegistry::stop() {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stopping_ = true;
-        generation_.fetch_add(1, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(stopMutex_);
+        stopping_.store(true, std::memory_order_release);
     }
+    generation_.fetch_add(1, std::memory_order_release);
     if (timer_) {
         asio::post(ioCtx_, [timer = timer_] { timer->cancel(); });
     }
@@ -178,7 +133,7 @@ void CallRegistry::reschedule() {
     asio::post(ioCtx_, [self] { self->onTimeout(); });
 }
 
-void CallRegistry::armTimerLocked(int64_t nextDeadlineMs) {
+void CallRegistry::armTimer(int64_t nextDeadlineMs) {
     // 已在 io 线程: 直接用最新代次重臂
     const uint64_t gen = generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
     if (nextDeadlineMs <= 0) {
@@ -194,60 +149,36 @@ void CallRegistry::armTimerLocked(int64_t nextDeadlineMs) {
         if (ec) {
             return; // 被取消/覆盖: 由新的那次检查负责
         }
-        std::unique_lock<std::mutex> lock(self->mutex_);
-        if (gen != self->generation_.load(std::memory_order_acquire) || self->stopping_) {
+        if (gen != self->generation_.load(std::memory_order_acquire)
+            || self->stopping_.load(std::memory_order_acquire)) {
             return;
         }
-        lock.unlock();
         self->checkExpired();
     });
 }
 
 void CallRegistry::onTimeout() {
-    std::unique_lock<std::mutex> lock(mutex_);
-    if (stopping_) {
+    if (stopping_.load(std::memory_order_acquire)) {
         return;
     }
-    // 跳过已经结算的到期项, 找出当前最早的到期时刻
-    int64_t next = 0;
-    for (auto it = deadlines_.begin(); it != deadlines_.end();) {
-        auto e = entries_.find(it->second);
-        if (e == entries_.end() || e->second->settled.load(std::memory_order_acquire)) {
-            it = deadlines_.erase(it);
-            continue;
-        }
-        next = it->first;
-        break;
-    }
-    lock.unlock();
-    armTimerLocked(next);
+    // 记账里已经到期的会被 nextDeadlineMs 归到"现在", 这里只需要重臂
+    const int64_t next = registry_.nextDeadlineMs(nowMs());
+    armTimer(next);
 
-    // 到期项就地处理 (armTimerLocked 已保证下一次检查会到来)
+    // 到期项就地处理 (armTimer 已保证下一次检查会到来)
     checkExpired();
 }
 
 void CallRegistry::checkExpired() {
-    const int64_t         now = nowMs();
-    std::vector<uint64_t> expired;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (auto it = deadlines_.begin(); it != deadlines_.end() && it->first <= now;) {
-            auto e = entries_.find(it->second);
-            if (e != entries_.end() && !e->second->settled.load(std::memory_order_acquire)) {
-                expired.push_back(it->second);
-            }
-            it = deadlines_.erase(it);
-        }
-    }
-    for (uint64_t id : expired) {
+    const auto expired = registry_.popExpired(nowMs());
+    for (const auto& entry : expired) {
         CallOutcome outcome;
         outcome.ok        = false;
         outcome.code      = AGENTXX_FFI_ERR_TIMEOUT;
         outcome.errorName = "timeout";
         outcome.message   = "call timed out before the server replied";
-        if (settle(id, std::move(outcome))) {
-            XX_LOGD("[ffi] call #{} timed out", id);
-        }
+        emitOutcome(entry, std::move(outcome));
+        XX_LOGD("[ffi] call #{} timed out", entry.id);
     }
 }
 

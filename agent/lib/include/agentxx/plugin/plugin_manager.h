@@ -26,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace agentxx {
@@ -73,6 +74,16 @@ public:
     /// - 类型本体在 cxx_pluginxx (能力表是通用表), 登记与撤销由主程序核心统一维护
     ///   (见 [pluginxx::PluginHostCore])
     using CapabilityRegistration = pluginxx::PluginCapabilityRegistration;
+
+    /// 清单声明的插件形态 (`kind`)
+    /// - 空 / `native` = 动态库插件, 由框架加载 DSO 与调生命周期入口;
+    /// - 其它值 = 由运行器插件执行的形态: 没有 DSO, 加载 / 卸载走运行器的能力
+    ///   (见 [PluginManager::loadInterpretedAsync])
+    std::string kind;
+
+    /// 运行器是否已接手这个实例 (`kind != native` 用; 卸载 / 停用时据此决定要不要
+    /// 再调运行器的卸载能力)
+    bool kindLoaded = false;
 
     /// 插件侧挂载入口 (加载时解析; 缺失 = 该插件无 agent 侧能力)
     AgentxxPluginAgentMountFn   mountFn   = nullptr;
@@ -376,6 +387,38 @@ public:
         std::string                         path,
         const agentxx::agent::PluginConfig* cfg                 = nullptr,
         bool                                allowClientOnlySkip = false
+    );
+
+    /// 加载一个由运行器插件执行的形态 (`kind` 不是 `native`)
+    ///
+    /// - 没有动态库: 解析清单后建一个没有生命周期入口的实例, 再让运行器接手;
+    /// - 清单里的 `kind` 必须能在形态表里找到, 且该形态由已加载的插件提供
+    ///   (没装运行器时报"缺运行器", 不会崩);
+    /// - 运行器拿到的是**目标实例的 host 视图**作为调用方, 脚本里的工具 / 订阅因此
+    ///   挂在目标插件上, 卸载它时整批撤销;
+    /// - 加载失败时回滚 (实例出表 + 释放名称), 与动态库插件同一条路径。
+    asio::awaitable<std::shared_ptr<PluginInstance>> loadInterpretedAsync(
+        std::string                         path,
+        std::string                         kind,
+        const agentxx::agent::PluginConfig* cfg = nullptr
+    );
+
+    /// 让运行器加载 / 卸载一个实例的脚本 (载荷与回答见 `pluginxx/api/kinds.h`)
+    asio::awaitable<bool> startInterpretedInstance(
+        const std::shared_ptr<PluginInstance>& inst,
+        std::string&                           reason
+    );
+    asio::awaitable<bool>
+        stopInterpretedInstance(const std::shared_ptr<PluginInstance>& inst);
+
+    /// 调一次运行器插件的能力, 等它的回答
+    /// - `caller` 作为调用方实例 (运行器据此把脚本注册挂到目标插件上);
+    /// - 返回 `{ok, 文本}`; 未受理 / 超时 / 能力失败都算 ok=false, 文本给原因。
+    asio::awaitable<std::pair<bool, std::string>> invokeKindCapability(
+        PluginInstance* caller,
+        std::string     capability,
+        std::string     argsJson,
+        uint32_t        timeoutMs
     );
 
     asio::awaitable<void>

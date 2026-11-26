@@ -10,6 +10,7 @@
 /// - UI 线程从不直接调用插件代码: 命令/点击经 postCommandInvocation / 派发投递
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "pluginxx/host/kind_registry.h"
 #include "pluginxx/host/table_op.h"
 #include "pluginxx/runtime/driver.h"
 #include "pluginxx/runtime/op_driver.h"
@@ -337,12 +338,46 @@ ClientPluginInstance::~ClientPluginInstance() {
 // ClientPluginManager
 // =====================================================================
 
+namespace {
+
+/// 本主程序的 client 侧预置形态 (与 agent 侧同一套规则)
+///
+/// - `native`: 动态库插件, 由框架加载 DSO 并调生命周期入口, 接口代次对是 client 侧的 C 接口那一对;
+/// - `js`: 脚本形态的**预置位置**, 框架自己不实现 —— 引擎插件经 `agentxx.kind` 以
+///   `overrideBuiltin: true` 接管后才能加载 (`requiresPluginAbi=false`, 代次对由登记它的运行器给)。
+///   引擎没装 / 被禁用时, 加载 `kind: js` 的插件得到“缺运行器”而不是崩。
+std::vector<pluginxx::PluginxxKindSpec> buildClientKindSpecs() {
+    std::vector<pluginxx::PluginxxKindSpec> specs;
+    pluginxx::PluginxxKindSpec              nativeSpec;
+    nativeSpec.kind                = "native";
+    nativeSpec.builtin             = true;
+    nativeSpec.requiresPluginAbi   = true;
+    nativeSpec.interfaceVersion    = AGENTXX_CLIENT_PLUGIN_API_VERSION;
+    nativeSpec.minInterfaceVersion = AGENTXX_CLIENT_PLUGIN_API_VERSION;
+    nativeSpec.describe            = "动态库插件 (框架加载)";
+    specs.push_back(std::move(nativeSpec));
+
+    pluginxx::PluginxxKindSpec scriptSpec;
+    scriptSpec.kind              = "js";
+    scriptSpec.builtin           = true;
+    scriptSpec.requiresPluginAbi = false;
+    scriptSpec.describe          = "脚本插件 (由运行器插件执行)";
+    specs.push_back(std::move(scriptSpec));
+    return specs;
+}
+
+} // namespace
+
 ClientPluginManager::ClientPluginManager(asio::any_io_executor ex, size_t workerThreads) :
     pluginxx::PluginHostLifecycle<ClientPluginInstance>(std::move(ex)),
     uiRegistry_(std::make_shared<const ClientUiRegistry>()) {
     // 通用表 (log/json/config/plugins/broadcasts/...) 需要主程序数据时经这里取
     // (必须在任何 vtable 入口被调用之前注入)
     setDomainServices(this);
+    // 插件形态表: 预置 `native` 与 `js` (后者只是位置, 由引擎插件接手)
+    setKindRegistry(
+        pluginxx::PluginxxKindRegistry(buildClientKindSpecs(), AGENTXX_CLIENT_PLUGIN_API_VERSION)
+    );
     // 客户端频道: 插件在 start 里就会订阅, 因此管理器构造时就声明好 (幂等)
     declareClientChannels();
     // 工作池与插件执行线程: 构造即起 (没有 client 插件也建有), 与 agent 侧同一模型
@@ -393,6 +428,44 @@ void ClientPluginManager::onInstanceLoaded(ClientPluginInstance& inst) {
 /// 实例从插件表摘除: 清除实例代次登记
 void ClientPluginManager::onInstanceUnloaded(ClientPluginInstance& inst) {
     setRegistryGeneration(inst.name, 0, false);
+}
+
+/// 停用收尾: 解释执行的形态先把脚本停掉
+/// - 注册已由骨架摘除; 脚本自己的计时器 / 回调要随卸载一起回收,
+///   否则插件已停用而脚本还在后台跑;
+/// - 等待期间用户又启用它: 本次停用作废 (与 agent 侧同一处理), 交给启用事务
+///   重新加载 (重复加载在运行器侧是幂等的)。
+asio::awaitable<void> ClientPluginManager::onInstanceDisabledAsync(
+    const std::shared_ptr<ClientPluginInstance>& inst
+) {
+    if (!inst || inst->enabled) {
+        co_return;
+    }
+    co_await stopInterpretedInstance(inst);
+    co_return;
+}
+
+/// 卸载开始后 (插件 stop/destroy 之前): 先把脚本停掉 —— 此刻实例还能被运行器代表
+asio::awaitable<void> ClientPluginManager::onInstanceUnloadingAsync(
+    const std::shared_ptr<ClientPluginInstance>& inst
+) {
+    co_await stopInterpretedInstance(inst);
+    co_return;
+}
+
+/// 启用收尾: 解释执行的形态重新交给运行器加载 (脚本 start 里重新声明注册)
+asio::awaitable<void> ClientPluginManager::onInstanceEnabledAsync(
+    const std::shared_ptr<ClientPluginInstance>& inst
+) {
+    if (!inst || !inst->enabled || inst->kind.empty() || inst->kind == "native"
+        || inst->kindLoaded) {
+        co_return;
+    }
+    std::string reason;
+    if (!co_await startInterpretedInstance(inst, reason)) {
+        XX_LOGE("[client_plugin] `{}` could not be re-enabled: {}", inst->name, reason);
+    }
+    co_return;
 }
 
 // ==================== 加载 ====================
@@ -474,6 +547,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     //   dlopen —— 本函数一次 dlopen 完成 探测(entry 符号) + 加载
     std::error_code          ec;
     std::string              libPath = path;
+    std::string              manifestKind;
     std::vector<std::string> depends, optionalDepends;
     PluginManifestInterfaces interfaces;
     if (std::filesystem::is_directory(path, ec)) {
@@ -485,10 +559,16 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
                 depends,
                 optionalDepends,
                 nullptr,
-                &interfaces
+                &interfaces,
+                &manifestKind
             )) {
             XX_LOGE("[client_plugin] `{}` missing/invalid plugin.yaml", path);
             co_return nullptr;
+        }
+        // 脚本插件 (kind 不是 native) 没有动态库: 交给运行器插件解释执行
+        // (没装运行器时报缺运行器, 不当错误)
+        if (!manifestKind.empty() && manifestKind != "native") {
+            co_return co_await loadInterpretedAsync(path, manifestKind, cfg);
         }
         libPath = resolvePluginEntryPath(std::filesystem::path(path), manifestEntry);
     }

@@ -2,18 +2,15 @@
 
 #include "asio/io_context.hpp"
 #include "asio/steady_timer.hpp"
+#include "pluginxx/host/ffi_bridge.h"
 #include "utilxx_base/json.h"
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <functional>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <vector>
 
 namespace asio = ::boost::asio;
 
@@ -37,15 +34,26 @@ struct CallOutcome {
 
 /// 待完成调用表 (提交 + 回执模型的核心记账)
 ///
+/// 记账本身在 [pluginxx::ffi::RequestRegistry] 里 (与插件框架共用同一份实现, 见
+/// `pluginxx/host/ffi_bridge.h`); 本类只补主程序自己的三件事:
+///
+/// - **定时器**: 共享实现不建定时器, 只给 `nextDeadlineMs` / `popExpired`; 这里用注入的
+///   io_context 驱动一个共享定时器;
+/// - **失败码与回执**: 记账只记 op 名, 失败码要按 op 定义的 `failureCode` 补齐, 再由
+///   [EmitFn] 投递回执 (谁从记账里拿到这条请求, 谁负责发唯一的那条回执);
+/// - **收尾**: `stop` 之后不再受理, `begin` 返回 0。
+///
 /// 线程模型:
-/// - `begin` / `abort` / `settle` / `cancel` / `failAll` 可从任意线程调用 (mutex 保护)
-/// - 超时靠**一个共享定时器** + 按到期时间排序的索引, 定时器跑在注入的 io_context 上
+/// - `begin` / `abort` / `settle` / `cancel` / `failAll` 可从任意线程调用
+/// - 超时靠**一个共享定时器**, 定时器跑在注入的 io_context 上
 /// - 回执由注入的 [EmitFn] 投递, 调用方自己决定在哪个线程真正回调 (本类不假设线程)
 ///
 /// 保证:
 /// - 每个受理成功的 reqId **恰好一条回执**: 服务端应答、取消、超时、收尾都走
 ///   [settle]; 谁先到谁赢, 后到的返回 false 并丢弃
 /// - "同步参数校验失败" 不进表 (见 [abort]), 因此也不会有回执
+/// - "停止受理" 与 "整表结算" 在同一把锁里做: 两者之间进来的 `begin` 不会漏网
+///   (它要么被拒, 要么已经被 `failAll` 结算)
 class CallRegistry : public std::enable_shared_from_this<CallRegistry> {
 public:
 
@@ -88,25 +96,23 @@ public:
     /// 当前未完成的调用条数
     size_t pendingCount() const;
 
-    /// 停止: 不再排定新的超时检查 (收尾后调用; 已排定的检查会自行退出)
+    /// 停止: 不再受理新的调用与超时检查 (收尾后调用; 已排定的检查会自行退出)
     void stop();
 
 private:
 
-    struct Entry {
-        const FfiOpDef*   def        = nullptr;
-        int64_t           deadlineMs = 0; ///< 到期时刻 (steady 毫秒); 0 = 不限
-        std::atomic<bool> settled{false};
-    };
-
     /// 当前毫秒 (steady_clock, 只用于比较)
     static int64_t nowMs();
+
+    /// 把一条已从记账里取出的请求按结局发出去
+    /// - 失败且没给错误名时补 `rejected`; 没给失败码时按 op 定义补
+    void emitOutcome(const pluginxx::ffi::RequestEntry& entry, CallOutcome outcome);
 
     /// 排定下一次超时检查 (任意线程; 内部 post 到 io 线程完成定时器操作)
     void reschedule();
 
-    /// io 线程: 按当前最早的到期时刻重臂定时器
-    void armTimerLocked(int64_t nextDeadlineMs);
+    /// io 线程: 按当前最早的到期时刻重臂定时器 (只在 io 线程调用, 不需要加锁)
+    void armTimer(int64_t nextDeadlineMs);
 
     /// io 线程: 把已到期的条目按超时结算
     void checkExpired();
@@ -117,14 +123,14 @@ private:
     asio::io_context& ioCtx_;
     EmitFn            emit_;
 
-    mutable std::mutex mutex_;
-    /// reqId → 待完成记录 (reqId 稠密自增, 用 unordered_map)
-    std::unordered_map<uint64_t, std::shared_ptr<Entry>> entries_;
-    /// 到期时刻 → reqId (有序索引; 需要按 reqId 摘除, 故不用堆)
-    std::multimap<int64_t, uint64_t> deadlines_;
-    uint64_t                         nextReqId_ = 0;
-    /// 收尾标记: 置位后不再排定新的超时检查
-    bool stopping_ = false;
+    /// 待完成调用的记账 (reqId / 到期时刻 / 恰好一条结果)
+    pluginxx::ffi::RequestRegistry registry_;
+
+    /// 保护两组操作互斥: "判定收尾 + 登记" 与 "置收尾标记 + 整表结算"
+    std::mutex stopMutex_;
+
+    /// 收尾标记: 置位后不再受理新调用, 也不再排定新的超时检查
+    std::atomic<bool> stopping_{false};
 
     /// 定时器代次: 每次重臂 +1, 旧的回调发现自己过期就直接退出
     /// - 读写可能跨线程 ([stop] / 析构 与 io 线程的 [armTimerLocked]), 因此用原子量

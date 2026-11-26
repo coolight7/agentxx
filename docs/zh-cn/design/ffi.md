@@ -608,7 +608,7 @@ await client.dispose();                                // destroy + 释放回调
 
 ---
 
-## 8. 与 `musicxx_extern_plugin` 共用的口径
+## 8. 与 `musicxx_extern_plugin` 共用的规则
 
 四条约定由 musicxx 仓库的 `docs/history/plugin-framework-compare/plan.md` 定稿，两边文档互相引用；
 通用实现下沉在子模块 `cxx_pluginxx`（`host/ffi_bridge.h`、`api/ui.h`、`host/ui_content.h`、
@@ -617,7 +617,7 @@ await client.dispose();                                // destroy + 释放回调
 ### 8.1 事件 `type` 与 `seq`
 
 `AgentxxFFIEventType` 枚举保留（现有绑定不破），但**新事件的判定以 payload 里的 `type` 字符串为准**：
-宿主按名字路由，不认识的忽略；`seq` 单调递增，用来发现丢事件。老宿主不认识新事件也不会崩。
+主程序按名字路由，不认识的忽略；`seq` 单调递增，用来发现丢事件。老主程序不认识新事件也不会崩。
 
 ### 8.2 超时与取消
 

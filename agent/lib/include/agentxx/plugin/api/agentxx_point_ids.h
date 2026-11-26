@@ -1,5 +1,7 @@
 /// agentxx 功能埋点 id 清单 (唯一真源)
 ///
+/// 本文件由 `agent/tool/gen_ids.dart` 从 `agent/schema/ids.def.json` 生成, 请勿手改。
+///
 /// 一个"功能埋点"= 一个 id, 同时是
 /// - 一条**能力** (`<应用名>.capabilities`, 声明为 `impls: many` + `merge: first`, 只开 `impl`);
 /// - 一个**同名广播频道** (`<应用名>.broadcasts`)。
@@ -26,24 +28,32 @@ namespace points {
 
 /// 通知型: 一轮会话开始
 inline constexpr std::string_view TurnStart = "agentxx.agent.point.turn.start";
+
 /// 通知型: 一轮会话结束
 inline constexpr std::string_view TurnEnd = "agentxx.agent.point.turn.end";
+
 /// 通知型: 一次模型调用开始
 inline constexpr std::string_view ModelStart = "agentxx.agent.point.model.start";
+
 /// 通知型: 一次模型尝试 (重试会多次触发)
 inline constexpr std::string_view ModelRun = "agentxx.agent.point.model.run";
+
 /// 通知型: 一次模型调用结束
 inline constexpr std::string_view ModelEnd = "agentxx.agent.point.model.end";
+
 /// 通知型: 一次工具调用开始
 inline constexpr std::string_view ToolStart = "agentxx.agent.point.tool.start";
+
 /// 通知型: 一次工具调用结束
 inline constexpr std::string_view ToolEnd = "agentxx.agent.point.tool.end";
 
 /// 取值型: token 估算 (入参 `{agentId, model, kind, text?}`, 实现行回答 `{tokens}`)
 inline constexpr std::string_view ContextCountTokens = "agentxx.agent.point.context.countTokens";
+
 /// 取值型: 上下文压缩 (入参 `{agentId, sessionId, model, targetTokens}`,
 /// 实现行回答 `{summary, truncated?}`)
 inline constexpr std::string_view ContextSummarize = "agentxx.agent.point.context.summarize";
+
 /// 取值型: 工具输出摘要 (入参 `{agentId, tool, bytes, text}`, 实现行回答 `{summary}`)
 inline constexpr std::string_view ToolSummarizeOutput = "agentxx.agent.point.tool.summarizeOutput";
 

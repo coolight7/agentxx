@@ -333,7 +333,6 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             spec.merge       = PLUGINXX_CAPABILITY_MERGE_FIRST;
             spec.phases      = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
             spec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
-            spec.sync        = 1;
             spec.run_start   = &probePointImpl;
             spec.user_data   = nullptr;
 

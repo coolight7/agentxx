@@ -485,6 +485,40 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 保持引擎加载，供后续 JS 用例复用
     }
 
+    // ---- 4.7 example_js 纯脚本插件 (清单 kind: js, 没有动态库) ----
+    //
+    // 验收: 只有清单与 plugin.js 的目录能由运行器加载 / 卸载;
+    // 运行器不在时报"缺运行器"而不是崩。
+    {
+        auto jsDir  = findPluginDir("example_js");
+        auto jsInst = co_await ctx->pluginManager->loadPluginAsync(jsDir);
+        XX_TEST_EXPECT_TRUE(jsInst != nullptr);
+        if (jsInst) {
+            XX_TEST_EXPECT_EQ(jsInst->kind, std::string{"js"});
+            // 脚本顶层登记的工具已生效
+            for (int i = 0; i < 40 && !ctx->toolRegistry->contains("js_hello"); ++i) {
+                co_await sleepMs(50);
+            }
+            XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
+            // 卸载: 脚本的注册跟着实例一起撤销
+            co_await ctx->pluginManager->unloadAsync("example_js");
+            XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
+        }
+        // 运行器卸掉后加载同一个目录: 必须失败 (缺运行器), 不能崩
+        co_await ctx->pluginManager->unloadAsync("agentxx_javascript_engine");
+        auto noRunner = co_await ctx->pluginManager->loadPluginAsync(jsDir);
+        XX_TEST_EXPECT_TRUE(noRunner == nullptr);
+        // 装回运行器: 立刻又能加载 (与"撤销后回到原实现"同一路径)
+        auto engineAgain
+            = co_await ctx->pluginManager->loadPluginAsync(findPluginDir("agentxx_javascript_engine"));
+        XX_TEST_EXPECT_TRUE(engineAgain != nullptr);
+        auto jsAgain = co_await ctx->pluginManager->loadPluginAsync(jsDir);
+        XX_TEST_EXPECT_TRUE(jsAgain != nullptr);
+        if (jsAgain) {
+            co_await ctx->pluginManager->unloadAsync("example_js");
+        }
+    }
+
     // ---- 5. 通知型功能埋点: 主程序级派发器入链 (建挂载就挂上并常驻) ----
     {
         const auto& handles = ctx->middlewareHandleContext->handles;
@@ -1413,7 +1447,9 @@ throw new Error("top-level rollback probe");
             co_await sleepMs(10);
         }
         XX_TEST_EXPECT_TRUE(engine25b->lifecycleStopped);
-        XX_TEST_EXPECT_TRUE(js25b->lifecycleStopped);
+        // 脚本插件没有生命周期入口 (它没有动态库): 停用由运行器的卸载接手,
+        // 可观察结果是脚本注册消失、kindLoaded 复位
+        XX_TEST_EXPECT_FALSE(js25b->kindLoaded);
         XX_TEST_EXPECT_TRUE(
             engine25b->lifetime->state() == pluginxx::PluginInstanceState::Disabled
         );
@@ -1484,9 +1520,10 @@ throw new Error("top-level rollback probe");
         }
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
 
-        // 同步关闭路径: stop 未执行前不得 destroy/dlclose
+        // 同步关闭路径: 有生命周期入口的插件必须保留实例/上下文 (CloseFailed),
+        // 由 shutdownAsync 收尾; 脚本插件没有上下文与 DSO, 同步路径能直接收完
         ctx->pluginManager->shutdownAll();
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") != nullptr);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") != nullptr);
         XX_TEST_EXPECT_TRUE(
             engine26->lifetime->state() == pluginxx::PluginInstanceState::CloseFailed

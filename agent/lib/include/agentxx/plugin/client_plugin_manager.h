@@ -27,6 +27,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace agentxx {
@@ -477,6 +478,15 @@ public:
     /// 直连库路径为空) —— 主程序限制依据, 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
 
+    /// 清单声明的插件形态 (`kind`; 见 pluginxx/host/kind_registry.h)
+    /// - 空 = 按 `native` 处理 (直连动态库路径 / 老清单没写 kind)
+    /// - 不是 `native` = 由运行器插件解释执行, 本身没有动态库
+    std::string kind;
+
+    /// 运行器是否已接手这个实例 (只有 `kind != native` 会置真)
+    /// 禁用 / 卸载时据此决定要不要先让运行器把脚本卸掉
+    bool kindLoaded = false;
+
     /// 注册残留 (卸载时统一清理; 仅 io 线程)
     /// - disable 时【完整注册信息】(statusItemRegs/panelRegs/infoSectionRegs/
     ///   commandRegs) 保留, enable 可恢复; 仅 unload/进程销毁时随实例释放
@@ -608,6 +618,38 @@ public:
         std::string                         path,
         const agentxx::agent::PluginConfig* cfg               = nullptr,
         bool                                allowMissingEntry = false
+    );
+
+    /// 加载一个由运行器插件执行的形态 (`kind` 不是 `native`)
+    ///
+    /// - 没有动态库: 解析清单后建一个没有生命周期入口的实例, 再让运行器接手;
+    /// - 清单里的 `kind` 必须能在形态表里找到, 且该形态由已加载的插件提供
+    ///   (没装运行器时报"缺运行器", 不会崩);
+    /// - 运行器拿到的是**目标实例的主程序视图**作为调用方, 脚本里的注册因此挂在
+    ///   目标插件上, 停用 / 卸载它时整批撤销;
+    /// - 加载失败时回滚 (实例出表 + 释放名称), 与动态库插件同一条路径。
+    asio::awaitable<std::shared_ptr<ClientPluginInstance>> loadInterpretedAsync(
+        std::string                         path,
+        std::string                         kind,
+        const agentxx::agent::PluginConfig* cfg = nullptr
+    );
+
+    /// 让运行器加载 / 卸载一个实例的脚本 (载荷与回答见 `pluginxx/api/kinds.h`)
+    asio::awaitable<bool> startInterpretedInstance(
+        const std::shared_ptr<ClientPluginInstance>& inst,
+        std::string&                                 reason
+    );
+    asio::awaitable<bool>
+        stopInterpretedInstance(const std::shared_ptr<ClientPluginInstance>& inst);
+
+    /// 调一次运行器插件的能力, 等它的回答
+    /// - `caller` 作为调用方实例 (运行器据此把脚本注册挂到目标插件上);
+    /// - 返回 `{ok, 文本}`; 未受理 / 超时 / 能力失败都算 ok=false, 文本给原因。
+    asio::awaitable<std::pair<bool, std::string>> invokeKindCapability(
+        ClientPluginInstance* caller,
+        std::string           capability,
+        std::string           argsJson,
+        uint32_t              timeoutMs
     );
 
     /// 卸载插件 (按名称; 等全部执行中回调完成后才 dlclose)
@@ -1105,6 +1147,20 @@ protected:
 
     /// 实例从插件表摘除: 清除实例代次登记
     void onInstanceUnloaded(ClientPluginInstance& inst) override;
+
+    /// 停用收尾: 解释执行的形态要先把脚本停掉 (脚本自己的计时器 / 回调一并回收),
+    /// 再启用时由 [onInstanceEnabledAsync] 重新交给运行器加载
+    asio::awaitable<void>
+        onInstanceDisabledAsync(const std::shared_ptr<ClientPluginInstance>& inst) override;
+
+    /// 卸载开始后 (插件 stop/destroy 之前): 同样先把脚本停掉 —— 此刻实例还是
+    /// 正常状态, 运行器仍能代表它做卸载
+    asio::awaitable<void>
+        onInstanceUnloadingAsync(const std::shared_ptr<ClientPluginInstance>& inst) override;
+
+    /// 启用收尾: 把脚本重新交给运行器加载 (脚本 start 里重新声明注册)
+    asio::awaitable<void>
+        onInstanceEnabledAsync(const std::shared_ptr<ClientPluginInstance>& inst) override;
 
     /// 卸载级联只统计"启用中"的依赖者 (client 侧既有行为: 已禁用的依赖者保持加载)
     bool cascadeUnloadEnabledOnly() const noexcept override {

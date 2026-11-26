@@ -1,0 +1,108 @@
+{
+  "_comment": "agentxx 的 id 清单（生成 `agentxx_{capability,point,broadcast}_ids.h` 的唯一来源）。改这里之后跑 `pwsh -File agent/script/gen_ids.ps1` 并提交生成物；`-Check` 只校验。",
+  "capabilities": [
+    {
+      "name": "SystemUsage",
+      "id": "agentxx.system_usage",
+      "doc": [
+        "当前系统负担的快照 (CPU / 内存 / GPU 占用与显存), 由 `agentxx_system_monitor` 提供",
+        "- 一个 id 允许多个实现行, 第一个给出结果的生效 (没有谁覆盖谁);",
+        "- 载荷字段见 docs/zh-cn/design/plugins.md 的\"内置能力\"段。"
+      ]
+    }
+  ],
+  "points": {
+    "notify": [
+      { "name": "TurnStart", "id": "agentxx.agent.point.turn.start", "doc": ["通知型: 一轮会话开始"] },
+      { "name": "TurnEnd", "id": "agentxx.agent.point.turn.end", "doc": ["通知型: 一轮会话结束"] },
+      { "name": "ModelStart", "id": "agentxx.agent.point.model.start", "doc": ["通知型: 一次模型调用开始"] },
+      { "name": "ModelRun", "id": "agentxx.agent.point.model.run", "doc": ["通知型: 一次模型尝试 (重试会多次触发)"] },
+      { "name": "ModelEnd", "id": "agentxx.agent.point.model.end", "doc": ["通知型: 一次模型调用结束"] },
+      { "name": "ToolStart", "id": "agentxx.agent.point.tool.start", "doc": ["通知型: 一次工具调用开始"] },
+      { "name": "ToolEnd", "id": "agentxx.agent.point.tool.end", "doc": ["通知型: 一次工具调用结束"] }
+    ],
+    "value": [
+      {
+        "name": "ContextCountTokens",
+        "id": "agentxx.agent.point.context.countTokens",
+        "doc": ["取值型: token 估算 (入参 `{agentId, model, kind, text?}`, 实现行回答 `{tokens}`)"]
+      },
+      {
+        "name": "ContextSummarize",
+        "id": "agentxx.agent.point.context.summarize",
+        "doc": [
+          "取值型: 上下文压缩 (入参 `{agentId, sessionId, model, targetTokens}`,",
+          "实现行回答 `{summary, truncated?}`)"
+        ]
+      },
+      {
+        "name": "ToolSummarizeOutput",
+        "id": "agentxx.agent.point.tool.summarizeOutput",
+        "doc": ["取值型: 工具输出摘要 (入参 `{agentId, tool, bytes, text}`, 实现行回答 `{summary}`)"]
+      }
+    ]
+  },
+  "broadcasts": [
+    {
+      "name": "AgentRoundStart",
+      "id": "agentxx.agent.round.start",
+      "doc": ["一轮会话开始 (主程序发布, 无缓存): SDK 的基础类订阅它清理会话级的取消标记"]
+    },
+    {
+      "name": "AgentAsyncDone",
+      "id": "agentxx.agent.async.done",
+      "doc": ["后台任务结束 (主程序发布, `cache: latest`): 载荷里用 `asyncId` 区分是哪一条"]
+    },
+    {
+      "name": "AgentClientAttached",
+      "id": "agentxx.agent.host.client_attached",
+      "doc": ["客户端接入 (服务端端点发布, 无缓存): chatbot / planning 一类插件用它判断\"有人在看\""]
+    },
+    {
+      "name": "ClientReady",
+      "id": "agentxx.client.ready",
+      "doc": ["客户端就绪 (client 侧发布, `cache: latest`)"]
+    },
+    {
+      "name": "ClientConnectionState",
+      "id": "agentxx.client.connection_state",
+      "doc": ["客户端连接状态变化 (`cache: latest`)"]
+    },
+    {
+      "name": "ClientSessionSwitch",
+      "id": "agentxx.client.session_switch",
+      "doc": ["客户端切换会话 (`cache: latest`)"]
+    },
+    {
+      "name": "ClientUiLayout",
+      "id": "agentxx.client.ui_layout",
+      "doc": ["客户端布局 / 区域尺寸 (`cache: latest`)"]
+    },
+    {
+      "name": "ClientUserInput",
+      "id": "agentxx.client.user_input",
+      "doc": ["用户输入 (client 侧发布, 无缓存)"]
+    },
+    {
+      "name": "ClientDelta",
+      "id": "agentxx.client.delta",
+      "doc": ["流式增量 (client 侧发布, 无缓存)"]
+    },
+    {
+      "name": "ClientTurnEnd",
+      "id": "agentxx.client.turn_end",
+      "doc": ["一轮结束 (client 侧发布, 无缓存)"]
+    }
+  ],
+  "broadcastPrefixes": [
+    {
+      "name": "ClientPluginPrefix",
+      "id": "agentxx.client.plugin.",
+      "doc": [
+        "跨端插件数据的频道前缀: 完整名字是 `agentxx.client.plugin.<插件名>.<事件>`",
+        "",
+        "两端都可发布 (`publish: anyone`), 首次发布前由主程序按需声明 (幂等)。"
+      ]
+    }
+  ]
+}

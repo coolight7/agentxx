@@ -341,7 +341,6 @@ void runMountStep(MountJob* job) {
         capSpec.merge       = PLUGINXX_CAPABILITY_MERGE_NONE;
         capSpec.phases      = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
         capSpec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
-        capSpec.sync        = 0;
         capSpec.run_start   = &probeCapabilityStart;
         capSpec.user_data   = nullptr;
         op = capabilities->register_capability(
