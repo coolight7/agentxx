@@ -454,6 +454,8 @@ struct SysMonClientCtx : public ClientPluginBase {
     AgentxxInfoSection* section = nullptr;
     std::atomic<bool>   usage_enabled{true};
     std::string         last_usage_json;
+    /// 状态栏项 (声明式内容的 id 与它一致) 是否已登记
+    bool status_registered = false;
 };
 
 struct UsageStat {
@@ -528,6 +530,44 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
     return out.dump();
 }
 
+/// 状态栏项的内容 id (声明项与内容同名; 客户端按这个 id 找画什么)
+constexpr const char* kStatusItemId = "agentxx_system_monitor.status";
+
+/// 一行概览 (状态栏只画一行)
+static std::string buildStatusLine(const UsageStat& st) {
+    std::string line = fmt::format("CPU {:.0f}% · RAM {:.0f}%", st.cpu, st.memPct);
+    if (st.gpuCount > 0) {
+        line += fmt::format(" · GPU {:.0f}%", st.gpuPeakPct);
+    }
+    return line;
+}
+
+/// 状态栏项的内容 (声明式): 用最近一次数据生成一行文本
+static void PLUGINXX_CALL generateStatusContent(
+    const PluginxxHost*           /*host*/,
+    const PluginxxStringView*     /*ctx_json*/,
+    void*                         ud,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               /*error_out*/
+) {
+    auto* ctx = static_cast<SysMonClientCtx*>(ud);
+    if (ctx == nullptr || notify == nullptr || notify->done == nullptr) {
+        return;
+    }
+    utilxx_base::Json block;
+    block["kind"] = "Text";
+    block["text"] = ctx->last_usage_json.empty()
+                        ? std::string{"—"}
+                        : buildStatusLine(parseUsage(ctx->last_usage_json));
+    utilxx_base::Json doc;
+    doc["items"]            = utilxx_base::Json::array({block});
+    utilxx_base::Json body;
+    body["json"]            = doc;
+    const std::string        payload = body.dump();
+    const PluginxxStringView view{payload.data(), payload.size()};
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
+}
+
 static void refreshUsageDisplay(SysMonClientCtx& ctx) {
     if (!ctx.host) {
         return;
@@ -546,6 +586,13 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
         json         = off.dump();
     }
     agentxx::plugin::clientUpdateInfoSection(ctx.host, ctx.iface.ui, ctx.section, json);
+    // 状态栏项走声明式内容: 让它按当前数据重新生成一次 (不支持新成员的主程序忽略)
+    if (ctx.status_registered && ctx.iface.ui->update_ui_slot) {
+        const auto        slotSv = agentxx::plugin::PluginStringView::fromCstr("status");
+        const std::string ids    = fmt::format(R"(["{}"])", kStatusItemId);
+        const auto        idsSv  = agentxx::plugin::PluginStringView::from(ids.data(), ids.size());
+        ctx.iface.ui->update_ui_slot(ctx.host, &slotSv, &idsSv, nullptr, nullptr, nullptr);
+    }
 }
 
 /// client 侧注册事务 (协程形态): 无 UI 能力时静默降级
@@ -574,6 +621,32 @@ static asio::awaitable<void> sysMonClientSetupAsync(SysMonClientCtx& ctx) {
         ctx.section = agentxx::plugin::clientHandleOf<AgentxxInfoSection>(res);
         if (!ctx.section) {
             ctx.log.log(3, fmt::format("register info section failed: {}", res.text()));
+        }
+    }
+
+    // 状态栏项: 声明项 + 内容 (与 Info 段落同一份数据, 内容由主程序按需生成)
+    if (ui->register_ui_item && ui->register_ui_content) {
+        const auto                 idSv   = agentxx::plugin::PluginStringView::fromCstr(kStatusItemId);
+        const auto                 slotSv = agentxx::plugin::PluginStringView::fromCstr("status");
+        constexpr std::string_view kData  = R"_({"align":1,"order":0})_";
+        const auto dataSv = agentxx::plugin::PluginStringView::from(kData.data(), kData.size());
+        PluginxxUiEntrySpec entry{};
+        entry.version     = 1;
+        entry.struct_size = sizeof(PluginxxUiEntrySpec);
+        entry.item_id     = idSv;
+        entry.type        = slotSv;
+        entry.data_json   = dataSv;
+        if (ui->register_ui_item(host, &entry, nullptr, nullptr, nullptr) != nullptr) {
+            PluginxxUiContentSpec content{};
+            content.version     = 1;
+            content.struct_size = sizeof(PluginxxUiContentSpec);
+            content.id          = idSv;
+            content.slot        = slotSv;
+            content.generate    = &generateStatusContent;
+            content.user_data   = &ctx;
+            if (ui->register_ui_content(host, &content, nullptr, nullptr, nullptr) != nullptr) {
+                ctx.status_registered = true;
+            }
         }
     }
 
