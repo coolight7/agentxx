@@ -83,8 +83,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     /// 参数 JSON → 对象 (空串/非法 JSON/非对象返回 nullopt: 回调不给内容,
     /// 界面走默认渲染)
     static auto argObject
-        = [](const AgentxxToolRenderInput* in) -> std::optional<utilxx_base::Json> {
-        std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        = [](const agentxx::plugin::ClientToolRenderInput* in) -> std::optional<utilxx_base::Json> {
+        std::string_view args = in->argsJson;
         if (args.empty()) {
             return std::nullopt;
         }
@@ -128,7 +128,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // List / Write / Remove (折叠内容 = 路径)
     static auto pathCollapsed
         = [](void*,
-                                       const AgentxxToolRenderInput* in,
+                                       const agentxx::plugin::ClientToolRenderInput* in,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*) -> int32_t {
         auto j = argObject(in);
@@ -157,7 +157,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // Read (折叠内容 = "[offset, limit] path")
     static auto readCollapsed
         = [](void*,
-                                       const AgentxxToolRenderInput* in,
+                                       const agentxx::plugin::ClientToolRenderInput* in,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*) -> int32_t {
         auto j = argObject(in);
@@ -202,7 +202,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // Glob (折叠内容 = 文件模式, 最多列两个)
     static auto globCollapsed
         = [](void*,
-                                       const AgentxxToolRenderInput* in,
+                                       const agentxx::plugin::ClientToolRenderInput* in,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*) -> int32_t {
         auto j = argObject(in);
@@ -236,7 +236,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // Grep (折叠内容 = '["pat"] file_patterns')
     static auto grepCollapsed
         = [](void*,
-                                       const AgentxxToolRenderInput* in,
+                                       const agentxx::plugin::ClientToolRenderInput* in,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*) -> int32_t {
         auto j = argObject(in);
@@ -295,7 +295,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // Edit: 折叠内容 = "[+行 -行] path"; 展开内容 = 逐段 diff items
     static auto editCollapsed
         = [](void*,
-                                       const AgentxxToolRenderInput* in,
+                                       const agentxx::plugin::ClientToolRenderInput* in,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*) -> int32_t {
         auto j = argObject(in);
@@ -324,7 +324,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     };
     static auto editExpanded
         = [](void*,
-                                       const AgentxxToolRenderInput* in,
+                                       const agentxx::plugin::ClientToolRenderInput* in,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*) -> int32_t {
         auto j = argObject(in);
@@ -333,7 +333,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         }
         const std::string path     = stringArg(*j, "path");
         const auto        segments = agentxx_fs_plugin::editSegmentsArg(*j);
-        if (in->is_error) {
+        if (in->error) {
             return 0; // 失败时界面走默认展开体, 不给自定义内容
         }
         utilxx_base::Json arr          = utilxx_base::Json::array();
@@ -371,7 +371,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // Search / Fetch / FetchMD / Bash / Windows (折叠内容 = 单个参数)
     static auto queryCollapsed
         = [](void*,
-                                       const AgentxxToolRenderInput* in,
+                                       const agentxx::plugin::ClientToolRenderInput* in,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*) -> int32_t {
         auto j = argObject(in);
@@ -386,7 +386,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     };
     static auto urlCollapsed
         = [](void*,
-                                       const AgentxxToolRenderInput* in,
+                                       const agentxx::plugin::ClientToolRenderInput* in,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*) -> int32_t {
         auto j = argObject(in);
@@ -401,7 +401,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     };
     static auto commandCollapsed
         = [](void*,
-                                       const AgentxxToolRenderInput* in,
+                                       const agentxx::plugin::ClientToolRenderInput* in,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*) -> int32_t {
         auto j = argObject(in);
@@ -449,7 +449,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // 折叠内容 = todos 摘要, 展开内容 = 状态图 + todos + notes, 覆盖"重启恢复会话
     // 后历史 Tool 消息没有运行时装饰"的渲染路径
     static auto planOf
-        = [](const AgentxxToolRenderInput* in) -> std::optional<utilxx_base::Json> {
+        = [](const agentxx::plugin::ClientToolRenderInput* in) -> std::optional<utilxx_base::Json> {
         auto a = argObject(in);
         if (!a) {
             return std::nullopt;
@@ -458,8 +458,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             return a; // write: 参数即规划内容
         }
         // read: 结果即保存的规划 JSON
-        std::string_view result(in->result_text.data ? in->result_text.data : "",
-                                in->result_text.size);
+        std::string_view result = in->resultText;
         if (result.empty()) {
             return utilxx_base::Json::object();
         }
@@ -500,7 +499,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     };
     static auto planningCollapsed
         = [](void*,
-                                       const AgentxxToolRenderInput* in,
+                                       const agentxx::plugin::ClientToolRenderInput* in,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*) -> int32_t {
         auto plan = planOf(in);
@@ -515,7 +514,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     };
     static auto planningExpanded
         = [](void*,
-                                       const AgentxxToolRenderInput* in,
+                                       const agentxx::plugin::ClientToolRenderInput* in,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*) -> int32_t {
         auto plan = planOf(in);
@@ -872,21 +871,16 @@ struct ToolHeaderFixture {
         }
 
         const std::string callId = "call_1"; // 与 [pushTool] 一致
-        auto              callSv = agentxx::plugin::PluginStringView::from(callId);
-        auto              nameSv = agentxx::plugin::PluginStringView::from(toolName);
-        auto              argsSv = agentxx::plugin::PluginStringView::from(args);
-        auto              resSv  = agentxx::plugin::PluginStringView::from(result);
 
-        AgentxxToolRenderInput input{};
-        input.struct_size  = sizeof(AgentxxToolRenderInput);
-        input.version      = 1;
-        input.tool_call_id = callSv;
-        input.tool_name    = nameSv;
-        input.args_json    = argsSv;
-        input.result_text  = resSv;
-        input.is_finished  = finished ? 1 : 0;
-        input.is_error     = failed ? 1 : 0;
-        input.max_width    = 0;
+        agentxx::plugin::ClientToolRenderInput input;
+        input.toolCallId = callId;
+        input.toolName   = toolName;
+        input.argsJson   = args;
+        input.resultText = result;
+        input.finished   = finished;
+        input.error      = failed;
+        input.maxWidth   = 0;
+        input.summary    = wantCollapsed;
 
         agentxx::plugin::ClientToolRenderEntry entry;
         entry.key = agentxx::plugin::ClientToolRenderRequest::keyFor(

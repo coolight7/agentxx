@@ -329,8 +329,6 @@ const AgentxxClientUiIface g_fakeClientUi = {
     /* unregister_command */ nullptr,
     /* show_toast */ nullptr,
     /* update_tool_decor */ fakeUpdateToolDecor,
-    /* register_tool_renderer */ nullptr,
-    /* unregister_tool_renderer */ nullptr,
     /* bind_action_handler */ nullptr,
     /* unbind_action_handler */ nullptr,
     /* open_overlay */ fakeOpenOverlay,

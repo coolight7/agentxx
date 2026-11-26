@@ -1701,21 +1701,6 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(offsetof(AgentxxOverlaySpec, type), size_t{8});
         XX_TEST_EXPECT_EQ(offsetof(AgentxxOverlaySpec, title), size_t{16});
 
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, struct_size), size_t{0});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, version), size_t{4});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, tool_name), size_t{8});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, display_name), size_t{24});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, collapsed_fn), size_t{40});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, expanded_fn), size_t{48});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, user_data), size_t{56});
-        XX_TEST_EXPECT_EQ(sizeof(AgentxxToolRenderSpec), size_t{64});
-
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderInput, struct_size), size_t{0});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderInput, version), size_t{4});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderInput, tool_call_id), size_t{8});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderInput, is_finished), 8u + 4 * 16u);
-        XX_TEST_EXPECT_EQ(sizeof(AgentxxToolRenderInput), 8u + 4 * 16u + 16u);
-
         XX_TEST_EXPECT_EQ(offsetof(AgentxxUiActionContext, struct_size), size_t{0});
         XX_TEST_EXPECT_EQ(offsetof(AgentxxUiActionContext, version), size_t{4});
         XX_TEST_EXPECT_EQ(offsetof(AgentxxUiActionContext, owner_id), size_t{8});
@@ -1737,9 +1722,6 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginToolSpec), size_t{104});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginGraphNodeTypeSpec), size_t{64});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxOverlaySpec), size_t{64});
-            // 显示名 + 折叠/展开内容两个回调: 8 字节头 + 两个字符串视图 (32) +
-            // 两个函数指针 + user_data = 64
-            XX_TEST_EXPECT_EQ(sizeof(AgentxxToolRenderSpec), size_t{64});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxTimerSpec), size_t{56});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxKeybindSpec), size_t{56});
         }

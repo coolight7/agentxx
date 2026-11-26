@@ -15,6 +15,8 @@
 /// 21. kit::ActionController 单测 (header-only, 无主程序)
 /// 28. 主程序内置工具特化渲染: agentxx_share_store / agentxx_subagent
 ///     (lib 内置工具无对应插件, 由主程序注册内置渲染器)
+/// 34. JS 脚本作为 client 插件: 工具行 / 展示面 / 命令 / 动作
+/// 34b. 形态注册表: 第二个运行器接管预置 `js` (native 不可接管、代次沿用自带声明)
 /// 29. 接口协商: TUI 主程序声明 ui 表整体 + 全部子能力, 构建产物中的内置插件
 ///     client 侧声明必须全部被满足 (避免启动误报"可选接口不支持")
 #include "agentxx-test/plugin/test_client_plugins.h"
@@ -35,6 +37,7 @@
 #include "asio/io_context.hpp"
 #include "asio/post.hpp"
 #include "asio/use_awaitable.hpp"
+#include "pluginxx/host/kind_registry.h"
 #include "pluginxx/runtime/instance_base.h"
 #include "utilxx_base/log.h"
 #include <atomic>
@@ -2249,10 +2252,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             }
 
             // 14.4 历史恢复路径 (重启/重连/切换会话后由 Sync 回放的 Tool 消息):
-            // 没有任何 EVT_DELTA / update_tool_decor 推送, 渲染内容由类型级
-            // 渲染器 (register_tool_renderer 按 tool_name) 从消息自带的
-            // 参数/结果推导 —— 修复前此类消息走通用渲染 (折叠头显示原始
-            // toolName "agentxx_planning" + 参数/结果原文)
+            // 没有任何 EVT_DELTA / update_tool_decor 推送, 渲染内容由 `tool` 槽位上的
+            // 声明项 + 内容从消息自带的参数/结果推导 —— 改动前此类消息走通用渲染
+            // (折叠头显示原始 toolName "agentxx_planning" + 参数/结果原文)
             {
                 // 渲染器已按 tool_name 注册
                 reg              = mgr->uiRegistrySnapshot();
@@ -3212,6 +3214,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // 展开内容: 同一输入但独立的键与请求 (Read 只注册了折叠内容 →
             // 展开部分没有自定义内容, 界面走默认展开体)
+            // 展开内容: 工具行内容是同一个生成函数管两处, 所以展开部分也有注册项 ——
+            // 首次查询是 pending (生成要在插件线程上跑), 这一帧展开体为空
             auto expandedFirst = agentxx::plugin::renderClientToolExpanded(
                 reg.get(),
                 cache.get(),
@@ -3223,10 +3227,34 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 req.isError,
                 req.maxWidth
             );
-            XX_TEST_EXPECT_FALSE(expandedFirst.pending);
+            XX_TEST_EXPECT_TRUE(expandedFirst.pending);
+            XX_TEST_EXPECT_EQ(expandedFirst.pendingPlugin, std::string{"agentxx_filesystem"});
             XX_TEST_EXPECT_TRUE(expandedFirst.items.empty());
 
-            // 展开内容的空结果同样写缓存 (matched == false), 不会每帧重复请求
+            // 生成结果为空 (Read 没有展开体内容) → matched == false 写进缓存,
+            // 界面回到默认展开体, 且不会每帧重复请求
+            {
+                agentxx::plugin::ClientToolRenderRequest expandedReq;
+                expandedReq.toolCallId = req.toolCallId;
+                expandedReq.toolName   = req.toolName;
+                expandedReq.argsJson   = req.argsJson;
+                expandedReq.resultText = req.resultText;
+                expandedReq.part       = agentxx::plugin::ClientToolRenderPart::Expanded;
+                expandedReq.isFinished = true;
+                expandedReq.isError    = false;
+                expandedReq.maxWidth   = req.maxWidth;
+                mgr->requestToolRender(expandedReq);
+                for (int i = 0; i < 500 && !cache->lookup(expandedKey, hash); ++i) {
+                    co_await sleepMs(1);
+                }
+                const auto expandedEntry = cache->lookup(expandedKey, hash);
+                XX_TEST_EXPECT_TRUE(expandedEntry != nullptr);
+                if (expandedEntry) {
+                    XX_TEST_EXPECT_FALSE(expandedEntry->matched);
+                    XX_TEST_EXPECT_TRUE(expandedEntry->items.empty());
+                }
+            }
+
             auto expandedSecond = agentxx::plugin::renderClientToolExpanded(
                 reg.get(),
                 cache.get(),
@@ -3391,7 +3419,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     );
                     XX_TEST_EXPECT_TRUE(decorCollapsed.pending);
                     XX_TEST_EXPECT_FALSE(decorCollapsed.isDecor);
-                    // 展开内容: 装饰没给 items → 同样回落注册项 (Read 无展开内容)
+                    // 展开内容: 装饰没给 items → 同样回落注册项 (内容没给展开体,
+                    // 第一次展开先 pending, 结果为空后回到默认展开体)
                     auto decorExpanded = agentxx::plugin::renderClientToolExpanded(
                         decorReg.get(),
                         cache.get(),
@@ -3403,7 +3432,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                         false,
                         100
                     );
-                    XX_TEST_EXPECT_FALSE(decorExpanded.pending);
+                    XX_TEST_EXPECT_TRUE(decorExpanded.pending);
                     XX_TEST_EXPECT_FALSE(decorExpanded.isDecor);
                     XX_TEST_EXPECT_TRUE(decorExpanded.items.empty());
                 }
@@ -4197,7 +4226,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         {
             // 插件侧渲染回调是异步操作契约: 内容经回调自己的 notify 交回
             auto pluginCollapsed = +[](void*                         ud,
-                                       const AgentxxToolRenderInput* input,
+                                       const agentxx::plugin::ClientToolRenderInput* input,
                                        const PluginxxOperatorNotify* notify,
                                        PluginxxString*               errorOut) -> int32_t {
                 (void)ud;
@@ -5282,6 +5311,93 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(co_await mgrJs->unloadAsync("agentxx_javascript_engine"));
         }
         mgrJs.reset();
+    }
+
+    // ---- 34b. 形态注册表: 第二个运行器接管预置 `js` ----
+    //
+    // `js` 是主程序预置的形态位置 (不带实现): 引擎插件以 `overrideBuiltin` 登记同名形态后
+    // 才算有运行器; 撤销后回到“位置”本身。动态库形态 (`native`) 不允许插件接管。
+    // 未登记的形态按动态库处理 (框架不知道它是怎么编的)。
+    {
+        auto mgrKind = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
+        auto& kinds  = mgrKind->kindRegistry();
+
+        const auto* jsBuiltin = kinds.find("js");
+        XX_TEST_EXPECT_TRUE(jsBuiltin != nullptr);
+        XX_TEST_EXPECT_TRUE(jsBuiltin->frameworkOwned());
+        const int32_t jsVersion = jsBuiltin->interfaceVersion;
+        const int32_t jsMin     = jsBuiltin->minInterfaceVersion;
+
+        // 1. `native` 是动态库形态: 即使写了 overrideBuiltin 也不给接管
+        {
+            pluginxx::PluginxxKindSpec spec;
+            spec.kind           = "native";
+            spec.provider       = "alt_runner";
+            spec.loadCapability = "plugin.alt_runner.load";
+            std::string err;
+            XX_TEST_EXPECT_TRUE(!kinds.registerKind(spec, /*overrideBuiltin=*/true, err));
+            XX_TEST_EXPECT_TRUE(err.find("native-library") != std::string::npos);
+        }
+
+        // 2. 不写 overrideBuiltin 时不能被接管
+        {
+            pluginxx::PluginxxKindSpec spec;
+            spec.kind                = "js";
+            spec.provider            = "alt_runner";
+            spec.loadCapability      = "plugin.alt_runner.load";
+            spec.interfaceVersion    = 99;
+            spec.minInterfaceVersion = 99;
+            std::string err;
+            XX_TEST_EXPECT_TRUE(!kinds.registerKind(spec, /*overrideBuiltin=*/false, err));
+            XX_TEST_EXPECT_TRUE(err.find("overrideBuiltin") != std::string::npos);
+        }
+
+        // 3. 接管后由该插件提供, 接口代次对沿用自带声明 (不让接管者改)
+        {
+            pluginxx::PluginxxKindSpec spec;
+            spec.kind                = "js";
+            spec.provider            = "alt_runner";
+            spec.loadCapability      = "plugin.alt_runner.load";
+            spec.unloadCapability    = "plugin.alt_runner.unload";
+            spec.interfaceVersion    = 99;
+            spec.minInterfaceVersion = 99;
+            std::string err;
+            XX_TEST_EXPECT_TRUE(kinds.registerKind(spec, /*overrideBuiltin=*/true, err));
+            const auto* taken = kinds.find("js");
+            XX_TEST_EXPECT_TRUE(taken != nullptr);
+            if (taken) {
+                XX_TEST_EXPECT_EQ(taken->provider, std::string{"alt_runner"});
+                XX_TEST_EXPECT_TRUE(taken->builtin);
+                XX_TEST_EXPECT_TRUE(!taken->frameworkOwned());
+                XX_TEST_EXPECT_EQ(taken->interfaceVersion, jsVersion);
+                XX_TEST_EXPECT_EQ(taken->minInterfaceVersion, jsMin);
+                XX_TEST_EXPECT_EQ(taken->loadCapability, std::string{"plugin.alt_runner.load"});
+            }
+            // 别的插件不能再抢已经被接管的形态
+            pluginxx::PluginxxKindSpec other;
+            other.kind           = "js";
+            other.provider       = "other_runner";
+            other.loadCapability = "plugin.other_runner.load";
+            std::string otherErr;
+            XX_TEST_EXPECT_TRUE(!kinds.registerKind(other, /*overrideBuiltin=*/true, otherErr));
+            XX_TEST_EXPECT_TRUE(otherErr.find("alt_runner") != std::string::npos);
+        }
+
+        // 4. 撤销后回到自带实现
+        {
+            std::string err;
+            XX_TEST_EXPECT_TRUE(kinds.unregisterKind("js", "alt_runner", err));
+            const auto* back = kinds.find("js");
+            XX_TEST_EXPECT_TRUE(back != nullptr);
+            XX_TEST_EXPECT_TRUE(back->frameworkOwned());
+        }
+
+        // 5. 未登记的形态: 按动态库处理 (宁可要求够新的接口版本)
+        XX_TEST_EXPECT_TRUE(kinds.find("no_such_kind") == nullptr);
+        XX_TEST_EXPECT_TRUE(kinds.requiresPluginAbi("no_such_kind"));
+        XX_TEST_EXPECT_TRUE(!kinds.requiresPluginAbi("js"));
+
+        mgrKind.reset();
     }
 
     // ---- 35. 声明式界面: 声明项 + 内容 (生成 / 推送 / 重新生成 / 停用撤销) ----
