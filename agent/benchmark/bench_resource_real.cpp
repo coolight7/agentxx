@@ -7,6 +7,7 @@
 // 目标: 在尽量贴近真实使用的运行形态下采集内存/CPU/渲染性能数据, 并给出
 // 各部分模块的内存归属 (smaps 模块分解 + 逻辑内存统计 + 分阶段增量), 供优化前后对比。
 
+#include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
@@ -14,9 +15,12 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/util/observability.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
+#include "asio/redirect_error.hpp"
+#include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "bench_mem_logical.h"
 #include "bench_resource.h"
@@ -25,8 +29,11 @@
 #include "fmt/format.h"
 #include "utilxx_base/env.h"
 #include "utilxx_base/log.h"
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <future>
@@ -1631,6 +1638,910 @@ void benchResourcePluginAttrib() {
     }
     std::error_code ec;
     std::filesystem::remove_all(tmpDir, ec);
+}
+
+// ===========================================================================
+// 场景 5: 真实 TUI 长上下文 —— 真实流式回复 + 逐字渲染 + 超限后的自动压缩
+//
+// 与其它场景的区别:
+// - 不用"注入固定历史", 而是**逐轮真实对话**: 每轮发一条用户消息, mock LLM 以
+//   真实流式返回 (每个 SSE 帧单独写出、帧间停顿), TUI 收到 delta 就重绘;
+// - 累计内容 token (所有用户消息 + 回复) 达到采样点时才采样: 100K/200K 在上限内,
+//   1M/2M 已经远远超过模型上下文上限, 看到的稳态是"自动压缩之后"的样子;
+// - 开会话库 (与真实使用一致), 因此展示历史按窗口淘汰;
+// - 走主程序路径 (AgentHost) 建根 agent: 上下文压缩要经 `service.subagent` 起
+//   压缩子代理, 没有主程序时只会退化成硬截断, 量不到真实压缩的内存行为。
+// ===========================================================================
+
+namespace {
+
+/// 流式 mock LLM: 每个 SSE 帧单独写成 chunk, 帧之间停顿, 模拟真实供应商的逐字输出
+struct StreamingLlmSim {
+    std::unique_ptr<utilxx::HttpServer>  svr;
+    std::thread                          thr;
+    uint16_t                             port         = 0;
+    std::shared_ptr<std::atomic<size_t>> turnCount    = std::make_shared<std::atomic<size_t>>(0);
+    std::shared_ptr<std::atomic<size_t>> compactCount = std::make_shared<std::atomic<size_t>>(0);
+
+    StreamingLlmSim() = default;
+
+    StreamingLlmSim(StreamingLlmSim&& o) noexcept :
+        svr(std::move(o.svr)),
+        thr(std::move(o.thr)),
+        port(o.port),
+        turnCount(std::move(o.turnCount)),
+        compactCount(std::move(o.compactCount)) {
+        o.port = 0;
+    }
+
+    StreamingLlmSim& operator=(StreamingLlmSim&& o) noexcept {
+        if (this != &o) {
+            stop();
+            svr          = std::move(o.svr);
+            thr          = std::move(o.thr);
+            port         = o.port;
+            turnCount    = std::move(o.turnCount);
+            compactCount = std::move(o.compactCount);
+            o.port       = 0;
+        }
+        return *this;
+    }
+
+    StreamingLlmSim(const StreamingLlmSim&)            = delete;
+    StreamingLlmSim& operator=(const StreamingLlmSim&) = delete;
+
+    ~StreamingLlmSim() {
+        stop();
+    }
+
+    void stop() {
+        if (svr) {
+            svr->stop();
+        }
+        if (thr.joinable()) {
+            thr.join();
+        }
+        svr.reset();
+        port = 0;
+    }
+};
+
+/// 起流式 mock LLM
+/// - `replyBytes`: 普通轮次回复正文长度 (按完整句子截断到该长度)
+/// - `streamChunks`: 回复切成几个 SSE 帧 (每帧一个 data 事件)
+/// - `chunkDelayMs`: 帧间停顿 (毫秒, 0 = 连续写)
+inline StreamingLlmSim
+    startStreamingLlmSim(size_t replyBytes, size_t streamChunks, int chunkDelayMs) {
+    StreamingLlmSim sim;
+
+    utilxx::HttpServer::Config cfg;
+    cfg.address          = "127.0.0.1";
+    cfg.port             = 0;
+    cfg.ioThreads        = 1;
+    cfg.accessLogEnabled = false;
+    cfg.maxConnections   = 32;
+    // 300K token 上下文的请求体约 1 MiB; 留足余量避免 mock 侧提前拒绝
+    cfg.maxRequestBody          = 32 * 1024 * 1024;
+    cfg.sseWriteTimeout         = std::chrono::seconds(120);
+
+    sim.svr      = std::make_unique<utilxx::HttpServer>(cfg);
+    auto* rawSvr = sim.svr.get();
+    auto  turns  = sim.turnCount;
+    auto  comps  = sim.compactCount;
+
+    // 回复正文与压缩摘要 (压缩摘要要短, 模拟真实摘要的体积)
+    std::string longReply;
+    {
+        static constexpr std::string_view kUnit
+            = "The assistant keeps the reply text stable so every turn costs the same. ";
+        longReply.reserve(replyBytes + kUnit.size());
+        while (longReply.size() < replyBytes) {
+            longReply += kUnit;
+        }
+        longReply.resize(replyBytes);
+    }
+    const std::string summaryReply
+        = "[Previous conversation]: 摘要: 早前若干探针轮次已完成, 关键结论与待办都保留在这里, "
+          "可以继续后面的工作。";
+
+    auto handler =
+        [longReply, summaryReply, streamChunks, chunkDelayMs, turns, comps](
+            utilxx::HttpServer::Request&                   req,
+            std::shared_ptr<utilxx::HttpServer::SseWriter> writer
+        ) -> asio::awaitable<void> {
+        namespace http = boost::beast::http;
+
+        const std::string_view body = req.body();
+        // 压缩请求靠压缩指令识别, 回复只要一段摘要
+        // - 只能认模板首句: 内置系统提示词里就写着 `[Please describe previous
+        //   conversation]` ("Context Markers" 说明段), 用它判定会把每个普通请求都当成压缩
+        // - `[Previous conversation]:` 同理: 压缩后的会话每轮都带着这段摘要
+        const bool isCompact
+            = body.find("The conversation above will be compacted to free context space")
+              != std::string_view::npos;
+        const bool isStream
+            = body.find("\"stream\":true") != std::string_view::npos
+              || body.find("\"stream\": true") != std::string_view::npos;
+        // 请求体字节 / 4 ≈ prompt token, 与基准其它场景同一套量级估算
+        const int64_t promptTokens = static_cast<int64_t>(body.size() / 4);
+
+        const std::string& reply = isCompact ? summaryReply : longReply;
+        const int64_t      completionTokens = static_cast<int64_t>(reply.size() / 4);
+
+        if (!isStream) {
+            // 非流式: 直接回完整 JSON (带 usage), 走 SseWriter 的一次性响应
+            utilxx_base::Json msg;
+            msg["role"]    = "assistant";
+            msg["content"] = reply;
+            utilxx_base::Json choice;
+            choice["index"]         = 0;
+            choice["message"]       = msg;
+            choice["finish_reason"] = "stop";
+            utilxx_base::Json doc;
+            doc["id"]      = "chatcmpl-tui-longctx";
+            doc["object"]  = "chat.completion";
+            doc["created"] = 1750000000;
+            doc["model"]   = "bench-tui-longctx";
+            doc["choices"] = utilxx_base::Json::array({choice});
+            doc["usage"]   = {
+                {"prompt_tokens",     promptTokens                },
+                {"completion_tokens", completionTokens            },
+                {"total_tokens",      promptTokens + completionTokens}
+            };
+            (isCompact ? comps : turns)->fetch_add(1);
+            co_await writer->writeResponse(http::status::ok, "application/json", doc.dump());
+            co_return;
+        }
+
+        (isCompact ? comps : turns)->fetch_add(1);
+
+        auto chunkFrame = [](const utilxx_base::Json& delta, std::string_view finishReason) {
+            utilxx_base::Json ev;
+            ev["id"]      = "chatcmpl-tui-longctx";
+            ev["object"]  = "chat.completion.chunk";
+            ev["created"] = 1750000000;
+            ev["model"]   = "bench-tui-longctx";
+            utilxx_base::Json choice;
+            choice["index"] = 0;
+            choice["delta"] = delta;
+            if (finishReason.empty()) {
+                choice["finish_reason"] = nullptr;
+            } else {
+                choice["finish_reason"] = std::string{finishReason};
+            }
+            ev["choices"] = utilxx_base::Json::array({choice});
+            return fmt::format("data: {}\n\n", ev.dump());
+        };
+
+        // 1) role 帧
+        // 注意: writeChunk 在第一个帧里会先写响应头再 await, 临时串会悬空,
+        // 因此每一帧都先落到具名局部变量再交出去。
+        {
+            utilxx_base::Json d;
+            d["role"]                = "assistant";
+            const std::string frame = chunkFrame(d, "");
+            if (!co_await writer->writeChunk(frame)) {
+                co_return;
+            }
+        }
+
+        // 2) 正文按 streamChunks 切片逐帧推送 (帧间停顿, 与真实流式的间隔同量级)
+        //    切点必须落在 utf8 字符边界上: 摘要等文本含多字节字符, 按字节随便切会产生非法
+        //    utf8 分片 (Json::dump 直接报错, 整个请求失败 → 主程序重试)
+        const size_t chunks = streamChunks == 0 ? 1 : streamChunks;
+        const size_t step   = reply.size() / chunks;
+        size_t       pos    = 0;
+        for (size_t i = 0; i < chunks; ++i) {
+            size_t len = (i + 1 == chunks) ? (reply.size() - pos) : step;
+            if (len == 0) {
+                continue;
+            }
+            // 切点落在续字节 (0b10xxxxxx) 上时往后挪到下一个字符开头
+            while (pos + len < reply.size()
+                   && (static_cast<unsigned char>(reply[pos + len]) & 0xC0) == 0x80) {
+                ++len;
+            }
+            utilxx_base::Json d;
+            d["content"]             = reply.substr(pos, len);
+            pos                     += len;
+            const std::string frame = chunkFrame(d, "");
+            if (!co_await writer->writeChunk(frame)) {
+                co_return;
+            }
+            if (chunkDelayMs > 0) {
+                auto                      ex = co_await asio::this_coro::executor;
+                asio::steady_timer        timer(ex);
+                timer.expires_after(std::chrono::milliseconds(chunkDelayMs));
+                utilxx_base::AsioErrorCode ec;
+                co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+            }
+        }
+
+        // 3) finish 帧 + usage 帧 (OpenAI 在 stream_options.include_usage 时给最后一帧)
+        {
+            const std::string frame = chunkFrame(utilxx_base::Json::object(), "stop");
+            if (!co_await writer->writeChunk(frame)) {
+                co_return;
+            }
+        }
+        {
+            utilxx_base::Json ev;
+            ev["id"]      = "chatcmpl-tui-longctx";
+            ev["object"]  = "chat.completion.chunk";
+            ev["created"] = 1750000000;
+            ev["model"]   = "bench-tui-longctx";
+            ev["choices"] = utilxx_base::Json::array();
+            ev["usage"]   = {
+                {"prompt_tokens",     promptTokens                },
+                {"completion_tokens", completionTokens            },
+                {"total_tokens",      promptTokens + completionTokens}
+            };
+            const std::string frame = fmt::format("data: {}\n\n", ev.dump());
+            if (!co_await writer->writeChunk(frame)) {
+                co_return;
+            }
+        }
+        co_await writer->writeChunk(std::string_view{"data: [DONE]\n\n"});
+        co_await writer->close();
+        co_return;
+    };
+
+    rawSvr->addSsePostRoute("/v1/chat/completions", handler);
+    rawSvr->addSsePostRoute("/chat/completions", handler);
+
+    sim.thr = std::thread([rawSvr]() {
+        rawSvr->start();
+    });
+    for (int i = 0; i < 200; ++i) {
+        sim.port = rawSvr->port();
+        if (sim.port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return sim;
+}
+
+/// 解析逗号分隔的 token 列表 (空项忽略)
+inline std::vector<size_t> parseTokenPoints(std::string_view text) {
+    std::vector<size_t> out;
+    size_t              start = 0;
+    while (start <= text.size()) {
+        size_t comma = text.find(',', start);
+        if (comma == std::string_view::npos) {
+            comma = text.size();
+        }
+        std::string item{text.substr(start, comma - start)};
+        // 去掉空白
+        item.erase(std::remove_if(item.begin(), item.end(), [](unsigned char c) {
+                       return std::isspace(c) != 0;
+                   }),
+                   item.end());
+        if (!item.empty()) {
+            out.push_back(static_cast<size_t>(std::strtoull(item.c_str(), nullptr, 10)));
+        }
+        if (comma == text.size()) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return out;
+}
+
+/// 采样点名字: 100000 -> ctx100k, 2000000 -> ctx2m
+inline std::string tokenPointName(size_t tokens) {
+    if (tokens >= 1000000 && tokens % 1000000 == 0) {
+        return fmt::format("ctx{}m", tokens / 1000000);
+    }
+    return fmt::format("ctx{}k", (tokens + 500) / 1000);
+}
+
+/// 采集逻辑内存 (agent 会话 + TUI 侧), 与 real_tui 场景同一套统计口径
+inline void collectLogicalForTuiLongCtx(
+    ResourceResult&                                          res,
+    const std::shared_ptr<agent::CodeAgent>&                 agent,
+    const std::shared_ptr<agentxx::client::TUIClientAgentIO>& tui,
+    const std::string&                                       sessionId
+) {
+    std::promise<void> p;
+    asio::post(*agent->ioCtx, [&]() {
+        res.logical = collectAgentLogicalMem(
+            agent->agentContext,
+            AgentLogicalOptions{true, {sessionId}}
+        );
+        p.set_value();
+    });
+    p.get_future().wait();
+    if (auto snap = tui->sharedState().readSnapshot()) {
+        auto rows = collectTuiLogicalMem(*snap);
+        res.logical.insert(res.logical.end(), rows.begin(), rows.end());
+    }
+}
+
+} // namespace
+
+/// 场景 5: 真实 TUI 长上下文 (真实流式回复 + 逐字渲染 + 超限自动压缩后的稳态)
+///
+/// 装配与 `real_tui` 一致 (AgentHost + 插件 + Channel + 真实 FTXUI + 会话库),
+/// 区别是逐轮真实对话: 每轮发一条 `msgBytes` 用户消息, mock LLM 把回复切成多帧流式
+/// 吐回, TUI 逐帧渲染; 累计内容 token 到采样点就采一次内存/渲染/上下文数据。
+///
+/// - 环境变量 (均可选, 括号内为默认值):
+///     - `AGENTXX_TUI_CTX_POINTS` (100000,200000,1000000,2000000) 采样点: 累计内容 token
+///     - `AGENTXX_TUI_CTX_MSG_BYTES` (8192) 每轮用户消息字节数
+///     - `AGENTXX_TUI_CTX_REPLY_BYTES` (600) mock 回复正文字节数
+///     - `AGENTXX_TUI_CTX_MODEL_MAX` (300000) 模型上下文上限 (达 75% 触发自动压缩)
+///     - `AGENTXX_TUI_CTX_STREAM_CHUNKS` (48) 回复切成多少个 SSE 帧
+///     - `AGENTXX_TUI_CTX_CHUNK_DELAY_MS` (1) 帧间停顿 (毫秒)
+///     - `AGENTXX_TUI_CTX_PLUGINS` (1) 是否加载 5 个基准插件
+///     - `AGENTXX_TUI_CTX_SESSION_STORE` (1) 是否启用会话库
+///     - `AGENTXX_TUI_CTX_MAX_ROUNDS` (20000) 驱动轮数上限
+///     - `AGENTXX_TUI_CTX_ROUND_TIMEOUT_MS` (180000) 单轮等待上限
+void benchResourceTuiLongCtx() {
+#ifndef AGENTXX_BUILD_CLIENT
+    std::cout << "  [resource][tui_longctx] skipped: AGENTXX_BUILD_CLIENT not enabled"
+              << std::endl;
+    return;
+#else
+    std::cout << "\n=== Resource Benchmark: 真实 TUI 长上下文 (流式回复 + 自动压缩) ==="
+              << std::endl;
+
+    auto envSize = [](std::string_view name, size_t def) -> size_t {
+        if (auto v = utilxx_base::ApplicationEnv::instance().get(name)) {
+            return static_cast<size_t>(std::strtoull(v->c_str(), nullptr, 10));
+        }
+        return def;
+    };
+    auto envText = [](std::string_view name, std::string_view def) -> std::string {
+        if (auto v = utilxx_base::ApplicationEnv::instance().get(name)) {
+            return *v;
+        }
+        return std::string{def};
+    };
+
+    const auto  points    = parseTokenPoints(
+        envText("AGENTXX_TUI_CTX_POINTS", "100000,200000,1000000,2000000")
+    );
+    const size_t msgBytes  = envSize("AGENTXX_TUI_CTX_MSG_BYTES", 8192);
+    const size_t modelMax  = envSize("AGENTXX_TUI_CTX_MODEL_MAX", 300000);
+    const size_t chunks    = envSize("AGENTXX_TUI_CTX_STREAM_CHUNKS", 48);
+    const int    chunkMs   = static_cast<int>(envSize("AGENTXX_TUI_CTX_CHUNK_DELAY_MS", 1));
+    const size_t replyBytes = envSize("AGENTXX_TUI_CTX_REPLY_BYTES", 600);
+    const bool   usePlugins = envSize("AGENTXX_TUI_CTX_PLUGINS", 1) != 0;
+    const bool   useStore   = envSize("AGENTXX_TUI_CTX_SESSION_STORE", 1) != 0;
+    const size_t maxRounds  = envSize("AGENTXX_TUI_CTX_MAX_ROUNDS", 20000);
+    const int    roundTimeoutMs = static_cast<int>(envSize("AGENTXX_TUI_CTX_ROUND_TIMEOUT_MS", 180000));
+
+    if (points.empty()) {
+        std::cout << "  [resource][tui_longctx] 采样点为空, 跳过" << std::endl;
+        return;
+    }
+
+    auto  sim      = startStreamingLlmSim(replyBytes, chunks, chunkMs);
+    auto  tmpDir   = createBenchTempDir("bench_tui_longctx");
+    auto& reporter = BenchReporter::instance();
+
+    MemPhaseTracker phaseTracker(0, "self");
+    phaseTracker.mark("process_base", "仅流式 mock LLM 服务; agent/TUI 未构建");
+
+    auto agentConfig                = std::make_shared<agent::AgentConfig>();
+    agentConfig->dataDir            = (tmpDir / "data").string();
+    agentConfig->workDir            = tmpDir.string();
+    agentConfig->permissionMode     = agent::PermissionMode::Pass;
+    agentConfig->enableSessionStore = useStore;
+    agentConfig->enableSubagent     = false; // 只控制工具注入; 压缩委派由 AgentHost 提供
+    agentConfig->enableWorktree     = false;
+    // 关闭单条输入超长卸载 (默认 8K 字符): 本场景要的就是每轮正文完整进上下文,
+    // 否则被卸载后上下文只留开头片段 + `agentxx_share_store` 提示, token 数对不上
+    agentConfig->userInputSummaryLimitLength = 0;
+
+    agent::ModelConfig mc;
+    mc.name                 = "bench-sim";
+    mc.type                 = "openai";
+    mc.baseUrl              = fmt::format("http://127.0.0.1:{}/v1", sim.port);
+    mc.apiKey               = "EMPTY";
+    mc.modelName            = "bench-sim";
+    mc.modelContextMaxToken = modelMax;
+    agentConfig->model                    = mc;
+    agentConfig->availableModels[mc.name] = mc;
+    agentConfig->currentModelName         = mc.name;
+    if (usePlugins) {
+        agentConfig->plugins = bench5PluginConfigs();
+    }
+
+    auto        agent     = std::make_shared<agent::CodeAgent>(agentConfig);
+    auto        agentWork = asio::make_work_guard(*agent->ioCtx);
+    std::thread agentThread([agent]() {
+        agent->ioCtx->run();
+    });
+    phaseTracker.mark("agent_constructed", "CodeAgent + io_context 线程已创建");
+
+    // 主程序容器: 插件只加载一次, 压缩经它起子代理 (没有它只能硬截断)
+    auto host = agent::AgentHost::create({
+        .ioCtx        = agent->ioCtx,
+        .pluginList   = agentConfig->plugins,
+        .primaryAgent = agent->agentContext,
+    });
+
+    asio::io_context clientCtx;
+    auto        clientWork = asio::make_work_guard(clientCtx);
+    auto        clientEx   = clientCtx.get_executor();
+    std::string sessionId  = generateBenchSessionId();
+
+    auto tui = std::make_shared<agentxx::client::TUIClientAgentIO>(
+        clientEx,
+        sessionId,
+        agentxx::client::TUITheme::darkTheme()
+    );
+    tui->setDataDir((tmpDir / "data").string());
+    tui->setWorkDir(tmpDir.string());
+
+    auto pluginMgr = std::make_shared<agentxx::plugin::ClientPluginManager>(clientEx);
+    pluginMgr->setUiAdapter(std::make_shared<agentxx::client::TuiPluginAdapter>(tui));
+    pluginMgr->setSessionId(sessionId);
+    tui->setPluginManager(pluginMgr);
+    tui->setEventSink(pluginMgr);
+
+    // TUI 绘制到 fd 1: 本次只看内存/帧数, 输出直接丢弃 (否则长跑会写出 GB 级转义序列)
+    std::ostringstream console;
+    StdoutCapture      capture(false, "");
+    tui->start();
+    bool firstFrameOk = waitTuiFrames(tui, 1, 5000);
+    phaseTracker.mark(
+        "tui_started",
+        fmt::format("FTXUI 界面线程启动, 首帧{}", firstFrameOk ? "已渲染" : "超时")
+    );
+
+    std::atomic<bool> pluginsLoaded{false};
+    asio::co_spawn(
+        clientEx,
+        [&]() -> asio::awaitable<void> {
+            co_await pluginMgr->loadConfiguredClientPlugins(agentConfig->plugins);
+            pluginsLoaded.store(true);
+            co_return;
+        },
+        asio::detached
+    );
+    while (!pluginsLoaded.load()) {
+        clientCtx.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    auto agentEx = agent->ioCtx->get_executor();
+
+    auto [clientTransport, serverTransport]
+        = agent::ChannelAgentIOTransport::makePair(clientEx, agentEx);
+    auto countingClient = std::make_shared<CountingTransport>(
+        std::shared_ptr<agent::AgentIOTransportBase>(std::move(clientTransport))
+    );
+    auto countingServer = std::make_shared<CountingTransport>(
+        std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport))
+    );
+    tui->setTransport(countingClient);
+
+    agent::SessionServerAgentIO::Config scCfg;
+    scCfg.sessionId            = sessionId;
+    scCfg.initialSyncTailCount = 100;
+    auto serverIO = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent, scCfg);
+    serverIO->setTransport(countingServer);
+
+    std::atomic<bool> serverReady{false};
+    if (auto ctx = agent->agentContext) {
+        ctx->initNotifier = [tui](std::string_view step) {
+            tui->onServerProgress(step);
+        };
+    }
+    asio::co_spawn(
+        *agent->ioCtx,
+        [serverIO]() -> asio::awaitable<void> {
+            co_await serverIO->runTransportLoop();
+        },
+        asio::detached
+    );
+    asio::co_spawn(
+        *agent->ioCtx,
+        [&]() -> asio::awaitable<void> {
+            co_await host->loadPluginsAsync();
+            if (auto ctx = agent->agentContext; ctx && host->pluginHost()) {
+                ctx->pluginManager      = host->pluginHost();
+                ctx->pluginManagerOwned = false; // 进程共享管理器
+            }
+            co_await agent->init();
+            host->attachRoot(agent);
+            tui->requestAppendComponentInfo(sessionId);
+            tui->onServerReady();
+            serverReady.store(true);
+            co_await serverIO->run();
+        },
+        asio::detached
+    );
+    asio::co_spawn(
+        clientEx,
+        [tui]() -> asio::awaitable<void> {
+            co_await tui->runTransportLoop();
+        },
+        asio::detached
+    );
+
+    std::thread clientThread([&clientCtx]() {
+        clientCtx.run();
+    });
+    while (!serverReady.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    phaseTracker.mark(
+        "agent_init_done",
+        fmt::format("AgentHost + agent init + {} 插件挂载完成", usePlugins ? 5 : 0)
+    );
+
+    tui->sendToPeer(agent::WireHello{sessionId, "", 0, "", "en"});
+    tui->sendToPeer(agent::WireGetModel{sessionId});
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // ---- 会话状态读取 (必须在 agent io 线程) ----
+    // 轻量快照: 轮次轮询每几十毫秒取一次, **不得**生成消息 JSON
+    // (100K+ token 上下文的 JSON dump 每轮几百 KB, 随轮询频率连续分配会拖慢本轮并推高内存)
+    struct SessionSnap {
+        size_t    liveContextTokens = 0;
+        size_t    maxContextTokens  = 0;
+        size_t    viewWindowCount   = 0;
+        size_t    viewTotalCount    = 0;
+        int64_t   usageTotal        = 0;
+        uint64_t  turnsStarted      = 0;
+        /// 轮次终态总数 (完成/失败/取消/中断四种之和)
+        uint64_t  turnsEnded        = 0;
+        std::string turnEndDetail;
+        bool      idle              = true;
+        // 以下只在采样点填 (见 fillDetail)
+        size_t    viewWindowBytes = 0;
+        size_t    llmCount        = 0;
+        size_t    llmBytes        = 0;
+    };
+    auto readSession = [&]() -> SessionSnap {
+        SessionSnap        snap;
+        std::promise<void> p;
+        asio::post(*agent->ioCtx, [&]() {
+            if (auto sess = agent->agentContext->getSession(sessionId)) {
+                snap.liveContextTokens = sess->contextStats->contextTokens;
+                snap.maxContextTokens  = sess->contextStats->maxContextTokens;
+                snap.viewWindowCount   = sess->viewWindow().size();
+                snap.viewTotalCount    = sess->viewMessageCount();
+                snap.usageTotal        = sess->contextStats->usage.totalTokens;
+                snap.idle              = (sess->activity == agent::SessionActivity::Idle);
+            }
+            if (auto m = agent->agentContext->metrics) {
+                snap.turnsStarted   = m->turns();
+                snap.turnsEnded     = m->turnsCompleted() + m->turnsFailed() + m->turnsCanceled()
+                                  + m->turnsInterrupted();
+                snap.turnEndDetail  = fmt::format(
+                    "完成 {} / 失败 {} / 取消 {} / 中断 {}",
+                    m->turnsCompleted(),
+                    m->turnsFailed(),
+                    m->turnsCanceled(),
+                    m->turnsInterrupted()
+                );
+            }
+            p.set_value();
+        });
+        p.get_future().wait();
+        return snap;
+    };
+    // 采样点才需要的内容类尺寸 (会生成消息 JSON, 每次调用只做一次)
+    auto fillSessionDetail = [&](SessionSnap& snap) {
+        std::promise<void> p;
+        asio::post(*agent->ioCtx, [&]() {
+            if (auto sess = agent->agentContext->getSession(sessionId)) {
+                snap.viewWindowBytes = estimateViewMessagesBytes(sess->viewWindow());
+                snap.llmCount        = sess->llmMessagesJson().size();
+                snap.llmBytes        = estimateLlmMessagesBytes(sess->llmMessagesJson());
+            }
+            p.set_value();
+        });
+        p.get_future().wait();
+    };
+
+    auto waitRoundDone = [&](const SessionSnap& prev, int timeoutMs) -> bool {
+        const auto deadline
+            = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto snap = readSession();
+            // 一轮结束只看"本轮轮次已记终态" + 会话空闲 (KeyMetrics 的轮次计数):
+            // - 不能用模型用量增长判断: 压缩子代理的用量也计入本会话, 它会在本轮正文还没
+            //   叫模型时就先增长, 于是驱动方提前发下一条, 输入被排到下轮 (轮数与模型调用对不上)
+            // - 也不能只看空闲: 本轮刚开始时用户消息已入队但还没进入流式, 同样是假空闲
+            // - 四种终态都要算 (不能只看"完成"): 压缩等路径上本轮可能以中断结束
+            if (snap.idle && snap.turnsEnded > prev.turnsEnded) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        auto snap = readSession();
+        std::cerr << fmt::format(
+            "  [tui_longctx] 等待轮次终态超时 ({} ms): 轮次={} 终态={} ({}) idle={} 上下文={}\n",
+            timeoutMs,
+            snap.turnsStarted,
+            snap.turnsEnded,
+            snap.turnEndDetail,
+            snap.idle ? 1 : 0,
+            snap.liveContextTokens
+        );
+        return false;
+    };
+
+    // ---- 预热轮 (真实走流式) ----
+    {
+        auto before = readSession();
+        tui->sendToPeer(agent::WireUserInput{sessionId, "hello"});
+        if (!waitRoundDone(before, roundTimeoutMs)) {
+            console << "  [tui_longctx] 预热轮超时, 继续\n";
+        }
+    }
+    phaseTracker.mark("warmup_turn_done", "首轮流式对话完成");
+
+    // ---- 每轮 token 估算 (用户消息 + 回复, 用主程序同一份估算器) ----
+    size_t userTokensPerRound  = 0;
+    size_t replyTokensPerRound = 0;
+    {
+        std::string probe = fmt::format("CTX-PROBE-000001: ");
+        if (probe.size() < msgBytes) {
+            probe.append(msgBytes - probe.size(), 'x');
+        }
+        neograph::ChatMessage um;
+        um.role    = "user";
+        um.content = probe;
+        userTokensPerRound = countLlmTokens({um});
+
+        neograph::ChatMessage am;
+        am.role    = "assistant";
+        am.content = std::string(replyBytes, 'y');
+        replyTokensPerRound = countLlmTokens({am});
+    }
+    const size_t tokensPerRound = userTokensPerRound + replyTokensPerRound;
+
+    console << fmt::format(
+        "  [tui_longctx] 每轮 {} 字节 ({} token) + 回复 {} 字节 ({} token) = {} token/轮; "
+        "模型上限 {} token ({}% 压缩), SSE {} 帧/回复, 帧间隔 {} ms, 会话库 {}\n",
+        msgBytes,
+        userTokensPerRound,
+        replyBytes,
+        replyTokensPerRound,
+        tokensPerRound,
+        modelMax,
+        75,
+        chunks,
+        chunkMs,
+        useStore ? "开" : "关"
+    );
+
+    if (tokensPerRound == 0) {
+        console << "  [tui_longctx] token 估算异常 (0), 结束\n";
+        tui->stop();
+        capture.restore();
+        std::cout << console.str();
+        return;
+    }
+
+    // ---- 逐轮驱动, 到点采样 ----
+    size_t              round           = 0;
+    size_t              cumulative      = 0;
+    size_t              nextPoint       = 0;
+    CpuWindow           cpuWin          = cpuBegin(0);
+    uint64_t            lastFrames      = 0;
+    auto                lastFrameStats  = tui->frameStats();
+    uint64_t            lastCompactions = 0;
+    // 区间统计 (上次采样到本次采样之间): 轮数、活上下文峰值、耗时
+    size_t intervalRounds  = 0;
+    size_t intervalMaxLive = 0;
+    auto   intervalStart   = std::chrono::steady_clock::now();
+
+    // 只读活上下文 token 数 (每轮调一次, 不生成消息 JSON)
+    auto readLiveTokens = [&]() -> size_t {
+        size_t             value = 0;
+        std::promise<void> p;
+        asio::post(*agent->ioCtx, [&]() {
+            if (auto sess = agent->agentContext->getSession(sessionId)) {
+                value = sess->contextStats->contextTokens;
+            }
+            p.set_value();
+        });
+        p.get_future().wait();
+        return value;
+    };
+
+    std::vector<ResourceResult> samples;
+    std::vector<size_t>         liveContexts;
+    auto                        driveStart = std::chrono::steady_clock::now();
+    while (nextPoint < points.size() && round < maxRounds) {
+        std::string text = fmt::format("CTX-PROBE-{:06d}: ", round + 1);
+        if (text.size() < msgBytes) {
+            text.append(msgBytes - text.size(), 'x');
+        }
+        const auto before = readSession();
+        tui->sendToPeer(agent::WireUserInput{sessionId, text});
+        if (!waitRoundDone(before, roundTimeoutMs)) {
+            console << fmt::format(
+                "  [tui_longctx] 第 {} 轮 {} ms 未完成, 停止驱动\n",
+                round + 1,
+                roundTimeoutMs
+            );
+            break;
+        }
+        ++round;
+        cumulative += tokensPerRound;
+        ++intervalRounds;
+        intervalMaxLive = std::max(intervalMaxLive, readLiveTokens());
+        // 长跑进度: 直接写 stderr (stdout 交给 console 缓冲, 结束才输出)
+        if (round <= 3 || round % 50 == 0) {
+            std::cerr << fmt::format(
+                "  [tui_longctx] 第 {} 轮完成, 估算累计 {} token\n",
+                round,
+                cumulative
+            );
+        }
+
+        while (nextPoint < points.size() && cumulative >= points[nextPoint]) {
+            const size_t target = points[nextPoint];
+            auto         snap   = readSession();
+            fillSessionDetail(snap);
+
+            ResourceResult res;
+            res.mode          = "tui_longctx";
+            res.side          = "self";
+            res.point         = tokenPointName(target);
+            res.tokens        = cumulative;
+            res.pluginsAgent  = agent->agentContext->pluginManager
+                                    ? agent->agentContext->pluginManager->list().size()
+                                    : 0;
+            res.pluginsClient = pluginMgr->list().size();
+            res.cpuIdlePct    = -1.0;
+            res.cpuBusyPct    = cpuEnd(cpuWin);
+            res.cpu           = cpuWin.result;
+            cpuWin            = cpuBegin(0);
+
+            const auto fs = tui->frameStats();
+            res.frames     = fs.frames - lastFrames;
+            res.frameAvgMs = (res.frames > 0)
+                                 ? (fs.totalRenderMs - lastFrameStats.totalRenderMs) / res.frames
+                                 : -1.0;
+            lastFrames     = fs.frames;
+            lastFrameStats = fs;
+
+            uint64_t compactions = 0;
+            if (agent->agentContext->metrics) {
+                compactions = agent->agentContext->metrics->compactions();
+            }
+            const uint64_t compactionDelta = compactions - lastCompactions;
+            lastCompactions                = compactions;
+
+            size_t clientMsgs = 0;
+            if (auto tuiSnap = tui->sharedState().readSnapshot()) {
+                clientMsgs = tuiSnap->messages().size();
+            }
+
+            res.viewCount = snap.viewWindowCount;
+            res.viewBytes = snap.viewWindowBytes;
+            res.llmCount  = snap.llmCount;
+            res.llmBytes  = snap.llmBytes;
+            const auto intervalMs
+                = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - intervalStart
+                )
+                      .count();
+            const double avgRoundMs
+                = intervalRounds > 0 ? static_cast<double>(intervalMs) / intervalRounds : -1.0;
+            res.note = fmt::format(
+                "累计内容 {} token (第 {} 轮); 服务端回报用量 {} token; 活上下文 {} / 上限 {} "
+                "(区间峰值 {}); 压缩 {} 次 (累计 {}); 展示窗口 {} 条 (总 {}); 客户端 {} 条; "
+                "区间 {} 轮/每轮均 {:.0f} ms; 渲染 {} 帧/平均 {:.3f} ms",
+                cumulative,
+                round,
+                snap.usageTotal,
+                snap.liveContextTokens,
+                snap.maxContextTokens,
+                std::max(intervalMaxLive, snap.liveContextTokens),
+                compactionDelta,
+                compactions,
+                snap.viewWindowCount,
+                snap.viewTotalCount,
+                clientMsgs,
+                intervalRounds,
+                avgRoundMs,
+                res.frames,
+                res.frameAvgMs
+            );
+
+            collectLogicalForTuiLongCtx(res, agent, tui, sessionId);
+            // 不在采样点做 malloc_trim/_heapmin: 它会提前把空闲页归还系统,
+            // 后面的采样点就量不到真实稳态 (端点之间的回收行为也会被抹平)
+            fillResourceMemDetail(res, 0, true, false);
+            filterNoisyModules(res.modules);
+            reporter.addResource(res);
+            printResourceResult(res, console);
+            phaseTracker.mark(
+                res.point,
+                fmt::format(
+                    "累计 {} token, 活上下文 {} token, 压缩 {} 次",
+                    cumulative,
+                    snap.liveContextTokens,
+                    compactions
+                )
+            );
+            samples.push_back(res);
+            liveContexts.push_back(snap.liveContextTokens);
+            intervalRounds  = 0;
+            intervalMaxLive = snap.liveContextTokens;
+            intervalStart   = std::chrono::steady_clock::now();
+            ++nextPoint;
+        }
+    }
+
+    phaseTracker.printTable("tui_longctx 分阶段内存", console);
+    reporter.attachPhases("tui_longctx", "self", phaseTracker.samples());
+
+    // ---- 汇总表: 各采样点的规模/内存/渲染 ----
+    console << fmt::format(
+        "\n  [tui_longctx] 采样汇总 (累计 {} token, 共 {} 轮, 驱动总耗时 {:.1f} s, mock 普通轮次 {} "
+        "/ 压缩 {} 次)\n",
+        cumulative,
+        round,
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - driveStart).count(),
+        sim.turnCount->load(),
+        sim.compactCount->load()
+    );
+    console << fmt::format(
+        "    {:<8} {:>10} {:>10} {:>8} {:>8} {:>8} {:>6} {:>6} {:>8} {:>8}\n",
+        "point",
+        "累计token",
+        "活上下文",
+        "RSS",
+        "私有",
+        "峰值RSS",
+        "线程",
+        "句柄",
+        "帧数",
+        "帧ms"
+    );
+    for (size_t i = 0; i < samples.size(); ++i) {
+        const auto& r = samples[i];
+        console << fmt::format(
+            "    {:<8} {:>10} {:>10} {:>8.2f} {:>8.2f} {:>8.2f} {:>6} {:>6} {:>8} {:>8.3}\n",
+            r.point,
+            r.tokens,
+            liveContexts[i],
+            r.rssMB,
+            r.privateMB,
+            r.mem.peakRssMB,
+            r.mem.threads,
+            r.mem.fds,
+            r.frames,
+            r.frameAvgMs
+        );
+    }
+
+    tui->stop();
+    capture.restore();
+    std::cout << console.str();
+
+    serverIO->stop();
+    clientWork.reset();
+    clientCtx.stop();
+    if (clientThread.joinable()) {
+        clientThread.join();
+    }
+    // 先投递根的异步销毁 (摘挂载/插件卸载还在 io 线程上跑), 再停 io
+    host->unmountRoot("root");
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    agentWork.reset();
+    agent->ioCtx->stop();
+    if (agentThread.joinable()) {
+        agentThread.join();
+    }
+    host.reset();
+    agent.reset();
+    sim.stop();
+    std::error_code ec;
+    std::filesystem::remove_all(tmpDir, ec);
+#endif
 }
 
 void benchResourceRealAll() {

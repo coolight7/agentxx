@@ -189,7 +189,8 @@ path/to/agentxx_test --log-level warn string_util regex
     - 资源基准 (resource_* 模块, 详见 docs/zh-cn/design/benchmark.md):
       同进程 CLI/TUI、真实两进程 (server/client 子进程)、真实运行的 TUI (FTXUI 界面线程,
       含帧耗时/渲染字节)、真实 server 单独运行 (空载漂移/WS 轮次/断连回收)、
-      PTY 驱动的真实 TUI 子进程、插件逐项边际内存
+      PTY 驱动的真实 TUI 子进程、真实 TUI 长上下文 (逐轮流式对话, 100K~2M 累计输入,
+      含超限后的自动压缩)、插件逐项边际内存
     - 指标: RSS/PSS/私有脏页/匿名/峰值/线程/fd + glibc 堆在用与碎片 + malloc_trim
       可回收 + smaps 模块级分解 (可执行文件/项目库/各插件/系统库/堆/匿名) +
       逻辑内存 (会话消息/TUI 状态/工具 schema) + 分阶段增量 + CPU 用户/内核时间

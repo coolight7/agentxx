@@ -38,6 +38,8 @@
 - cxx_pluginxx_ui 剥离 musicxx 特化渲染类型
 - 仿照 musicxx，重构 js 插件
 - 重构插件数据保存目录规范
+- async 系列tool一直提示正在调用中
+- 压缩提示消息写入压缩后的提示词
 
 - SVG/HTML绘制支持
 - 透视UI，虚拟现实/玻璃显示(车挡风玻璃、眼镜)

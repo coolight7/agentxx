@@ -37,6 +37,11 @@ void benchResourceRealTuiChild();
 /// 场景 4: 逐插件加载/卸载的内存边际成本与回收量
 void benchResourcePluginAttrib();
 
+/// 场景 5: 真实 TUI 长上下文 (真实流式回复 + 逐字渲染 + 超限后自动压缩后的稳态)
+/// - 逐轮真实对话, 累计内容 token 达到 100K/200K/1M/2M 时采样
+/// - 环境变量说明见该函数上方的注释 (AGENTXX_TUI_CTX_*)
+void benchResourceTuiLongCtx();
+
 /// 运行全部真实运行场景
 void benchResourceRealAll();
 
