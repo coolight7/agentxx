@@ -27,7 +27,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ session     │ broadcasts   │ scheduler   │  ...19 张 agent + 16 张 client
+         │ tools       │ session     │ broadcasts   │ scheduler   │  ...18 张 agent + 16 张 client
          │ register/   │ 会话上下文  │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │ 与取消      │ subscribe    │ offload     │  plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
@@ -43,8 +43,8 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   - 核心 vtable 精简：移除原 `strdup` 槽位，改为基于 `alloc` 的头文件内联实现 `pluginxx_strdup`
   - C++ 辅助便捷层：`PluginxxStringView` 与 `PluginxxString` 内置 `operator const T*()` 隐式取址转换与 `empty()` 方法，文件尾部提供值传兼容重载与 `pluginxx_string_free` 重载
 - **接口表独立演进**：每张表首字段 `int32_t version` 独立版本号；表内函数指针可能为 `NULL` (主程序未实现该子能力，调用前判空)
-- **版本限制**：全局 `PLUGINXX_API_VERSION` 当前 **7**、`AGENTXX_CLIENT_PLUGIN_API_VERSION` 当前 **8**；加载时要求 `>=` 主程序版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
-- **v7/v8 契约的实施方式（不改库）**: `cxx_pluginxx` 的 `abi.h` 里 `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认**恒为 1**（该库被多个主程序共用，默认值不跟随任一主程序的契约）；agentxx 在 `agent/CMakeLists.txt` 用选项 `AGENTXX_PLUGIN_API_VERSION`（当前 7）向全局 `CMAKE_C_FLAGS/CMAKE_CXX_FLAGS` **宏覆盖**，并同时传给 `cxx_pluginxx` 的嵌套构建（它的 PUBLIC `INTERFACE_COMPILE_DEFINITIONS` 也跟着变成 7），嵌套构建（插件 / 测试 / 客户端）继承同一份 FLAGS，因此框架、使用方与插件看到的值一致；插件不链接框架库也能拿到（只用头文件）。覆盖时**先剔除旧值再追加**，否则缓存里的上一代 `-DPLUGINXX_API_VERSION=3` 会一直留着，插件与主程序编译到不同代次；改完需要让嵌套工程重新配置
+- **版本限制**：全局 `PLUGINXX_API_VERSION` 当前 **9**、`AGENTXX_CLIENT_PLUGIN_API_VERSION` 当前 **9**；加载时要求 `>=` 主程序版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
+- **v8/v9 契约的实施方式（不改库）**: `cxx_pluginxx` 的 `abi.h` 里 `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认**恒为 1**（该库被多个主程序共用，默认值不跟随任一主程序的契约）；agentxx 在 `agent/CMakeLists.txt` 用选项 `AGENTXX_PLUGIN_API_VERSION`（当前 9）向全局 `CMAKE_C_FLAGS/CMAKE_CXX_FLAGS` **宏覆盖**，并同时传给 `cxx_pluginxx` 的嵌套构建（它的 PUBLIC `INTERFACE_COMPILE_DEFINITIONS` 也跟着变成 9），嵌套构建（插件 / 测试 / 客户端）继承同一份 FLAGS，因此框架、使用方与插件看到的值一致；插件不链接框架库也能拿到（只用头文件）。覆盖时**先剔除旧值再追加**，否则缓存里的上一代 `-DPLUGINXX_API_VERSION=3` 会一直留着，插件与主程序编译到不同代次；改完需要让嵌套工程重新配置
 - **加载与挂载分离**：`AgentHost` 持有插件管理器（进程一份，一次 `create`/`start`），每个 agent 在 `init` 的 `plugin_mount` 步骤 `mountAgentAsync` 挂载；加载表见 yaml `plugin.list`，本会话挂哪些由 `plugin.mount` 决定 (`policy: all|none|listed` + `list` + 每插件 `args`)，子代理与插件自己创建的根默认 `none`
 - **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由主程序内部投递到 IO 线程；操作 `start/cancel` 与 `start/stop/mount/unmount` 由主程序驱动（在插件执行线程上调用，见 §15.3）；`PluginxxOperatorNotify.done` 可任意线程回调；主程序派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 一律经 `dispatchToPlugin` 投到插件执行线程
 - **实例生命周期、Operation 终态与租约**：见第 15 节（实例生命周期契约，所有插件必须遵守）
@@ -512,26 +512,64 @@ C++ 侧有两种消费形态在插件 SDK (`agent_plugin_kit.h` / `client_plugin
 > 引用指向的挂载不存在或序号已过期要读挂载表, 只能在 IO 线程上判, 因此按
 > **受理后失败**交回 (`status` 非 OK, `payload` 给原因)。
 
-> 共 19 张 agent 侧接口表: 10 张**业务表** (`agentxx.agent.*`, 主程序实现) + 9 张**通用表**
+> 共 18 张 agent 侧接口表: 9 张**业务表** (`agentxx.agent.*`, 主程序实现) + 9 张**通用表**
 > (由插件框架声明与实现, agent 侧与 client 侧各一份)。通用表的 IID 是 `<应用名>.<表名>`,
 > 本项目应用名 `agentxx`, 也就是 `agentxx.log` / `agentxx.broadcasts` 这一组 (源码里写作
 > `PLUGINXX_APP_ID("log")`, 表名部分冻结) —— **按 `pluginxx.log` 或 `agentxx.agent.log` 查询都不会命中**。
-> 另有一张 `agentxx_plugin_net` (网络, 两侧都提供, 不计入上面的 19 张), 见 §22。
+> 另有一张 `agentxx_plugin_net` (网络, 两侧都提供, 不计入上面的 18 张), 见 §22。
 
-### 8.1 业务表 (`agentxx.agent.*`, 10 张)
+### 8.1 业务表 (`agentxx.agent.*`, 9 张)
 
 | IID | 版本 | 能力 |
 |-----|------|------|
 | `agentxx_agent_tools` | 5 | `register_tool/unregister_tool`, `call_tool` (插件互调, cb 保证 IO 线程 post; 取消统一用 `agentxx.cancel.op_cancel`); v3 = 工具成败只由最终通知的状态位表达，结果文本不带 `[Error]` 前缀; v4 = 工具结果改成**两段上报** (正文原样字节 + 元数据 JSON), 完成通知器换成 `AgentxxPluginToolNotify`, 互调回调换成 `AgentxxPluginToolCallback` (见 §8.4); v5 = `register_tool`/`unregister_tool` 改成异步操作契约，`call_tool_async` 更名为 `call_tool` (见 §8.0) |
 | `agentxx_agent_permission` | 3 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 完成时判定数组按 JSON 数组文本交回; 见下方说明)。v3 = 全部成员改成异步操作契约 (见 §8.0) |
-| `agentxx_agent_session` | 4 | `get_share_store/add_share_store/emit_message_tip` (v4 起异步, 见 §8.0) + `get_session_work_dir(agent, session_id)` (会话生效工作目录: worktree 绑定优先, session_id 为空返回默认工作目录) + `is_canceled(agent, thread_id)` (advisory 查询, 权威通知仍是取消回调)。后两项 v3 从插件框架通用表迁入 |
-| `agentxx_agent_context` | 3 | 会话 LLM 上下文查询: `get_messages/messages_count` (完成时正文与十进制条数经 `payload` 交回)。上下文由会话持有 (图状态不含 `messages` 通道), 插件需要上下文内容时经此按需查询; 只要数量用 `messages_count`, 避免拉取整段上下文。v3 = 改成异步操作契约 (见 §8.0) |
+| `agentxx_agent_session` | 5 | `get_share_store/add_share_store` (v4 起异步, 见 §8.0) + `get_session_work_dir(agent, session_id)` (会话生效工作目录: worktree 绑定优先, session_id 为空返回默认工作目录) + `is_canceled(agent, thread_id)` (advisory 查询, 权威通知仍是取消回调)。v5 = 补齐会话消息读写: 删除 `emit_message_tip` (提示消息改用写一条 `tip` 角色的展示消息), 表尾追加展示历史与 LLM 上下文的 `get/count/set/append/update` 十项 (原 `agentxx_agent_context` 表的两个成员并入这里, 该表已删除), 详见 §8.1.1 |
 | `agentxx_agent_model` | 3 | `get_config(agent)` (该 agent 的主模型及关联配置 JSON, 经 `payload` 交回)。v3 = 改成异步操作契约 (见 §8.0) |
 | `agentxx_agent_prompt` | 4 | `get_prompt/set_prompt` (主程序提示词读写) + `get_tool_prompt(tool_name)` (工具提示词配置 JSON `{depict, args}`, 主程序级配置; v3 从插件框架通用表迁入)。v4 = 全部成员改成异步操作契约 (见 §8.0) |
 | `agentxx_agent_resources` | 3 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变)。v3 = 全部成员改成异步操作契约 (登记类完成时已生效, 清单经 `payload` 交回, 见 §8.0) |
-| `agentxx_agent_graph` | 3 | 执行图扩展 (v3 起全部异步, 见 §8.0): `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改主程序执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 主程序构建 engine 前处理)。**图状态不含对话上下文**: `state_json` 里没有 `messages` 通道 (LLM 上下文由会话持有), 只有控制类通道与只读影子通道 `xx_messagesMeta` (条数/版本/角色分布/末尾消息摘要, 载荷与上下文大小无关); 需要上下文内容用 `agentxx_agent_context` 查询; **写 `messages` 通道没有兼容路径** —— 插件返回的 `{"channel":"messages", ...}` write 按“写入未知通道”失败, 要变更会话内容用会话运行时 (`agentxx_agent_runtime`) 的 `send_input`。**条件边用 `xx_has_tool_calls`** (agentxx 注册, 语义 = 最后一条 assistant 是否带 tool_calls; 读 `xx_messagesMeta.last_assistant_tool_calls`, 缺该通道时回退扫描 `messages` 通道), 内置 `has_tool_calls` 在新架构下恒为 false, 不要使用 |
+| `agentxx_agent_graph` | 3 | 执行图扩展 (v3 起全部异步, 见 §8.0): `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改主程序执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 主程序构建 engine 前处理)。**图状态不含对话上下文**: `state_json` 里没有 `messages` 通道 (LLM 上下文由会话持有), 只有控制类通道与只读影子通道 `xx_messagesMeta` (条数/版本/角色分布/末尾消息摘要, 载荷与上下文大小无关); 需要上下文内容用 `agentxx_agent_session` 的 `get_llm_messages` 查询; **写 `messages` 通道没有兼容路径** —— 插件返回的 `{"channel":"messages", ...}` write 按“写入未知通道”失败, 要变更会话内容用会话运行时 (`agentxx_agent_runtime`) 的 `send_input` 或会话表的 `append_llm_messages`。**条件边用 `xx_has_tool_calls`** (agentxx 注册, 语义 = 最后一条 assistant 是否带 tool_calls; 读 `xx_messagesMeta.last_assistant_tool_calls`, 缺该通道时回退扫描 `messages` 通道), 内置 `has_tool_calls` 在新架构下恒为 false, 不要使用 |
 | `agentxx_agent_mount` | 2 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载时完成回调给失败)。v2 = 两个成员改成异步操作契约 (见 §8.0) |
 | `agentxx_agent_runtime` | 3 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调投递) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。v2 表尾追加后台任务四成员 (`submit/cancel/get/list_async_work`); v3 = 21 个成员全部改成异步操作契约 (见 §8.0): 句柄 id 与查询结果经 `payload` 交回 (id 是十进制文本), 不再有 `out_*` 出参, 基线重置为整表长度。`get_async_work` 对不存在或非本实例提交的任务按 `not_found` 交回。详见 §19 |
+
+### 8.1.1 会话消息读写 (`agentxx_agent_session` v5)
+
+会话里有两份消息, 插件以前只能读到其中一份的一半; v5 把两份都做成可读可写:
+
+| 消息 | 存在哪里 | 形态 |
+|------|----------|------|
+| 展示历史 (view messages) | `Session::viewWindow_` + 会话库 `view_message` 表 | `ViewMessage` JSON: `id` / `role` (user/assistant/thinking/system/tool/tip/interrupt/event) / `text` / `startTimeMs` / `durationMs` / `collapsed` / `source` + 角色专属子结构 (`tool` / `tip` / `think` / `interrupt` / `attachments`) |
+| LLM 上下文 (llm messages) | `Session::messages_` + 会话库 `llm_context` 表 | `ChatMessage` JSON: `role` (user/assistant/tool/system) / `content` / `tool_calls` / `tool_call_id` / `tool_name` / `tool_status` / `image_urls` / `audio_urls` / `video_urls` / `reasoning_content` / `extra` 等 |
+
+两组各有五个成员 (全部是异步操作契约, 见 §8.0; `session_id` 必须是已加载的会话):
+
+| 成员 | 入参 | 完成时 `payload` |
+|------|------|------------------|
+| `get_view_messages` / `get_llm_messages` | — | JSON 数组文本 (`get_llm_messages` 每条多一个 `id`) |
+| `count_view_messages` / `count_llm_messages` | — | 十进制条数 |
+| `set_view_messages` / `set_llm_messages` | `messages_json` (数组) | 分配到的 `id` 数组文本 (与入参同序) |
+| `append_view_messages` / `append_llm_messages` | `messages_json` (数组) | 分配到的 `id` 数组文本 (与入参同序) |
+| `update_view_messages` / `update_llm_messages` | `messages_json` (数组, 每条带 `id`) | `{"updated":N,"missing":["id",…]}` |
+
+约定:
+
+- **`append` 是复数**: 一次传多条, 等价于按顺序逐条写; 返回值是按同序分配的 `id`。
+- **`update` 按 `id` 定位, 一次多条**: 每个元素是“整条新消息 + `id`”, 没给的字段回到默认
+  值 (建议先 `get` 再改); 找不到的 `id` 不算失败, 列在 `missing` 里 (插件可能拿着已被压缩
+  或改写替换掉的旧 id)。
+- **`id`**: 展示历史的 `id` 由会话分配 (`msg_000001` 递增, 不落库以外的地方); LLM 上下文
+  的 `id` (`llm_000001`) 只在**进程内稳定** —— 不落库, 重启/重新加载后按加载顺序重新分配,
+  插件不要把它当长期标识。
+- **视觉效果一致**: 写展示历史时, 视觉为空的消息 (只有空白/零宽字符且无附件) 被丢弃, 与
+  主程序自己的写入侧同一判据; 写入后立即广播增量 (`insert_message` / `update_message`)
+  给已连接客户端, `set_view_messages` 是整段替换, 客户端按一次尾部同步整体重建。
+- **提示消息**: 旧的 `emit_message_tip` 已删, 改用
+  `{"role":"tip","text":"…","tip":{"tip_level":"info|warning|error"}}` 写一条展示消息。
+- **写 LLM 上下文 = 直接改会话**: 主程序不做结构校验 (tool_calls 与 tool 结果是否配对、是否
+  以 system 开头由插件自己负责); 下一轮模型调用就能看到。写入不会刷新图状态里的只读影子通道
+  `xx_messagesMeta`, 下一轮节点写入时自然刷新。
+- **流式输出中不能整段替换**: `set_view_messages` 在会话还有未定稿的流式段 (`streamingView`
+  非空) 时按失败交回, 等本轮结束再写。
 
 ### 8.2 通用表 (`agentxx.*`, 9 张)
 
@@ -551,7 +589,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 | `agentxx.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |
 | `agentxx.tasks` | 1 | 后台任务主程序托管: `register_task/cancel_task` (kit `spawn` 自动注册; 主程序登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
 
-> 另一张 (不计入上面的 19 张): `agentxx_plugin_net` (v2) — `call` / `cancel`,
+> 另一张 (不计入上面的 18 张): `agentxx_plugin_net` (v2) — `call` / `cancel`,
 > HTTP / WebSocket / TCP / UDP / HTTP 服务端都转给 `utilxx::NetHub`, 详见 §22。
 > v2 = `call_async` 删掉, `call` 本身改成异步操作契约 (返回受理句柄 + 完成回调),
 > 所以现在**没有同步版本**: 不想收结果就传 `cb = NULL`。
@@ -560,13 +598,18 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 > `X_BASELINE_SIZE` (基线字节数); 需要按 agent 区分的业务表为 v2 起 (v1 只在本进程单 agent
 > 下成立, 已不再兼容), 其余表为 v1 (基线 = 完整表长)。
 >
-> **代次 (全局 API 版本) 与当前状态**: agent 侧现在是 **v7**、client 侧 **v8**
-> (2026-11 接口表异步操作契约) —— 插件接口表不再有"同步拿结果"的成员: 受理即返回
+> **代次 (全局 API 版本) 与当前状态**: agent 侧现在是 **v9**、client 侧 **v9**
+> (2026-11 会话消息读写) —— 插件接口表不再有"同步拿结果"的成员: 受理即返回
 > `PluginxxOperatorHandle*`, 结果 (正文 / 句柄 id / 失败原因) 经 `PluginxxOperatorCallback`
 > 恰好一次交回, 返回 `NULL` = 未受理 + `error_out` (见 §8.0)。client 侧连同步查询成员
 > 也没有保留, 渲染回调与命令 `execute` 同样是异步契约。插件侧不需要协程的场合用
 > 表调用形态之一 (`co_await *Async(...)` / `tableOpCallback`)。
 > 两端需同一代头文件重编。
+> 更早的档位: v8 (2026-11 入口符号与 `create` 合并) —— `agentxx_agent_plugin_*` /
+> `agentxx_client_plugin_*` 入口、`get_info` 改填表、`create` 与 `stop`/`destroy` 同一套
+> 异步 "恰好一次 notify" 协议。
+> 更早的档位: v7 (2026-11 表成员全改异步操作契约) —— 9 张 agent 业务表与运行时表、
+> 框架通用表都不再有同步成员; SDK 只留 `co_await xxxAsync(...)` / `tableOpCallback`。
 > 更早的档位: v6 (2026-11 工具结果两段上报) —— `agentxx_agent_tools` 抬到 4: 工具结果拆成
 > "正文 (原样字节) + 元数据 JSON"两段, 完成通知器换成 `AgentxxPluginToolNotify`,
 > 插件互调回调换成 `AgentxxPluginToolCallback` (见 §8.4)。
@@ -2404,7 +2447,7 @@ plugin:
 
 | 用例 | 覆盖 |
 |---|---|
-| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/功能埋点实现行/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 19 张表可查, 拆挂载与关闭收尾 |
+| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/功能埋点实现行/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 18 张表可查, 拆挂载与关闭收尾 |
 | `plugin_multi_mount` | 真实示例插件 `example_multi_mount`: 计数与 `config_json` 按挂载隔离、重挂归零、旧引用失效 |
 | `plugin_multi_instance` | 多实例三铁律 (两个管理器各一实例) |
 | `plugin_runtime` / `plugin_cleanup` / `plugin_dispatch` / `plugin_feature` / `plugin_resources` | 挂载语义下的注册可逆与清单 |

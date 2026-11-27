@@ -203,6 +203,11 @@ public:
     /// - 可从任意线程调用 (统一投递到本端点的执行器)
     void onAsyncWorksChanged() override;
 
+    /// 展示历史被整段替换后重推一次同步 (插件接口表 `set_view_messages`)
+    /// - 尾部窗口大小与常规接入/切换会话一致 (`effectiveSyncTailCount`)
+    /// - 可从任意线程调用 (统一投递到本端点的执行器)
+    void onViewMessagesReplaced() override;
+
     /// 驱动循环 run() 是否仍在运行 (用于停止时等待其退出)
     bool running() const noexcept {
         return running_.load(std::memory_order_acquire);

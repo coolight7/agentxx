@@ -52,17 +52,6 @@ static_assert(
 );
 
 template<>
-struct IfaceMeta<AgentxxPluginContextIface> {
-    static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_MIN_VERSION;
-    static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_BASELINE_SIZE;
-};
-
-static_assert(AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_BASELINE_SIZE >= 8u);
-static_assert(
-    AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_BASELINE_SIZE <= sizeof(AgentxxPluginContextIface)
-);
-
-template<>
 struct IfaceMeta<AgentxxPluginModelIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_MODEL_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_MODEL_BASELINE_SIZE;

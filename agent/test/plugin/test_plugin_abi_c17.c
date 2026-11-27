@@ -22,9 +22,10 @@
    返回 NULL 表示未受理); v8 = 入口协议与命名换代: `get_info` 改成填表,
    `create` 与 `start` 合并成一个异步 `create` (返回 void, 上下文走出参, 可重入),
    `destroy` 也改成异步; 入口符号与表 IID 改下划线 (`agentxx_agent_plugin_*` /
-   `agentxx_agent_*`) —— 旧插件被拒, 必须重编 */
-_Static_assert(PLUGINXX_API_VERSION == 8, "agent 侧 ABI 版本必须为 8");
-_Static_assert(PLUGINXX_MIN_API_VERSION == 8, "agent 侧最低兼容 ABI 版本必须为 8");
+   `agentxx_agent_*`); v9 = 会话消息读写 (`agentxx.agent.session` 抬到 5, 旧
+   `agentxx.agent.context` 表删除) —— 旧插件被拒, 必须重编 */
+_Static_assert(PLUGINXX_API_VERSION == 9, "agent 侧 ABI 版本必须为 9");
+_Static_assert(PLUGINXX_MIN_API_VERSION == 9, "agent 侧最低兼容 ABI 版本必须为 9");
 _Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 9, "client 侧 ABI 版本必须为 9");
 _Static_assert(
     AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 9,

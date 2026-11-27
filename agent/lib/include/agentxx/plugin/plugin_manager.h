@@ -202,7 +202,7 @@ public:
     /// - `net` 由本主程序实现, 单独一张 (`agentxx.net`), 不计入上面两组
     /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §8 与根 `AGENTS.md`
     ///   (测试模块 `boundaries` 会校验三者一致)
-    inline static constexpr size_t kInterfaceTableCount = 9 + 10;
+    inline static constexpr size_t kInterfaceTableCount = 9 + 9;
 
     /// 本管理器唯一的工作池 (构造即建; 插件阻塞工作 / dlopen / 会话加载等共用)
     /// - 主程序把它交给 `AgentContext::threadPool`, 工具 offload / 会话加载等借用方共用它

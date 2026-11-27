@@ -59,7 +59,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 - **多轮对话**: 支持完整的多轮对话管理，维护展示历史 (落库为 append-only 完整历史, 会话内存只常驻尾部窗口) 和会话 LLM 上下文 (可压缩的调用上下文) 双消息集
   - **会话是 LLM 上下文的唯一权威**: 上下文以 typed 形式 (`std::vector<neograph::ChatMessage>`) 存在会话里, 带单调递增版本号 `messagesVersion`; Json 形态 (`Session::llmMessagesJson()`) 只在持久化 / `WireGetContext` / 插件查询等边界按需惰性生成
-  - **图状态不再持有上下文**: neograph 执行图里没有 `messages` 通道, `state.serialize()` (每 super-step checkpoint、VALUES 事件、插件 stateJson) 的载荷与上下文大小无关; 需要上下文内容的插件经接口表 `agentxx_agent_context` 查询, 图状态里的只读通道 `xx_messagesMeta` 只给条数/版本/末尾消息摘要
+  - **图状态不再持有上下文**: neograph 执行图里没有 `messages` 通道, `state.serialize()` (每 super-step checkpoint、VALUES 事件、插件 stateJson) 的载荷与上下文大小无关; 需要上下文内容或要改写上下文的插件经会话接口表 `agentxx_agent_session` 的 `get_llm_messages` / `append_llm_messages` 一类成员读写, 图状态里的只读通道 `xx_messagesMeta` 只给条数/版本/末尾消息摘要
   - 上下文变更只经 `Session::appendMessages` / `replaceMessages` / `truncateMessages` 单一入口 (节点与中间件经 `agentxx/nodes/session_context.h` 的入口调用), 不再有"图状态写通道 + 轮末整体覆盖对账"的双份拷贝
   - ReAct 循环路由由 `llm` 节点按"本轮是否有 tool_calls"返回 `Command.goto_node` (tools / agent_end) 给出, 不再依赖读上下文的条件边; 节点级 `xx_autoRoute=false` 可关闭, 交由图定义/自定义路由节点接管
 - **流式输出**: LLM 响应以增量 Delta 事件推送 (stream_begin / text_token / thinking_token / insert_message / update_message / stream_end + 界面状态类 turn_start / turn_end / node_start / node_end / message_tip / gen_status)，每个 Delta 携带单调递增 seq 用于重放与同步; **展示历史的唯一写者是 agent**: 消息边界/正文归组/耗时/折叠默认值/id 全在 agent 端决定, 客户端只按 op 维护副本 (按 id 追加文本 / 整条 upsert / 丢弃流式项), 不再有归组与回填启发式 (见下文 "展示历史 (viewMessages) 与客户端副本")
@@ -2129,7 +2129,7 @@ agent/
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM 调用, 动态模型切换)
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
-│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 19 张 agent 接口表 + 16 张 client 接口表)
+│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 18 张 agent 接口表 + 16 张 client 接口表)
 │   │   │   │                     #   插件框架 (C ABI 契约 / SDK 核心 / 主程序运行时 / 加载 / 清单解析) 已拆为
 │   │   │   │                     #   agent/third_party/cxx_pluginxx (命名空间 pluginxx); 本目录只保留主程序业务实现
 │   │   │   ├── api/              # 插件 API 头 (插件/主程序共用 C ABI 契约 + 插件 SDK; 主程序侧引用也走 api/ 前缀)
@@ -2622,7 +2622,7 @@ EventBus (事件总线)
 ## 附录 B: 插件系统 v1 要点 (详见 plugins.md)
 
 - COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `pluginxx_strdup`), 能力按 IID 字符串查询独立接口表 (每张表四件套: IID + `struct_size` + `version`/`_VERSION` + `_MIN_VERSION` + `_BASELINE_SIZE`; 判定 = `version >= MIN_VERSION` 且 `struct_size >= BASELINE_SIZE`); 插件级要求 `api_version >= PLUGINXX_MIN_API_VERSION`
-- Agent 侧 19 张接口表: 9 张通用表 (`agentxx.*`: log / json / config / plugins / broadcasts / capabilities / scheduler / tasks / cancel, 另有不计入的 `agentxx_plugin_net`) + 10 张业务表 (`agentxx.agent.*`: tools / permission / session / context / model / prompt / resources / graph / mount / runtime)
+- Agent 侧 18 张接口表: 9 张通用表 (`agentxx.*`: log / json / config / plugins / broadcasts / capabilities / scheduler / tasks / cancel, 另有不计入的 `agentxx_plugin_net`) + 9 张业务表 (`agentxx.agent.*`: tools / permission / session / model / prompt / resources / graph / mount / runtime); 会话消息 (展示历史与 LLM 上下文各五个成员) 在 `session` 表里, 原来的 `context` 表已并入并删除
 - Client 侧 16 张接口表: 10 张通用表 (与 agent 侧同一套: log / json / config / plugins / broadcasts / capabilities / scheduler / tasks / cancel / net) + 6 张自有表 (`agentxx.client.*`: ui / session / wire / self / timer / keybind; 详见 client_plugin_api.h)。客户端事件走广播频道, 不再有 `events` / `json` / `log` 三张表
 - 附加成员与结构体规则: 表成员只能追加在表尾 (基线不变 + `ifaceHas` 判定), 重排/改签名/删成员要换 IID; 跨边界结构体 (spec/input) 统一带 `struct_size` (填充方填长度, 读取方 `specSizeOk`/`specHas` 判定) —— 见 plugins.md §17
 - 现代 SDK (plugin_kit.h): 

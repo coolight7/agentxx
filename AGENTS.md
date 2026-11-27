@@ -7,6 +7,7 @@
     - Linux x86_64 + WSL扩展功能
     - Windows 10+ x86_64
     - Android 5.0+
+    - Macos
 
 ## 整体设计 & 建议
 - 详细主程序架构设计见[design](docs/zh-cn/design/index.md)，插件设计文档见[plugins.md](docs/zh-cn/design/plugins.md)，客户端界面层（描述层/适配/kit/GUI 接入）见[ui-layer.md](docs/zh-cn/design/ui-layer.md)，事件中枢与后台任务见[events.md](docs/zh-cn/design/events.md)，当大幅修改代码时，请参考并更新
@@ -899,10 +900,13 @@ path/to/agentxx_test --log-level warn string_util regex
   **入参都是借用视图**: 主程序投递前必按值拷贝 (`copyView`), 否则跨线程执行时
   heap-use-after-free (ASan 实测); 派发到插件线程的闭包同理, 不得捕注册表快照里的指针
   (只捕回调与它的 userData)
-- 接口表数量: agent 侧 19 张 (9 张通用表 `<应用名>.*` 即 `agentxx.*`: broadcasts/capabilities/
-  scheduler/tasks/cancel/plugins/config/json/log + 10 张业务表 `agentxx.agent.*`,
+- 接口表数量: agent 侧 18 张 (9 张通用表 `<应用名>.*` 即 `agentxx.*`: broadcasts/capabilities/
+  scheduler/tasks/cancel/plugins/config/json/log + 9 张业务表 `agentxx.agent.*`,
   不含两侧都有的 `agentxx.net`;
-  业务表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`、
+  业务表含 `agentxx.agent.session` (共享存储 / 工作目录 / 取消查询 + **会话消息读写**:
+  展示历史与 LLM 上下文各一套 `get/count/set/append/update`; `append`/`update` 都是复数,
+  `update` 按消息 id 定位; LLM 消息的 id 只在进程内稳定; 旧的 `agentxx.agent.context` 表
+  与 `emit_message_tip` 已删)、
   `agentxx.agent.mount` 挂载查询 `list`/`get`,
   以及 `agentxx.agent.runtime` 会话运行时 —— 插件挂自己的根 agent
   (`mount_root`/`unmount_root`)、在上面开关会话通道 (`open_channel`/`close_channel`/
@@ -918,7 +922,7 @@ path/to/agentxx_test --log-level warn string_util regex
   `open_channel: conflict`, 详见 [plugins.md](docs/zh-cn/design/plugins.md) §19,
   client 侧 16 张 (9 张框架通用表 + `agentxx.net` + 6 张自有表 `agentxx.client.*`:
   ui/session/wire/self/timer/keybind)
-- **网络能力 `agentxx.net` 是通用表** (两侧都提供, 不计入上面的 10 张业务表):
+- **网络能力 `agentxx.net` 是通用表** (两侧都提供, 不计入上面的 9 张业务表):
   插件不自己建连接 —— HTTP / WebSocket / TCP / UDP / HTTP 服务端都经这张表转给
   `utilxx::NetHub` (自有网络线程, 按插件实例记账; 禁用/卸载时 `shutdownOwner` 整批收掉)。
   两个入口 `call` (异步操作契约, 没有同步版本; `cb = NULL` = 提交完不管) / `cancel`;
@@ -939,7 +943,7 @@ path/to/agentxx_test --log-level warn string_util regex
   4 个网络插件已全部迁完 (`websearch` / `rag_search` / `text_selection_monitor` / `chatbot`),
   插件里不再出现 `utilxx/http_client.h` / `ws_client.h`; 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §22
-- 接口表版本与基线 (**当前代次 8** (agent 侧) / **9** (client 侧), 全局 API 版本 = 8:
+- 接口表版本与基线 (**当前代次 9** (agent 侧) / **9** (client 侧), 全局 API 版本 = 9:
   v2 是多 agent 挂载换代;
   v3 把通用表里的业务成员 (会话工作目录 / 取消查询 / 工具提示词) 迁回 agentxx 业务表
   并把 "agent" 用词泛化为 "作用域"; v4 = 工具结果换代 (成败改由状态位表达);
@@ -951,14 +955,16 @@ path/to/agentxx_test --log-level warn string_util regex
   v8 = 插件接口重构 (入口符号统一 `agentxx_agent_plugin_*` / `agentxx_client_plugin_*`,
   `get_info` 改填表, `create` 合并 start 且与 stop/destroy 同一套异步"恰好一次 notify" 协议;
   每端一个管理器启动即建 — 一条插件执行线程 + 一个工作池, 工具只剩 `tool`);
+  v9 = 会话消息读写 (`agentxx.agent.session` 抬到 5: 删 `emit_message_tip`, 追加展示历史与
+  LLM 上下文的 `get/count/set/append/update` 十项; 旧 `agentxx.agent.context` 表删除);
   client 侧 `AGENTXX_CLIENT_PLUGIN_API_VERSION` = **9** (client 六张表改异步 +
   渲染/命令回调改 notify; client 侧没有保留的同步成员);
-  业务表 `version` = `MIN_VERSION` = 2 ~ 4, 通用表见 `pluginxx/api/tables.h`,
+  业务表 `version` = `MIN_VERSION` = 2 ~ 5, 通用表见 `pluginxx/api/tables.h`,
   基线 = 重置时的完整布局):
   - **库里的默认值不改**: cxx_pluginxx 的 `abi.h` 中 `PLUGINXX_API_VERSION` /
     `PLUGINXX_MIN_API_VERSION` 恒保持 1 (多主程序共用); agentxx 在 `agent/CMakeLists.txt`
-    用 `AGENTXX_PLUGIN_API_VERSION` 选项向全局 FLAGS 追 `-D...=8` 覆盖, 并随 `CMAKE_ARGS`
-    传给 cxx_pluginxx 的嵌套构建 (installed targets 的 INTERFACE 定义随之变成 8)
+    用 `AGENTXX_PLUGIN_API_VERSION` 选项向全局 FLAGS 追 `-D...=9` 覆盖, 并随 `CMAKE_ARGS`
+    传给 cxx_pluginxx 的嵌套构建 (installed targets 的 INTERFACE 定义随之变成 9)
   - 改代次时注意构建缓存: 覆盖时必须**先剔旧值再追加** (否则嵌套 ExternalProject
     会一直用缓存里的上一代值编译)
   - `agentxx.config` 现有 `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language`,
@@ -997,13 +1003,15 @@ path/to/agentxx_test --log-level warn string_util regex
   - `Session` 存 typed 上下文 (`std::vector<neograph::ChatMessage>` + `messagesVersion`),
     Json 形态 (`Session::llmMessagesJson()`) 只在落库 / `WireGetContext` / 插件查询时惰性生成;
     写入口只有 `appendMessages`/`replaceMessages`/`replaceMessagesFromJson`/`truncateMessages`
+    (插件经 `agentxx.agent.session` 的 `*_llm_messages` 成员走同一批入口, 消息 id 由会话维护)
   - 节点/中间件经 `agent/lib/include/agentxx/nodes/session_context.h` 读写
     (`sessionMessages` 只读借用不得跨 co_await; `appendSessionMessages` 追加 + 发同名通道写事件;
     `updateMessagesMeta` 刷新图状态里的只读影子通道 `xx_messagesMeta`)
   - 事件: 消息写入方先写会话再发 `{"channel":"messages","value":[...]}` CHANNEL_WRITE,
     EventBridge 只做 UI 展开 + 请求节流落盘 (不再追加消息); 图定义默认不再声明 `messages` 通道,
     **插件写该通道的 writes 没有兼容路径**: 按“写入未知通道”失败, 要改会话内容用会话运行时的
-    `send_input` (曾经由 `PluginGraphNode` 改写为会话写入, 2026-11 删掉)
+    `send_input` 或会话表的 `append_llm_messages`/`update_llm_messages` (曾经由 `PluginGraphNode`
+    改写为会话写入, 2026-11 删掉)
   - 路由: `llm` 节点按本轮是否有 tool_calls 返回 `Command.goto_node` (tools/agent_end),
     默认图只用静态边; 节点级 `xx_autoRoute=false` (图定义里该节点的额外键会合并进
     `NodeContext.extra_config`) 可交回图定义路由

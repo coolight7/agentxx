@@ -114,6 +114,17 @@ struct SessionStoreHooks {
     /// - 传入的是已序列化的 JSON 数组**文本**, 不是 DOM: 落盘只需要文本,
     ///   会话侧直接给出文本可以少构造一份与上下文等大的 DOM
     std::function<void(std::string_view)> onSaveLlmMessages;
+
+    /// 整段替换展示历史后调用 (插件接口表 `set_view_messages`)
+    /// - 消息已含分配 id; `msgIdCounter` / `viewSeqCounter` 为替换后的计数,
+    ///   与追加路径同意义 (供重启恢复延续 id 分配与增量补拉)
+    /// - 实现应删掉会话库里的旧行再按传入顺序写回 (一次事务)
+    std::function<void(
+        const std::vector<ViewMessage>&,
+        uint64_t                        msgIdCounter,
+        uint64_t                        viewSeqCounter
+    )>
+        onRewriteViewMessages;
 };
 
 /// 本会话已消耗的 token 累计量 (供 UI 显示; 与上下文占用不是一回事)
@@ -340,12 +351,19 @@ public:
 
     /// 上下文条数
     /// - **可在任意线程读** (与同族其它访问器不同): 插件接口表的会话查询
-    ///   (agentxx.agent.context 的 messages_count) 与诊断导出会在非 io 线程调用;
+    ///   (agentxx.agent.session 的 count_llm_messages) 与诊断导出会在非 io 线程调用;
     ///   并发写入期间读到的是近似值 (可能比实际少一两条), 只用于展示/估算,
     ///   不要据此做写入决策
     size_t messagesCount() const noexcept {
         return messages_.size();
     }
+
+    /// 单条上下文消息的 id (与 messages() 同下标)
+    /// - 插件接口表按它定位要更新的消息 (`update_llm_messages`); 会话内唯一,
+    ///   消息还在原位置时不变
+    /// - 只在进程内稳定: 不落库, 重启/重新加载后按加载顺序重新分配
+    /// - 仅 io 线程调用
+    const std::string& messageIdAt(size_t index) const;
 
     /// 追加消息到上下文末尾 (assistant 回复 / tool 结果 / 补充提示)
     /// - persistThrottled=true 时请求一次节流落盘 (进程中途被杀最多丢一个窗口)
@@ -384,6 +402,33 @@ public:
     ///   缓存; 文本形态只保留一份文本
     /// - 返回引用在下一次上下文变更前有效
     const std::string& llmMessagesJsonText() const;
+
+    /// 取上下文 JSON 数组文本, 每条消息附带 `id` 字段 (插件接口表 `get_llm_messages`)
+    /// - 内容与 [llmMessagesJsonText] 相同, 只是每条多一个 `id` (= [messageIdAt])
+    /// - 不缓存: 只有插件查询走这条路径, 频次远低于落盘
+    std::string llmMessagesJsonWithIds() const;
+
+    /// 追加上下文消息并返回分配的 id (插件接口表 `append_llm_messages`)
+    /// - 落盘节流与 [appendMessages] 一致
+    /// - `return` 与入参同序的 id
+    std::vector<std::string> appendMessagesWithIds(std::vector<neograph::ChatMessage> msgs);
+
+    /// 整体替换上下文并返回分配的 id (插件接口表 `set_llm_messages`)
+    /// - 语义与 [replaceMessages] 一致, 所有消息重新分配 id
+    std::vector<std::string> replaceMessagesWithIds(std::vector<neograph::ChatMessage> msgs);
+
+    /// 按 id 更新上下文消息的结果 (插件接口表 `update_llm_messages`)
+    struct LlmMessageUpdateResult {
+        size_t                   updated = 0; ///< 命中的条数
+        std::vector<std::string> missing;     ///< 找不到的 id (顺序与输入一致)
+    };
+
+    /// 按 id 逐条替换上下文消息 (插件接口表 `update_llm_messages`)
+    /// - 找不到的 id 不算失败, 记在 `missing` 里: 插件可能持有压缩前的旧 id
+    /// - 有命中时递增上下文版本号并按既有节流落盘
+    LlmMessageUpdateResult updateMessagesByIds(
+        std::vector<std::pair<std::string, neograph::ChatMessage>> updates
+    );
     // -------------------------------------------------------------------
     // io 线程专用写入接口
     // -------------------------------------------------------------------
@@ -402,6 +447,14 @@ public:
     /// - 已在窗口外 (被淘汰) 时**不改内存、直接写库**: 调用方持有的副本可能
     ///   已过期, 不能据此重建整行; 客户端最终靠定稿的整条 upsert 收敛
     void updateViewMessage(ViewMessage msg);
+
+    /// 整段替换展示历史 (插件接口表 `set_view_messages`)
+    /// - 丢弃待落盘队列与直播槽, 重置窗口/计数器/索引, 逐条重新分配 id 与序号,
+    ///   再经 [SessionStoreHooks::onRewriteViewMessages] 一次写库
+    /// - 直播槽非空 (= 正在输出一段未定稿的内容) 时调用方应先拒绝: 覆盖会让
+    ///   定稿的那一段接错位置; 本函数遇到该情况只记日志并返回空
+    /// - `return` 与入参同序的 id (未写入时为空)
+    std::vector<std::string> replaceViewMessages(std::vector<ViewMessage> msgs);
 
     // -------------------------------------------------------------------
     // 直播槽 (进行中的流式消息; 仅 io 线程)
@@ -680,6 +733,16 @@ private:
     /// 上下文消息 (typed 权威存储)
     std::vector<neograph::ChatMessage> messages_;
 
+    /// 上下文消息 id (与 messages_ 一一对应, 插件接口表按它定位更新)
+    /// - 只能在维护 messages_ 的同一处改 (append/replace/truncate/setSystem)
+    std::vector<std::string> messageIds_;
+
+    /// 上下文消息 id 计数器 (`llm_000001` 递增; 不落库)
+    uint64_t llmMsgIdCounter_ = 0;
+
+    /// 分配一个新的上下文消息 id
+    std::string nextLlmMessageId();
+
     /// 待注入输入 (next-step / inject; 仅 io 线程)
     std::vector<SessionPendingInput> pendingInputs_;
 
@@ -701,6 +764,7 @@ private:
 
     std::shared_ptr<neograph::graph::CancelToken> cancelToken_  = nullptr;
     uint64_t                                      msgIdCounter_ = 0;
+
 
     /// 展示历史持久化序号计数 (每次 appendViewMessage 递增; = 历史总条数)
     uint64_t viewSeqCounter_ = 0;

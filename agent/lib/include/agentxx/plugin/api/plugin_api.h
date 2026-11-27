@@ -491,8 +491,13 @@ typedef struct AgentxxPluginPermissionIface {
 /// v4: 改成异步操作契约 (`get_share_store` / `emit_message_tip` /
 ///     `add_share_store` / `get_session_work_dir`); `is_canceled` 保持同步
 ///     (本地原子标记, 任意线程直接读); 基线与最低版本重置
-#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION     4
-#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_MIN_VERSION 4
+/// v5: 补齐会话消息读写 —— 删除 `emit_message_tip` (提示消息改用
+///     `append_view_messages` 写一条 tip 角色消息), 表尾追加展示历史与 LLM 上下文的
+///     `get` / `count` / `set` / `append` / `update` 十项; 原 `agentxx.agent.context`
+///     表的 `get_messages` / `messages_count` 并入这里 (该表已删除);
+///     基线与最低版本重置 (删成员属于破坏性改动)
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION     5
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_MIN_VERSION 5
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_BASELINE_SIZE sizeof(AgentxxPluginSessionIface)
 
@@ -509,17 +514,6 @@ typedef struct AgentxxPluginSessionIface {
         const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id,
         int64_t                   id,
-        PluginxxOperatorCallback  cb,
-        void*                     ud,
-        PluginxxString*           error_out
-    );
-    /// 给会话插一条提示消息 (**异步**; 不关心受理结果时 `cb` 传 NULL)
-    PluginxxOperatorHandle*(PLUGINXX_CALL* emit_message_tip)(
-        const PluginxxHost*       host,
-        const PluginxxScopeRef*   agent,
-        const PluginxxStringView* session_id,
-        const PluginxxStringView* text,
-        int32_t                   level,
         PluginxxOperatorCallback  cb,
         void*                     ud,
         PluginxxString*           error_out
@@ -559,49 +553,146 @@ typedef struct AgentxxPluginSessionIface {
         const PluginxxScopeRef*   agent,
         const PluginxxStringView* thread_id
     );
+
+    /* ---- (v5) 展示历史 (view messages: 客户端看到的那份) ----
+     *
+     * 消息形态 = `ViewMessage` 的 JSON: `id` / `role` (user|assistant|thinking|
+     * system|tool|tip|interrupt|event) / `text` / `startTimeMs` / `durationMs` /
+     * `collapsed` / `source`, 以及角色专属子结构 (`tool` / `tip` / `think` /
+     * `interrupt` / `attachments`); 与 wire 同步里的消息是同一形态。
+     *
+     * 写入约束:
+     * - 视觉为空的消息 (`hasVisibleContent` 为假: 只有空白/零宽字符且无附件) 被丢弃,
+     *   与主程序自己的写入侧同一判据 —— 否则会在消息列表里留下空白行;
+     * - `id` 由会话分配 (`msg_000001` 递增), 写入时传的 `id` 被忽略;
+     * - 提示消息 = `{"role":"tip","text":"…","tip":{"tip_level":"info"}}`;
+     * - 写入后主程序立即广播增量 (`insert_message` / `update_message`) 给已连接的
+     *   客户端; `set_view_messages` 是整段替换, 客户端按一次完整同步重建副本。
+     */
+
+    /// 读取会话展示历史 (**异步**; 完成时 `payload` 是 ViewMessage JSON 数组文本)
+    /// - 全量返回 (含已从内存窗口淘汰、仍在会话库里的历史行)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_view_messages)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 展示历史条数 (**异步**; `payload` 是十进制整数文本)
+    /// - 只取条数时用它, 避免为读一个数字拉取整段历史
+    PluginxxOperatorHandle*(PLUGINXX_CALL* count_view_messages)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 整段替换展示历史 (**异步**; `payload` 是分配到的 id 数组文本, 与入参同序)
+    /// - 旧行从会话库删除后按入参顺序重写, id 全部重新分配
+    /// - 正在输出一段未定稿内容 (直播槽非空) 时按失败交回: 覆盖会让定稿那段接错位置
+    PluginxxOperatorHandle*(PLUGINXX_CALL* set_view_messages)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        const PluginxxStringView* messages_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 追加多条展示历史消息 (**异步**; `payload` 是分配到的 id 数组文本, 与入参同序)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* append_view_messages)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        const PluginxxStringView* messages_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 按 id 更新多条展示历史消息 (**异步**)
+    /// - `messages_json` 是对象数组, 每个元素带 `id` 与要改的字段
+    ///   (按整条消息替换语义: 没给的字段回到默认值, 建议先 get 再改);
+    /// - 完成时 `payload` 是 `{"updated":N,"missing":["id",…]}` —— 找不到的 id
+    ///   不算失败 (可能已随历史改写消失), 调用方据 `missing` 自行处理
+    PluginxxOperatorHandle*(PLUGINXX_CALL* update_view_messages)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        const PluginxxStringView* messages_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+
+    /* ---- (v5) LLM 上下文 (view messages 之外的另一份: 真正发给模型的那个数组) ----
+     *
+     * 消息形态 = `ChatMessage` 的 JSON: `role` (user|assistant|tool|system) /
+     * `content` / `tool_calls` / `tool_call_id` / `tool_name` / `tool_status` /
+     * `image_urls` / `audio_urls` / `video_urls` / `reasoning_content` / `extra` 等。
+     *
+     * 读时每条多一个 `id` (`llm_000001` 递增), 写时忽略; id 只在进程内稳定
+     * (不落库, 重启后按加载顺序重新分配)。
+     *
+     * 写入相当于直接改会话上下文: 主程序不做结构校验 (tool_calls 与 tool 结果是否
+     * 配对、是否有 system 开头等由插件自己负责)。写入后下一轮模型调用就能看到。
+     */
+
+    /// 读取会话 LLM 上下文 (**异步**; `payload` 是 ChatMessage JSON 数组文本, 每条带 `id`)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_llm_messages)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// LLM 上下文条数 (**异步**; `payload` 是十进制整数文本)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* count_llm_messages)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 整体替换 LLM 上下文 (**异步**; `payload` 是分配到的 id 数组文本, 与入参同序)
+    /// - 入参里带的 `id` 被忽略, 所有消息重新分配
+    PluginxxOperatorHandle*(PLUGINXX_CALL* set_llm_messages)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        const PluginxxStringView* messages_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 追加多条 LLM 上下文消息 (**异步**; `payload` 是分配到的 id 数组文本, 与入参同序)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* append_llm_messages)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        const PluginxxStringView* messages_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
+    /// 按 id 更新多条 LLM 上下文消息 (**异步**)
+    /// - `messages_json` 是对象数组, 每个元素带 `id` 与整条新消息内容;
+    /// - 完成时 `payload` 是 `{"updated":N,"missing":["id",…]}` —— 找不到的 id
+    ///   不算失败 (可能已被压缩换掉), 调用方据 `missing` 自行处理
+    PluginxxOperatorHandle*(PLUGINXX_CALL* update_llm_messages)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        const PluginxxStringView* messages_json,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
+    );
 } AgentxxPluginSessionIface;
-
-/* ==================== 接口表: 会话上下文查询 (agentxx.agent.context) ==================== */
-
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT             AGENTXX_TABLE_ID("agent_context")
-/// v2: 全部成员增加 `agent` 参数
-/// v3: 全部成员改成异步操作契约 (结果经 `payload` 交回)
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION     3
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_MIN_VERSION 3
-/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_BASELINE_SIZE sizeof(AgentxxPluginContextIface)
-
-/// 会话 LLM 上下文查询
-///
-/// 背景: LLM 上下文由会话持有 (唯一权威), 图状态不再包含 `messages` 通道;
-/// 插件需要上下文内容时经本表查询, 图状态里的 `xx_messagesMeta` 通道只给
-/// 条数/版本/末尾消息摘要等轻量信息 (与上下文大小无关)。
-typedef struct AgentxxPluginContextIface {
-    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION
-    uint32_t struct_size;
-
-    /// 读取会话 LLM 上下文 (**异步**)
-    /// - 完成时 `payload` 是 ChatMessage JSON 数组文本; 会话不存在按失败交回
-    PluginxxOperatorHandle*(PLUGINXX_CALL* get_messages)(
-        const PluginxxHost*       host,
-        const PluginxxScopeRef*   agent,
-        const PluginxxStringView* session_id,
-        PluginxxOperatorCallback  cb,
-        void*                     ud,
-        PluginxxString*           error_out
-    );
-
-    /// 会话 LLM 上下文条数 (**异步**; 只取数量时用它, 避免为读一个数字拉取整段上下文)
-    /// - 完成时 `payload` 是十进制整数文本
-    PluginxxOperatorHandle*(PLUGINXX_CALL* messages_count)(
-        const PluginxxHost*       host,
-        const PluginxxScopeRef*   agent,
-        const PluginxxStringView* session_id,
-        PluginxxOperatorCallback  cb,
-        void*                     ud,
-        PluginxxString*           error_out
-    );
-} AgentxxPluginContextIface;
 
 /* ==================== 接口表: 主模型配置 (agentxx.agent.model) ==================== */
 

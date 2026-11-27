@@ -5,11 +5,13 @@
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/resource_applier.h"
+#include "agentxx/agent/session_store.h"
 #include "agentxx/event/hub.h"
 #include "agentxx/event/naming.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "fmt/format.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
@@ -828,10 +830,98 @@ static int32_t PLUGINXX_CALL xx_session_Canceled(
 }
 
 // =====================================================================
-// 接口表: 会话上下文查询 (agentxx.agent.context)
+// 接口表: 会话消息 (展示历史 / LLM 上下文; agentxx.agent.session v5)
+//
+// 十个成员分两组 (view / llm), 每组 get/count/set/append/update。工作体都在管理器
+// 的 io 线程执行 (与会话的 assertIoThread 约束一致), 入参 JSON 先按值拷进来 ——
+// 插件给的视图只在本次调用期间有效。
 // =====================================================================
 
-static PluginxxOperatorHandle* PLUGINXX_CALL xx_context_get_messages(
+namespace {
+
+/// 解析入参消息数组 (JSON 数组文本); 非法时抛 [TableOpError]
+utilxx_base::Json parseMessageArray(std::string_view messages_json, std::string_view label) {
+    utilxx_base::Json arr;
+    try {
+        arr = utilxx_base::Json::parse(messages_json);
+    } catch (const std::exception& e) {
+        throw TableOpError(
+            fmt::format("{}: messages_json is not valid JSON: {}", label, e.what())
+        );
+    }
+    if (!arr.is_array()) {
+        throw TableOpError(fmt::format("{}: messages_json must be a JSON array", label));
+    }
+    return arr;
+}
+
+/// 展示历史消息数组 → ViewMessage 列表
+std::vector<agentxx::agent::ViewMessage>
+    parseViewMessagesJson(std::string_view messages_json, std::string_view label) {
+    const auto                               arr = parseMessageArray(messages_json, label);
+    std::vector<agentxx::agent::ViewMessage> out;
+    out.reserve(arr.size());
+    for (const auto& item : arr) {
+        if (!item.is_object()) {
+            throw TableOpError(fmt::format("{}: every message must be a JSON object", label));
+        }
+        out.push_back(agentxx::agent::ViewMessage::fromJson(item));
+    }
+    return out;
+}
+
+/// LLM 上下文消息数组 → `(id, ChatMessage)` 列表
+/// - 元素里的 `id` 是读时附加的定位字段, 转成 ChatMessage 时被忽略
+std::vector<std::pair<std::string, neograph::ChatMessage>>
+    parseLlmMessagesJson(std::string_view messages_json, std::string_view label) {
+    const auto arr = parseMessageArray(messages_json, label);
+    std::vector<std::pair<std::string, neograph::ChatMessage>> out;
+    out.reserve(arr.size());
+    for (const auto& item : arr) {
+        if (!item.is_object()) {
+            throw TableOpError(fmt::format("{}: every message must be a JSON object", label));
+        }
+        neograph::json         one = agentxx::util::toNeographJson(item);
+        neograph::ChatMessage  msg;
+        neograph::from_json(one, msg);
+        out.emplace_back(item.value("id", std::string{}), std::move(msg));
+    }
+    return out;
+}
+
+/// id 列表 → JSON 数组文本
+std::string idArrayJson(const std::vector<std::string>& ids) {
+    utilxx_base::Json arr = utilxx_base::Json::array();
+    for (const auto& id : ids) {
+        arr.push_back(id);
+    }
+    return arr.dump();
+}
+
+/// 更新结果 → `{"updated":N,"missing":[...]}`
+std::string updateResultJson(size_t updated, const std::vector<std::string>& missing) {
+    utilxx_base::Json arr = utilxx_base::Json::array();
+    for (const auto& id : missing) {
+        arr.push_back(id);
+    }
+    utilxx_base::Json j = utilxx_base::Json::object();
+    j["updated"]        = static_cast<int64_t>(updated);
+    j["missing"]        = std::move(arr);
+    return j.dump();
+}
+
+/// 工作体里取挂载: 作用域校验已由 asyncScopedTableCall 完成, 这里只做防御
+PluginMount& mountOfOrThrow(PluginManager* mgr, const PluginxxScopeRef& ref, std::string_view label) {
+    auto* mount = mountIn(mgr, &ref);
+    if (mount == nullptr) {
+        throw TableOpError(fmt::format("{}: agent reference is invalid", label));
+    }
+    return *mount;
+}
+
+} // namespace
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_get_view_messages(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
@@ -841,7 +931,7 @@ static PluginxxOperatorHandle* PLUGINXX_CALL xx_context_get_messages(
 ) {
     return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
         if (agentxx::plugin::PluginStringView::empty(session_id)) {
-            setTableOpError(error_out, "get_messages: session id is required");
+            setTableOpError(error_out, "get_view_messages: session id is required");
             return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
         auto sid = svToStr(session_id);
@@ -851,30 +941,23 @@ static PluginxxOperatorHandle* PLUGINXX_CALL xx_context_get_messages(
             cb,
             ud,
             error_out,
-            "context.get_messages",
+            "session.get_view_messages",
             [sid](
                 PluginInstance*,
                 PluginManager*          mgr,
                 const PluginxxScopeRef& ref
             ) -> std::string {
-                const PluginxxStringView view{
-                    sid.data(), static_cast<uint64_t>(sid.size())
-                };
-                PluginxxString raw{};
-                auto           rc = mountCall(mgr, &ref, noAgent, [&](PluginMount& mount) {
-                    raw = mount.getSessionMessages(view);
-                    return AGENTXX_RESULT_OK;
-                });
-                if (rc != AGENTXX_RESULT_OK) {
-                    throw TableOpError(std::string(agentxx::plugin::resultName(rc)));
-                }
+                auto& mount = mountOfOrThrow(mgr, ref, "get_view_messages");
+                auto  raw   = mount.getViewMessages(
+                    PluginxxStringView{sid.data(), static_cast<uint64_t>(sid.size())}
+                );
                 return takePluginString(raw);
             }
         );
     });
 }
 
-static PluginxxOperatorHandle* PLUGINXX_CALL xx_context_messages_count(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_count_view_messages(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
@@ -884,7 +967,7 @@ static PluginxxOperatorHandle* PLUGINXX_CALL xx_context_messages_count(
 ) {
     return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
         if (agentxx::plugin::PluginStringView::empty(session_id)) {
-            setTableOpError(error_out, "messages_count: session id is required");
+            setTableOpError(error_out, "count_view_messages: session id is required");
             return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
         auto sid = svToStr(session_id);
@@ -894,23 +977,18 @@ static PluginxxOperatorHandle* PLUGINXX_CALL xx_context_messages_count(
             cb,
             ud,
             error_out,
-            "context.messages_count",
+            "session.count_view_messages",
             [sid](
                 PluginInstance*,
                 PluginManager*          mgr,
                 const PluginxxScopeRef& ref
             ) -> std::string {
-                const PluginxxStringView view{
-                    sid.data(), static_cast<uint64_t>(sid.size())
-                };
-                auto count = mountCall(
-                    mgr,
-                    &ref,
-                    [] { return int64_t{-1}; },
-                    [&view](PluginMount& mount) { return mount.sessionMessagesCount(view); }
+                auto& mount = mountOfOrThrow(mgr, ref, "count_view_messages");
+                const auto count = mount.countViewMessages(
+                    PluginxxStringView{sid.data(), static_cast<uint64_t>(sid.size())}
                 );
                 if (count < 0) {
-                    throw TableOpError("session context is not available");
+                    throw TableOpError(fmt::format("count_view_messages: session '{}' not found", sid));
                 }
                 return std::to_string(count);
             }
@@ -918,57 +996,290 @@ static PluginxxOperatorHandle* PLUGINXX_CALL xx_context_messages_count(
     });
 }
 
-static const AgentxxPluginContextIface g_ifaceContext = {
-    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION,
-    /* struct_size */ sizeof(AgentxxPluginContextIface),
-    /* get_messages */ xx_context_get_messages,
-    /* messages_count */ xx_context_messages_count,
-};
-
-static PluginxxOperatorHandle* PLUGINXX_CALL xx_emit_message_tip(
+/// set/append/update 三组的公共骨架 (都带 messages_json)
+template<typename Fn>
+static PluginxxOperatorHandle* sessionMessageWriteCall(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
-    const PluginxxStringView* text,
-    int32_t                   level,
+    const PluginxxStringView* messages_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out,
+    std::string               label,
+    Fn&&                      work
+) {
+    if (agentxx::plugin::PluginStringView::empty(session_id)) {
+        setTableOpError(error_out, label + ": session id is required");
+        return static_cast<PluginxxOperatorHandle*>(nullptr);
+    }
+    if (agentxx::plugin::PluginStringView::empty(messages_json)) {
+        setTableOpError(error_out, label + ": messages_json is required");
+        return static_cast<PluginxxOperatorHandle*>(nullptr);
+    }
+    auto sid  = svToStr(session_id);
+    auto body = svToStr(messages_json);
+    return asyncScopedTableCall<false>(
+        host,
+        agent,
+        cb,
+        ud,
+        error_out,
+        std::move(label),
+        [sid, body, work = std::forward<Fn>(work)](
+            PluginInstance*,
+            PluginManager*          mgr,
+            const PluginxxScopeRef& ref
+        ) -> std::string {
+            return work(mountOfOrThrow(mgr, ref, "session message write"), sid, body);
+        }
+    );
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_set_view_messages(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* session_id,
+    const PluginxxStringView* messages_json,
     PluginxxOperatorCallback  cb,
     void*                     ud,
     PluginxxString*           error_out
 ) {
     return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
-        if (agentxx::plugin::PluginStringView::empty(text)) {
-            setTableOpError(error_out, "emit_message_tip: text is required");
+        return sessionMessageWriteCall(
+            host,
+            agent,
+            session_id,
+            messages_json,
+            cb,
+            ud,
+            error_out,
+            "session.set_view_messages",
+            [](PluginMount& mount, const std::string& sid, const std::string& body) {
+                return mount.setViewMessages(
+                    PluginxxStringView{sid.data(), static_cast<uint64_t>(sid.size())},
+                    body
+                );
+            }
+        );
+    });
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_append_view_messages(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* session_id,
+    const PluginxxStringView* messages_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        return sessionMessageWriteCall(
+            host,
+            agent,
+            session_id,
+            messages_json,
+            cb,
+            ud,
+            error_out,
+            "session.append_view_messages",
+            [](PluginMount& mount, const std::string& sid, const std::string& body) {
+                return mount.appendViewMessages(
+                    PluginxxStringView{sid.data(), static_cast<uint64_t>(sid.size())},
+                    body
+                );
+            }
+        );
+    });
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_update_view_messages(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* session_id,
+    const PluginxxStringView* messages_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        return sessionMessageWriteCall(
+            host,
+            agent,
+            session_id,
+            messages_json,
+            cb,
+            ud,
+            error_out,
+            "session.update_view_messages",
+            [](PluginMount& mount, const std::string& sid, const std::string& body) {
+                return mount.updateViewMessages(
+                    PluginxxStringView{sid.data(), static_cast<uint64_t>(sid.size())},
+                    body
+                );
+            }
+        );
+    });
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_get_llm_messages(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* session_id,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(session_id)) {
+            setTableOpError(error_out, "get_llm_messages: session id is required");
             return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        auto sid  = svToStr(session_id);
-        auto body = svToStr(text);
-        return asyncScopedTableCall(
+        auto sid = svToStr(session_id);
+        return asyncQueryCall(
             host,
             agent,
             cb,
             ud,
             error_out,
-            "session.emit_message_tip",
-            [sid, body, level](
-                PluginInstance*         inst,
+            "session.get_llm_messages",
+            [sid](
+                PluginInstance*,
                 PluginManager*          mgr,
                 const PluginxxScopeRef& ref
             ) -> std::string {
-                mountCall(
-                    mgr,
-                    &ref,
-                    [] { return 0; },
-                    [inst, &sid, &body, level](PluginMount& mount) {
-                        mount.emitMessageTip(
-                            inst,
-                            PluginxxStringView{sid.data(), sid.size()},
-                            PluginxxStringView{body.data(), body.size()},
-                            level
-                        );
-                        return 0;
-                    }
+                auto& mount = mountOfOrThrow(mgr, ref, "get_llm_messages");
+                auto  raw   = mount.getLlmMessages(
+                    PluginxxStringView{sid.data(), static_cast<uint64_t>(sid.size())}
                 );
-                return std::string{};
+                return takePluginString(raw);
+            }
+        );
+    });
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_count_llm_messages(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* session_id,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(session_id)) {
+            setTableOpError(error_out, "count_llm_messages: session id is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
+        }
+        auto sid = svToStr(session_id);
+        return asyncQueryCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "session.count_llm_messages",
+            [sid](
+                PluginInstance*,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                auto& mount = mountOfOrThrow(mgr, ref, "count_llm_messages");
+                const auto count = mount.countLlmMessages(
+                    PluginxxStringView{sid.data(), static_cast<uint64_t>(sid.size())}
+                );
+                if (count < 0) {
+                    throw TableOpError(fmt::format("count_llm_messages: session '{}' not found", sid));
+                }
+                return std::to_string(count);
+            }
+        );
+    });
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_set_llm_messages(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* session_id,
+    const PluginxxStringView* messages_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        return sessionMessageWriteCall(
+            host,
+            agent,
+            session_id,
+            messages_json,
+            cb,
+            ud,
+            error_out,
+            "session.set_llm_messages",
+            [](PluginMount& mount, const std::string& sid, const std::string& body) {
+                return mount.setLlmMessages(
+                    PluginxxStringView{sid.data(), static_cast<uint64_t>(sid.size())},
+                    body
+                );
+            }
+        );
+    });
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_append_llm_messages(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* session_id,
+    const PluginxxStringView* messages_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        return sessionMessageWriteCall(
+            host,
+            agent,
+            session_id,
+            messages_json,
+            cb,
+            ud,
+            error_out,
+            "session.append_llm_messages",
+            [](PluginMount& mount, const std::string& sid, const std::string& body) {
+                return mount.appendLlmMessages(
+                    PluginxxStringView{sid.data(), static_cast<uint64_t>(sid.size())},
+                    body
+                );
+            }
+        );
+    });
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_update_llm_messages(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* session_id,
+    const PluginxxStringView* messages_json,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
+) {
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        return sessionMessageWriteCall(
+            host,
+            agent,
+            session_id,
+            messages_json,
+            cb,
+            ud,
+            error_out,
+            "session.update_llm_messages",
+            [](PluginMount& mount, const std::string& sid, const std::string& body) {
+                return mount.updateLlmMessages(
+                    PluginxxStringView{sid.data(), static_cast<uint64_t>(sid.size())},
+                    body
+                );
             }
         );
     });
@@ -1521,10 +1832,19 @@ static const AgentxxPluginSessionIface g_ifaceSession = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION,
     /* struct_size */ sizeof(AgentxxPluginSessionIface),
     /* get_share_store */ xx_get_share_store,
-    /* emit_message_tip */ xx_emit_message_tip,
     /* add_share_store */ xx_add_share_store,
     /* get_session_work_dir */ xx_session_work_dir,
     /* is_canceled */ xx_session_Canceled,
+    /* get_view_messages */ xx_session_get_view_messages,
+    /* count_view_messages */ xx_session_count_view_messages,
+    /* set_view_messages */ xx_session_set_view_messages,
+    /* append_view_messages */ xx_session_append_view_messages,
+    /* update_view_messages */ xx_session_update_view_messages,
+    /* get_llm_messages */ xx_session_get_llm_messages,
+    /* count_llm_messages */ xx_session_count_llm_messages,
+    /* set_llm_messages */ xx_session_set_llm_messages,
+    /* append_llm_messages */ xx_session_append_llm_messages,
+    /* update_llm_messages */ xx_session_update_llm_messages,
 };
 
 static const AgentxxPluginPromptIface g_ifacePrompt = {
@@ -2595,9 +2915,6 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_SESSION) {
         return &g_ifaceSession;
     }
-    if (n == AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT) {
-        return &g_ifaceContext;
-    }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_PROMPT) {
         return &g_ifacePrompt;
     }
@@ -3179,59 +3496,226 @@ int64_t PluginMount::addShareStore(
     return static_cast<int64_t>(ctx->middlewareHandleContext->addShareStoreItemValue(sid, text));
 }
 
-void PluginMount::emitMessageTip(
-    PluginInstance*    inst,
-    PluginxxStringView session_id,
-    PluginxxStringView text,
-    int32_t            level
-) {
-    if (!inst || agentxx::plugin::PluginStringView::empty(&session_id)
-        || agentxx::plugin::PluginStringView::empty(&text)) {
-        return;
+std::shared_ptr<agentxx::agent::Session> PluginMount::findSession(std::string_view session_id) {
+    if (session_id.empty()) {
+        return nullptr;
     }
     auto ctx = agent_.lock();
-    if (!ctx) {
-        return;
+    if (!ctx || !ctx->sessions) {
+        return nullptr;
     }
-    std::string sid     = svToStr(session_id);
-    auto        session = ctx->getSession(sid);
-    if (!session || !session->io) {
-        return;
-    }
-    agentxx::agent::WireDelta delta;
-    delta.type    = agentxx::agent::WireDelta::Type::MessageUITip;
-    delta.text    = svToStr(text);
-    delta.tipType = level >= 2 ? agentxx::agent::WireDelta::TipType::Error
-                               : (level == 1 ? agentxx::agent::WireDelta::TipType::Warning
-                                             : agentxx::agent::WireDelta::TipType::Info);
-    delta.seq     = session->nextDeltaSeq();
-    session->io->sendToPeer(delta);
+    // 只认已加载的会话: 插件拿着不存在的 id 时要拿到错误, 不能顺手建一个空会话
+    return ctx->sessions->get(session_id);
 }
 
-PluginxxString PluginMount::getSessionMessages(PluginxxStringView session_id) {
-    auto ctx = agent_.lock();
-    if (!ctx || !ctx->sessions || agentxx::plugin::PluginStringView::empty(&session_id)) {
-        return PluginxxString{nullptr, 0};
-    }
-    auto session = ctx->sessions->get(svToStr(session_id));
+PluginxxString PluginMount::getViewMessages(PluginxxStringView session_id) {
+    const auto sid     = svToStr(session_id);
+    auto       session = findSession(sid);
     if (!session) {
-        return PluginxxString{nullptr, 0};
+        throw TableOpError(fmt::format("get_view_messages: session '{}' not found", sid));
     }
-    // 会话是上下文的唯一权威: 取 Json 形态 (惰性生成) 后按主程序 alloc 约定复制出去
-    auto jsonText = session->llmMessagesJson().dump();
-    return agentxx::plugin::hostMemoryCreateString(jsonText);
+    const uint64_t     total = static_cast<uint64_t>(session->viewMessageCount());
+    utilxx_base::Json arr   = utilxx_base::Json::array();
+    if (total > 0) {
+        // 内存里只有尾部窗口, 更早的历史回库读 (与端点做完整同步走同一入口)
+        std::vector<agentxx::agent::ViewMessage> rows;
+        if (!session->collectViewRange(0, total, rows)) {
+            throw TableOpError(fmt::format(
+                "get_view_messages: history of session '{}' is incomplete (store unavailable)",
+                sid
+            ));
+        }
+        for (const auto& row : rows) {
+            arr.push_back(row.toJson());
+        }
+    }
+    return agentxx::plugin::hostMemoryCreateString(arr.dump());
 }
 
-int64_t PluginMount::sessionMessagesCount(PluginxxStringView session_id) {
-    auto ctx = agent_.lock();
-    if (!ctx || !ctx->sessions || agentxx::plugin::PluginStringView::empty(&session_id)) {
+int64_t PluginMount::countViewMessages(PluginxxStringView session_id) {
+    auto session = findSession(svToStr(session_id));
+    if (!session) {
         return -1;
     }
-    auto session = ctx->sessions->get(svToStr(session_id));
+    return static_cast<int64_t>(session->viewMessageCount());
+}
+
+std::string
+    PluginMount::setViewMessages(PluginxxStringView session_id, std::string_view messages_json) {
+    const auto sid     = svToStr(session_id);
+    auto       session = findSession(sid);
+    if (!session) {
+        throw TableOpError(fmt::format("set_view_messages: session '{}' not found", sid));
+    }
+    if (session->streamingView.has_value()) {
+        throw TableOpError(
+            "set_view_messages: a streaming segment is still open, retry when the turn finishes"
+        );
+    }
+    auto msgs = parseViewMessagesJson(messages_json, "set_view_messages");
+    // 视觉为空的消息不写 (与主程序写入侧同一判据), 否则消息列表里会多出空白行
+    std::vector<agentxx::agent::ViewMessage> kept;
+    kept.reserve(msgs.size());
+    for (auto& msg : msgs) {
+        if (!msg.hasVisibleContent()) {
+            XX_LOGD("set_view_messages: drop a visually blank message (role={})", int(msg.role));
+            continue;
+        }
+        kept.push_back(std::move(msg));
+    }
+    auto ids = session->replaceViewMessages(std::move(kept));
+    // 旧行与 id 全换, 客户端只能整体重建
+    if (session->io) {
+        session->io->onViewMessagesReplaced();
+    }
+    return idArrayJson(ids);
+}
+
+std::string
+    PluginMount::appendViewMessages(PluginxxStringView session_id, std::string_view messages_json) {
+    const auto sid     = svToStr(session_id);
+    auto       session = findSession(sid);
+    if (!session) {
+        throw TableOpError(fmt::format("append_view_messages: session '{}' not found", sid));
+    }
+    auto                     msgs = parseViewMessagesJson(messages_json, "append_view_messages");
+    std::vector<std::string> ids;
+    ids.reserve(msgs.size());
+    for (auto& msg : msgs) {
+        if (!msg.hasVisibleContent()) {
+            XX_LOGD("append_view_messages: drop a visually blank message (role={})", int(msg.role));
+            continue;
+        }
+        // 发出去的副本要先带好 id (下面 move 进了会话)
+        auto       out = msg;
+        const auto id  = session->appendViewMessage(std::move(msg));
+        out.id         = id;
+        ids.push_back(id);
+        if (session->io) {
+            agentxx::agent::WireDelta delta;
+            delta.type    = agentxx::agent::WireDelta::Type::InsertMessage;
+            delta.message = std::make_shared<agentxx::agent::ViewMessage>(std::move(out));
+            delta.seq     = session->nextDeltaSeq();
+            session->io->sendToPeer(std::move(delta));
+        }
+    }
+    return idArrayJson(ids);
+}
+
+std::string
+    PluginMount::updateViewMessages(PluginxxStringView session_id, std::string_view messages_json) {
+    const auto sid     = svToStr(session_id);
+    auto       session = findSession(sid);
+    if (!session) {
+        throw TableOpError(fmt::format("update_view_messages: session '{}' not found", sid));
+    }
+    const auto arr = parseMessageArray(messages_json, "update_view_messages");
+    size_t     updated = 0;
+    std::vector<std::string> missing;
+    missing.reserve(arr.size());
+    for (const auto& item : arr) {
+        if (!item.is_object()) {
+            throw TableOpError("update_view_messages: every message must be a JSON object");
+        }
+        auto msg = agentxx::agent::ViewMessage::fromJson(item);
+        if (msg.id.empty()) {
+            throw TableOpError("update_view_messages: every message needs an `id`");
+        }
+        // 内存窗口外的行只在会话库里: 先问库是否还有这一行, 有就只改库
+        const bool inWindow = session->viewMessageById(msg.id) != nullptr;
+        bool       persisted = false;
+        if (!inWindow) {
+            auto ctx = agent_.lock();
+            if (ctx && ctx->sessions && ctx->sessions->sessionStore) {
+                persisted = ctx->sessions->sessionStore->viewMessageExists(sid, msg.id);
+            }
+        }
+        if (!inWindow && !persisted) {
+            missing.push_back(msg.id);
+            continue;
+        }
+        auto out = msg;
+        session->updateViewMessage(std::move(msg));
+        ++updated;
+        if (inWindow && session->io) {
+            agentxx::agent::WireDelta delta;
+            delta.type    = agentxx::agent::WireDelta::Type::UpdateMessage;
+            delta.message = std::make_shared<agentxx::agent::ViewMessage>(std::move(out));
+            delta.seq     = session->nextDeltaSeq();
+            session->io->sendToPeer(std::move(delta));
+        }
+    }
+    return updateResultJson(updated, missing);
+}
+
+PluginxxString PluginMount::getLlmMessages(PluginxxStringView session_id) {
+    const auto sid     = svToStr(session_id);
+    auto       session = findSession(sid);
+    if (!session) {
+        throw TableOpError(fmt::format("get_llm_messages: session '{}' not found", sid));
+    }
+    // 每条消息附带 id (插件按 id 更新), 与落盘形态一致, 只是多一个字段
+    return agentxx::plugin::hostMemoryCreateString(session->llmMessagesJsonWithIds());
+}
+
+int64_t PluginMount::countLlmMessages(PluginxxStringView session_id) {
+    auto session = findSession(svToStr(session_id));
     if (!session) {
         return -1;
     }
     return static_cast<int64_t>(session->messagesCount());
+}
+
+std::string
+    PluginMount::setLlmMessages(PluginxxStringView session_id, std::string_view messages_json) {
+    const auto sid     = svToStr(session_id);
+    auto       session = findSession(sid);
+    if (!session) {
+        throw TableOpError(fmt::format("set_llm_messages: session '{}' not found", sid));
+    }
+    auto parsed = parseLlmMessagesJson(messages_json, "set_llm_messages");
+    std::vector<neograph::ChatMessage> msgs;
+    msgs.reserve(parsed.size());
+    for (auto& [id, msg] : parsed) {
+        (void)id; // 整体替换: 入参里的 id 一律忽略, 全部重新分配
+        msgs.push_back(std::move(msg));
+    }
+    return idArrayJson(session->replaceMessagesWithIds(std::move(msgs)));
+}
+
+std::string
+    PluginMount::appendLlmMessages(PluginxxStringView session_id, std::string_view messages_json) {
+    const auto sid     = svToStr(session_id);
+    auto       session = findSession(sid);
+    if (!session) {
+        throw TableOpError(fmt::format("append_llm_messages: session '{}' not found", sid));
+    }
+    auto parsed = parseLlmMessagesJson(messages_json, "append_llm_messages");
+    std::vector<neograph::ChatMessage> msgs;
+    msgs.reserve(parsed.size());
+    for (auto& [id, msg] : parsed) {
+        (void)id; // 追加的消息没有 id (由会话分配)
+        msgs.push_back(std::move(msg));
+    }
+    return idArrayJson(session->appendMessagesWithIds(std::move(msgs)));
+}
+
+std::string
+    PluginMount::updateLlmMessages(PluginxxStringView session_id, std::string_view messages_json) {
+    const auto sid     = svToStr(session_id);
+    auto       session = findSession(sid);
+    if (!session) {
+        throw TableOpError(fmt::format("update_llm_messages: session '{}' not found", sid));
+    }
+    auto parsed = parseLlmMessagesJson(messages_json, "update_llm_messages");
+    for (const auto& [id, msg] : parsed) {
+        (void)msg;
+        if (id.empty()) {
+            throw TableOpError("update_llm_messages: every message needs an `id`");
+        }
+    }
+    auto result = session->updateMessagesByIds(std::move(parsed));
+    return updateResultJson(result.updated, result.missing);
 }
 
 } // namespace plugin

@@ -78,7 +78,7 @@ std::string normalizeIntent(std::string_view s) {
 
 /// 从主程序查询会话 LLM 上下文 (json 数组; 图状态不再包含 messages 通道)
 ///
-/// - 上下文由会话持有 (唯一权威), 经 agentxx.agent.context 接口表查询;
+/// - 上下文由会话持有 (唯一权威), 经 agentxx.agent.session 的 `get_llm_messages` 查询;
 /// - **协程形态**: 节点执行业务跑在插件自己的执行线程上, 那里不能同步等表调用
 ///   (kit 的同步入口在插件线程上直接拒绝), 因此这里 `co_await` 凭据;
 /// - 接口不可用/查询失败时返回空数组 (老主程序降级: 路由退化为 fallback)
@@ -87,10 +87,10 @@ asio::awaitable<utilxx_base::Json> sessionMessages(
     const agentxx::plugin::ScopeRef&   ref,
     const agentxx::plugin::RootRequest& req
 ) {
-    if (!ctx.iface.context || !ctx.iface.context->get_messages) {
+    if (!ctx.iface.session || !ctx.iface.session->get_llm_messages) {
         co_return utilxx_base::Json::array();
     }
-    auto result = co_await ctx.getSessionMessages(ctx, ref, req.scope());
+    auto result = co_await ctx.getLlmMessages(ctx, ref, req.scope());
     const auto text = result.text();
     if (!result.ok() || text.empty()) {
         co_return utilxx_base::Json::array();

@@ -121,6 +121,12 @@ public:
     ///   通知上层不再有事件 —— 关掉 transport 之后这些动作都发不出去
     virtual void onRuntimeStopping() {}
 
+    /// 展示历史被整段替换后通知 [server] (默认空实现, 服务端端点按需覆写)
+    /// - 插件接口表的 `set_view_messages` 改写展示历史后调用: 旧行已全部删掉重写,
+    ///   id 也重新分配过, 客户端副本没有可用的增量, 只能整段重建
+    /// - 实现见 [SessionServerAgentIO::onViewMessagesReplaced] (重推一次尾部同步)
+    virtual void onViewMessagesReplaced() {}
+
     /// 服务端启动进度通知 [client] (默认空实现, 客户端端点按需覆写):
     /// - 本地模式: server-io 的 init() 各启动阶段 (加载 MCP/Skill/Memory/
     ///   RAG/CodeGraph 等) 经 AgentContext::initNotifier → 本接口逐步上报,

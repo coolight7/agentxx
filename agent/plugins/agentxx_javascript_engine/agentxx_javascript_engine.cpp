@@ -230,7 +230,6 @@ enum BridgeMagic {
     B_UNREGISTER_TOOL,
     B_CALL_TOOL,
     B_GET_SHARE_STORE,
-    B_EMIT_MESSAGE_TIP,
     B_LOG,
     B_REGISTER_HOOK,
     B_UNREGISTER_HOOK,
@@ -280,8 +279,17 @@ enum BridgeMagic {
     B_GET_TOOL_PROMPT,
     B_GET_SESSION_WORK_DIR,
     B_IS_CANCELED,
-    B_GET_MESSAGES,
-    B_MESSAGES_COUNT,
+    // 会话消息 (展示历史 / LLM 上下文; 与 C++ 插件 SDK 同名)
+    B_GET_VIEW_MESSAGES,
+    B_COUNT_VIEW_MESSAGES,
+    B_SET_VIEW_MESSAGES,
+    B_APPEND_VIEW_MESSAGES,
+    B_UPDATE_VIEW_MESSAGES,
+    B_GET_LLM_MESSAGES,
+    B_COUNT_LLM_MESSAGES,
+    B_SET_LLM_MESSAGES,
+    B_APPEND_LLM_MESSAGES,
+    B_UPDATE_LLM_MESSAGES,
     B_GET_GRAPH_JSON,
     B_GET_GRAPH_NAME,
     B_SET_GRAPH_JSON,
@@ -3506,7 +3514,6 @@ private:
             def("unregisterTool", B_UNREGISTER_TOOL, 1);
             def("callTool", B_CALL_TOOL, 3);
             def("getShareStore", B_GET_SHARE_STORE, 2);
-            def("emitMessageTip", B_EMIT_MESSAGE_TIP, 3);
             def("log", B_LOG, 2);
             def("onHook", B_REGISTER_HOOK, 2);
             def("offHook", B_UNREGISTER_HOOK, 2);
@@ -3558,8 +3565,18 @@ private:
             def("getToolPrompt", B_GET_TOOL_PROMPT, 1);
             def("getSessionWorkDir", B_GET_SESSION_WORK_DIR, 1);
             def("isCanceled", B_IS_CANCELED, 1);
-            def("getMessages", B_GET_MESSAGES, 1);
-            def("messagesCount", B_MESSAGES_COUNT, 1);
+            def("getMessages", B_GET_LLM_MESSAGES, 1);
+            def("messagesCount", B_COUNT_LLM_MESSAGES, 1);
+            def("getViewMessages", B_GET_VIEW_MESSAGES, 1);
+            def("countViewMessages", B_COUNT_VIEW_MESSAGES, 1);
+            def("setViewMessages", B_SET_VIEW_MESSAGES, 2);
+            def("appendViewMessages", B_APPEND_VIEW_MESSAGES, 2);
+            def("updateViewMessages", B_UPDATE_VIEW_MESSAGES, 2);
+            def("getLlmMessages", B_GET_LLM_MESSAGES, 1);
+            def("countLlmMessages", B_COUNT_LLM_MESSAGES, 1);
+            def("setLlmMessages", B_SET_LLM_MESSAGES, 2);
+            def("appendLlmMessages", B_APPEND_LLM_MESSAGES, 2);
+            def("updateLlmMessages", B_UPDATE_LLM_MESSAGES, 2);
             def("getGraphJson", B_GET_GRAPH_JSON, 0);
             def("getGraphName", B_GET_GRAPH_NAME, 0);
             def("setGraphJson", B_SET_GRAPH_JSON, 1);
@@ -5396,6 +5413,102 @@ JSValue JsEngine::bridgeCall(
     const agentxx::plugin::AgentIfaces iface  = agentxx::plugin::AgentIfaces::query(host);
     (void)engine;
 
+    /// 会话消息只读成员 (get / count) 的 JS 桥
+    /// - `asArray` = true 时把 `payload` 按 JSON 数组给出, 否则按整数给出
+    /// - 参数不合法 / 主程序未实现该成员时返回空数组 / -1 (与旧行为一致)
+    auto sessionMessageReadJs = [&](bool asArray, JSValueConst sessionArg, auto member) -> JSValue {
+        if (!iface.session) {
+            return asArray ? JS_NewArray(ctx) : JS_NewInt64(ctx, -1);
+        }
+        const auto fn = member(iface.session);
+        if (!fn) {
+            return asArray ? JS_NewArray(ctx) : JS_NewInt64(ctx, -1);
+        }
+        const std::string sessionId
+            = JS_IsString(sessionArg) ? jsToCppString(ctx, sessionArg) : std::string{};
+        if (sessionId.empty()) {
+            return asArray ? JS_NewArray(ctx) : JS_NewInt64(ctx, -1);
+        }
+        auto sidSv = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
+        return tableOpPromise(
+            ctx,
+            host,
+            engine,
+            [host, pctx, fn, sidSv](
+                PluginxxOperatorCallback cb,
+                void*                     opUd,
+                PluginxxString*           err
+            ) { return fn(host, pctx->scope(), &sidSv, cb, opUd, err); },
+            [asArray](JSContext* c, const JsTableResult& r) -> JSValue {
+                if (asArray) {
+                    if (!r.ok()) {
+                        return JS_NewArray(c);
+                    }
+                    JSValue arr = jsonTextToValue(c, r.payload, "<messages>");
+                    if (!JS_IsArray(arr)) {
+                        JS_FreeValue(c, arr);
+                        return JS_NewArray(c);
+                    }
+                    return arr;
+                }
+                if (!r.ok()) {
+                    return JS_NewInt64(c, -1);
+                }
+                int64_t count = -1;
+                try {
+                    count = std::stoll(std::string{r.text()});
+                } catch (...) {
+                    count = -1;
+                }
+                return JS_NewInt64(c, count);
+            }
+        );
+    };
+
+    /// 会话消息写入成员 (set / append / update) 的 JS 桥
+    /// - 第二个参数可以是 JS 数组/对象, 也可以是 JSON 文本
+    /// - 成功后 resolve 成解析后的 JSON (id 数组或 `{updated, missing}`), 失败给 null
+    auto sessionMessageWriteJs
+        = [&](JSValueConst sessionArg, JSValueConst messagesArg, auto member) -> JSValue {
+        if (!iface.session) {
+            return JS_NULL;
+        }
+        const auto fn = member(iface.session);
+        if (!fn) {
+            return JS_NULL;
+        }
+        const std::string sessionId
+            = JS_IsString(sessionArg) ? jsToCppString(ctx, sessionArg) : std::string{};
+        if (sessionId.empty()) {
+            return JS_NULL;
+        }
+        std::string body
+            = JS_IsUndefined(messagesArg) ? std::string{} : valueToJsonString(ctx, messagesArg);
+        auto sidSv  = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
+        auto bodySv = agentxx::plugin::PluginStringView::from(body.data(), body.size());
+        return tableOpPromise(
+            ctx,
+            host,
+            engine,
+            [host, pctx, fn, sidSv, bodySv](
+                PluginxxOperatorCallback cb,
+                void*                     opUd,
+                PluginxxString*           err
+            ) { return fn(host, pctx->scope(), &sidSv, &bodySv, cb, opUd, err); },
+            [](JSContext* c, const JsTableResult& r) -> JSValue {
+                if (!r.ok() || r.payload.empty()) {
+                    return JS_NULL;
+                }
+                JSValue out = JS_ParseJSON(c, r.payload.data(), r.payload.size(), "<messages>");
+                if (JS_IsException(out)) {
+                    JS_FreeValue(c, out);
+                    return JS_NULL;
+                }
+                return out;
+            }
+        );
+    };
+
     /// 订阅一个频道并把 (topic / handler / 主程序订阅句柄) 记进 agents 数组
     /// - [on_end] 为函数时走 `subscribe_broadcast_ex` (频道被结束时回调一次)
     /// - [optionsJson] 形如 `{"intervalMs":200,"mode":"delay"}` (空 = 不限频)
@@ -5849,42 +5962,6 @@ JSValue JsEngine::bridgeCall(
                     }
                     return JS_NewStringLen(c, r.payload.data(), r.payload.size());
                 }
-            );
-        }
-
-        case B_EMIT_MESSAGE_TIP: {
-            std::string sessionId = argc >= 1 ? jsToCppString(ctx, argv[0]) : "";
-            std::string text      = argc >= 2 ? jsToCppString(ctx, argv[1]) : "";
-            int         level     = 0;
-            if (argc >= 3 && JS_IsNumber(argv[2])) {
-                int32_t lv = 0;
-                JS_ToInt32(ctx, &lv, argv[2]);
-                level = lv;
-            }
-            auto sidSv
-                = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
-            auto txtSv = agentxx::plugin::PluginStringView::from(text.data(), text.size());
-            return tableOpPromise(
-                ctx,
-                host,
-                engine,
-                [host, iface, pctx, sidSv, txtSv, level](
-                    PluginxxOperatorCallback cb,
-                    void*                     ud,
-                    PluginxxString*           err
-                ) {
-                    return iface.session->emit_message_tip(
-                        host,
-                        pctx->scope(),
-                        &sidSv,
-                        &txtSv,
-                        level,
-                        cb,
-                        ud,
-                        err
-                    );
-                },
-                [](JSContext*, const JsTableResult&) -> JSValue { return JS_UNDEFINED; }
             );
         }
 
@@ -6909,81 +6986,75 @@ JSValue JsEngine::bridgeCall(
                                                                                : JS_FALSE;
         }
 
-        case B_GET_MESSAGES: {
-            if (!iface.context || !iface.context->get_messages || argc < 1) {
-                return JS_NewArray(ctx);
-            }
-            const std::string sessionId = jsToCppString(ctx, argv[0]);
-            auto sidSv = agentxx::plugin::PluginStringView::from(
-                sessionId.data(),
-                sessionId.size()
+        case B_GET_VIEW_MESSAGES:
+            return sessionMessageReadJs(
+                /*asArray=*/true,
+                argc >= 1 ? argv[0] : JS_UNDEFINED,
+                [](const AgentxxPluginSessionIface* s) { return s->get_view_messages; }
             );
-            return tableOpPromise(
-                ctx,
-                host,
-                engine,
-                [iface, host, pctx, sidSv](
-                    PluginxxOperatorCallback cb,
-                    void*                     ud,
-                    PluginxxString*           err
-                ) {
-                    return iface.context->get_messages(host, pctx->scope(), &sidSv, cb, ud, err);
-                },
-                [](JSContext* c, const JsTableResult& r) -> JSValue {
-                    if (!r.ok()) {
-                        return JS_NewArray(c);
-                    }
-                    JSValue arr = jsonTextToValue(c, r.payload, "<messages>");
-                    if (!JS_IsArray(arr)) {
-                        JS_FreeValue(c, arr);
-                        return JS_NewArray(c);
-                    }
-                    return arr;
-                }
-            );
-        }
 
-        case B_MESSAGES_COUNT: {
-            if (!iface.context || !iface.context->messages_count || argc < 1) {
-                return JS_NewInt32(ctx, -1);
-            }
-            const std::string sessionId = jsToCppString(ctx, argv[0]);
-            auto sidSv = agentxx::plugin::PluginStringView::from(
-                sessionId.data(),
-                sessionId.size()
+        case B_COUNT_VIEW_MESSAGES:
+            return sessionMessageReadJs(
+                /*asArray=*/false,
+                argc >= 1 ? argv[0] : JS_UNDEFINED,
+                [](const AgentxxPluginSessionIface* s) { return s->count_view_messages; }
             );
-            return tableOpPromise(
-                ctx,
-                host,
-                engine,
-                [iface, host, pctx, sidSv](
-                    PluginxxOperatorCallback cb,
-                    void*                     ud,
-                    PluginxxString*           err
-                ) {
-                    return iface.context->messages_count(
-                        host,
-                        pctx->scope(),
-                        &sidSv,
-                        cb,
-                        ud,
-                        err
-                    );
-                },
-                [](JSContext* c, const JsTableResult& r) -> JSValue {
-                    if (!r.ok()) {
-                        return JS_NewInt32(c, -1);
-                    }
-                    int64_t count = -1;
-                    try {
-                        count = std::stoll(std::string{r.text()});
-                    } catch (...) {
-                        count = -1;
-                    }
-                    return JS_NewInt64(c, count);
-                }
+
+        case B_SET_VIEW_MESSAGES:
+            return sessionMessageWriteJs(
+                argc >= 1 ? argv[0] : JS_UNDEFINED,
+                argc >= 2 ? argv[1] : JS_UNDEFINED,
+                [](const AgentxxPluginSessionIface* s) { return s->set_view_messages; }
             );
-        }
+
+        case B_APPEND_VIEW_MESSAGES:
+            return sessionMessageWriteJs(
+                argc >= 1 ? argv[0] : JS_UNDEFINED,
+                argc >= 2 ? argv[1] : JS_UNDEFINED,
+                [](const AgentxxPluginSessionIface* s) { return s->append_view_messages; }
+            );
+
+        case B_UPDATE_VIEW_MESSAGES:
+            return sessionMessageWriteJs(
+                argc >= 1 ? argv[0] : JS_UNDEFINED,
+                argc >= 2 ? argv[1] : JS_UNDEFINED,
+                [](const AgentxxPluginSessionIface* s) { return s->update_view_messages; }
+            );
+
+        case B_GET_LLM_MESSAGES:
+            return sessionMessageReadJs(
+                /*asArray=*/true,
+                argc >= 1 ? argv[0] : JS_UNDEFINED,
+                [](const AgentxxPluginSessionIface* s) { return s->get_llm_messages; }
+            );
+
+        case B_COUNT_LLM_MESSAGES:
+            return sessionMessageReadJs(
+                /*asArray=*/false,
+                argc >= 1 ? argv[0] : JS_UNDEFINED,
+                [](const AgentxxPluginSessionIface* s) { return s->count_llm_messages; }
+            );
+
+        case B_SET_LLM_MESSAGES:
+            return sessionMessageWriteJs(
+                argc >= 1 ? argv[0] : JS_UNDEFINED,
+                argc >= 2 ? argv[1] : JS_UNDEFINED,
+                [](const AgentxxPluginSessionIface* s) { return s->set_llm_messages; }
+            );
+
+        case B_APPEND_LLM_MESSAGES:
+            return sessionMessageWriteJs(
+                argc >= 1 ? argv[0] : JS_UNDEFINED,
+                argc >= 2 ? argv[1] : JS_UNDEFINED,
+                [](const AgentxxPluginSessionIface* s) { return s->append_llm_messages; }
+            );
+
+        case B_UPDATE_LLM_MESSAGES:
+            return sessionMessageWriteJs(
+                argc >= 1 ? argv[0] : JS_UNDEFINED,
+                argc >= 2 ? argv[1] : JS_UNDEFINED,
+                [](const AgentxxPluginSessionIface* s) { return s->update_llm_messages; }
+            );
 
         case B_GET_GRAPH_JSON: {
             if (!iface.graph || !iface.graph->get_graph_json) {

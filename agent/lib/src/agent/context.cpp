@@ -11,6 +11,7 @@
 #include "utilxx/async_offload.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fmt/format.h>
@@ -136,6 +137,15 @@ SessionStoreHooks makeSessionStoreHooks(
         .onSaveLlmMessages =
             [store, sessionId, weakSession](std::string_view msgsText) {
                 store->saveLlmMessages(sessionId, msgsText);
+                reportPersistFailure(weakSession.lock(), store);
+            },
+        .onRewriteViewMessages =
+            [store, sessionId, weakSession](
+                const std::vector<ViewMessage>& msgs,
+                uint64_t                        msgIdCounter,
+                uint64_t                        viewSeqCounter
+            ) {
+                store->rewriteViewMessages(sessionId, msgs, msgIdCounter, viewSeqCounter);
                 reportPersistFailure(weakSession.lock(), store);
             },
     };
@@ -347,6 +357,41 @@ void Session::updateViewMessage(ViewMessage msg) {
     }
 }
 
+std::vector<std::string> Session::replaceViewMessages(std::vector<ViewMessage> msgs) {
+    assertIoThread();
+    std::vector<std::string> ids;
+    // 直播槽非空 = 正在输出一段未定稿的内容: 覆写会让定稿那段接错位置, 调用方应先拒绝
+    if (streamingView.has_value()) {
+        XX_LOGW("Session::replaceViewMessages ignored: a streaming segment is still open");
+        return ids;
+    }
+    // 待落盘操作按绝对下标引用旧窗口, 替换后下标全变: 直接丢弃 (与 restoreWindow 同)
+    pendingViewOps_.clear();
+    viewEvictPending_ = false;
+
+    viewWindow_.clear();
+    viewWindowBase_ = 0;
+    viewSeqCounter_ = 0;
+    msgIndex_.clear();
+    viewWindow_.reserve(msgs.size());
+    msgIndex_.reserve(msgs.size());
+    ids.reserve(msgs.size());
+    // id 与序号全部重新分配: 旧行已被删掉, 复用旧 id 只会让客户端副本对不上
+    for (auto& msg : msgs) {
+        msg.id = fmt::format("msg_{:06d}", ++msgIdCounter_);
+        const auto viewSeq = ++viewSeqCounter_;
+        msgIndex_.insert_or_assign(msg.id, viewSeq - 1);
+        ids.push_back(msg.id);
+        viewWindow_.push_back(std::move(msg));
+    }
+    if (hooks_.onRewriteViewMessages) {
+        hooks_.onRewriteViewMessages(viewWindow_, msgIdCounter_, viewSeqCounter_);
+    }
+    // 一次性写入后仍按窗口上限淘汰 (行已在库里, 删内存不丢数据)
+    maybeEvictViewWindow();
+    return ids;
+}
+
 void Session::setStoreHooks(SessionStoreHooks hooks) {
     assertIoThread();
     hooks_ = std::move(hooks);
@@ -549,10 +594,27 @@ void Session::markMessagesChanged() {
     llmMessagesJsonTextDirty_ = true;
 }
 
+std::string Session::nextLlmMessageId() {
+    return fmt::format("llm_{:06d}", ++llmMsgIdCounter_);
+}
+
+const std::string& Session::messageIdAt(size_t index) const {
+    static const std::string kEmpty;
+    if (index >= messageIds_.size()) {
+        return kEmpty;
+    }
+    return messageIds_[index];
+}
+
 void Session::appendMessages(std::vector<neograph::ChatMessage> msgs, bool persistThrottled) {
     assertIoThread();
     if (msgs.empty()) {
         return;
+    }
+    // id 与消息同寿命: 先给新消息分配 id 再搬进上下文 (两段长度恒等)
+    messageIds_.reserve(messageIds_.size() + msgs.size());
+    for (size_t i = 0; i < msgs.size(); ++i) {
+        messageIds_.push_back(nextLlmMessageId());
     }
     messages_.insert(
         messages_.end(),
@@ -568,6 +630,12 @@ void Session::appendMessages(std::vector<neograph::ChatMessage> msgs, bool persi
 void Session::replaceMessages(std::vector<neograph::ChatMessage> msgs, bool persistThrottled) {
     assertIoThread();
     messages_ = std::move(msgs);
+    // 整段替换后按新布局重新分配 id (老 id 指向的内容已不存在)
+    messageIds_.clear();
+    messageIds_.reserve(messages_.size());
+    for (size_t i = 0; i < messages_.size(); ++i) {
+        messageIds_.push_back(nextLlmMessageId());
+    }
     markMessagesChanged();
     if (persistThrottled) {
         requestSaveLlmMessages();
@@ -593,8 +661,10 @@ void Session::setSystemMessage(neograph::ChatMessage msg, bool persistThrottled)
             return;
         }
         messages_.front() = std::move(msg);
+        // 就地改内容: id 跟着这一行不变 (插件持有的 id 仍然有效)
     } else {
         messages_.insert(messages_.begin(), std::move(msg));
+        messageIds_.insert(messageIds_.begin(), nextLlmMessageId());
     }
     markMessagesChanged();
     if (persistThrottled) {
@@ -608,10 +678,77 @@ void Session::truncateMessages(size_t count, bool persistThrottled) {
         return;
     }
     messages_.resize(count);
+    if (messageIds_.size() > count) {
+        messageIds_.resize(count);
+    }
     markMessagesChanged();
     if (persistThrottled) {
         requestSaveLlmMessages();
     }
+}
+
+std::vector<std::string> Session::appendMessagesWithIds(std::vector<neograph::ChatMessage> msgs) {
+    assertIoThread();
+    std::vector<std::string> ids;
+    if (msgs.empty()) {
+        return ids;
+    }
+    ids.reserve(msgs.size());
+    for (size_t i = 0; i < msgs.size(); ++i) {
+        ids.push_back(nextLlmMessageId());
+    }
+    messageIds_.insert(messageIds_.end(), ids.begin(), ids.end());
+    messages_.insert(
+        messages_.end(),
+        std::make_move_iterator(msgs.begin()),
+        std::make_move_iterator(msgs.end())
+    );
+    markMessagesChanged();
+    requestSaveLlmMessages();
+    return ids;
+}
+
+std::vector<std::string> Session::replaceMessagesWithIds(std::vector<neograph::ChatMessage> msgs) {
+    assertIoThread();
+    messages_ = std::move(msgs);
+    messageIds_.clear();
+    messageIds_.reserve(messages_.size());
+    for (size_t i = 0; i < messages_.size(); ++i) {
+        messageIds_.push_back(nextLlmMessageId());
+    }
+    markMessagesChanged();
+    requestSaveLlmMessages();
+    return messageIds_;
+}
+
+Session::LlmMessageUpdateResult Session::updateMessagesByIds(
+    std::vector<std::pair<std::string, neograph::ChatMessage>> updates
+) {
+    assertIoThread();
+    LlmMessageUpdateResult result;
+    if (updates.empty()) {
+        return result;
+    }
+    for (auto& [id, message] : updates) {
+        if (id.empty()) {
+            result.missing.emplace_back();
+            continue;
+        }
+        const auto it = std::find(messageIds_.begin(), messageIds_.end(), id);
+        if (it == messageIds_.end()) {
+            result.missing.push_back(id);
+            continue;
+        }
+        const auto index = static_cast<size_t>(std::distance(messageIds_.begin(), it));
+        messages_[index] = std::move(message);
+        // id 跟着这一行不变 (同一条消息换了内容, 插件可以再按同一个 id 改回来)
+        ++result.updated;
+    }
+    if (result.updated > 0) {
+        markMessagesChanged();
+        requestSaveLlmMessages();
+    }
+    return result;
 }
 
 const utilxx_base::Json& Session::llmMessagesJson() const {
@@ -657,6 +794,30 @@ const std::string& Session::llmMessagesJsonText() const {
         llmMessagesJsonTextDirty_ = false;
     }
     return llmMessagesJsonTextCache_;
+}
+
+std::string Session::llmMessagesJsonWithIds() const {
+    assertIoThread();
+    std::string out;
+    if (messages_.empty()) {
+        return "[]";
+    }
+    out.push_back('[');
+    for (size_t i = 0; i < messages_.size(); ++i) {
+        if (i > 0) {
+            out.push_back(',');
+        }
+        neograph::json one;
+        neograph::to_json(one, messages_[i]);
+        auto j = agentxx::util::fromNeographJson(one);
+        if (!j.is_object()) {
+            j = utilxx_base::Json::object();
+        }
+        j["id"] = messageIdAt(i);
+        out += j.dump();
+    }
+    out.push_back(']');
+    return out;
 }
 
 void Session::requestSaveLlmMessages() {

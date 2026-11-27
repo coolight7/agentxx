@@ -399,18 +399,42 @@ public:
         PluginxxStringView content
     );
 
-    void emitMessageTip(
-        PluginInstance*    inst,
-        PluginxxStringView session_id,
-        PluginxxStringView text,
-        int32_t            level
-    );
+    // =====================================================================
+    // 会话消息读写 (agentxx.agent.session v5)
+    //
+    // 两份消息各有 get/count/set/append/update:
+    // - 展示历史 = `ViewMessage` (客户端看到的那份, 带 id)
+    // - LLM 上下文 = `ChatMessage` (真正发给模型的那个数组, 读时每条附 id)
+    //
+    // 入参/出参都是 JSON 文本; 失败一律抛 [TableOpError] (由 vtable 层按 FAILED
+    // 交回), 不返回半成品。全部方法只能在主程序 io 线程调用 (由表调用的工作体
+    // 满足, 与 Session 的写入约束一致)。
+    // =====================================================================
 
-    /// 会话 LLM 上下文 (Json 数组文本; 主程序 alloc, 失败返回空串)
-    PluginxxString getSessionMessages(PluginxxStringView session_id);
+    /// 取已加载的会话 (不存在返回空; 不顺手创建空会话)
+    std::shared_ptr<agentxx::agent::Session> findSession(std::string_view session_id);
 
-    /// 会话 LLM 上下文条数 (会话不存在返回 -1)
-    int64_t sessionMessagesCount(PluginxxStringView session_id);
+    /// 展示历史 (ViewMessage JSON 数组文本; 主程序 alloc, 会话不存在返回空串)
+    PluginxxString getViewMessages(PluginxxStringView session_id);
+    /// 展示历史条数 (会话不存在返回 -1)
+    int64_t countViewMessages(PluginxxStringView session_id);
+    /// 整段替换展示历史; 返回分配到的 id 数组文本
+    std::string setViewMessages(PluginxxStringView session_id, std::string_view messages_json);
+    /// 追加多条展示历史; 返回分配到的 id 数组文本
+    std::string appendViewMessages(PluginxxStringView session_id, std::string_view messages_json);
+    /// 按 id 更新多条展示历史; 返回 `{"updated":N,"missing":[...]}`
+    std::string updateViewMessages(PluginxxStringView session_id, std::string_view messages_json);
+
+    /// LLM 上下文 (ChatMessage JSON 数组文本, 每条带 id; 会话不存在返回空串)
+    PluginxxString getLlmMessages(PluginxxStringView session_id);
+    /// LLM 上下文条数 (会话不存在返回 -1)
+    int64_t countLlmMessages(PluginxxStringView session_id);
+    /// 整体替换 LLM 上下文; 返回分配到的 id 数组文本
+    std::string setLlmMessages(PluginxxStringView session_id, std::string_view messages_json);
+    /// 追加多条 LLM 上下文; 返回分配到的 id 数组文本
+    std::string appendLlmMessages(PluginxxStringView session_id, std::string_view messages_json);
+    /// 按 id 更新多条 LLM 上下文; 返回 `{"updated":N,"missing":[...]}`
+    std::string updateLlmMessages(PluginxxStringView session_id, std::string_view messages_json);
 
     // =====================================================================
     // 执行图 (agentxx.agent.graph)

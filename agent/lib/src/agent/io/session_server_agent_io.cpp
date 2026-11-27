@@ -3234,6 +3234,20 @@ void SessionServerAgentIO::sendContextStats(const std::shared_ptr<AgentIOTranspo
     }
 }
 
+void SessionServerAgentIO::onViewMessagesReplaced() {
+    // 展示历史被整段替换 (插件接口表 set_view_messages): 旧行与 id 全换, 没有可用
+    // 增量, 直接重推一次同步载荷 (客户端 ViewReplica::reset 整体重建)。
+    // 调用方通常已在 io 线程; 不在时 dispatch 回来, 与其它被动入口一致。
+    asio::dispatch(ex_, [self = weak_from_this()]() {
+        auto io = self.lock();
+        if (!io) {
+            return;
+        }
+        auto sync = io->buildTailSync(io->effectiveSyncTailCount());
+        io->sendToPeer(std::move(sync));
+    });
+}
+
 void SessionServerAgentIO::onAsyncWorksChanged() {
     // 调用方可能在任意线程 (后台任务管理器 / 插件): 统一回到本端点的执行器处理
     asio::dispatch(ex_, [self = weak_from_this()]() {

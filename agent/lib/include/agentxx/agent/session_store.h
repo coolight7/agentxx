@@ -180,6 +180,23 @@ public:
     /// - msg.id 必须非空 (appendViewMessage 分配); 找不到匹配行仅记录日志, 不影响内存状态
     void updateViewMessage(std::string_view sessionId, const ViewMessage& msg);
 
+    /// 查询一条展示历史是否还在会话库里 (按 msg_id 主键索引)
+    /// - 插件接口表 `update_view_messages` 用它判断“已有内存窗口淘汰、但库里还在”的行
+    /// - 只读连接; 失败按不存在处理
+    bool viewMessageExists(std::string_view sessionId, std::string_view msgId);
+
+    /// 整段替换展示历史 (插件接口表 `set_view_messages`)
+    /// - 单事务: 删掉该会话全部旧行, 再按传入顺序以 seq = 1..N 写回, 并写回
+    ///   `msgIdCounter` / `viewSeqCounter` 两项计数 (供重启后继续编号与增量补拉)
+    /// - 标题与标题来源保持原值 (用户改名不被覆盖)
+    /// - 失败仅记录日志, 不影响内存状态
+    void rewriteViewMessages(
+        std::string_view                sessionId,
+        const std::vector<ViewMessage>& msgs,
+        uint64_t                        msgIdCounter,
+        uint64_t                        viewSeqCounter
+    );
+
     /// 保存 LLM 上下文消息 (整表替换; 每轮对话结束时调用)
     /// - [llmMessagesJson] 为上下文 JSON 数组的**文本** (会话侧已序列化, 见
     ///   Session::llmMessagesJsonText): 落盘只需要文本, 直接写文本可省掉一份与

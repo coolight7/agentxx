@@ -2,6 +2,7 @@
 #include "agentxx-test/plugin/test_table_op.h"
 
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/session_store.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -18,12 +19,15 @@
 #include "pluginxx/host/table_op.h"
 #include "pluginxx/runtime/op_driver.h"
 #include "utilxx_base/asio_error.h"
+#include "utilxx_base/string_util.h"
 
 #include <algorithm>
 #include <atomic>
 #include <barrier>
 #include <cstddef>
 #include <chrono>
+#include <filesystem>
+#include <fmt/format.h>
 #include <future>
 #include <mutex>
 #include <optional>
@@ -2838,7 +2842,304 @@ TestResult testPluginRuntime() {
             }
         }
     }
+    /// 会话消息表 (agentxx.agent.session v5): 展示历史与 LLM 上下文的读 / 写
+    ///
+    /// 走真实 vtable 入口 (xx_query_interface → g_ifaceSession) + 真实会话 (带会话库),
+    /// 覆盖 append / update / set / count / get 的语义与几条边界:
+    /// 会话不存在按失败交回、视觉为空的展示消息被丢弃、update 的 missing 列表、
+    /// LLM 消息 id 在 replace 后仍能按 id 定位、流式输出中拒绝 set_view_messages。
+    {
+        RuntimeFixture f;
+        const auto     root = (std::filesystem::temp_directory_path() / "agentxx-test-session-msg")
+                              .string();
+        std::error_code ec;
+        std::filesystem::remove_all(utilxx_base::utf8ToPath(root), ec);
+        auto store = std::make_shared<agentxx::agent::SessionStore>(root);
+        f.ctx->sessions                     = std::make_shared<agentxx::agent::SessionsManager>();
+        f.ctx->sessions->sessionStore        = store;
+        f.ctx->sessions->viewWindowMessages = 0; ///< 0 = 不淘汰, 全量驻留 (方便断言)
+        auto session = f.ctx->sessions->getOrCreate("msg-session");
+        XX_TEST_EXPECT_TRUE(session != nullptr);
+
+        const auto* host    = f.provider->hostView();
+        const auto  ifaces  = plugin::AgentIfaces::query(host);
+        XX_TEST_EXPECT_TRUE(ifaces.session != nullptr);
+        if (!ifaces.session) {
+            return result;
+        }
+
+        // 作用域引用: 本挂载的 agentId + 挂载序号
+        std::string      agentId = f.mount->agentId();
+        PluginxxScopeRef ref{};
+        ref.struct_size = sizeof(PluginxxScopeRef);
+        ref.id          = plugin::PluginStringView::from(agentId.data(), agentId.size());
+        ref.seq         = f.mount->mountSeq();
+
+        auto makeSv = [](std::string_view s) {
+            return PluginxxStringView{s.data(), static_cast<uint64_t>(s.size())};
+        };
+        auto call = [&](auto startFn) {
+            return agentxx::test::tableOpWait(host, ifaces.cancel, ifaces.scheduler, startFn);
+        };
+        auto parse = [](const pluginxx::detail::TableOpResult& r) {
+            return utilxx_base::Json::parse(std::string{r.text()});
+        };
+
+        // ---- 边界: 会话不存在 / session id 缺失 / JSON 非法 ----
+        {
+            auto missing = makeSv("no-such-session");
+            auto res     = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->get_view_messages(host, &ref, &missing, cb, ud, err);
+            });
+            XX_TEST_EXPECT_FALSE(res.ok());
+            XX_TEST_EXPECT_TRUE(res.text().find("not found") != std::string_view::npos);
+
+            auto emptySid = makeSv("");
+            res           = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->count_llm_messages(host, &ref, &emptySid, cb, ud, err);
+            });
+            XX_TEST_EXPECT_FALSE(res.ok());
+
+            auto sid  = makeSv("msg-session");
+            auto junk = makeSv("{not json");
+            res       = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->append_view_messages(
+                    host,
+                    &ref,
+                    &sid,
+                    &junk,
+                    cb,
+                    ud,
+                    err
+                );
+            });
+            XX_TEST_EXPECT_FALSE(res.ok());
+            XX_TEST_EXPECT_TRUE(res.text().find("not valid JSON") != std::string_view::npos);
+        }
+
+        // ---- 展示历史: append 多条 → count / get ----
+        std::string userRowId;
+        std::string assistantRowId;
+        {
+            auto sid = makeSv("msg-session");
+            auto body = makeSv(R"([
+                {"role":"user","text":"hello from plugin","startTimeMs":1760000000000},
+                {"role":"assistant","text":"hi","startTimeMs":1760000001000},
+                {"role":"assistant","text":"   "}
+            ])");
+            auto res = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->append_view_messages(host, &ref, &sid, &body, cb, ud, err);
+            });
+            XX_TEST_EXPECT_TRUE(res.ok());
+            if (!res.ok()) {
+                XX_LOGW("[plugin_runtime] append_view_messages failed: {}", res.text());
+            }
+            auto ids = parse(res);
+            // 空正文那条被丢弃: 只分配两条 id
+            XX_TEST_EXPECT_TRUE(ids.is_array());
+            XX_TEST_EXPECT_EQ(ids.size(), size_t{2});
+            if (ids.size() == 2) {
+                userRowId      = ids[0].get<std::string>();
+                assistantRowId = ids[1].get<std::string>();
+            }
+            XX_TEST_EXPECT_TRUE(userRowId.starts_with("msg_"));
+            XX_TEST_EXPECT_EQ(session->viewMessageCount(), size_t{2});
+
+            auto countRes
+                = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                      return ifaces.session->count_view_messages(
+                          host,
+                          &ref,
+                          &sid,
+                          cb,
+                          ud,
+                          err
+                      );
+                  });
+            XX_TEST_EXPECT_TRUE(countRes.ok());
+            XX_TEST_EXPECT_EQ(std::string{countRes.text()}, std::string{"2"});
+
+            auto getRes = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->get_view_messages(host, &ref, &sid, cb, ud, err);
+            });
+            XX_TEST_EXPECT_TRUE(getRes.ok());
+            auto rows = parse(getRes);
+            XX_TEST_EXPECT_EQ(rows.size(), size_t{2});
+            if (rows.size() == 2) {
+                XX_TEST_EXPECT_EQ(rows[0].value("id", std::string{}), userRowId);
+                XX_TEST_EXPECT_EQ(rows[0].value("text", std::string{}), std::string{"hello from plugin"});
+                XX_TEST_EXPECT_EQ(rows[0].value("role", std::string{}), std::string{"user"});
+            }
+        }
+
+        // ---- 展示历史: update 按 id 改多条 (含一个不存在的 id) ----
+        {
+            auto sid = makeSv("msg-session");
+            // 字符串先存成具名变量: makeSv 只借用它的内存, 临时对象在语句结束就没了
+            const auto bodyText = fmt::format(
+                R"([{{"id":"{}","role":"user","text":"hello v2"}},{{"id":"msg_999999","role":"user","text":"gone"}}])",
+                userRowId
+            );
+            auto body = makeSv(bodyText);
+            auto res = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->update_view_messages(host, &ref, &sid, &body, cb, ud, err);
+            });
+            XX_TEST_EXPECT_TRUE(res.ok());
+            auto out = parse(res);
+            XX_TEST_EXPECT_EQ(out.value("updated", int64_t{-1}), int64_t{1});
+            XX_TEST_EXPECT_TRUE(out.contains("missing"));
+            XX_TEST_EXPECT_EQ(out["missing"].size(), size_t{1});
+            if (auto* row = session->viewMessageById(userRowId); row != nullptr) {
+                XX_TEST_EXPECT_EQ(row->text, std::string{"hello v2"});
+            } else {
+                XX_TEST_EXPECT_FALSE(true);
+            }
+        }
+
+        // ---- 展示历史: set 整段替换 (旧行从库里删掉, id 重新分配) ----
+        {
+            auto sid  = makeSv("msg-session");
+            auto body = makeSv(
+                R"([{"role":"user","text":"only one"},
+                    {"role":"tip","text":"plugin tip","tip":{"tip_level":"warning"}}])"
+            );
+            auto res = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->set_view_messages(host, &ref, &sid, &body, cb, ud, err);
+            });
+            XX_TEST_EXPECT_TRUE(res.ok());
+            auto ids = parse(res);
+            XX_TEST_EXPECT_EQ(ids.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(session->viewMessageCount(), size_t{2});
+            // 旧行已不在内存与库里
+            XX_TEST_EXPECT_TRUE(session->viewMessageById(userRowId) == nullptr);
+            XX_TEST_EXPECT_FALSE(store->viewMessageExists("msg-session", userRowId));
+            auto loaded = store->loadSession("msg-session");
+            XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{2});
+            if (loaded.viewMessages.size() == 2) {
+                XX_TEST_EXPECT_EQ(loaded.viewMessages[0].text, std::string{"only one"});
+                XX_TEST_EXPECT_EQ(
+                    loaded.viewMessages[1].role,
+                    agentxx::agent::ViewMessage::Role::Tip
+                );
+            }
+        }
+
+        // ---- LLM 上下文: append / get (每条带 id) / update / count ----
+        {
+            auto sid  = makeSv("msg-session");
+            auto body = makeSv(
+                R"([{"role":"system","content":"you are a test"},
+                    {"role":"assistant","content":"answer","id":"ignored"}])"
+            );
+            auto res = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->append_llm_messages(host, &ref, &sid, &body, cb, ud, err);
+            });
+            XX_TEST_EXPECT_TRUE(res.ok());
+            auto ids = parse(res);
+            XX_TEST_EXPECT_EQ(ids.size(), size_t{2});
+            XX_TEST_EXPECT_TRUE(ids[0].get<std::string>().starts_with("llm_"));
+
+            auto countRes
+                = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                      return ifaces.session->count_llm_messages(host, &ref, &sid, cb, ud, err);
+                  });
+            XX_TEST_EXPECT_TRUE(countRes.ok());
+            XX_TEST_EXPECT_EQ(std::string{countRes.text()}, std::string{"2"});
+            XX_TEST_EXPECT_EQ(session->messagesCount(), size_t{2});
+
+            auto getRes = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->get_llm_messages(host, &ref, &sid, cb, ud, err);
+            });
+            XX_TEST_EXPECT_TRUE(getRes.ok());
+            auto rows = parse(getRes);
+            XX_TEST_EXPECT_EQ(rows.size(), size_t{2});
+            if (rows.size() == 2) {
+                XX_TEST_EXPECT_TRUE(rows[0].contains("id"));
+                XX_TEST_EXPECT_EQ(rows[0].value("id", std::string{}), ids[0].get<std::string>());
+                XX_TEST_EXPECT_EQ(rows[0].value("content", std::string{}), std::string{"you are a test"});
+            }
+
+            // 按 id 改第一条 (改成 user) + 一个已不存在的 id
+            const auto updateText = fmt::format(
+                R"([{{"id":"{}","role":"user","content":"rewritten"}},{{"id":"llm_999999","role":"user","content":"x"}}])",
+                ids[0].get<std::string>()
+            );
+            auto updateBody = makeSv(updateText);
+            auto updateRes = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->update_llm_messages(
+                    host,
+                    &ref,
+                    &sid,
+                    &updateBody,
+                    cb,
+                    ud,
+                    err
+                );
+            });
+            XX_TEST_EXPECT_TRUE(updateRes.ok());
+            auto updated = parse(updateRes);
+            XX_TEST_EXPECT_EQ(updated.value("updated", int64_t{-1}), int64_t{1});
+            XX_TEST_EXPECT_EQ(updated["missing"].size(), size_t{1});
+            const auto& msgs = session->messages();
+            XX_TEST_EXPECT_EQ(msgs.size(), size_t{2});
+            if (!msgs.empty()) {
+                XX_TEST_EXPECT_EQ(msgs[0].role, std::string{"user"});
+                XX_TEST_EXPECT_EQ(msgs[0].content, std::string{"rewritten"});
+            }
+
+            // set: 整段替换后 id 全部重新分配, 旧 id 不再命中
+            auto setBody = makeSv(R"([{"role":"system","content":"fresh"}])");
+            auto setRes  = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->set_llm_messages(host, &ref, &sid, &setBody, cb, ud, err);
+            });
+            XX_TEST_EXPECT_TRUE(setRes.ok());
+            auto freshIds = parse(setRes);
+            XX_TEST_EXPECT_EQ(freshIds.size(), size_t{1});
+            XX_TEST_EXPECT_EQ(session->messagesCount(), size_t{1});
+            const auto staleText = fmt::format(
+                R"([{{"id":"{}","role":"user","content":"x"}}])",
+                ids[0].get<std::string>()
+            );
+            auto staleBody = makeSv(staleText);
+            auto staleRes = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->update_llm_messages(
+                    host,
+                    &ref,
+                    &sid,
+                    &staleBody,
+                    cb,
+                    ud,
+                    err
+                );
+            });
+            XX_TEST_EXPECT_TRUE(staleRes.ok());
+            auto staleOut = parse(staleRes);
+            XX_TEST_EXPECT_EQ(staleOut.value("updated", int64_t{-1}), int64_t{0});
+            XX_TEST_EXPECT_EQ(staleOut["missing"].size(), size_t{1});
+        }
+
+        // ---- 边界: 流式输出中拒绝 set_view_messages ----
+        {
+            auto sid = makeSv("msg-session");
+            session->beginStreamingView(
+                agentxx::agent::ViewMessage::makeText(
+                    agentxx::agent::ViewMessage::Role::Assistant,
+                    ""
+                )
+            );
+            auto body = makeSv(R"([{"role":"user","text":"x"}])");
+            auto res  = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->set_view_messages(host, &ref, &sid, &body, cb, ud, err);
+            });
+            XX_TEST_EXPECT_FALSE(res.ok());
+            XX_TEST_EXPECT_TRUE(res.text().find("streaming") != std::string_view::npos);
+            session->clearStreamingView();
+        }
+
+        std::filesystem::remove_all(utilxx_base::utf8ToPath(root), ec);
+    }
 
     return result;
 }
+
 } // namespace agentxx::test

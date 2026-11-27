@@ -34,10 +34,8 @@ struct AgentIfaces {
     const AgentxxPluginPermissionIface* permission = nullptr; ///< "agentxx.agent.permission"
     const PluginxxCapabilitiesIface* capabilities = nullptr; ///< "pluginxx.capabilities"
     const PluginxxSchedulerIface*    scheduler    = nullptr; ///< "pluginxx.scheduler"
-    /// "agentxx.agent.session": 会话共享存储 / 提示 / 工作目录 / 取消查询
+    /// "agentxx.agent.session": 会话共享存储 / 工作目录 / 取消查询 / 消息读写
     const AgentxxPluginSessionIface* session = nullptr; ///< "agentxx.agent.session"
-    /// "agentxx.agent.context": 会话 LLM 上下文查询 (图状态不含上下文内容)
-    const AgentxxPluginContextIface*   context   = nullptr; ///< "agentxx.agent.context"
     const PluginxxPluginsIface*        plugins   = nullptr; ///< "pluginxx.plugins"
     const PluginxxConfigIface*         config    = nullptr; ///< "pluginxx.config"
     const AgentxxPluginPromptIface*    prompt    = nullptr; ///< "agentxx.agent.prompt"
@@ -78,8 +76,6 @@ struct AgentIfaces {
         f.scheduler = queryInterface<PluginxxSchedulerIface>(host, PLUGINXX_IFACE_SCHEDULER);
         f.session
             = queryInterface<AgentxxPluginSessionIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_SESSION);
-        f.context
-            = queryInterface<AgentxxPluginContextIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT);
         f.plugins = queryInterface<PluginxxPluginsIface>(host, PLUGINXX_IFACE_PLUGINS);
         f.config  = queryInterface<PluginxxConfigIface>(host, PLUGINXX_IFACE_CONFIG);
         f.prompt
@@ -912,25 +908,164 @@ public:
         );
     }
 
-    /// 读取会话 LLM 上下文 (**协程形态**: `co_await` 后 `.text()` 是 JSON 数组文本)
-    template<typename Ctx>
-    asio::awaitable<pluginxx::TableOpResult> getSessionMessages(
+    /// 会话消息成员 (get / count 这类只读成员) 的公共调用骨架
+    /// - 主程序未实现该成员时返回未受理 (表调用按失败交回), 插件不必逐个判空
+    template<typename Ctx, typename Member>
+    asio::awaitable<pluginxx::TableOpResult> sessionMessageOp(
         const Ctx&       ctx,
         const ScopeRef&  agent,
-        std::string_view tid
+        std::string_view sid,
+        Member           member
     ) const {
-        auto ref   = agent;
-        auto tidSv = PluginStringView::from(tid.data(), tid.size());
+        auto ref  = agent;
+        auto idSv = PluginStringView::from(sid.data(), sid.size());
         co_return co_await asyncTableOp(
             ctx,
             co_await asio::this_coro::executor,
-            [this, ref, tidSv](auto cb, auto ud, auto err) {
+            [this, ref, idSv, member](auto cb, auto ud, auto err) {
                 auto r = ref.raw();
-                if (!host || !iface.context || !iface.context->get_messages) {
+                if (!host || !iface.session) {
                     return static_cast<PluginxxOperatorHandle*>(nullptr);
                 }
-                return iface.context->get_messages(host, &r, &tidSv, cb, ud, err);
+                const auto fn = member(iface.session);
+                if (!fn) {
+                    return static_cast<PluginxxOperatorHandle*>(nullptr);
+                }
+                return fn(host, &r, &idSv, cb, ud, err);
             }
+        );
+    }
+
+    /// 会话消息成员 (set / append / update 这类带消息数组的成员) 的公共调用骨架
+    /// - 入参 JSON 按值捕进闭包: 插件侧视图只在本次调用期间有效
+    template<typename Ctx, typename Member>
+    asio::awaitable<pluginxx::TableOpResult> sessionMessageWriteOp(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view sid,
+        std::string_view messages_json,
+        Member           member
+    ) const {
+        auto ref  = agent;
+        auto idSv = PluginStringView::from(sid.data(), sid.size());
+        co_return co_await asyncTableOp(
+            ctx,
+            co_await asio::this_coro::executor,
+            [this,
+             ref,
+             idSv,
+             body = std::string{messages_json},
+             member](auto cb, auto ud, auto err) {
+                auto r = ref.raw();
+                if (!host || !iface.session) {
+                    return static_cast<PluginxxOperatorHandle*>(nullptr);
+                }
+                const auto fn = member(iface.session);
+                if (!fn) {
+                    return static_cast<PluginxxOperatorHandle*>(nullptr);
+                }
+                auto bodySv = PluginStringView::from(body.data(), body.size());
+                return fn(host, &r, &idSv, &bodySv, cb, ud, err);
+            }
+        );
+    }
+
+    /// 读取会话展示历史 (**协程形态**: `co_await` 后 `.text()` 是 ViewMessage JSON 数组文本)
+    /// - 带 `id`, 改完可以按 id 回写 (`updateViewMessages`)
+    template<typename Ctx>
+    asio::awaitable<pluginxx::TableOpResult> getViewMessages(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view sid
+    ) const {
+        co_return co_await sessionMessageOp(
+            ctx,
+            agent,
+            sid,
+            [](const AgentxxPluginSessionIface* s) { return s->get_view_messages; }
+        );
+    }
+
+    /// 展示历史条数 (**协程形态**: `co_await` 后 `.integer(-1)`)
+    template<typename Ctx>
+    asio::awaitable<pluginxx::TableOpResult> countViewMessages(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view sid
+    ) const {
+        co_return co_await sessionMessageOp(
+            ctx,
+            agent,
+            sid,
+            [](const AgentxxPluginSessionIface* s) { return s->count_view_messages; }
+        );
+    }
+
+    /// 整段替换展示历史 (**协程形态**: `co_await` 后 `.text()` 是分配到的 id 数组文本)
+    template<typename Ctx>
+    asio::awaitable<pluginxx::TableOpResult> setViewMessages(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view sid,
+        std::string_view messages_json
+    ) const {
+        co_return co_await sessionMessageWriteOp(
+            ctx,
+            agent,
+            sid,
+            messages_json,
+            [](const AgentxxPluginSessionIface* s) { return s->set_view_messages; }
+        );
+    }
+
+    /// 追加多条展示历史 (**协程形态**: `co_await` 后 `.text()` 是分配到的 id 数组文本)
+    template<typename Ctx>
+    asio::awaitable<pluginxx::TableOpResult> appendViewMessages(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view sid,
+        std::string_view messages_json
+    ) const {
+        co_return co_await sessionMessageWriteOp(
+            ctx,
+            agent,
+            sid,
+            messages_json,
+            [](const AgentxxPluginSessionIface* s) { return s->append_view_messages; }
+        );
+    }
+
+    /// 按 id 更新多条展示历史 (**协程形态**: 入参元素带 `id`)
+    /// - `co_await` 后 `.text()` 是 `{"updated":N,"missing":[...]}`
+    template<typename Ctx>
+    asio::awaitable<pluginxx::TableOpResult> updateViewMessages(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view sid,
+        std::string_view messages_json
+    ) const {
+        co_return co_await sessionMessageWriteOp(
+            ctx,
+            agent,
+            sid,
+            messages_json,
+            [](const AgentxxPluginSessionIface* s) { return s->update_view_messages; }
+        );
+    }
+
+    /// 读取会话 LLM 上下文 (**协程形态**: `co_await` 后 `.text()` 是 JSON 数组文本)
+    /// - 每条消息带 `id` (只在进程内稳定), 改完可以按 id 回写 (`updateLlmMessages`)
+    template<typename Ctx>
+    asio::awaitable<pluginxx::TableOpResult> getLlmMessages(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view sid
+    ) const {
+        co_return co_await sessionMessageOp(
+            ctx,
+            agent,
+            sid,
+            [](const AgentxxPluginSessionIface* s) { return s->get_llm_messages; }
         );
     }
 
@@ -959,23 +1094,68 @@ public:
 
     /// 会话 LLM 上下文条数 (**协程形态**: `co_await` 后 `.integer(-1)`)
     template<typename Ctx>
-    asio::awaitable<pluginxx::TableOpResult> sessionMessagesCount(
+    asio::awaitable<pluginxx::TableOpResult> countLlmMessages(
         const Ctx&       ctx,
         const ScopeRef&  agent,
-        std::string_view tid
+        std::string_view sid
     ) const {
-        auto ref   = agent;
-        auto tidSv = PluginStringView::from(tid.data(), tid.size());
-        co_return co_await asyncTableOp(
+        co_return co_await sessionMessageOp(
             ctx,
-            co_await asio::this_coro::executor,
-            [this, ref, tidSv](auto cb, auto ud, auto err) {
-                auto r = ref.raw();
-                if (!host || !iface.context || !iface.context->messages_count) {
-                    return static_cast<PluginxxOperatorHandle*>(nullptr);
-                }
-                return iface.context->messages_count(host, &r, &tidSv, cb, ud, err);
-            }
+            agent,
+            sid,
+            [](const AgentxxPluginSessionIface* s) { return s->count_llm_messages; }
+        );
+    }
+
+    /// 整体替换 LLM 上下文 (**协程形态**: `co_await` 后 `.text()` 是分配到的 id 数组文本)
+    template<typename Ctx>
+    asio::awaitable<pluginxx::TableOpResult> setLlmMessages(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view sid,
+        std::string_view messages_json
+    ) const {
+        co_return co_await sessionMessageWriteOp(
+            ctx,
+            agent,
+            sid,
+            messages_json,
+            [](const AgentxxPluginSessionIface* s) { return s->set_llm_messages; }
+        );
+    }
+
+    /// 追加多条 LLM 上下文消息 (**协程形态**: `co_await` 后 `.text()` 是分配到的 id 数组文本)
+    template<typename Ctx>
+    asio::awaitable<pluginxx::TableOpResult> appendLlmMessages(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view sid,
+        std::string_view messages_json
+    ) const {
+        co_return co_await sessionMessageWriteOp(
+            ctx,
+            agent,
+            sid,
+            messages_json,
+            [](const AgentxxPluginSessionIface* s) { return s->append_llm_messages; }
+        );
+    }
+
+    /// 按 id 更新多条 LLM 上下文消息 (**协程形态**: 入参元素带 `id`)
+    /// - `co_await` 后 `.text()` 是 `{"updated":N,"missing":[...]}`
+    template<typename Ctx>
+    asio::awaitable<pluginxx::TableOpResult> updateLlmMessages(
+        const Ctx&       ctx,
+        const ScopeRef&  agent,
+        std::string_view sid,
+        std::string_view messages_json
+    ) const {
+        co_return co_await sessionMessageWriteOp(
+            ctx,
+            agent,
+            sid,
+            messages_json,
+            [](const AgentxxPluginSessionIface* s) { return s->update_llm_messages; }
         );
     }
 

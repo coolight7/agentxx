@@ -271,6 +271,109 @@ void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessa
     );
 }
 
+bool SessionStore::viewMessageExists(std::string_view sessionId, std::string_view msgId) {
+    if (msgId.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    return agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db     = dbs(sessionId).sessionDb;
+            auto  select = db.prepare("SELECT 1 FROM view_message WHERE msg_id = ? LIMIT 1");
+            select.bindText(1, std::string{msgId});
+            return select.step();
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGD("SessionStore: viewMessageExists({}, {}) failed: {}", sessionId, msgId, errmsg);
+            return false;
+        }
+    );
+}
+
+void SessionStore::rewriteViewMessages(
+    std::string_view                sessionId,
+    const std::vector<ViewMessage>& msgs,
+    uint64_t                        msgIdCounter,
+    uint64_t                        viewSeqCounter
+) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto& db = dbs(sessionId).sessionDb;
+            db.beginImmediate();
+            bool inTx = true;
+            try {
+                // 整段替换: 先清空旧行再按新顺序写回 (seq 从 1 开始, 与内存下标一致)
+                db.exec("DELETE FROM view_message");
+                auto insert = db.prepare(
+                    "INSERT INTO view_message(seq, json, msg_id) VALUES (?, ?, ?)"
+                );
+                int64_t lastActiveMs = 0;
+                uint64_t seq        = 0;
+                for (const auto& msg : msgs) {
+                    ++seq;
+                    insert.reset();
+                    insert.bindInt64(1, static_cast<int64_t>(seq));
+                    insert.bindText(2, dumpJsonUtf8(stripAttachmentDataUrl(msg).toJson()));
+                    insert.bindText(3, msg.id);
+                    insert.step();
+                    if (msg.startTimeMs > lastActiveMs) {
+                        lastActiveMs = msg.startTimeMs;
+                    }
+                }
+
+                auto meta = db.prepare("INSERT INTO meta(key, value) VALUES (?, ?) "
+                                       "ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+                meta.bindText(1, kMetaMsgIdCounter);
+                meta.bindInt64(2, static_cast<int64_t>(msgIdCounter));
+                meta.step();
+                meta.reset();
+                meta.bindText(1, kMetaViewSeqCounter);
+                meta.bindInt64(2, static_cast<int64_t>(viewSeqCounter));
+                meta.step();
+                meta.reset();
+                meta.bindText(1, kMetaSessionId);
+                meta.bindText(2, std::string{sessionId});
+                meta.step();
+                if (lastActiveMs > 0) {
+                    meta.reset();
+                    meta.bindText(1, kMetaLastActiveMs);
+                    meta.bindInt64(2, lastActiveMs);
+                    meta.step();
+                }
+
+                db.commit();
+                inTx = false;
+            } catch (...) {
+                if (inTx) {
+                    agentxx::util::catchError<bool>(
+                        [&]() -> bool {
+                            db.rollback();
+                            return true;
+                        },
+                        [](std::string) -> bool {
+                            return false;
+                        }
+                    );
+                }
+                throw;
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE(
+                "SessionStore: rewriteViewMessages({}, {} messages) failed: {}",
+                sessionId,
+                msgs.size(),
+                errmsg
+            );
+            // 记录写失败原因 (只记根因, 见 appendViewMessage 处注释)
+            lastWriteError_ = errmsg;
+            return false;
+        }
+    );
+}
+
 // ---------------------------------------------------------------------------
 // SessionStore
 // ---------------------------------------------------------------------------

@@ -446,6 +446,28 @@ if (SIDE === "client") {
       out.mount = mount === null ? "null" : typeof mount.agentId;
       out.messagesIsArray = Array.isArray(await agentxx.getMessages("probe-session"));
       out.messagesCount = typeof (await agentxx.messagesCount("probe-session"));
+      // 会话消息 (接口表 v5): 展示历史与 LLM 上下文各一套 get/count/set/append/update。
+      // 不存在的会话走拒绝分支 (读给空数组/-1, 写给 null), 这里只验形状。
+      out.viewMessagesIsArray = Array.isArray(await agentxx.getViewMessages("probe-session"));
+      out.viewMessagesCount = typeof (await agentxx.countViewMessages("probe-session"));
+      out.setViewMessages = await agentxx.setViewMessages("probe-session", [
+        { role: "user", text: "x" },
+      ]);
+      out.appendViewMessages = await agentxx.appendViewMessages("probe-session", [
+        { role: "user", text: "x" },
+      ]);
+      out.updateViewMessages = await agentxx.updateViewMessages("probe-session", [
+        { id: "msg_x", role: "user", text: "y" },
+      ]);
+      out.llmMessagesIsArray = Array.isArray(await agentxx.getLlmMessages("probe-session"));
+      out.llmMessagesCount = typeof (await agentxx.countLlmMessages("probe-session"));
+      out.setLlmMessages = await agentxx.setLlmMessages("probe-session", []);
+      out.appendLlmMessages = await agentxx.appendLlmMessages("probe-session", [
+        { role: "user", content: "x" },
+      ]);
+      out.updateLlmMessages = await agentxx.updateLlmMessages("probe-session", [
+        { id: "llm_x", role: "user", content: "y" },
+      ]);
       out.prompt = kindOf(await agentxx.getPrompt());
       out.toolPrompt = kindOf(await agentxx.getToolPrompt("no_such_tool_for_probe"));
       out.shareStore = kindOf(await agentxx.getShareStore("probe-session", 0));

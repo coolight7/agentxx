@@ -70,11 +70,20 @@ std::string findPluginDir(std::string_view pluginName) {
         std::error_code                     ec2;
         std::filesystem::directory_iterator it(dir, ec2);
         std::filesystem::directory_iterator end;
+        bool                                hasScript = false;
         for (; it != end; it.increment(ec2)) {
             auto ext = it->path().extension().string();
             if (ext == ".so" || ext == ".dll" || ext == ".dylib") {
                 return true;
             }
+            if (it->path().filename() == "plugin.js") {
+                hasScript = true;
+            }
+        }
+        // 纯脚本插件 (如 example_js) 没有动态库: 清单 + plugin.js 也算插件目录;
+        // 只有 plugin.yaml 的 C++ 插件源码目录不算, 否则 cwd 在仓库根时会误命中
+        if (hasScript && std::filesystem::exists(dir / "plugin.yaml", ec2)) {
+            return true;
         }
         return false;
     };
@@ -568,9 +577,9 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
         );
     }
 
-    // ================= 15. 19 张表可查 + 挂载表内容 =================
+    // ================= 15. 18 张表可查 + 挂载表内容 =================
     {
-        XX_TEST_EXPECT_EQ(plugin::PluginManager::kInterfaceTableCount, size_t{19});
+        XX_TEST_EXPECT_EQ(plugin::PluginManager::kInterfaceTableCount, size_t{18});
         const PluginxxHost* hostView = inst->hostView();
         const char*         iids[]   = {
             PLUGINXX_IFACE_LOG,
@@ -585,7 +594,6 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             AGENTXX_PLUGIN_IFACE_AGENT_TOOLS,
             AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION,
             AGENTXX_PLUGIN_IFACE_AGENT_SESSION,
-            AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT,
             AGENTXX_PLUGIN_IFACE_AGENT_MODEL,
             AGENTXX_PLUGIN_IFACE_AGENT_PROMPT,
             AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES,

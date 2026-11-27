@@ -56,8 +56,8 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
 
 namespace test {
 
-/// 定位插件库目录 (通用; exe 同目录优先, cwd 回退; 校验目录内存在动态库产物,
-/// 避免 cwd 在源码仓库下时误命中 agent/plugins/ 下的插件源码目录)
+/// 定位插件库目录 (通用; exe 同目录优先, cwd 回退; 校验目录内存在动态库产物或
+/// 脚本插件的 plugin.js, 避免 cwd 在源码仓库下时误命中 agent/plugins/ 下的插件源码目录)
 static std::string findPluginDir(const char* pluginName) {
     namespace fs = std::filesystem;
     std::error_code       ec;
@@ -70,11 +70,20 @@ static std::string findPluginDir(const char* pluginName) {
         std::error_code                     ec2;
         std::filesystem::directory_iterator it(dir, ec2);
         std::filesystem::directory_iterator end;
+        bool                                hasScript = false;
         for (; it != end; it.increment(ec2)) {
             auto ext = it->path().extension().string();
             if (ext == ".so" || ext == ".dll" || ext == ".dylib") {
                 return true;
             }
+            if (it->path().filename() == "plugin.js") {
+                hasScript = true;
+            }
+        }
+        // 纯脚本插件 (如 example_js) 没有动态库: 清单 + plugin.js 也算插件目录;
+        // 只有 plugin.yaml 的 C++ 插件源码目录不算, 否则 cwd 在仓库根时会误命中
+        if (hasScript && std::filesystem::exists(dir / "plugin.yaml", ec2)) {
+            return true;
         }
         return false;
     };
@@ -847,6 +856,17 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 // 上下文查询: 空会话给空数组, 条数给数字
                 XX_TEST_EXPECT_TRUE(j["messagesIsArray"].get<bool>());
                 XX_TEST_EXPECT_TRUE(kindIs("messagesCount", {"number"}));
+                // 会话消息 (接口表 v5): 不存在的会话读给空数组 / -1, 写给 null
+                XX_TEST_EXPECT_TRUE(j["viewMessagesIsArray"].get<bool>());
+                XX_TEST_EXPECT_TRUE(kindIs("viewMessagesCount", {"number"}));
+                XX_TEST_EXPECT_TRUE(j["setViewMessages"].is_null());
+                XX_TEST_EXPECT_TRUE(j["appendViewMessages"].is_null());
+                XX_TEST_EXPECT_TRUE(j["updateViewMessages"].is_null());
+                XX_TEST_EXPECT_TRUE(j["llmMessagesIsArray"].get<bool>());
+                XX_TEST_EXPECT_TRUE(kindIs("llmMessagesCount", {"number"}));
+                XX_TEST_EXPECT_TRUE(j["setLlmMessages"].is_null());
+                XX_TEST_EXPECT_TRUE(j["appendLlmMessages"].is_null());
+                XX_TEST_EXPECT_TRUE(j["updateLlmMessages"].is_null());
                 // 提示词与工具提示词
                 XX_TEST_EXPECT_TRUE(kindIs("prompt", {"null", "object", "string"}));
                 XX_TEST_EXPECT_TRUE(kindIs("toolPrompt", {"null"}));

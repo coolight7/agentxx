@@ -51,11 +51,20 @@ static std::string findPluginDirMI(std::string_view pluginName) {
         std::error_code                     ec2;
         std::filesystem::directory_iterator it(dir, ec2);
         std::filesystem::directory_iterator end;
+        bool                                hasScript = false;
         for (; it != end; it.increment(ec2)) {
             auto ext = it->path().extension().string();
             if (ext == ".so" || ext == ".dll" || ext == ".dylib") {
                 return true;
             }
+            if (it->path().filename() == "plugin.js") {
+                hasScript = true;
+            }
+        }
+        // 纯脚本插件 (如 example_js) 没有动态库: 清单 + plugin.js 也算插件目录;
+        // 只有 plugin.yaml 的 C++ 插件源码目录不算, 否则 cwd 在仓库根时会误命中
+        if (hasScript && std::filesystem::exists(dir / "plugin.yaml", ec2)) {
+            return true;
         }
         return false;
     };
