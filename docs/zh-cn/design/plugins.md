@@ -826,7 +826,7 @@ cancel) + 1 张**网络表** `agentxx_plugin_net` (两侧都提供) + 6 张自�
 
 | 场景 | 写法 |
 |------|------|
-| 只要提交, 不要结果 (更新面板/状态栏/Info 段落、overlay、装饰、退订) | `clientTableCall(...)` 或 `ClientPluginBase` 的 `setPanelJson` / `setStatusJson` / `showOverlay` 一类方法 (提交即返回, 任何线程都不等) |
+| 只要提交, 不要结果 (推一份内容、overlay、装饰、退订) | `clientTableCall(...)`、`Content::publish` (推内容并记住这一份) 或 `ClientPluginBase` 的 `showOverlay` 一类方法 (提交即返回, 任何线程都不等) |
 | 要结果, 且在协程里 (start 事务、spawn 出来的任务) | `co_await clientTableOpAsync(ctx, ...)`, 句柄用 `clientHandleOf<T>(res)` 取 |
 | 要结果, 但不在协程里 | 写成回调形态 `tableOpCallback(...)`; 没有同步入口 |
 
@@ -834,9 +834,10 @@ cancel) + 1 张**网络表** `agentxx_plugin_net` (两侧都提供) + 6 张自�
 > 线程与 client io 线程是两条线程, 在那里等结果就是让插件自己停住)。`boundaries` 规则
 > 禁止这些名字回到插件源码。
 >
-> 需要在频道/动作回调里懒注册 Info 段落时用 `ClientPluginBase::ensureInfoSection`:
-> 注册请求立刻提交, 句柄由主程序受理后写回槽位, 之后用 `infoSection(id)` 取到再推内容
-> (首轮可能还拿不到句柄, 下一轮事件补上)。
+> 新插件**不再需要**按旧成员懒注册: 展示位置就是声明项 + 内容, 注册在 `start` 事务里
+> (`co_await clientRegisterContentAsync`), 之后算好一份就 `Content::publish` 一份。
+> `ClientPluginBase::ensureInfoSection` / `infoSection(id)` 只是给已经按旧成员写好的插件
+> 留的兼容入口 (注册请求立刻提交, 句柄受理后写回槽位, 首轮可能还拿不到)。
 
 **客户端事件走广播频道, 不再有事件表** (原来的 `agentxx.client.events` /
 `agentxx.client.json` / `agentxx.client.log` 已删除, 后两者改用通用表
@@ -1279,7 +1280,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      `tool_call_id` 无限增长。
    - `toolDecors` (实例级装饰) 是纯主程序数据, 仍在 UI 线程直接读 (取 summary / items 两部分)。
 
-### 9.6 声明式界面：声明项 + 内容 (`agentxx.client.ui` v3)
+### 9.6 声明式界面：声明项 + 内容 (`agentxx.client.ui` v4)
 
 与 agent 侧同一套规则（`pluginxx/api/ui.h` + `pluginxx/host/ui_content.h`），差在槽位与变量：
 
@@ -1299,12 +1300,26 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
   所以生成函数里不要做重活：先给一份占位内容，数据到了再 `update_ui_slot` / `push_ui_content`。
 - **界面线程只读快照**（`ClientPluginManager::uiContentSnapshot()`）：渲染永远不跑插件代码，也没有同步等待。
   停用 / 卸载时声明项、内容与自建槽位一起撤销（重新启用时由插件 `start` 事务重新登记）。
+- **插件侧怎么写**（C++ 用 kit）：
+  - 状态栏项 / 面板 / Info 段落 / 工具行都是"声明项 + 内容"，一条注册函数：
+    `co_await clientRegisterContentAsync(ctx, ContentSpec{.slot, .id, .title, .data, .deps, .generate})`；
+    工具行专用 `co_await clientRegisterToolRowAsync(ctx, 工具名, 显示名, ToolRowSpec{.summary, .body})`。
+  - 内容"算"有两种：
+    1. **按变量算**：在 `generate` 里把主程序给的变量变成文档（纯函数，别做重活）；
+    2. **只推不算**：`generate` 留空，状态由频道回调 / 网络线程更新，算好文档就
+       `content->publish(doc)` —— `publish` 记住这一份，主程序之后来问生成函数时回的是这份拷贝，
+       所以生成函数（插件执行线程）不会跨线程读别人的状态。
+  - 面板与 Info 段落的文档是 `{"items":[…]}`，状态栏项是 `{"blocks":[…]}`（一行文本 / 一行横排片段）。
+  - 句柄要活到实例卸载（生成函数的 `user_data` 指着它）：放进实例上下文即可。
 - **与旧成员的关系**：面板 / Info 段落 / 状态栏项的老写法（`register_panel` + `update_panel` 等）仍然可用，
   **但它们写的就是这套注册表**：主程序把 `register_status_item` 写成 `status` 上一条声明项
   （`data` = `{"align":0|1,"order":n}`）加一份内容，`update_*` 就是推一份新内容，`unregister_*`
   就是撤销它。所以界面**只有一条绘制路径**（只读内容）：旧写法不再有自己的绘制分支，也不存在
   “内容还没到就画旧 items”的回落。插件同时用两套接口写同一个 id 时，后写的生效；
   旧句柄注销时不撤销插件自己注册过生成函数的内容（那一份归声明式接口管）。
+  仓库自带插件里 `agentxx_websearch` / `agentxx_chatbot` / `agentxx_codegraph` /
+  `agentxx_system_monitor` / `example_plugin` 已全部迁到内容写法；`agentxx_planning` 的 Info 段落
+  还同时写旧段落与内容（懒注册留下的写法，界面画的是内容），外部插件与 JS 桥仍可用旧成员。
 - **工具行也是内容**（`agentxx.client.tool`）：一份内容 = 某个工具名的行渲染（例：`agentxx_websearch` 的 client 侧）。
   与上面三个槽位不同，它**不是同时只画一份** —— 每次工具调用各要一份：
   - 声明项的 `data` 给出 `{"tool":"<工具名>","displayName":"<折叠头显示名>"}`；

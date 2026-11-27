@@ -1040,6 +1040,15 @@ path/to/agentxx_test --log-level warn string_util regex
     `registerToolRenderer`, 不保留别名)、声明式模版 (`template_json`/`summaryKey`)、
     “名称结果” (`#工具名` 键) 机制、运行中参数预览。布局变过, **旧插件 DLL 必须重建**
     (见 [plugins.md](docs/zh-cn/design/plugins.md) 的“工具特化渲染架构”)
+  - **状态栏项 / 侧边栏面板 / Info 段落也是"声明项 + 内容"**: kit 用
+    `co_await clientRegisterContentAsync(ctx, ContentSpec{.slot, .id, .title, .data, .deps, .generate})`
+    注册 (`status` / `panel` / `info` 槽位, 面板与 Info 的文档是 `{"items":[…]}`、状态栏是 `{"blocks":[…]}`)。
+    `generate` 留空就是"只推不算": 数据由频道回调更新时算好文档就 `Content::publish(doc)`,
+    它记住这一份并推给主程序, 生成函数 (插件执行线程) 之后回的是那份拷贝 —— **不要**在生成函数里
+    直接读别的线程写的状态。旧成员 (`register_status_item` / `register_panel` /
+    `register_info_section` 与 `update_*`) 仍然可用 (主程序镜像到同一份注册表), 但自带插件
+    (`agentxx_websearch` / `agentxx_chatbot` / `agentxx_codegraph` / `agentxx_system_monitor` /
+    `example_plugin`) 已全部改走内容
   - **参数自愈的适用范围**: 凡是把参数交给工具的地方都用这一份实现 —— 前台工具调用
     (`ToolcallWrapNode`, 内置工具与插件工具不区分) 与后台工具任务 (`AsyncWorkManager` 的
     `kind=tool`, 提交后执行前); 数值取整与布尔认词规则见

@@ -420,6 +420,26 @@ needed): `agentxx.client.ready`, `agentxx.client.connection_state`,
 `agentxx.client.delta`, `agentxx.client.turn_end`, and
 `agentxx.client.plugin.<plugin name>.<event>` for cross-side plugin data.
 
+Status items, sidebar panels, Info sections and tool rows are all **a declaration item plus
+content** (`register_ui_item` / `register_ui_content`, slots `status` / `panel` / `info` / `tool`).
+The C++ kit registers them in one coroutine call:
+
+- `co_await clientRegisterContentAsync(ctx, ContentSpec{.slot, .id, .title, .data, .deps, .generate})`
+  for status / panel / info, `co_await clientRegisterToolRowAsync(ctx, tool, displayName, ToolRowSpec)` for rows;
+- content can be **computed from variables** (the `generate` function; keep it cheap) or **push only**
+  (leave `generate` empty, call `Content::publish(doc)` from whichever thread owns the data). `publish`
+  remembers the document, so the generate call the host makes later answers with that copy and never
+  reads another thread's state;
+- panel and Info documents are `{"items":[…]}`; a status item document is `{"blocks":[…]}` (a single line);
+- keep the returned handle alive until the instance unloads (the generate function's `user_data` points at it).
+
+The legacy members (`register_status_item` / `register_panel` / `register_info_section` and their
+`update_*` / `unregister_*`) still work: the host mirrors them onto the same registry (one declaration
+item plus one content), so there is a single drawing path. The bundled plugins
+(`agentxx_websearch`, `agentxx_chatbot`, `agentxx_codegraph`, `agentxx_system_monitor`,
+`example_plugin`) have all moved to content; `agentxx_planning` still writes both its Info section and
+the content (lazy registration), and external plugins plus the JS bridge keep using the old members.
+
 ### Tool Row Content (Tool Rendering & Decor)
 
 The Agentxx client renders tool rows from declarative content. The TUI core is completely decoupled, containing zero hardcoded tool names:
