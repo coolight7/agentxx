@@ -518,6 +518,14 @@ public:
         lastPanelId_ = id;
     }
 
+    /// 声明式内容更新 (旧注册项更新走上面那几个; 新写法都到这一条)
+    void onContentUpdated(const std::string& slot, const std::string& shortId) override {
+        std::lock_guard<std::mutex> lock(m_);
+        ++contentUpdated_;
+        lastContentSlot_ = slot;
+        lastContentId_   = shortId;
+    }
+
     void onPanelUpdated(const std::string& id, const utilxx_base::Json& /*items*/) override {
         std::lock_guard<std::mutex> lock(m_);
         ++panelUpdated_;
@@ -614,6 +622,11 @@ public:
     int panelUpdated() const {
         std::lock_guard<std::mutex> lock(m_);
         return panelUpdated_;
+    }
+
+    int contentUpdated() const {
+        std::lock_guard<std::mutex> lock(m_);
+        return contentUpdated_;
     }
 
     int infoSectionRegistered() const {
@@ -719,6 +732,9 @@ private:
     int                infoSectionRegistered_ = 0;
     int                infoSectionUpdated_    = 0;
     int                infoSectionRemoved_    = 0;
+    int                contentUpdated_        = 0;
+    std::string        lastContentSlot_;
+    std::string        lastContentId_;
     int                toastCount_            = 0;
     int                sendCount_             = 0;
     int                dataUpCount_           = 0;
@@ -1016,67 +1032,58 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     XX_TEST_EXPECT_TRUE(mgr->hasPluginExecutor());
 
     // ---- 2. UI 注册表 ----
+    // 三处展示位置都是"声明项 + 内容": 旧注册表 (statusItems / panels / infoSections) 空着,
+    // 界面只读内容 (一条绘制路径)
     {
         auto reg = mgr->uiRegistrySnapshot();
         XX_TEST_EXPECT_TRUE(reg != nullptr);
         if (reg) {
-            bool hasStatus = false;
-            for (const auto& s : reg->statusItems) {
-                if (s.id == "example_plugin.turns") {
-                    hasStatus = true;
-                    XX_TEST_EXPECT_EQ(s.text, "turns: 0");
-                }
+            XX_TEST_EXPECT_TRUE(reg->statusItems.empty());
+            XX_TEST_EXPECT_TRUE(reg->panels.empty());
+            XX_TEST_EXPECT_TRUE(reg->infoSections.empty());
+            XX_TEST_EXPECT_TRUE(reg->commands.size() >= 2);
+        }
+        // 内容由 start 事务注册并推一份初始文档 (推送是提交即返回, 等它落到快照上)
+        XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+            auto snap = mgr->uiContentSnapshot();
+            if (!snap) {
+                return false;
             }
-            XX_TEST_EXPECT_TRUE(hasStatus);
-            bool hasPanel = false;
-            for (const auto& p : reg->panels) {
-                if (p.id == "example_plugin.panel") {
-                    hasPanel = true;
-                    XX_TEST_EXPECT_EQ(p.title, "Example");
-                }
+            const auto* status = snap->contentOf(
+                agentxx::plugin::kClientUiSlotStatus,
+                "example_plugin.turns"
+            );
+            return status != nullptr && status->hasResult
+                && status->json.find("turns: 0") != std::string::npos;
+        }));
+        if (auto uiSnap = mgr->uiContentSnapshot()) {
+            const auto* status = uiSnap->contentOf(
+                agentxx::plugin::kClientUiSlotStatus,
+                "example_plugin.turns"
+            );
+            XX_TEST_EXPECT_TRUE(status != nullptr);
+            if (status != nullptr) {
+                // 状态栏项的文档是 `{"blocks":[…]}`: 只画一行文本
+                XX_TEST_EXPECT_TRUE(status->parsed.contains("blocks"));
             }
-            XX_TEST_EXPECT_TRUE(hasPanel);
-            bool hasInfo = false;
-            for (const auto& s : reg->infoSections) {
-                if (s.id == "example_plugin.info") {
-                    hasInfo = true;
-                    XX_TEST_EXPECT_EQ(s.title, "Example Info");
-                }
+            const auto* panel = uiSnap->contentOf(
+                agentxx::plugin::kClientUiSlotPanel,
+                "example_plugin.panel"
+            );
+            XX_TEST_EXPECT_TRUE(panel != nullptr);
+            if (panel != nullptr) {
+                XX_TEST_EXPECT_TRUE(panel->hasResult);
+                XX_TEST_EXPECT_EQ(panel->title, "Example");
             }
-            XX_TEST_EXPECT_TRUE(hasInfo);
-            // 旧注册项同样落在声明式注册表里: 同一份存储, 界面只有一条绘制路径
-            if (auto uiSnap = mgr->uiContentSnapshot()) {
-                const auto* status = uiSnap->contentOf(
-                    agentxx::plugin::kClientUiSlotStatus,
-                    "example_plugin.turns"
-                );
-                XX_TEST_EXPECT_TRUE(status != nullptr);
-                if (status != nullptr) {
-                    XX_TEST_EXPECT_TRUE(status->hasResult);
-                    // 文本形态的状态栏项按一行文本给出
-                    XX_TEST_EXPECT_TRUE(status->parsed.contains("blocks"));
-                    XX_TEST_EXPECT_TRUE(status->json.find("turns: 0") != std::string::npos);
-                }
-                XX_TEST_EXPECT_TRUE(
-                    uiSnap->contentOf(agentxx::plugin::kClientUiSlotPanel, "example_plugin.panel")
-                    != nullptr
-                );
-                XX_TEST_EXPECT_TRUE(
-                    uiSnap->contentOf(agentxx::plugin::kClientUiSlotInfo, "example_plugin.info")
-                    != nullptr
-                );
+            const auto* info = uiSnap->contentOf(
+                agentxx::plugin::kClientUiSlotInfo,
+                "example_plugin.info"
+            );
+            XX_TEST_EXPECT_TRUE(info != nullptr);
+            if (info != nullptr) {
+                XX_TEST_EXPECT_TRUE(info->hasResult);
+                XX_TEST_EXPECT_EQ(info->title, "Example Info");
             }
-            bool hasCmd1 = false, hasCmd2 = false;
-            for (const auto& c : reg->commands) {
-                if (c.name == "example") {
-                    hasCmd1 = true;
-                }
-                if (c.name == "example_toast") {
-                    hasCmd2 = true;
-                }
-            }
-            XX_TEST_EXPECT_TRUE(hasCmd1);
-            XX_TEST_EXPECT_TRUE(hasCmd2);
         }
     }
     XX_TEST_EXPECT_TRUE(mgr->hasCommand("example"));
@@ -1233,11 +1240,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     }
     XX_TEST_EXPECT_FALSE(mgr->hasCommand("no_such_command"));
 
-    // 插件 loadNativeAsync 在 io 线程, entry 的注册经 ioCallSync 同步完成:
-    // 适配器应已收到注册信号
-    XX_TEST_EXPECT_EQ(adapter->statusRegistered(), 1);
-    XX_TEST_EXPECT_EQ(adapter->panelRegistered(), 1);
-    XX_TEST_EXPECT_EQ(adapter->infoSectionRegistered(), 1);
+    // 三处位置都是"声明项 + 内容": 适配器的旧注册信号不再触发 (内容只走 onContentUpdated)
+    XX_TEST_EXPECT_EQ(adapter->statusRegistered(), 0);
+    XX_TEST_EXPECT_EQ(adapter->panelRegistered(), 0);
+    XX_TEST_EXPECT_EQ(adapter->infoSectionRegistered(), 0);
 
     // ---- 3. 事件分发 ----
     // READY: 插件回调更新状态栏 + 跨端 send_plugin_data("hello");
@@ -1260,31 +1266,39 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // TURN_END 的处理在插件执行线程上: 等这次回调整段跑完再断言
     // (状态栏项与 Info 段落同属一次回调, 只等其中一个会漏)
     co_await drainPlugin(mgr, "example_plugin");
-    {
-        auto reg = mgr->uiRegistrySnapshot();
-        if (reg) {
-            bool found = false;
-            for (const auto& s : reg->statusItems) {
-                if (s.id == "example_plugin.turns") {
-                    found = true;
-                    XX_TEST_EXPECT_EQ(s.text, "turns: 1");
-                }
-            }
-            XX_TEST_EXPECT_TRUE(found);
-            // Info 段落: TURN_END 时插件更新内容 (text "Turns: 1" + hint 说明)
-            bool infoFound = false;
-            for (const auto& s : reg->infoSections) {
-                if (s.id == "example_plugin.info" && s.items.is_array() && !s.items.empty()) {
-                    infoFound        = true;
-                    const auto first = s.items[0];
-                    XX_TEST_EXPECT_EQ(first.value("kind", std::string{}), "Text");
-                    XX_TEST_EXPECT_EQ(first.value("text", std::string{}), "Turns: 1");
-                }
-            }
-            XX_TEST_EXPECT_TRUE(infoFound);
+    // 状态栏项与 Info 段落都由同一次回调推内容 (推送提交即返回, 等它落到快照上)
+    XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+        auto snap = mgr->uiContentSnapshot();
+        if (!snap) {
+            return false;
         }
-    }
-    XX_TEST_EXPECT_TRUE(adapter->infoSectionUpdated() >= 1);
+        const auto* status = snap->contentOf(
+            agentxx::plugin::kClientUiSlotStatus,
+            "example_plugin.turns"
+        );
+        return status != nullptr && status->json.find("turns: 1") != std::string::npos;
+    }));
+    XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+        auto snap = mgr->uiContentSnapshot();
+        if (!snap) {
+            return false;
+        }
+        const auto* info = snap->contentOf(
+            agentxx::plugin::kClientUiSlotInfo,
+            "example_plugin.info"
+        );
+        if (info == nullptr || !info->parsed.contains("items")) {
+            return false;
+        }
+        const auto& items = info->parsed["items"];
+        if (!items.is_array() || items.empty()) {
+            return false;
+        }
+        const auto& first = items[0];
+        return first.value("kind", std::string{}) == "Text"
+            && first.value("text", std::string{}) == "Turns: 1";
+    }));
+    XX_TEST_EXPECT_TRUE(adapter->contentUpdated() >= 1);
 
     // USER_INPUT: 通知事件 (payload 含 text)
     mgr->onUserInput("sess-test", "hello world");
@@ -1296,7 +1310,18 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         d.data  = R"({"done":1})";
         mgr->onPluginData(d);
     }
-    XX_TEST_EXPECT_TRUE(co_await waitUntil([&] { return adapter->panelUpdated() >= 1; }));
+    XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+        auto snap = mgr->uiContentSnapshot();
+        if (!snap) {
+            return false;
+        }
+        const auto* panel = snap->contentOf(
+            agentxx::plugin::kClientUiSlotPanel,
+            "example_plugin.panel"
+        );
+        return panel != nullptr
+            && panel->json.find("plugin.example_plugin.progress") != std::string::npos;
+    }));
 
     // ---- 4. 命令执行 ----
     // /example (send 动作)
@@ -1370,7 +1395,21 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_FALSE(any); // 全部摘除
         }
     }
-    XX_TEST_EXPECT_TRUE(adapter->infoSectionRemoved() >= 1);
+    // 内容跟着实例撤销 (声明项与内容一起摘)
+    {
+        auto snap      = mgr->uiContentSnapshot();
+        bool anyContent = false;
+        if (snap) {
+            anyContent
+                = snap->contentOf(agentxx::plugin::kClientUiSlotStatus, "example_plugin.turns")
+                      != nullptr
+                || snap->contentOf(agentxx::plugin::kClientUiSlotPanel, "example_plugin.panel")
+                       != nullptr
+                || snap->contentOf(agentxx::plugin::kClientUiSlotInfo, "example_plugin.info")
+                       != nullptr;
+        }
+        XX_TEST_EXPECT_FALSE(anyContent);
+    }
     XX_TEST_EXPECT_FALSE(mgr->hasCommand("example"));
     // disable 期间命令不执行
     mgr->invokeCommand("example", R"({"text":"x"})");
@@ -1383,28 +1422,27 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     }
     {
         auto reg    = mgr->uiRegistrySnapshot();
-        bool hasCmd = false, hasStatus = false, hasInfo = false;
+        bool hasCmd = false;
         if (reg) {
             for (const auto& c : reg->commands) {
                 if (c.name == "example") {
                     hasCmd = true;
                 }
             }
-            for (const auto& s : reg->statusItems) {
-                if (s.id == "example_plugin.turns") {
-                    hasStatus = true;
-                }
-            }
-            for (const auto& s : reg->infoSections) {
-                if (s.id == "example_plugin.info") {
-                    hasInfo = true;
-                }
-            }
         }
         XX_TEST_EXPECT_TRUE(hasCmd);
-        XX_TEST_EXPECT_TRUE(hasStatus);
-        XX_TEST_EXPECT_TRUE(hasInfo);
     }
+    // 内容由 start 事务重新注册, 注册完先推一份初始文档 (推送提交即返回, 等它写进快照)
+    XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+        auto snap = mgr->uiContentSnapshot();
+        if (!snap) {
+            return false;
+        }
+        return snap->contentOf(agentxx::plugin::kClientUiSlotStatus, "example_plugin.turns")
+                   != nullptr
+            && snap->contentOf(agentxx::plugin::kClientUiSlotInfo, "example_plugin.info")
+                   != nullptr;
+    }));
     XX_TEST_EXPECT_TRUE(mgr->hasCommand("example"));
 
     // ---- 7. unload 清理 ----
@@ -1437,8 +1475,21 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
         XX_TEST_EXPECT_FALSE(any);
     }
-    // 插件卸载时主动反注册 (unload 回调): adapter 信号计数增加
-    XX_TEST_EXPECT_TRUE(adapter->infoSectionRemoved() >= 2);
+    // 卸载时声明项与内容一起撤销
+    {
+        auto snap       = mgr->uiContentSnapshot();
+        bool anyContent = false;
+        if (snap) {
+            anyContent
+                = snap->contentOf(agentxx::plugin::kClientUiSlotStatus, "example_plugin.turns")
+                      != nullptr
+                || snap->contentOf(agentxx::plugin::kClientUiSlotPanel, "example_plugin.panel")
+                       != nullptr
+                || snap->contentOf(agentxx::plugin::kClientUiSlotInfo, "example_plugin.info")
+                       != nullptr;
+        }
+        XX_TEST_EXPECT_FALSE(anyContent);
+    }
     XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
 
     // ---- 广播频道 (客户端事件的唯一通道) ----
@@ -1856,15 +1907,28 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto cgInst = co_await mgr->loadNativeAsync(cgPath);
         XX_TEST_EXPECT_TRUE(cgInst != nullptr);
         if (cgInst) {
-            auto reg          = mgr->uiRegistrySnapshot();
-            bool hasCgSection = false;
-            for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_codegraph.status") {
-                    hasCgSection = true;
-                    XX_TEST_EXPECT_EQ(sec.title, std::string{"CodeGraph"});
+            // Info 段落是声明项 + 内容: 标题在内容上, 正文由插件按事件推
+            auto cgItems = [&]() -> std::string {
+                auto        snap = mgr->uiContentSnapshot();
+                const auto* sec  = snap ? snap->contentOf(
+                                             agentxx::plugin::kClientUiSlotInfo,
+                                             "agentxx_codegraph.status"
+                                         )
+                                        : nullptr;
+                return sec != nullptr ? sec->json : std::string{};
+            };
+            {
+                auto        snap = mgr->uiContentSnapshot();
+                const auto* sec  = snap ? snap->contentOf(
+                                             agentxx::plugin::kClientUiSlotInfo,
+                                             "agentxx_codegraph.status"
+                                         )
+                                        : nullptr;
+                XX_TEST_EXPECT_TRUE(sec != nullptr);
+                if (sec != nullptr) {
+                    XX_TEST_EXPECT_EQ(sec->title, std::string{"CodeGraph"});
                 }
             }
-            XX_TEST_EXPECT_TRUE(hasCgSection);
 
             // status 事件: 新版 Append 段风格仅显示 “|- wait for index” (已加载但无进度时)
             agentxx::agent::WirePluginData st;
@@ -1872,15 +1936,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             st.data   = R"({"loaded":true,"project_root":"/workspace/test_proj"})";
             mgr->onPluginData(st);
             co_await drainPlugin(mgr, "agentxx_codegraph");
-
-            reg = mgr->uiRegistrySnapshot();
-            for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_codegraph.status") {
-                    std::string dump = sec.items.dump();
-                    // 当前实现: 无进度时展示 wait for index (小写+, hint)
-                    XX_TEST_EXPECT_TRUE(dump.find("wait for index") != std::string::npos);
-                }
-            }
+            XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+                return cgItems().find("wait for index") != std::string::npos;
+            }));
 
             // progress 事件 (进行中): 新版为 “|- indexing 25% (25/100)” + progress 条 + 文件名
             agentxx::agent::WirePluginData prog;
@@ -1888,22 +1946,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             prog.data   = R"({"processed":25,"total":100,"current_file":"src/main.cpp"})";
             mgr->onPluginData(prog);
             co_await drainPlugin(mgr, "agentxx_codegraph");
-
-            reg = mgr->uiRegistrySnapshot();
-            for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_codegraph.status") {
-                    std::string dump = sec.items.dump();
-                    // 25/100 -> 25% ( {:.0f}% 保留整数, 25%)
-                    XX_TEST_EXPECT_TRUE(dump.find("25/100") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(
-                        dump.find("indexing") != std::string::npos
-                        || dump.find("Indexing") != std::string::npos
-                    );
+            XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+                const std::string dump = cgItems();
+                // 25/100 -> 25% ( {:.0f}% 保留整数, 25%)
+                return dump.find("25/100") != std::string::npos
+                    && (dump.find("indexing") != std::string::npos
+                        || dump.find("Indexing") != std::string::npos)
                     // 文件名仅保留 basename "main.cpp"
-                    XX_TEST_EXPECT_TRUE(dump.find("main.cpp") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("Progress") != std::string::npos);
-                }
-            }
+                    && dump.find("main.cpp") != std::string::npos
+                    && dump.find("Progress") != std::string::npos;
+            }));
 
             // progress 事件 (完成): 新版为 “|- available · 100”
             agentxx::agent::WirePluginData progDone;
@@ -1911,15 +1963,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             progDone.data   = R"({"processed":100,"total":100,"current_file":""})";
             mgr->onPluginData(progDone);
             co_await drainPlugin(mgr, "agentxx_codegraph");
-
-            reg = mgr->uiRegistrySnapshot();
-            for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_codegraph.status") {
-                    std::string dump = sec.items.dump();
-                    XX_TEST_EXPECT_TRUE(dump.find("available") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("100") != std::string::npos);
-                }
-            }
+            XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+                const std::string dump = cgItems();
+                return dump.find("available") != std::string::npos
+                    && dump.find("100") != std::string::npos;
+            }));
 
             co_await mgr->unloadAsync("agentxx_codegraph");
             XX_TEST_EXPECT_TRUE(mgr->find("agentxx_codegraph") == nullptr);
@@ -1934,15 +1982,28 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto smInst = co_await mgr->loadNativeAsync(smPath);
         XX_TEST_EXPECT_TRUE(smInst != nullptr);
         if (smInst) {
-            auto reg          = mgr->uiRegistrySnapshot();
-            bool hasSmSection = false;
-            for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_system_monitor.usage") {
-                    hasSmSection = true;
-                    XX_TEST_EXPECT_EQ(sec.title, std::string{"System"});
+            // Info 段落是声明项 + 内容: 标题在内容上, 正文由插件按事件推
+            auto smItems = [&]() -> std::string {
+                auto        snap = mgr->uiContentSnapshot();
+                const auto* sec  = snap ? snap->contentOf(
+                                             agentxx::plugin::kClientUiSlotInfo,
+                                             "agentxx_system_monitor.usage"
+                                         )
+                                        : nullptr;
+                return sec != nullptr ? sec->json : std::string{};
+            };
+            {
+                auto        snap = mgr->uiContentSnapshot();
+                const auto* sec  = snap ? snap->contentOf(
+                                             agentxx::plugin::kClientUiSlotInfo,
+                                             "agentxx_system_monitor.usage"
+                                         )
+                                        : nullptr;
+                XX_TEST_EXPECT_TRUE(sec != nullptr);
+                if (sec != nullptr) {
+                    XX_TEST_EXPECT_EQ(sec->title, std::string{"System"});
                 }
             }
-            XX_TEST_EXPECT_TRUE(hasSmSection);
 
             // usage 事件: Append 段风格为 “|- CPU 36% · 12x” / “|- RAM 52% · 8G/16G” / “|- GPU 42%”
             agentxx::agent::WirePluginData usage;
@@ -1951,49 +2012,31 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 = R"({"cpu":35.5,"cpu_cores":12,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":6144,"usage_percent":42.0}]})";
             mgr->onPluginData(usage);
             co_await drainPlugin(mgr, "agentxx_system_monitor");
-
-            reg = mgr->uiRegistrySnapshot();
-            for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_system_monitor.usage") {
-                    std::string dump = sec.items.dump();
-                    // CPU 段首个 item 的完整文案: “|- CPU 36% · 12x”
-                    // (核数 12 -> “12x”, 利用率四舍五入到整数 35.5 -> 36)
-                    XX_TEST_EXPECT_TRUE(sec.items.is_array() && !sec.items.empty());
-                    if (sec.items.is_array() && !sec.items.empty()) {
-                        XX_TEST_EXPECT_EQ(
-                            sec.items[0].value("text", std::string{}),
-                            std::string{"|- CPU 36% · 12x"}
-                        );
-                    }
-                    XX_TEST_EXPECT_TRUE(dump.find("CPU") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("12x") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(
-                        dump.find("36%") != std::string::npos
-                        || dump.find("35.5%") != std::string::npos
-                    );
+            XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+                const std::string dump = smItems();
+                // CPU 段首个 item 的完整文案: “|- CPU 36% · 12x”
+                // (核数 12 -> “12x”, 利用率四舍五入到整数 35.5 -> 36)
+                return dump.find("|- CPU 36% · 12x") != std::string::npos
+                    && (dump.find("36%") != std::string::npos
+                        || dump.find("35.5%") != std::string::npos)
                     // RAM 带格式化大小 (8192 MB -> 8G, 16384 -> 16G)
-                    XX_TEST_EXPECT_TRUE(dump.find("RAM") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("52%") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("8G") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("16G") != std::string::npos);
+                    && dump.find("RAM") != std::string::npos
+                    && dump.find("52%") != std::string::npos
+                    && dump.find("8G") != std::string::npos
+                    && dump.find("16G") != std::string::npos
                     // GPU 仅显示峰值百分比, 不含名称及 MB
-                    XX_TEST_EXPECT_TRUE(dump.find("GPU") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("42%") != std::string::npos);
-                }
-            }
+                    && dump.find("GPU") != std::string::npos
+                    && dump.find("42%") != std::string::npos;
+            }));
 
             // 旧版本 agent 侧未上报 cpu_cores (取值 0): 回退为不带核数的 “|- CPU 71%”
             usage.data
                 = R"({"cpu":71.2,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384})";
             mgr->onPluginData(usage);
             co_await drainPlugin(mgr, "agentxx_system_monitor");
-            reg = mgr->uiRegistrySnapshot();
-            for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_system_monitor.usage") {
-                    std::string dump = sec.items.dump();
-                    XX_TEST_EXPECT_TRUE(dump.find("CPU 71%") != std::string::npos);
-                }
-            }
+            XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+                return smItems().find("CPU 71%") != std::string::npos;
+            }));
 
             // sysinfo 命令执行: 新版切换文案为 “System resource info: ON/OFF”
             XX_TEST_EXPECT_TRUE(mgr->hasCommand("sysinfo"));
@@ -2024,22 +2067,32 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto cbInst = co_await mgr->loadNativeAsync(cbPath);
             XX_TEST_EXPECT_TRUE(cbInst != nullptr);
             if (cbInst) {
-                // 面板注册: id / 标题
-                auto reg      = mgr->uiRegistrySnapshot();
-                bool hasPanel = false;
-                utilxx_base::Json placeholder = utilxx_base::Json::array();
-                for (const auto& p : reg->panels) {
-                    if (p.id == "agentxx_chatbot.bots") {
-                        hasPanel    = true;
-                        placeholder = p.items;
-                        XX_TEST_EXPECT_EQ(p.title, std::string{"机器人"});
+                // 面板是声明项 + 内容: 标题在内容上, 正文是插件推的文档
+                auto cbPanel = [&]() -> std::string {
+                    auto        snap = mgr->uiContentSnapshot();
+                    const auto* p    = snap ? snap->contentOf(
+                                                  agentxx::plugin::kClientUiSlotPanel,
+                                                  "agentxx_chatbot.bots"
+                                              )
+                                           : nullptr;
+                    return p != nullptr ? p->json : std::string{};
+                };
+                {
+                    auto        snap = mgr->uiContentSnapshot();
+                    const auto* p    = snap ? snap->contentOf(
+                                                  agentxx::plugin::kClientUiSlotPanel,
+                                                  "agentxx_chatbot.bots"
+                                              )
+                                           : nullptr;
+                    XX_TEST_EXPECT_TRUE(p != nullptr);
+                    if (p != nullptr) {
+                        XX_TEST_EXPECT_EQ(p->title, std::string{"机器人"});
                     }
                 }
-                XX_TEST_EXPECT_TRUE(hasPanel);
-                // 还没收到快照: 一行提示 (不留空白栏)
-                XX_TEST_EXPECT_TRUE(
-                    placeholder.dump().find("等待服务端数据") != std::string::npos
-                );
+                // 还没收到快照: 一行提示 (不留空白栏); 初始文档是注册后推的, 等它写进快照
+                XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+                    return cbPanel().find("等待服务端数据") != std::string::npos;
+                }));
 
                 // 快照事件: 一个在线账号 + 一个人设 + 一条正在执行且排队 3 条的群会话
                 const auto snapshot = std::string{
@@ -2054,15 +2107,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 panelData.data   = snapshot;
                 mgr->onPluginData(panelData);
                 co_await drainPlugin(mgr, "agentxx_chatbot");
-
-                reg = mgr->uiRegistrySnapshot();
-                bool checkedPanel = false;
-                for (const auto& p : reg->panels) {
-                    if (p.id != "agentxx_chatbot.bots") {
-                        continue;
-                    }
-                    checkedPanel         = true;
-                    const std::string dump = p.items.dump();
+                XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+                    return cbPanel().find("技术群") != std::string::npos;
+                }));
+                {
+                    const std::string dump = cbPanel();
                     // 段标题 `标题: 数量` + 列表项 `|- 内容`, 段之间是一行空白
                     XX_TEST_EXPECT_TRUE(dump.find("会话: 1") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("|- ") != std::string::npos);
@@ -2087,7 +2136,6 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(dump.find("qq_main online") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("失败 1") != std::string::npos);
                 }
-                XX_TEST_EXPECT_TRUE(checkedPanel);
 
                 // 坏载荷不能清掉已有内容 (面板停在上一份快照)
                 agentxx::agent::WirePluginData broken;
@@ -2095,12 +2143,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 broken.data   = "not-json";
                 mgr->onPluginData(broken);
                 co_await drainPlugin(mgr, "agentxx_chatbot");
-                reg = mgr->uiRegistrySnapshot();
-                for (const auto& p : reg->panels) {
-                    if (p.id == "agentxx_chatbot.bots") {
-                        XX_TEST_EXPECT_TRUE(p.items.dump().find("技术群") != std::string::npos);
-                    }
-                }
+                XX_TEST_EXPECT_TRUE(cbPanel().find("技术群") != std::string::npos);
 
                 // 连接就绪: 插件向上要一份快照 (send_plugin_data("refresh"))
                 // 注: 用连接状态事件而不是 onReady —— onReady 末尾主程序自己还会发
@@ -2114,12 +2157,17 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     std::string{"agentxx.client.plugin.agentxx_chatbot.refresh"}
                 );
 
-                // 卸载: 面板随之撤销
+                // 卸载: 面板内容随之撤销
                 co_await mgr->unloadAsync("agentxx_chatbot");
                 XX_TEST_EXPECT_TRUE(mgr->find("agentxx_chatbot") == nullptr);
-                reg = mgr->uiRegistrySnapshot();
-                for (const auto& p : reg->panels) {
-                    XX_TEST_EXPECT_TRUE(p.id != "agentxx_chatbot.bots");
+                {
+                    auto        snap = mgr->uiContentSnapshot();
+                    const auto* p    = snap ? snap->contentOf(
+                                                  agentxx::plugin::kClientUiSlotPanel,
+                                                  "agentxx_chatbot.bots"
+                                              )
+                                           : nullptr;
+                    XX_TEST_EXPECT_TRUE(p == nullptr);
                 }
             }
         }
