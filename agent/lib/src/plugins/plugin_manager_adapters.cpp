@@ -600,12 +600,13 @@ int PluginMount::registerGraphNodeType(
     // 注册到 per-agent GraphRegistry: 工厂经 weak_ptr 保活, 实例释放后
     // create 抛错 (引擎不会在卸载后重新编译图, 防御性处理)
     if (!ctx->graphRegistry->contains_type(type)) {
-        const auto mountWeak = weak_from_this();
         ctx->graphRegistry->register_type(
             type,
-            [slot,
-             type,
-             mountWeak](const std::string& name, const neograph::json& config, const neograph::graph::NodeContext&) {
+            [slot, type](
+                const std::string& name,
+                const neograph::json& config,
+                const neograph::graph::NodeContext&
+            ) {
                 auto snapshot = slot->snapshot();
                 if (!snapshot.active || !snapshot.instance || !snapshot.instance->enabled
                     || !snapshot.spec.run_start) {
@@ -619,8 +620,7 @@ int PluginMount::registerGraphNodeType(
                     snapshot.instance,
                     snapshot.spec,
                     slot,
-                    snapshot.generation,
-                    mountWeak
+                    snapshot.generation
                 );
             }
         );

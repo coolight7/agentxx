@@ -412,13 +412,6 @@ public:
     /// 会话 LLM 上下文条数 (会话不存在返回 -1)
     int64_t sessionMessagesCount(PluginxxStringView session_id);
 
-    /// 写会话 LLM 上下文 (插件图节点对 `messages` 通道的写入转发; 仅 io 线程)
-    size_t writeSessionMessages(
-        std::string_view         session_id,
-        const utilxx_base::Json& messages,
-        bool                     overwrite
-    );
-
     // =====================================================================
     // 执行图 (agentxx.agent.graph)
     // =====================================================================

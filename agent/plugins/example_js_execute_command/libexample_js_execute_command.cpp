@@ -171,6 +171,7 @@ bool dispatchScriptUnload(ShellCtx& ctx, const PluginxxOperatorNotify* stopNotif
         &capSv,
         &argsSv,
         0,
+        -1,
         &onScriptUnloadDone,
         state,
         &err
@@ -227,6 +228,7 @@ void beginScriptLoad(ShellCtx& ctx, const PluginxxOperatorNotify& notify, Plugin
         &capSv,
         &argsSv,
         0,
+        -1,
         &onScriptLoadDone,
         state,
         &err

@@ -3234,53 +3234,5 @@ int64_t PluginMount::sessionMessagesCount(PluginxxStringView session_id) {
     return static_cast<int64_t>(session->messagesCount());
 }
 
-size_t PluginMount::writeSessionMessages(
-    std::string_view         session_id,
-    const utilxx_base::Json& messages,
-    bool                     overwrite
-) {
-    auto ctx = agent_.lock();
-    if (!ctx || !ctx->sessions || session_id.empty()) {
-        return 0;
-    }
-    auto session = ctx->sessions->getOrCreate(session_id);
-    if (!session) {
-        return 0;
-    }
-
-    std::vector<neograph::ChatMessage> msgs;
-    if (messages.is_array()) {
-        msgs.reserve(messages.size());
-        for (const auto& item : messages) {
-            neograph::ChatMessage msg;
-            neograph::json        neoItem = agentxx::util::toNeographJson(item);
-            neograph::from_json(neoItem, msg);
-            msgs.push_back(std::move(msg));
-        }
-    }
-
-    if (overwrite) {
-        // 空列表覆盖视为误写: 按旧契约读不到消息的插件可能以为上下文为空,
-        // 直接覆盖会把整段上下文清空, 这里忽略并记日志
-        if (msgs.empty() && session->messagesCount() > 0) {
-            XX_LOGW(
-                "PluginManager: overwrite session `{}` with an empty message list ignored "
-                "(current count={})",
-                session_id,
-                session->messagesCount()
-            );
-            return 0;
-        }
-        session->replaceMessages(std::move(msgs));
-        return session->messagesCount();
-    }
-    if (msgs.empty()) {
-        return 0;
-    }
-    const size_t appended = msgs.size();
-    session->appendMessages(std::move(msgs));
-    return appended;
-}
-
 } // namespace plugin
 } // namespace agentxx

@@ -18,8 +18,7 @@ PluginGraphNode::PluginGraphNode(
     std::shared_ptr<PluginInstance> instance,
     AgentxxPluginGraphNodeTypeSpec  spec,
     std::shared_ptr<GraphTypeSlot>  slot,
-    uint64_t                        generation,
-    std::weak_ptr<PluginMount>      mount
+    uint64_t                        generation
 ) :
     name_(name),
     configJson_(configJson),
@@ -32,8 +31,7 @@ PluginGraphNode::PluginGraphNode(
     instance_(std::move(instance)),
     spec_(spec),
     slot_(std::move(slot)),
-    generation_(generation),
-    mount_(std::move(mount)) {
+    generation_(generation) {
     spec_.type               = agentxx::plugin::PluginStringView::from(type_.data(), type_.size());
     spec_.config_schema_json = agentxx::plugin::PluginStringView::from(
         configSchemaJson_.data(),
@@ -45,39 +43,6 @@ PluginGraphNode::~PluginGraphNode() = default;
 
 std::string PluginGraphNode::get_name() const {
     return name_;
-}
-
-void PluginGraphNode::applyMessagesWrite(
-    neograph::graph::NodeInput& in,
-    const utilxx_base::Json&    value,
-    bool                        overwrite
-) {
-    auto mount = mount_.lock();
-    if (!mount) {
-        XX_LOGW(
-            "Graph node `{}` (type {}) writes messages but its plugin mount is gone; write dropped",
-            name_,
-            type_
-        );
-        return;
-    }
-
-    const size_t written = mount->writeSessionMessages(in.ctx.thread_id, value, overwrite);
-    if (written == 0) {
-        return;
-    }
-
-    // 事件载荷: 本次写入的消息批 (与主程序节点写入同形), 供 UI 增量与节流持久化
-    if (in.stream_cb != nullptr && value.is_array()) {
-        (*in.stream_cb)(neograph::graph::GraphEvent{
-            neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
-            name_,
-            neograph::json{
-                           {"channel", "messages"},
-                           {"value", agentxx::util::toNeographJson(value)},
-                           },
-        });
-    }
 }
 
 asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::graph::NodeInput in) {
@@ -173,13 +138,6 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
                 const auto channel   = w["channel"].get<std::string>();
                 const bool overwrite = w.contains("mode") && w["mode"].is_string()
                                        && w["mode"].get<std::string>() == "overwrite";
-                if (channel == "messages") {
-                    // 兼容改写: 上下文由会话持有 (图状态不再有 messages 通道),
-                    // 插件对 messages 通道的写入 (常见于按旧契约编写的插件) 在此
-                    // 转成会话上下文写入, 而非抛"写入未知通道"或污染图状态
-                    applyMessagesWrite(in, w["value"], overwrite);
-                    continue;
-                }
                 neograph::graph::ChannelWrite cw;
                 cw.channel = channel;
                 cw.value   = agentxx::util::toNeographJson(w["value"]);

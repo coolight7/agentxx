@@ -1,33 +1,28 @@
 /// example_graph_node —— 执行图插件示例
 ///
 /// 演示能力 (经 graph 接口表 agentxx.agent.graph):
-/// 1. 注册自定义节点类型:
-///    - example_intent_router (意图识别): 读取会话上下文里最后一条 assistant
-///      消息 (经 agentxx.agent.context 接口表, 上下文由会话持有, 不在图状态里),
-///      按 config 中定义的意图枚举 (intents) 匹配, 写 __route__ channel,
-///      由图的 conditional edge (route_channel) 决定路由; 非枚举值取
-///      fallback (默认 "normal"); 已检查过的轮次退化为 xx_has_tool_calls 语义路由
-///    - example_datetime (时间输出): 将当前系统日期时间作为 assistant
-///      消息写入 messages channel —— 主程序把该通道的写入转成会话上下文写入
-///      (并同步 viewMessages / llmMessages)
+/// 1. 注册自定义节点类型 `example_intent_router` (意图识别): 读取会话上下文里最后一条
+///    assistant 消息 (经 agentxx.agent.context 接口表, 上下文由会话持有, 不在图状态里),
+///    按 config 中定义的意图枚举 (intents) 匹配, 写 __route__ channel,
+///    由图的 conditional edge (route_channel) 决定路由; 非枚举值取
+///    fallback (默认 "normal"); 已检查过的轮次退化为 xx_has_tool_calls 语义路由
 /// 2. 修改执行图 JSON: 将默认图 (agentxx.default) 改为
-///    用户输入 → llm (识别意图) → intent_router (路由) → datetime 直接结束
-///    轮次 / normal 进入原 agent loop (llm→tool→llm→...→end)
+///    用户输入 → llm (识别意图) → intent_router (路由) → normal 进入原 agent loop
+///    (llm→tool→llm→...→end) / end 直接收尾
 ///    llm 节点置 xx_autoRoute=false: 由本图的 intent_router 决定路由,
 ///    不使用主程序默认的"按 tool_calls 直接跳转"行为
 ///
 /// 节点实现遵循"统一异步操作模型" (操作 run_start/run_cancel):
 /// - run_start 在主程序 io 线程同步调用 (快同步节点: 直接算完 done 返回 NULL)
 /// - state_json 为 GraphState::serialize() 结果, 只读; 修改经返回 writes
-///   (其中 messages 通道的写入由主程序转成会话上下文写入)
+/// - 节点只能写图状态自己的通道: 会话上下文由会话持有, 写 `messages` 会按
+///   "写入未知通道"失败 —— 想产出助手消息请回到 llm 节点, 不要在节点里拼消息
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/agent_plugin_kit.h"
 #include "fmt/format.h"
 #include "utilxx_base/json.h"
 
-#include <chrono>
-#include <cstring>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -54,7 +49,7 @@ extern "C" PLUGINXX_EXPORT int32_t agentxx_agent_plugin_get_info(PluginxxInfo* o
         out,
         "example_graph_node",
         "1.0.0",
-        "Example graph node plugin: intent router + datetime node, modifies agent graph"
+        "Example graph node plugin: intent router, modifies agent graph"
     );
 }
 
@@ -154,7 +149,7 @@ bool lastAssistantHasToolCalls(const utilxx_base::Json& messages) {
 ///   写 __route__ (命中) / fallback (未命中); 同时标记 __intent_checked=true
 /// - 后续轮次: 按 "最后一条 assistant 是否带 tool_calls" 写 __route__ (tools/end), 保持原
 ///   agent loop 行为
-/// - config: {"intents": ["datetime", "normal"], "fallback": "normal"}
+/// - config: {"intents": ["normal", "end"], "fallback": "normal"}
 asio::awaitable<std::string> intentRouterRun(
     AgentCtx&                          ctx,
     const agentxx::plugin::ScopeRef&   ref,
@@ -206,34 +201,8 @@ asio::awaitable<std::string> intentRouterRun(
                 break;
             }
         }
-        // 命中意图时移除该纯意图消息 (避免污染后续 agent loop 上下文)
-        // - 对 messages 通道的 overwrite 写由主程序转成会话上下文替换
-        //   (图状态不再持有上下文), 语义与旧版一致
-        if (route != fallback && messages.is_array() && !messages.empty()) {
-            const auto   origin  = co_await sessionMessages(ctx, ref, req);
-            messages             = utilxx_base::Json::array();
-            const size_t n       = origin.size();
-            bool         removed = false;
-            for (size_t i = 0; i < n; ++i) {
-                const auto m = origin[static_cast<int>(i)];
-                if (!removed && m.is_object() && m.contains("role") && m["role"].is_string()
-                    && m["role"].get<std::string>() == "assistant") {
-                    removed = true; // 跳过最后一条 assistant (纯意图输出)
-                    continue;
-                }
-                messages.push_back(m);
-            }
-            if (removed) {
-                // overwrite messages (去掉意图消息)
-                const std::string payload = fmt::format(
-                    R"_({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}},{{"channel":"messages","value":{},"mode":"overwrite"}}]}})_",
-                    utilxx_base::Json(route).dump(),
-                    messages.dump()
-                );
-                co_return payload;
-            }
-        }
-        // 未命中/未移除: 仅写路由标记
+        // 纯意图消息留在会话里: 图节点不能改会话上下文 (写 `messages` 通道会被判为
+        // 写入未知通道), 因此这里只写路由标记。
         const std::string payload = fmt::format(
             R"_({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}}]}})_",
             utilxx_base::Json(route).dump()
@@ -250,47 +219,11 @@ asio::awaitable<std::string> intentRouterRun(
     co_return payload;
 }
 
-/// 时间输出节点执行 (快同步): 写当前系统日期时间到 messages channel
-/// - 主程序把 messages 通道写入转成会话上下文写入 (assistant 角色消息),
-///   并发出与主程序节点同形的通道写事件 → EventBridge 同步 viewMessages 与
-///   节流持久化, 满足"添加到 viewMessages、llmMessages"
-/// - 图配置为执行后直接路由 __end__ 结束轮次
-std::string datetimeNodeRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
-    (void)ctx;
-    (void)req;
-    const auto now  = std::chrono::system_clock::now();
-    const auto nowT = std::chrono::system_clock::to_time_t(now);
-    const auto nowMs
-        = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-    std::tm tm{};
-#if XX_IS_WIN_D
-    localtime_s(&tm, &nowT);
-#else
-    localtime_r(&nowT, &tm);
-#endif
-    char buf[64]{};
-    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
-
-    const std::string text = fmt::format("当前系统日期时间: {}", buf);
-    // assistant 消息 (role/content 字段, 与图消息 JSON 字段一致)
-    utilxx_base::Json msg = utilxx_base::Json::object();
-    msg["role"]           = "assistant";
-    msg["content"]        = text;
-    msg["startTimeMs"]    = nowMs;
-    msg["durationMs"]     = int64_t{0};
-
-    utilxx_base::Json msgs = utilxx_base::Json::array();
-    msgs.push_back(std::move(msg));
-
-    return fmt::format(R"_({{"writes":[{{"channel":"messages","value":{}}}]}})_", msgs.dump());
-}
-
 /// =====================================================================
 /// 修改执行图: 默认 agentxx.default → 意图路由流程
 ///
 /// 新图 (名称 example_graph_node.intent):
 ///   __start__ → agent_start → llm → intent_router → [conditional route_channel]
-///     datetime  → datetime_node → __end__          (时间节点执行后直接结束轮次)
 ///     normal    → llm                               (回到 agent loop)
 ///     tools     → tools → llm                        (原 loop: 工具分发后回 llm)
 ///     end       → agent_end → __end__
@@ -356,7 +289,7 @@ static asio::awaitable<bool> modifyGraphToIntentFlow(
     }
     graph["channels"] = std::move(channels);
 
-    // nodes: 原 4 节点 + intent_router + datetime_node
+    // nodes: 原图节点 + intent_router
     utilxx_base::Json nodes = utilxx_base::Json::object();
     if (def.contains("nodes") && def["nodes"].is_object()) {
         nodes = def["nodes"];
@@ -367,13 +300,10 @@ static asio::awaitable<bool> modifyGraphToIntentFlow(
         nodes["llm"]["xx_autoRoute"] = false;
     }
     nodes["intent_router"] = utilxx_base::Json{
-        {"type",     "example_intent_router"                                                   },
+        {"type",     "example_intent_router"                                                },
         {"intents",
-         utilxx_base::Json::array({utilxx_base::Json("datetime"), utilxx_base::Json("normal")})},
-        {"fallback", "normal"                                                                  },
-    };
-    nodes["datetime_node"] = utilxx_base::Json{
-        {"type", "example_datetime"},
+         utilxx_base::Json::array({utilxx_base::Json("normal"), utilxx_base::Json("end")})},
+        {"fallback", "normal"                                                                },
     };
     graph["nodes"] = std::move(nodes);
 
@@ -397,7 +327,6 @@ static asio::awaitable<bool> modifyGraphToIntentFlow(
         {"condition", "route_channel"},
         {"routes",
          utilxx_base::Json{
-             {"datetime", "datetime_node"},
              {"normal", "llm"},
              {"tools", "tools"},
              {"end", "agent_end"},
@@ -407,10 +336,6 @@ static asio::awaitable<bool> modifyGraphToIntentFlow(
     edges.push_back(utilxx_base::Json{
         {"from", "tools"},
         {"to",   "llm"  }
-    });
-    edges.push_back(utilxx_base::Json{
-        {"from", "datetime_node"},
-        {"to",   "__end__"      }
     });
     edges.push_back(utilxx_base::Json{
         {"from", "agent_end"},
@@ -434,7 +359,7 @@ static asio::awaitable<bool> modifyGraphToIntentFlow(
 ///
 /// 入口语义 (见 docs/zh-cn/design/plugins.md 第 15 节):
 /// - `create`: 只构造上下文与查询接口, 不注册节点类型、不修改执行图。
-/// - `start`: 注册事务 (两个节点类型 + 执行图修改); 注册失败返回 NULL + error,
+/// - `start`: 注册事务 (节点类型 + 执行图修改); 注册失败返回 NULL + error,
 ///   主程序回滚已生效的节点类型与图类型槽位。
 /// - `stop`: 只给出完成信号; 节点类型注册记录由主程序在 stop 后统一撤销
 ///   (GraphTypeSlot 失效使旧编译节点安全失败), 执行图保持当前定义。
@@ -485,23 +410,7 @@ static asio::awaitable<void>
             + (nodeResult.accepted() ? std::string(nodeResult.text()) : nodeResult.startError)
         };
     }
-    // 2. 注册时间输出节点类型
-    auto datetimeResult = co_await graphNodeAsync(
-        ctx,
-        ref,
-        "example_datetime",
-        R"_({"type":"object"})_",
-        datetimeNodeRun
-    );
-    if (!datetimeResult.ok()) {
-        throw std::runtime_error{
-            "example_graph_node: register node type example_datetime failed: "
-            + (datetimeResult.accepted() ? std::string(datetimeResult.text())
-                                         : datetimeResult.startError)
-        };
-    }
-
-    // 3. 修改执行图: 默认图 → 意图路由流程
+    // 2. 修改执行图: 默认图 → 意图路由流程
     std::string err;
     if (!co_await modifyGraphToIntentFlow(ctx, ref, err)) {
         ctx.log.warn("modify graph failed: " + err);

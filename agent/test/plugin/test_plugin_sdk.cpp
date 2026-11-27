@@ -136,7 +136,6 @@ const PluginxxCapabilitiesIface g_fakeCapabilities = {
     /* invoke_capability */ nullptr,
     /* capability_info */ nullptr,
     /* list_capabilities */ nullptr,
-    /* invoke_capability_ex */ nullptr,
     /* unregister_capability_ex */ nullptr,
 };
 

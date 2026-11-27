@@ -814,7 +814,7 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
         {"AgentxxPluginToolsIface",       "register_tool|unregister_tool|call_tool"                                                                                                                                                                                                                                                                           },
         {"PluginxxCancelIface",           "op_cancel"                                                                                                                                                                                                                                                                                              },
         {"PluginxxCapabilitiesIface",
-         "register_capability|unregister_capability|invoke_capability|capability_info|list_capabilities|invoke_capability_ex|unregister_capability_ex"
+         "register_capability|unregister_capability|invoke_capability|capability_info|list_capabilities|unregister_capability_ex"
         },
         {"PluginxxConfigIface",
          "get_config|get_plugin_args|get_plugin_config_path|get_language|set_language"

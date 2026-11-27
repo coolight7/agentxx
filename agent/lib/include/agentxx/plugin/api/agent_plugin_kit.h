@@ -123,13 +123,7 @@ inline std::string_view netCodeName(int32_t code) {
     if (const char* name = pluginxx::result::nameOf(code)) {
         return name;
     }
-    // 只有不走结果码表的两处会走到这里:
-    // - -99: 老主程序直接透传网络实现的内部错误 (`utilxx::net::ErrInternal`),
-    //   新主程序会在表入口换成本表的 `PLUGINXX_RESULT_ERR_INTERNAL` (-999);
-    // - 其它: 主程序自定义码, 名字只有它自己知道。
-    if (code == -99) {
-        return "internal";
-    }
+    // 不走结果码表的只剩主程序自定义码, 名字只有它自己知道
     return "unknown";
 }
 
@@ -3916,7 +3910,7 @@ inline asio::awaitable<std::vector<uint8_t>> filterPathPermissionsAsync(
 /// - `MountFn` / `UnmountFn`: agent 级 (每 agent 一次), 形如
 ///   `void*(CtxType&, const AgentxxPluginAgentMountSpec*, const PluginxxOperatorNotify*,
 ///    PluginxxString*)` / `void(CtxType&, void* mount_ud, const PluginxxOperatorNotify*,
-///    PluginxxString*)` (旧版 UnmountFn 的返回值被忽略);
+///    PluginxxString*)`;
 ///   **没有 per-agent 状态的插件传 `nullptr, nullptr`**
 #define AGENTXX_AGENT_PLUGIN_EXPORT(                                                \
     CtxType, Name, Ver, Desc, CreateFn, StopFn, MountFn, UnmountFn                  \
@@ -3927,7 +3921,7 @@ inline asio::awaitable<std::vector<uint8_t>> filterPathPermissionsAsync(
 /// 只生成挂载/卸载两个入口 (与 [AGENTXX_AGENT_PLUGIN_LIFECYCLE_EXPORT] 配套)
 ///
 /// - mount: 同步完成时先 `notify->done(OK)` 再返回 per-agent 状态;
-/// - unmount: `void` + 完成通知 (旧函数仍返回 `void*`, 返回值在这里被忽略)。
+/// - unmount: `void` + 完成通知。
 #define AGENTXX_AGENT_PLUGIN_MOUNT_EXPORT(CtxType, MountFn, UnmountFn)                         \
     extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_agent_plugin_mount(                \
         void*                              plugin_ctx,                                       \

@@ -2371,7 +2371,6 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_EQ(ginst->name, "example_graph_node");
             // 节点类型已注册到 per-agent GraphRegistry
             XX_TEST_EXPECT_TRUE(gctx->graphRegistry->contains_type("example_intent_router"));
-            XX_TEST_EXPECT_TRUE(gctx->graphRegistry->contains_type("example_datetime"));
             // 执行图已被插件修改
             XX_TEST_EXPECT_TRUE(gctx->graphDefinitionJson.contains("name"));
             if (gctx->graphDefinitionJson.contains("name")) {
@@ -2383,14 +2382,13 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(gctx->graphDefinitionJson.contains("nodes"));
             if (gctx->graphDefinitionJson.contains("nodes")) {
                 XX_TEST_EXPECT_TRUE(gctx->graphDefinitionJson["nodes"].contains("intent_router"));
-                XX_TEST_EXPECT_TRUE(gctx->graphDefinitionJson["nodes"].contains("datetime_node"));
                 XX_TEST_EXPECT_EQ(
                     gctx->graphDefinitionJson["nodes"]["intent_router"]["type"].get<std::string>(),
                     "example_intent_router"
                 );
             }
 
-            // 35.2 用修改后的图构建 engine 并执行: 走 datetime 流程 (需要
+            // 35.2 用修改后的图构建 engine 并执行: 走意图路由流程 (需要
             // mock provider 供 llm 节点输出意图)
             {
                 // 注册 4 个基础节点类型 (对齐 BaseAgent::initRegisterNodes)
@@ -2532,38 +2530,37 @@ throw new Error("top-level rollback probe");
                 );
                 XX_TEST_EXPECT_TRUE(engine != nullptr);
                 if (engine) {
-                    // 运行 datetime 意图: 应走到 datetime_node 输出时间并结束
+                    // 运行一轮: "现在几点" → llm 输出意图 "datetime" (不在 intents
+                    // 里) → fallback normal → 回到 llm → 无 tool_calls → end
                     // - 上下文以会话为唯一权威 (图状态不再有 messages 通道),
                     //   因此初始上下文写入会话而非 RunConfig.input
                     {
-                        auto sess = gctx->getSession("graph-test-datetime");
+                        auto sess = gctx->getSession("graph-test-intent");
                         sess->replaceMessages({
                             neograph::ChatMessage{.role = "user", .content = "现在几点"}
                         });
                     }
                     neograph::graph::RunConfig runCfg;
-                    runCfg.thread_id = "graph-test-datetime";
+                    runCfg.thread_id = "graph-test-intent";
                     /// 插件完成包必须经当前 IO executor 提交；同步 run 会创建嵌套
                     /// io_context 并阻塞当前循环，不能在主程序协程内使用。
                     auto result = co_await engine->run_async(runCfg);
                     XX_TEST_EXPECT_TRUE(false == result.interrupted);
-                    // 会话上下文含时间 (datetime_node 写 messages 通道由主程序
-                    // 转成会话上下文写入)
-                    bool hasTime = false;
+                    // 轮次以 llm 的助手消息收尾 (图节点自己不再往会话写消息)
+                    bool hasAssistant = false;
                     try {
-                        auto sess = gctx->getSession("graph-test-datetime");
+                        auto sess = gctx->getSession("graph-test-intent");
                         for (const auto& m : sess->messages()) {
-                            if (m.role == "assistant"
-                                && m.content.find("当前系统日期时间") != std::string::npos) {
-                                hasTime = true;
+                            if (m.role == "assistant") {
+                                hasAssistant = true;
                             }
                         }
                     } catch (...) {
                     }
-                    XX_TEST_EXPECT_TRUE(hasTime);
+                    XX_TEST_EXPECT_TRUE(hasAssistant);
 
                     // 运行 normal 意图: 应进入 agent loop (llm 输出 normal 后
-                    // intent_router 移除意图消息 → llm 重答 → 无 tool_calls → end)
+                    // intent_router 路由回 llm → 无 tool_calls → end)
                     {
                         auto sess = gctx->getSession("graph-test-normal");
                         sess->replaceMessages({

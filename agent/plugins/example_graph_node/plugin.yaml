@@ -1,6 +1,6 @@
 name: example_graph_node
 version: 1.0.0
-description: "Example graph node plugin: intent router + datetime node, modifies agent graph"
+description: "Example graph node plugin: intent router, modifies agent graph"
 entry: libexample_graph_node.so
 interfaces:
   require:

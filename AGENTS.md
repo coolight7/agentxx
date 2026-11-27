@@ -1002,7 +1002,8 @@ path/to/agentxx_test --log-level warn string_util regex
     `updateMessagesMeta` 刷新图状态里的只读影子通道 `xx_messagesMeta`)
   - 事件: 消息写入方先写会话再发 `{"channel":"messages","value":[...]}` CHANNEL_WRITE,
     EventBridge 只做 UI 展开 + 请求节流落盘 (不再追加消息); 图定义默认不再声明 `messages` 通道,
-    插件写该通道的 writes 由 `PluginGraphNode` 改写成会话写入 (空 overwrite 忽略)
+    **插件写该通道的 writes 没有兼容路径**: 按“写入未知通道”失败, 要改会话内容用会话运行时的
+    `send_input` (曾经由 `PluginGraphNode` 改写为会话写入, 2026-11 删掉)
   - 路由: `llm` 节点按本轮是否有 tool_calls 返回 `Command.goto_node` (tools/agent_end),
     默认图只用静态边; 节点级 `xx_autoRoute=false` (图定义里该节点的额外键会合并进
     `NodeContext.extra_config`) 可交回图定义路由

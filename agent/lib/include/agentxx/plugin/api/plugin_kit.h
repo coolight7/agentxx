@@ -414,10 +414,11 @@ using pluginxx::detail::RootRequest;
 /// - 首次构造的同步阶段只做"绑定 host/iface" (`attachHost`, `spawn` 依赖它)、写出
 ///   `*plugin_ctx` 与 `check`; `onHostReady` (要调表的业务初始化) 与注册事务进后台任务,
 ///   完成后经 `notify` 恰好一次交回 —— 插件执行线程上不能同步等表;
+/// - 首次构造时后台任务排不上 (主机没有 `pluginxx.tasks`) 按构造失败交回, 不会静默跳过
+///   业务初始化;
 /// - `check` 返回非空串 = 构造失败; 上下文仍写回 `*plugin_ctx` (主程序随后会调
 ///   destroy 收尾), 完成通知已发 FAILED;
-/// - `create` 为空 = 只构造 (没有注册事务);
-/// - 主机没有 `pluginxx.tasks` 表时 `spawn` 不可用, 退回旧路径 (跳过 `onHostReady`, 记警告)。
+/// - `create` 为空 = 只构造 (没有注册事务)。
 template<typename CtxType, typename CheckFn, typename CreateFn>
 inline void createCtxEntry(
     const PluginxxHost*           host,
@@ -500,33 +501,39 @@ inline void createCtxEntry(
     // 首次构造: 业务初始化是协程 (要调表), 与注册事务一起进后台任务。
     // 闭包里的 create 必须按值持有: 它原本是本函数的转发引用, 调用方 (C 入口) 返回即失效。
     if constexpr (pluginxx::detail::KitInstanceCtx<CtxType>) {
-        if (fresh && ctx->iface.tasks && ctx->iface.tasks->register_task) {
+        if (fresh) {
             const PluginxxOperatorNotify done = *notify; // 借用指针: 按值持有到任务结束
             CreateType createCopy(std::forward<CreateFn>(create));
-            ctx->spawn([host, done, createCopy = std::move(createCopy), runCreate](
-                           CtxType& instance, OpCtl&) mutable -> asio::awaitable<void> {
-                try {
-                    co_await instance.onHostReady();
-                    // 注册事务可能在内部发起异步工作 (finishLater), 自己完成通知;
-                    // 这里只负责把同步写出的错误串释放掉
-                    PluginxxString localError{nullptr, 0};
-                    runCreate(createCopy, instance, &done, &localError);
-                    if (localError.data) {
-                        PluginString::free(host, &localError);
+            const bool queued = ctx->spawn(
+                [host, done, createCopy = std::move(createCopy), runCreate](
+                    CtxType& instance, OpCtl&) mutable -> asio::awaitable<void> {
+                    try {
+                        co_await instance.onHostReady();
+                        // 注册事务可能在内部发起异步工作 (finishLater), 自己完成通知;
+                        // 这里只负责把同步写出的错误串释放掉
+                        PluginxxString localError{nullptr, 0};
+                        runCreate(createCopy, instance, &done, &localError);
+                        if (localError.data) {
+                            PluginString::free(host, &localError);
+                        }
+                    } catch (const std::exception& e) {
+                        notifyLifecycleFailure(host, &done, nullptr, e.what());
+                    } catch (...) {
+                        notifyLifecycleFailure(host, &done, nullptr, "plugin create: unknown exception");
                     }
-                } catch (const std::exception& e) {
-                    notifyLifecycleFailure(host, &done, nullptr, e.what());
-                } catch (...) {
-                    notifyLifecycleFailure(host, &done, nullptr, "plugin create: unknown exception");
+                    co_return;
                 }
-                co_return;
-            });
-            return;
-        }
-        if (fresh) {
-            ctx->log.warn(
-                "plugin create: host has no pluginxx.tasks; business init (onHostReady) skipped"
             );
+            if (!queued) {
+                // 没有后台任务表时业务初始化跑不了: 按失败交回, 不留半初始化的实例
+                notifyLifecycleFailure(
+                    host,
+                    notify,
+                    err,
+                    fmt::format("plugin create {}: host cannot queue tasks (pluginxx.tasks)", name)
+                );
+            }
+            return;
         }
     }
     callLifecycleEntryVoid(host, ctx, notify, err, "plugin create", [&]() {

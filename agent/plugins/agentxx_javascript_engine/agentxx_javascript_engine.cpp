@@ -5155,31 +5155,17 @@ JSValue JsEngine::capabilityInvokeValue(
     auto idSv   = agentxx::plugin::PluginStringView::from(id.data(), id.size());
     auto argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
     PluginxxString          err{nullptr, 0};
-    PluginxxOperatorHandle* handle = nullptr;
-    if (caps->invoke_capability_ex != nullptr) {
-        handle = caps->invoke_capability_ex(
-            host,
-            pctx->scope(),
-            &idSv,
-            &argsSv,
-            phase,
-            timeoutMs,
-            &JsEngine::capInvokeDone,
-            rawBridge,
-            &err
-        );
-    } else {
-        handle = caps->invoke_capability(
-            host,
-            pctx->scope(),
-            &idSv,
-            &argsSv,
-            phase,
-            &JsEngine::capInvokeDone,
-            rawBridge,
-            &err
-        );
-    }
+    PluginxxOperatorHandle* handle = caps->invoke_capability(
+        host,
+        pctx->scope(),
+        &idSv,
+        &argsSv,
+        phase,
+        timeoutMs,
+        &JsEngine::capInvokeDone,
+        rawBridge,
+        &err
+    );
     if (handle == nullptr) {
         // 真正被拒 (能力未声明 / 没有实现行): 也走 resolve, 业务结论看 ok
         std::string message = "capability is not available";
