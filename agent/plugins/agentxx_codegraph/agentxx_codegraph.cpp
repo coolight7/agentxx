@@ -1091,7 +1091,8 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
 /// client 侧每实例上下文 (多实例契约: 原进程级 static 状态全部移入)
 struct ClientCtx : agentxx::plugin::ClientPluginBase {
     const AgentxxClientUiIface*   ui           = nullptr;
-    AgentxxInfoSection*           section      = nullptr;
+    /// Info 段落内容 (声明项 + 内容; 卸载时由主程序撤销)
+    std::shared_ptr<agentxx::plugin::Content> section;
     bool                          loaded       = false;
     bool                          has_progress = false;
     int64_t                       processed    = 0;
@@ -1148,14 +1149,13 @@ static std::string buildInfoItemsJson(ClientCtx& c) {
 }
 
 static void refreshSection(ClientCtx& c) {
-    if (!c.host || !c.ui || !c.ui->update_info_section) {
-        return;
-    }
-    // 段落注册归 client start 事务 (协程里 co_await 注册); 这里只推内容 (提交即返回)
+    // 内容注册归 client start 事务 (协程里 co_await 注册); 这里只推内容 (提交即返回)
     if (!c.section) {
         return;
     }
-    agentxx::plugin::clientUpdateInfoSection(c.host, c.ui, c.section, buildInfoItemsJson(c));
+    // 文档在这里算 (状态也在这里更新), publish 记住一份, 生成函数 (插件执行线程)
+    // 之后回的是那份拷贝
+    c.section->publish(buildInfoItemsJson(c));
 }
 
 /// 取频道载荷 JSON 对象 (非法/空值返回空对象)
@@ -1252,22 +1252,24 @@ extern "C" PLUGINXX_EXPORT void agentxx_client_plugin_create(
 static asio::awaitable<void> codegraphClientSetupAsync(ClientCtx& ctx) {
     const PluginxxHost* host = ctx.host;
     const auto          ui   = ctx.ui;
-    if (ui && ui->register_info_section) {
-        const auto idSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
-        constexpr std::string_view kJson = R"_({"title":"CodeGraph"})_";
-        const auto                 jsonSv
-            = agentxx::plugin::PluginStringView::from(kJson.data(), kJson.size());
-        auto res = co_await agentxx::plugin::clientTableOpAsync(
+    if (ui) {
+        utilxx_base::Json data = utilxx_base::Json::object();
+        data["title"]          = "CodeGraph";
+        ctx.section            = co_await agentxx::plugin::clientRegisterContentAsync(
             ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* e) {
-                return ui->register_info_section(host, &idSv, &jsonSv, cb, ud, e);
+            agentxx::plugin::ContentSpec{
+                .slot  = "info",
+                .id    = "agentxx_codegraph.status",
+                .title = "CodeGraph",
+                .data  = data,
             }
         );
-        ctx.section = agentxx::plugin::clientHandleOf<AgentxxInfoSection>(res);
         if (!ctx.section) {
-            throw std::runtime_error(fmt::format("register info section failed: {}", res.text()));
+            throw std::runtime_error(
+                "register info section failed (declarative content rejected)"
+            );
         }
-        // 注册完立刻根据已有状态刷一次 (内部是提交即返回的更新)
+        // 注册完立刻根据已有状态刷一次 (内部是提交即返回的推送)
         refreshSection(ctx);
     }
 
@@ -1340,28 +1342,12 @@ static void codegraphClientStart(
     return;
 }
 
-/// client 侧 stop: 撤销 Info 段落 (可重复调用)
+/// client 侧 stop: 放掉内容句柄 (可重复调用)
 ///
-/// 注销是表调用, 这里提交即返回 (主程序在 stop 之后也会按记录撤销, 不依赖这一次)。
-static void    codegraphClientStop(ClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    if (ctx.section) {
-        if (ctx.iface.ui && ctx.iface.ui->unregister_info_section && ctx.host) {
-            agentxx::plugin::clientTableCall(
-                ctx.host,
-                ctx.iface,
-                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                    return ctx.iface.ui->unregister_info_section(
-                        ctx.host,
-                        ctx.section,
-                        cb,
-                        ud,
-                        err
-                    );
-                }
-            );
-        }
-        ctx.section = nullptr;
-    }
+/// 声明项与内容由主程序在 stop 之后统一撤销, 这里不做反注册: 句柄要活到实例析构,
+/// 生成函数还在用它。
+static void codegraphClientStop(ClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    ctx.section.reset();
     ctx.current_file.clear();
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return;

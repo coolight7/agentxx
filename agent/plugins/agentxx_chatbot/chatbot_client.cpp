@@ -46,16 +46,19 @@ constexpr const char* kRefreshTopic = "agentxx.client.plugin.agentxx_chatbot.ref
 
 /// client 侧实例上下文
 struct ChatbotClientCtx : public agentxx::plugin::ClientPluginBase {
-    /// 面板句柄 (主程序持有; 卸载自动清理)
-    AgentxxPanel* panel = nullptr;
-    /// 最近一次收到的快照
+    /// 面板内容 (声明项 + 内容; 卸载时由主程序撤销)
+    std::shared_ptr<agentxx::plugin::Content> panel;
+    /// 最近一次收到的快照 (只在 client io 线程读写)
     ac::PanelSnapshot snapshot;
-    /// 上一次提交给主程序的面板内容 (内容没变就不重复提交)
+    /// 上一次交给主程序的面板内容 (内容没变就不重复提交)
     std::string renderedJson;
 
     /// 重画面板 (内容没变时跳过)
+    ///
+    /// 文档算在 client io 线程上 (快照也在这里更新), 算好交给 [Content::publish]:
+    /// 它记住这一份, 主程序之后来问生成函数时回的是这份拷贝 (跨线程不读别人的状态)。
     void render(bool force = false) {
-        if (panel == nullptr) {
+        if (!panel) {
             return;
         }
         const std::string json = itemsJson(ac::panelItemsOf(snapshot));
@@ -63,7 +66,7 @@ struct ChatbotClientCtx : public agentxx::plugin::ClientPluginBase {
             return;
         }
         renderedJson = json;
-        setPanelJson(panel, json);
+        panel->publish(json);
     }
 
     /// 处理一条频道值 (payload 就是面板快照 JSON 文本)
@@ -139,23 +142,19 @@ asio::awaitable<void> chatbotClientSetupAsync(ChatbotClientCtx& ctx) {
     if (!ui) {
         co_return;
     }
-    if (ui->register_panel) {
-        utilxx_base::Json props = utilxx_base::Json::object();
-        props["title"]          = kPanelTitle;
-        const std::string propsJson = props.dump();
-        const auto        idSv   = agentxx::plugin::PluginStringView::fromCstr(kPanelId);
-        const auto        jsonSv = agentxx::plugin::PluginStringView::from(
-            propsJson.data(),
-            propsJson.size()
-        );
-        auto res = co_await agentxx::plugin::clientTableOpAsync(
+    {
+        utilxx_base::Json panelData = utilxx_base::Json::object();
+        panelData["title"]          = kPanelTitle;
+        ctx.panel                   = co_await agentxx::plugin::clientRegisterContentAsync(
             ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* e) {
-                return ui->register_panel(host, &idSv, &jsonSv, cb, ud, e);
+            agentxx::plugin::ContentSpec{
+                .slot  = "panel",
+                .id    = kPanelId,
+                .title = kPanelTitle,
+                .data  = panelData,
             }
         );
-        ctx.panel = agentxx::plugin::clientHandleOf<AgentxxPanel>(res);
-        if (ctx.panel == nullptr) {
+        if (!ctx.panel) {
             ctx.log.warn("register panel `agentxx_chatbot.bots` failed (id taken or no sidebar)");
         }
         // 先给一份占位内容: 免得 tab 里一片空白, 也让用户知道在等谁的数据

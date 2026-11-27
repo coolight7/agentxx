@@ -42,11 +42,14 @@ struct AgentCtx : public agentxx::plugin::PluginBase {};
 constexpr const char* kExampleProgressTopic = "plugin.example_plugin.progress";
 
 struct ClientCtx : public agentxx::plugin::ClientPluginBase {
-    const AgentxxClientUiIface* ui           = nullptr;
-    AgentxxStatusItem*          status_item  = nullptr;
-    AgentxxPanel*               panel        = nullptr;
-    AgentxxInfoSection*         info_section = nullptr;
-    int                         turn_count   = 0;
+    const AgentxxClientUiIface* ui = nullptr;
+    /// 状态栏项内容 (声明项 + 内容; start 事务注册, 卸载时主程序撤销)
+    std::shared_ptr<agentxx::plugin::Content> status_item;
+    /// 侧边栏面板内容
+    std::shared_ptr<agentxx::plugin::Content> panel;
+    /// Info 段落内容
+    std::shared_ptr<agentxx::plugin::Content> info_section;
+    int                                       turn_count = 0;
 };
 
 static auto agentGuardLogger(AgentCtx* ctx) noexcept {
@@ -680,14 +683,16 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
             return;
         }
         ++ctx->turn_count;
-        if (ctx->status_item && ctx->ui && ctx->ui->update_status_item) {
-            const std::string json = fmt::format(
-                R"_({{"text":{}}})_",
-                clientJsonEscape(*ctx, fmt::format("turns: {}", ctx->turn_count))
-            );
-            ctx->setStatusJson(ctx->status_item, json);
+        if (ctx->status_item) {
+            // 状态栏的文档是 `{"blocks":[...]}`: 只画一行文本
+            utilxx_base::Json line;
+            line["kind"] = "Text";
+            line["text"] = fmt::format("turns: {}", ctx->turn_count);
+            utilxx_base::Json doc;
+            doc["blocks"] = utilxx_base::Json::array({line});
+            ctx->status_item->publish(doc.dump());
         }
-        if (ctx->info_section && ctx->ui && ctx->ui->update_info_section) {
+        if (ctx->info_section) {
             // 组件项用描述层与 kit 组装 (不必手写 JSON 字符串与转义)
             std::vector<pluginxx::ui::Item> items;
             utilxx_base::Json               turnsText;
@@ -696,7 +701,9 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
             items.push_back(agentxx::ui::kit::hint({
                 {"text", "Example Info section is live"}
             }));
-            ctx->setInfoSectionItems(ctx->info_section, items);
+            utilxx_base::Json doc;
+            doc["items"] = pluginxx::ui::dumpBlocks(items);
+            ctx->info_section->publish(doc.dump());
         }
     });
 }
@@ -724,8 +731,10 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
         items.push_back(agentxx::ui::kit::badge({
             {"text", "updated"}
         }));
-        if (ctx->ui && ctx->panel) {
-            ctx->setPanelItems(ctx->panel, items);
+        if (ctx->panel) {
+            utilxx_base::Json doc;
+            doc["items"] = pluginxx::ui::dumpBlocks(items);
+            ctx->panel->publish(doc.dump());
         }
     });
 }
@@ -742,52 +751,71 @@ static asio::awaitable<void> exampleClientSetupAsync(ClientCtx& ctx) {
         throw std::runtime_error("client ui iface is unavailable");
     }
 
-    // 句柄类结果: 正文是主程序侧地址的十进制文本, 解析不到说明注册被拒
-    constexpr std::string_view kStatusJson = R"_({"text":"turns: 0"})_";
-    constexpr std::string_view kPanelJson  = R"_({"title":"Example"})_";
-    constexpr std::string_view kInfoJson   = R"_({"title":"Example Info"})_";
-
+    // 三处展示位置都用声明项 + 内容: 内容"只推不算" (生成函数回最近一次推的文档),
+    // 数据由频道回调更新, 算好的文档放在内容对象里, 不跨线程读。
     {
-        const auto idSv   = agentxx::plugin::PluginStringView::fromCstr("example_plugin.turns");
-        const auto jsonSv = agentxx::plugin::PluginStringView::from(kStatusJson.data(), kStatusJson.size());
-        auto res = co_await agentxx::plugin::clientTableOpAsync(
+        utilxx_base::Json data = utilxx_base::Json::object();
+        data["align"]          = 0;
+        data["order"]          = 10;
+        ctx.status_item        = co_await agentxx::plugin::clientRegisterContentAsync(
             ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ui->register_status_item(host, &idSv, &jsonSv, 0, 10, cb, ud, err);
+            agentxx::plugin::ContentSpec{
+                .slot = "status",
+                .id   = "example_plugin.turns",
+                .data = data,
             }
         );
-        ctx.status_item = agentxx::plugin::clientHandleOf<AgentxxStatusItem>(res);
         if (!ctx.status_item) {
-            throw std::runtime_error(fmt::format("register status item failed: {}", res.text()));
+            throw std::runtime_error("register status item failed (declarative content rejected)");
         }
     }
     {
-        const auto idSv   = agentxx::plugin::PluginStringView::fromCstr("example_plugin.panel");
-        const auto jsonSv = agentxx::plugin::PluginStringView::from(kPanelJson.data(), kPanelJson.size());
-        auto res = co_await agentxx::plugin::clientTableOpAsync(
+        utilxx_base::Json data = utilxx_base::Json::object();
+        data["title"]          = "Example";
+        ctx.panel              = co_await agentxx::plugin::clientRegisterContentAsync(
             ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ui->register_panel(host, &idSv, &jsonSv, cb, ud, err);
+            agentxx::plugin::ContentSpec{
+                .slot  = "panel",
+                .id    = "example_plugin.panel",
+                .title = "Example",
+                .data  = data,
             }
         );
-        ctx.panel = agentxx::plugin::clientHandleOf<AgentxxPanel>(res);
         if (!ctx.panel) {
-            throw std::runtime_error(fmt::format("register panel failed: {}", res.text()));
+            throw std::runtime_error("register panel failed (declarative content rejected)");
         }
     }
     {
-        const auto idSv   = agentxx::plugin::PluginStringView::fromCstr("example_plugin.info");
-        const auto jsonSv = agentxx::plugin::PluginStringView::from(kInfoJson.data(), kInfoJson.size());
-        auto res = co_await agentxx::plugin::clientTableOpAsync(
+        utilxx_base::Json data = utilxx_base::Json::object();
+        data["title"]          = "Example Info";
+        ctx.info_section       = co_await agentxx::plugin::clientRegisterContentAsync(
             ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ui->register_info_section(host, &idSv, &jsonSv, cb, ud, err);
+            agentxx::plugin::ContentSpec{
+                .slot  = "info",
+                .id    = "example_plugin.info",
+                .title = "Example Info",
+                .data  = data,
             }
         );
-        ctx.info_section = agentxx::plugin::clientHandleOf<AgentxxInfoSection>(res);
         if (!ctx.info_section) {
-            throw std::runtime_error(fmt::format("register info section failed: {}", res.text()));
+            throw std::runtime_error("register info section failed (declarative content rejected)");
         }
+    }
+
+    // 三处先各给一份初始内容: 免得界面在第一批数据之前空着
+    {
+        utilxx_base::Json line;
+        line["kind"] = "Text";
+        line["text"] = "turns: 0";
+        utilxx_base::Json doc;
+        doc["blocks"] = utilxx_base::Json::array({line});
+        ctx.status_item->publish(doc.dump());
+    }
+    {
+        utilxx_base::Json doc;
+        doc["items"] = utilxx_base::Json::array();
+        ctx.panel->publish(doc.dump());
+        ctx.info_section->publish(doc.dump());
     }
 
     // 命令回调是异步操作契约: 动作 JSON 经回调自己的 notify 交回 (本插件同步给).

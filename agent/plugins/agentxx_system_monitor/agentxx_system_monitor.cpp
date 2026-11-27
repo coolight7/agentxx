@@ -451,11 +451,12 @@ AGENTXX_AGENT_PLUGIN_EXPORT(
 );
 
 struct SysMonClientCtx : public ClientPluginBase {
-    AgentxxInfoSection* section = nullptr;
-    std::atomic<bool>   usage_enabled{true};
-    std::string         last_usage_json;
-    /// 状态栏项 (声明式内容的 id 与它一致) 是否已登记
-    bool status_registered = false;
+    /// Info 段落内容 (声明项 + 内容; 卸载时由主程序撤销)
+    std::shared_ptr<Content> section;
+    /// 状态栏项内容 (同一份数据, 只画一行)
+    std::shared_ptr<Content> status;
+    std::atomic<bool>        usage_enabled{true};
+    std::string              last_usage_json;
 };
 
 struct UsageStat {
@@ -542,56 +543,32 @@ static std::string buildStatusLine(const UsageStat& st) {
     return line;
 }
 
-/// 状态栏项的内容 (声明式): 用最近一次数据生成一行文本
-static void PLUGINXX_CALL generateStatusContent(
-    const PluginxxHost*           /*host*/,
-    const PluginxxStringView*     /*ctx_json*/,
-    void*                         ud,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               /*error_out*/
-) {
-    auto* ctx = static_cast<SysMonClientCtx*>(ud);
-    if (ctx == nullptr || notify == nullptr || notify->done == nullptr) {
-        return;
-    }
-    utilxx_base::Json block;
-    block["kind"] = "Text";
-    block["text"] = ctx->last_usage_json.empty()
-                        ? std::string{"—"}
-                        : buildStatusLine(parseUsage(ctx->last_usage_json));
-    utilxx_base::Json doc;
-    doc["items"]            = utilxx_base::Json::array({block});
-    utilxx_base::Json body;
-    body["json"]            = doc;
-    const std::string        payload = body.dump();
-    const PluginxxStringView view{payload.data(), payload.size()};
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
-}
-
 static void refreshUsageDisplay(SysMonClientCtx& ctx) {
-    if (!ctx.host) {
+    if (ctx.last_usage_json.empty()) {
         return;
     }
-    // 段落注册归 client start 事务 (协程里 co_await 注册); 这里只推内容 (提交即返回)
-    if (!ctx.section || !ctx.iface.ui || !ctx.iface.ui->update_info_section
-        || ctx.last_usage_json.empty()) {
-        return;
+    const UsageStat st = parseUsage(ctx.last_usage_json);
+    const bool      on = ctx.usage_enabled.load(std::memory_order_relaxed);
+    // 内容注册归 client start 事务 (协程里 co_await 注册); 这里只推内容 (提交即返回)
+    // 文档在这一条线程上算 (数据也在这里更新): publish 记住一份, 生成函数
+    // (插件执行线程) 之后回的是那份拷贝, 不跨线程读别人的状态。
+    if (ctx.section) {
+        if (on) {
+            ctx.section->publish(buildUsageInfoItemsJson(ctx, st));
+        } else {
+            utilxx_base::Json off;
+            off["items"] = utilxx_base::Json::array();
+            ctx.section->publish(off.dump());
+        }
     }
-    std::string json;
-    if (ctx.usage_enabled.load(std::memory_order_relaxed)) {
-        json = buildUsageInfoItemsJson(ctx, parseUsage(ctx.last_usage_json));
-    } else {
-        utilxx_base::Json off;
-        off["items"] = utilxx_base::Json::array();
-        json         = off.dump();
-    }
-    agentxx::plugin::clientUpdateInfoSection(ctx.host, ctx.iface.ui, ctx.section, json);
-    // 状态栏项走声明式内容: 让它按当前数据重新生成一次 (不支持新成员的主程序忽略)
-    if (ctx.status_registered && ctx.iface.ui->update_ui_slot) {
-        const auto        slotSv = agentxx::plugin::PluginStringView::fromCstr("status");
-        const std::string ids    = fmt::format(R"(["{}"])", kStatusItemId);
-        const auto        idsSv  = agentxx::plugin::PluginStringView::from(ids.data(), ids.size());
-        ctx.iface.ui->update_ui_slot(ctx.host, &slotSv, &idsSv, nullptr, nullptr, nullptr);
+    if (ctx.status) {
+        // 状态栏只画一行: 关掉时给空文本, 不把最后一份数据留在那里
+        utilxx_base::Json block;
+        block["kind"] = "Text";
+        block["text"] = on ? buildStatusLine(st) : std::string{};
+        utilxx_base::Json doc;
+        doc["items"] = utilxx_base::Json::array({block});
+        ctx.status->publish(doc.dump());
     }
 }
 
@@ -607,46 +584,38 @@ static asio::awaitable<void> sysMonClientSetupAsync(SysMonClientCtx& ctx) {
     }
 
     {
-        const auto idSv   = agentxx::plugin::PluginStringView::fromCstr(
-            "agentxx_system_monitor.usage"
-        );
-        constexpr std::string_view kJson = R"_({"title":"System"})_";
-        const auto jsonSv = agentxx::plugin::PluginStringView::from(kJson.data(), kJson.size());
-        auto res = co_await agentxx::plugin::clientTableOpAsync(
+        // Info 段落: 声明项 + 内容 (内容只推不算, 生成函数回最近一次推的文档)
+        utilxx_base::Json data = utilxx_base::Json::object();
+        data["title"]          = "System";
+        ctx.section            = co_await agentxx::plugin::clientRegisterContentAsync(
             ctx,
-            [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ui->register_info_section(host, &idSv, &jsonSv, cb, ud, err);
+            agentxx::plugin::ContentSpec{
+                .slot  = "info",
+                .id    = "agentxx_system_monitor.usage",
+                .title = "System",
+                .data  = data,
             }
         );
-        ctx.section = agentxx::plugin::clientHandleOf<AgentxxInfoSection>(res);
         if (!ctx.section) {
-            ctx.log.log(3, fmt::format("register info section failed: {}", res.text()));
+            ctx.log.log(3, "register info section failed (declarative content rejected)");
         }
     }
 
-    // 状态栏项: 声明项 + 内容 (与 Info 段落同一份数据, 内容由主程序按需生成)
-    if (ui->register_ui_item && ui->register_ui_content) {
-        const auto                 idSv   = agentxx::plugin::PluginStringView::fromCstr(kStatusItemId);
-        const auto                 slotSv = agentxx::plugin::PluginStringView::fromCstr("status");
-        constexpr std::string_view kData  = R"_({"align":1,"order":0})_";
-        const auto dataSv = agentxx::plugin::PluginStringView::from(kData.data(), kData.size());
-        PluginxxUiEntrySpec entry{};
-        entry.version     = 1;
-        entry.struct_size = sizeof(PluginxxUiEntrySpec);
-        entry.item_id     = idSv;
-        entry.type        = slotSv;
-        entry.data_json   = dataSv;
-        if (ui->register_ui_item(host, &entry, nullptr, nullptr, nullptr) != nullptr) {
-            PluginxxUiContentSpec content{};
-            content.version     = 1;
-            content.struct_size = sizeof(PluginxxUiContentSpec);
-            content.id          = idSv;
-            content.slot        = slotSv;
-            content.generate    = &generateStatusContent;
-            content.user_data   = &ctx;
-            if (ui->register_ui_content(host, &content, nullptr, nullptr, nullptr) != nullptr) {
-                ctx.status_registered = true;
+    {
+        // 状态栏项: 与 Info 段落同一份数据, 只画一行
+        utilxx_base::Json data = utilxx_base::Json::object();
+        data["align"]          = 1;
+        data["order"]          = 0;
+        ctx.status             = co_await agentxx::plugin::clientRegisterContentAsync(
+            ctx,
+            agentxx::plugin::ContentSpec{
+                .slot = "status",
+                .id   = kStatusItemId,
+                .data = data,
             }
+        );
+        if (!ctx.status) {
+            ctx.log.log(3, "register status item failed (declarative content rejected)");
         }
     }
 

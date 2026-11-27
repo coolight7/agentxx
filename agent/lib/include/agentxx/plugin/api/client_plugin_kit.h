@@ -109,6 +109,94 @@ inline asio::awaitable<pluginxx::TableOpResult>
     co_return co_await pluginxx::detail::tableOpAwaitAsyncSlot(ctx, std::move(start));
 }
 
+/// `std::vector<std::string>` → `["a","b"]` (空列表就是 `[]`)
+inline std::string depsJsonOf(const std::vector<std::string>& deps) {
+    utilxx_base::Json arr = utilxx_base::Json::array();
+    for (const auto& dep : deps) {
+        arr.push_back(dep);
+    }
+    return arr.dump();
+}
+
+/// 提交一份内容: 先声明项、再内容; 内容没注册上就把声明项撤掉
+///
+/// 工具行与其它内容都走这一条, 免得每处各写一遍提交与回滚。
+template<typename Ctx>
+inline asio::awaitable<bool> clientSubmitContentAsync(
+    Ctx&                ctx,
+    std::string_view    slot,
+    std::string_view    id,
+    std::string_view    title,
+    std::string_view    dataJson,
+    std::string_view    depsJson,
+    int32_t             order,
+    void(PLUGINXX_CALL* generate)(
+        const PluginxxHost*,
+        const PluginxxStringView*,
+        void*,
+        const PluginxxOperatorNotify*,
+        PluginxxString*
+    ),
+    void*               userData
+) {
+    const auto* ui = ctx.iface.ui;
+    if (!ctx.host || !ui || !ui->register_ui_item || !ui->register_ui_content) {
+        co_return false;
+    }
+    if (slot.empty() || id.empty() || generate == nullptr) {
+        co_return false;
+    }
+    auto idSv   = PluginStringView::from(id);
+    auto slotSv = PluginStringView::from(slot);
+    auto dataSv = PluginStringView::from(dataJson);
+
+    PluginxxUiEntrySpec entry{};
+    entry.version     = 1;
+    entry.struct_size = sizeof(PluginxxUiEntrySpec);
+    entry.item_id     = idSv;
+    entry.type        = slotSv;
+    entry.data_json   = dataSv;
+    entry.order       = order;
+    auto entryResult  = co_await clientTableAwaitAsync(
+        ctx,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->register_ui_item(ctx.host, &entry, cb, ud, err);
+        }
+    );
+    if (!entryResult.ok()) {
+        co_return false;
+    }
+
+    auto                  titleSv = PluginStringView::from(title);
+    auto                  depsSv  = PluginStringView::from(depsJson);
+    PluginxxUiContentSpec content{};
+    content.version     = 1;
+    content.struct_size = sizeof(PluginxxUiContentSpec);
+    content.id          = idSv;
+    content.slot        = slotSv;
+    content.title       = titleSv;
+    content.deps_json   = depsSv;
+    content.order       = order;
+    content.generate    = generate;
+    content.user_data   = userData;
+    auto contentResult  = co_await clientTableAwaitAsync(
+        ctx,
+        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->register_ui_content(ctx.host, &content, cb, ud, err);
+        }
+    );
+    if (!contentResult.ok()) {
+        // 内容没注册上就撤销声明项, 不留一个画不出来的位置
+        PluginxxString err{nullptr, 0};
+        ui->unregister_ui_item(ctx.host, &idSv, nullptr, nullptr, &err);
+        if (err.data != nullptr) {
+            PluginString::free(ctx.host, &err);
+        }
+        co_return false;
+    }
+    co_return true;
+}
+
 } // namespace detail
 
 /// client 表调用 (**asio 协程形态**): `co_await` 拿结果
@@ -513,6 +601,12 @@ public:
     /// `agentxx.client.tool` 槽位的短名
     static constexpr std::string_view kSlot = "tool";
 
+    /// 生成函数要的变量 (这次调用的名字 / 参数 / 结果 / 宽度 / 折叠还是展开 / 状态)
+    static constexpr std::string_view kDepsJson =
+        "[\"agentxx.client.tool.name\",\"agentxx.client.tool.args\","
+        "\"agentxx.client.tool.result\",\"agentxx.client.tool.width\","
+        "\"agentxx.client.tool.part\",\"agentxx.client.tool.state\"]";
+
     ToolRow(std::string toolName, std::string displayName, ToolRowSpec spec) :
         toolName_(std::move(toolName)),
         displayName_(displayName.empty() ? toolName_ : std::move(displayName)),
@@ -631,10 +725,6 @@ inline asio::awaitable<std::shared_ptr<ToolRow>> clientRegisterToolRowAsync(
     std::string_view displayName,
     ToolRowSpec    spec
 ) {
-    const auto* ui = ctx.iface.ui;
-    if (!ctx.host || !ui || !ui->register_ui_item || !ui->register_ui_content) {
-        co_return nullptr;
-    }
     if (toolName.empty()) {
         co_return nullptr;
     }
@@ -643,58 +733,235 @@ inline asio::awaitable<std::shared_ptr<ToolRow>> clientRegisterToolRowAsync(
         std::string{displayName},
         std::move(spec)
     );
-    std::string data   = row->declarationDataJson();
-    std::string title  = row->displayName();
-    auto        idSv   = PluginStringView::from(toolName);
-    auto        slotSv = PluginStringView::from(ToolRow::kSlot);
-    auto        dataSv = PluginStringView::from(data);
-
-    PluginxxUiEntrySpec entry{};
-    entry.version     = 1;
-    entry.struct_size = sizeof(PluginxxUiEntrySpec);
-    entry.item_id     = idSv;
-    entry.type        = slotSv;
-    entry.data_json   = dataSv;
-    auto entryResult  = co_await detail::clientTableAwaitAsync(
+    const bool ok = co_await detail::clientSubmitContentAsync(
         ctx,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->register_ui_item(ctx.host, &entry, cb, ud, err);
-        }
+        ToolRow::kSlot,
+        row->toolName(),
+        row->displayName(),
+        row->declarationDataJson(),
+        ToolRow::kDepsJson,
+        0,
+        &ToolRow::generate,
+        row.get()
     );
-    if (!entryResult.ok()) {
-        co_return nullptr;
+    co_return ok ? row : nullptr;
+}
+
+/* ==================== 界面内容: 声明项 + 内容 ==================== */
+
+
+/// 推送一份算好的内容 (内容要先注册上; 文档就是内容本身, 不用再包 `json`)
+///
+/// 提交即返回: 从任何线程都能调 (包括广播回调与网络线程)。
+inline int32_t clientPushContent(
+    const PluginxxHost*         host,
+    const AgentxxClientUiIface* ui,
+    std::string_view            id,
+    std::string_view            documentJson
+) {
+    if (!host || !ui || !ui->push_ui_content || id.empty() || documentJson.empty()) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    const auto iface = ClientIfaces::query(host);
+    auto       idSv  = PluginStringView::from(id.data(), id.size());
+    auto       docSv = PluginStringView::from(documentJson.data(), documentJson.size());
+    clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ui->push_ui_content(host, &idSv, &docSv, cb, ud, err);
+    });
+    return AGENTXX_RESULT_OK;
+}
+
+/// 让主程序按当前变量重新生成 ([ids] 为空 = 该槽位上本插件的全部内容)
+inline int32_t clientRefreshContent(
+    const PluginxxHost*             host,
+    const AgentxxClientUiIface*     ui,
+    std::string_view                slot,
+    const std::vector<std::string>& ids = {}
+) {
+    if (!host || !ui || !ui->update_ui_slot || slot.empty()) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    const auto        iface   = ClientIfaces::query(host);
+    auto              slotSv  = PluginStringView::from(slot.data(), slot.size());
+    const std::string idsJson = detail::depsJsonOf(ids);
+    auto              idsSv   = PluginStringView::from(idsJson);
+    clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+        return ui->update_ui_slot(host, &slotSv, &idsSv, cb, ud, err);
+    });
+    return AGENTXX_RESULT_OK;
+}
+
+/// 一份界面内容的注册参数
+///
+/// 位置由 `slot` 短名给出 (`status` / `panel` / `info` / `tool` …), 具体是哪一处由
+/// `id` 给出: 同一个槽位上可以有多份内容, 界面按 `order` 与注册顺序摆。
+struct ContentSpec {
+    std::string              slot;    ///< 槽位短名
+    std::string              id;      ///< 短名 (同一槽位上唯一)
+    std::string              title;   ///< 展示名 (可空)
+    utilxx_base::Json        data = utilxx_base::Json::object(); ///< 声明项的 data
+    std::vector<std::string> deps;    ///< 生成时要的变量
+    int32_t                  order = 0; ///< 同一槽位上的排序
+    /// 生成函数: 拿到的 `ctx` 只含 [deps] 的变量, 往 `out` 里写界面文档
+    ///
+    /// 不写就是"只推不算": 生成函数回最近一次 [Content::publish] 的文档
+    /// (状态由别的线程更新时用这个, 免得在插件执行线程上跨线程读别人的状态)。
+    std::function<void(const utilxx_base::Json& ctx, utilxx_base::Json& out)> generate;
+};
+
+/// 一份界面内容: 声明项 (位置) + 内容 (生成函数 / 推送)
+///
+/// 插件实例持它到卸载: 生成函数的状态在它身上, 提前释放会让主程序调到已销毁的对象。
+class Content {
+public:
+    Content(const PluginxxHost* host, const AgentxxClientUiIface* ui, ContentSpec spec) :
+        host_(host),
+        ui_(ui),
+        spec_(std::move(spec)) {}
+
+    const std::string& id() const noexcept {
+        return spec_.id;
     }
 
-    auto        titleSv = PluginStringView::from(title);
-    std::string deps    = "[\"agentxx.client.tool.name\",\"agentxx.client.tool.args\","
-                          "\"agentxx.client.tool.result\",\"agentxx.client.tool.width\","
-                          "\"agentxx.client.tool.part\",\"agentxx.client.tool.state\"]";
-    auto        depsSv  = PluginStringView::from(deps);
-    PluginxxUiContentSpec content{};
-    content.version     = 1;
-    content.struct_size = sizeof(PluginxxUiContentSpec);
-    content.id          = idSv;
-    content.slot        = slotSv;
-    content.title       = titleSv;
-    content.deps_json   = depsSv;
-    content.generate    = &ToolRow::generate;
-    content.user_data   = row.get();
-    auto contentResult  = co_await detail::clientTableAwaitAsync(
-        ctx,
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->register_ui_content(ctx.host, &content, cb, ud, err);
+    const std::string& slot() const noexcept {
+        return spec_.slot;
+    }
+
+    /// 有没有自带生成函数 (`false` = 只推不算)
+    bool hasGenerate() const noexcept {
+        return static_cast<bool>(spec_.generate);
+    }
+
+    /// 声明项的 `data` (对象文本)
+    std::string declarationDataJson() const {
+        return spec_.data.is_object() ? spec_.data.dump() : std::string{"{}"};
+    }
+
+    /// 推一份算好的文档: 记住它 (主程序之后来问也回这一份) 并交给主程序
+    ///
+    /// 跨线程安全: 状态通常由广播回调 / 网络线程更新, 算好的文档放这里,
+    /// 生成函数 (插件执行线程) 只读它。
+    int32_t publish(std::string documentJson) {
+        if (documentJson.empty()) {
+            return AGENTXX_RESULT_ERR_ARG;
         }
-    );
-    if (!contentResult.ok()) {
-        // 内容没注册上就撤销声明项, 不留一个画不出来的位置
-        PluginxxString err{nullptr, 0};
-        ui->unregister_ui_item(ctx.host, &idSv, nullptr, nullptr, &err);
-        if (err.data != nullptr) {
-            PluginString::free(ctx.host, &err);
+        {
+            std::lock_guard<std::mutex> lock{mtx_};
+            snapshot_ = documentJson;
         }
+        return clientPushContent(host_, ui_, spec_.id, documentJson);
+    }
+
+    /// 最近一次 [publish] 的文档 (没有就是空串)
+    std::string snapshot() const {
+        std::lock_guard<std::mutex> lock{mtx_};
+        return snapshot_;
+    }
+
+    /// 生成函数 (主程序调): 交给 [ContentSpec::generate], 没有就回最近一次推的文档
+    ///
+    /// - 结果包成内容契约的 `{"json": <界面文档>}`
+    /// - 跑在插件执行线程上; 拿不到内容时交空文档 (界面先用上一份)
+    static void PLUGINXX_CALL generate(
+        const PluginxxHost*           host,
+        const PluginxxStringView*     ctx_json,
+        void*                         user_data,
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
+    ) {
+        if (notify == nullptr || notify->done == nullptr) {
+            PluginString::set(host, error_out, "content needs a completion callback");
+            return;
+        }
+        auto* self = static_cast<Content*>(user_data);
+        if (self == nullptr) {
+            PluginString::set(host, error_out, "content is gone");
+            return;
+        }
+        std::string doc;
+        try {
+            if (self->spec_.generate) {
+                utilxx_base::Json ctx = utilxx_base::Json::object();
+                if (ctx_json != nullptr && ctx_json->data != nullptr && ctx_json->size > 0) {
+                    auto parsed = utilxx_base::Json::parse(
+                        std::string_view{ctx_json->data, static_cast<size_t>(ctx_json->size)}
+                    );
+                    if (parsed.is_object()) {
+                        ctx = std::move(parsed);
+                    }
+                }
+                utilxx_base::Json out = utilxx_base::Json::object();
+                self->spec_.generate(ctx, out);
+                if (out.is_object() && !out.empty()) {
+                    doc = out.dump();
+                }
+            } else {
+                doc = self->snapshot();
+            }
+        } catch (...) {
+            // 生成失败按“没有内容”处理 (界面先用上一份), 不打扰用户
+            doc.clear();
+        }
+        const std::string payload =
+            doc.empty() ? std::string{"{\"json\":{}}"} : std::string{"{\"json\":"} + doc + "}";
+        const PluginxxStringView view{payload.data(), static_cast<uint64_t>(payload.size())};
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
+    }
+
+private:
+    const PluginxxHost*         host_ = nullptr;
+    const AgentxxClientUiIface* ui_   = nullptr;
+    ContentSpec                 spec_;
+    mutable std::mutex          mtx_;
+    std::string                 snapshot_;
+};
+
+/// 注册一份内容 (声明项 + 内容); 返回的句柄要由插件实例持有
+///
+/// - 主程序不支持声明式界面时返回 `nullptr` (界面保持自己的默认渲染)
+/// - 两条表调用都要等, 所以只能写在协程里:
+///
+/// ```cpp
+/// ctx.panel = co_await clientRegisterContentAsync(ctx, {
+///     .slot  = "panel",
+///     .id    = "agentxx_chatbot.bots",
+///     .title = "Bots",
+///     .data  = utilxx_base::Json{{"title", "Bots"}},
+/// });
+/// ctx.panel->publish(doc);  // 之后算好一份就推一份
+/// ```
+template<typename Ctx>
+inline asio::awaitable<std::shared_ptr<Content>> clientRegisterContentAsync(
+    Ctx&        ctx,
+    ContentSpec spec
+) {
+    if (spec.slot.empty() || spec.id.empty()) {
         co_return nullptr;
     }
-    co_return row;
+    const bool               pushOnly = !spec.generate;
+    const std::string        title    = spec.title;
+    const std::string        depsJson = detail::depsJsonOf(spec.deps);
+    const int32_t            order    = spec.order;
+    auto content = std::make_shared<Content>(ctx.host, ctx.iface.ui, std::move(spec));
+    const bool ok = co_await detail::clientSubmitContentAsync(
+        ctx,
+        content->slot(),
+        content->id(),
+        title,
+        content->declarationDataJson(),
+        depsJson,
+        order,
+        &Content::generate,
+        content.get()
+    );
+    if (!ok) {
+        co_return nullptr;
+    }
+    if (pushOnly) {
+        // 只推不算: 注册完先让主程序来取一次 (开始之前推的那次还没注册上)
+        clientRefreshContent(ctx.host, ctx.iface.ui, content->slot(), {content->id()});
+    }
+    co_return content;
 }
 
 
