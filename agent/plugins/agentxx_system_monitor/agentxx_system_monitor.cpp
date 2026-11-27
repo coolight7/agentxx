@@ -495,7 +495,7 @@ static UsageStat parseUsage(const std::string& raw) {
     return st;
 }
 
-static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageStat& st) {
+static std::string buildUsageInfoDocJson(const SysMonClientCtx&, const UsageStat& st) {
     // 组件项经描述层与扩展 kit 组装 (同一份描述, 终端与将来的 GUI 客户端共用;
     // 每行是一个 Text, 语义色用 color)
     std::vector<pluginxx::ui::Item> items;
@@ -527,7 +527,7 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
         pushText(fmt::format("|- GPU {:.0f}% · {}x", st.gpuPeakPct, st.gpuCount));
     }
     utilxx_base::Json out;
-    out["items"] = pluginxx::ui::dumpBlocks(items);
+    out["blocks"] = pluginxx::ui::dumpBlocks(items);
     return out.dump();
 }
 
@@ -554,10 +554,10 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
     // (插件执行线程) 之后回的是那份拷贝, 不跨线程读别人的状态。
     if (ctx.section) {
         if (on) {
-            ctx.section->publish(buildUsageInfoItemsJson(ctx, st));
+            ctx.section->publish(buildUsageInfoDocJson(ctx, st));
         } else {
             utilxx_base::Json off;
-            off["items"] = utilxx_base::Json::array();
+            off["blocks"] = utilxx_base::Json::array();
             ctx.section->publish(off.dump());
         }
     }
@@ -567,7 +567,7 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
         block["kind"] = "Text";
         block["text"] = on ? buildStatusLine(st) : std::string{};
         utilxx_base::Json doc;
-        doc["items"] = utilxx_base::Json::array({block});
+        doc["blocks"] = utilxx_base::Json::array({block});
         ctx.status->publish(doc.dump());
     }
 }

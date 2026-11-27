@@ -138,8 +138,9 @@ std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>
 - 组件说明见生成的 `docs/zh-cn/design/agentxx-ui-kit.md`；
 - 改 kit：改 `agent/schema/agentxx-ui-kit.def.json` → 跑 `pwsh -NoProfile -File agent/script/gen_ui_kit.ps1`
   → 生成物一起提交（`agentxx_ui_kit.g.h` / `agentxx_ui_kit.js` / 生成的文档）；
-- JS 插件：`agent/js/agentxx_ui_kit.js`（全局 `pluginxx.ui.kit`）。**当前 JS 桥还没有界面注册入口**
-  （见 `agent/js/README.md`），所以这份 JS kit 是"就绪未接通"。
+- JS 插件：`agent/js/agentxx_ui_kit.js`（全局 `pluginxx.ui.kit`）。JS 桥的界面入口是
+  `registerUiItem` / `registerUiContent` / `pushUiContent` / `updateUiSlot`（用法见 `agent/js/README.md`），
+  与 C++ 侧一样只有“声明项 + 内容”一条路。
 
 ## 7. 控件与动作
 
@@ -167,11 +168,10 @@ CLI / 日志 / FFI 文本主程序走库的 `plainText`（`interruptUiPlainText`
 
 | 入口 | 说明 |
 |---|---|
-| `ClientPluginBase::setPanelItems(panel, items)` / `panelItems(panel)` | 面板内容（就地构建 + 自动提交见 `PanelWriter`） |
-| `setInfoSectionItems(section, items)` | Info 段落内容 |
+| `Content::publish(ClientPluginBase::blocksJson(items))` | 面板 / Info 段落的内容（组件树 → `{"blocks":[…]}`） |
+| `Content::publish(doc)` | 已算好的文档 (状态栏是一行 `{"blocks":[…]}`) |
 | `setToolDecor(toolCallId, decor)` | 工具消息装饰（折叠头显示名/摘要 + 展开体组件树） |
 | `showItemsOverlay(title, items, extraJson)` | 自定义 overlay 的内容 |
-| `setPanelJson` / `setStatusJson` | 已有 JSON 直接提交（例如 JS 侧产出的内容） |
 
 - 单条描述体积上限 **1 MiB**（`agentxx::plugin::kUiJsonMaxBytes`）：越界**拒绝整条更新**并记日志，
   注册表保持上一次成功内容；

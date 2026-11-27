@@ -502,8 +502,8 @@ struct TestStatusContent {
 
 /// 造一份只含状态栏内容的声明式界面快照 (与管理器推快照的形状一致)
 ///
-/// 旧 `register_status_item` 由管理器写进同一套注册表: 有富片段时内容是一行横排块,
-/// 否则是一行 Text 块。这里按同样两种形状造数据, 驱动渲染路径。
+/// 状态栏项就是 `status` 槽位上的一份内容: 有富片段时内容是一行横排块,
+/// 否则是一行 Text 块。这里按这两种形状造数据, 驱动渲染路径。
 std::shared_ptr<agentxx::plugin::ClientUiSnapshot> makeStatusSnapshot(
     const std::vector<TestStatusContent>& items
 ) {
@@ -607,7 +607,7 @@ void test_status_bar_click_actions() {
     XX_TEST_EXPECT_EQ(settingsClicks, 1);
 
     // ---- 插件状态栏项的内容渲染 (segments / sparkline / meter 对应的块树) ----
-    // 旧 `register_status_item` 的富片段由管理器改写成一行横排块; 这里直接给同样的内容
+    // 富片段写在一行横排块里 (插件自己拼, 管理器不再改写内容)
     const std::string richJson = R"({"blocks":[{"kind":"Row","gap":8,"children":[)"
                                  R"({"kind":"Text","text":"CPU","color":"hint"},)"
                                  R"({"kind":"Text","text":"55%","color":"accent"},)"
@@ -663,8 +663,6 @@ public:
         namespace pi = agentxx::plugin::plugin_interfaces;
         return {
             std::string{pi::ClientUi},
-            std::string{pi::ClientPanel},
-            std::string{pi::ClientInfoSection},
             std::string{pi::ClientComponents},
             std::string{pi::ClientLayout},
         };
@@ -728,6 +726,53 @@ int screenRowOf(const ftxui::Screen& screen, std::string_view sub) {
     return -1;
 }
 
+namespace {
+
+/// 用例要交出的文档 (生成函数读它; 同一份文档也直接推给主程序)
+const char* g_probeDoc = nullptr;
+
+/// 生成函数: 回 [g_probeDoc] 那一份 (用例只验证渲染, 不算内容)
+void PLUGINXX_CALL probeDocGenerate(
+    const PluginxxHost* /*host*/,
+    const PluginxxStringView* /*ctx_json*/,
+    void* /*user_data*/,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString* /*error_out*/
+) {
+    if (!notify || !notify->done) {
+        return;
+    }
+    std::string payload = std::string{"{\"json\":"} + (g_probeDoc ? g_probeDoc : "{}") + "}";
+    const PluginxxStringView view{payload.data(), payload.size()};
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
+}
+
+/// 注册一份界面内容并推一份文档 (两者内容相同, 生成与推送不会互相覆盖)
+int32_t registerProbeContent(
+    agentxx::plugin::ClientPluginManager*  mgr,
+    agentxx::plugin::ClientPluginInstance* inst,
+    const char*                            id,
+    const char*                            slot,
+    const char*                            title,
+    const std::string&                     doc
+) {
+    g_probeDoc = doc.c_str();
+    PluginxxUiContentSpec spec{};
+    spec.version     = 1;
+    spec.struct_size = sizeof(PluginxxUiContentSpec);
+    spec.id          = agentxx::plugin::PluginStringView::fromCstr(id);
+    spec.slot        = agentxx::plugin::PluginStringView::fromCstr(slot);
+    spec.title       = agentxx::plugin::PluginStringView::fromCstr(title);
+    spec.generate    = &probeDocGenerate;
+    const int32_t rc = mgr->registerUiContent(inst, &spec);
+    if (rc != PLUGINXX_RESULT_OK) {
+        return rc;
+    }
+    return mgr->pushUiContent(inst, id, doc);
+}
+
+} // namespace
+
 /// 面板接入点: 新组件 (表格/计量条/横排/趋势图) 与控件经真实注册路径上屏,
 /// 并上报可用尺寸 (插件据此重排; 见 reportRegionSize)
 void test_panel_access_point_extended_components() {
@@ -737,14 +782,7 @@ void test_panel_access_point_extended_components() {
     auto inst = mgr->createInstance("widget_probe");
     mgr->plugins_.emplace(inst->name, inst);
 
-    auto* panel = static_cast<AgentxxPanel*>(mgr->registerPanel(
-        inst.get(),
-        std::string_view{"widget_probe.panel"},
-        std::string_view{R"({"title":"Probe"})"}
-    ));
-    XX_TEST_EXPECT_TRUE(panel != nullptr);
-
-    const std::string items = R"({"items":[
+    const std::string items = R"({"blocks":[
         {"kind":"Table","header":true,
          "columns":[{"title":"Path"},{"title":"Scope","width":48}],
          "rows":[["a.txt","write"],["b.txt","read"]]},
@@ -752,7 +790,10 @@ void test_panel_access_point_extended_components() {
         {"kind":"Row","gap":8,"children":[{"kind":"Text","text":"L"},
                                           {"kind":"Sparkline","data":[1,5,9]}]}
     ]})";
-    XX_TEST_EXPECT_EQ(mgr->updatePanel(inst.get(), panel, std::string_view{items}), 0);
+    XX_TEST_EXPECT_EQ(
+        registerProbeContent(mgr.get(), inst.get(), "widget_probe.panel", "panel", "Probe", items),
+        0
+    );
 
     auto tui = std::make_shared<TUIClientAgentIO>(io.get_executor(), "session");
     tui->setPluginManager(mgr);
@@ -781,8 +822,8 @@ void test_panel_access_point_extended_components() {
     XX_TEST_EXPECT_TRUE(found);
 
     // 内容更新: 新的描述立即反映到下一次渲染 (版本号递增, 供缓存 key 使用)
-    const std::string updated = R"({"items":[{"kind":"Text","text":"second"}]})";
-    XX_TEST_EXPECT_EQ(mgr->updatePanel(inst.get(), panel, std::string_view{updated}), 0);
+    const std::string updated = R"({"blocks":[{"kind":"Text","text":"second"}]})";
+    XX_TEST_EXPECT_EQ(mgr->pushUiContent(inst.get(), "widget_probe.panel", updated), 0);
     const auto rows2 = tui->renderPluginPanel("widget_probe.panel");
     const auto text2 = renderScrollItems(rows2, 40, 3);
     XX_TEST_EXPECT_TRUE(text2.find("second") != std::string::npos);
@@ -797,17 +838,16 @@ void test_info_access_point_extended_components() {
     auto inst = mgr->createInstance("info_probe");
     mgr->plugins_.emplace(inst->name, inst);
 
-    auto* section = static_cast<AgentxxInfoSection*>(mgr->registerInfoSection(
-        inst.get(),
-        std::string_view{"info_probe.section"},
-        std::string_view{R"({"title":"Probe Info"})"}
-    ));
-    XX_TEST_EXPECT_TRUE(section != nullptr);
-    const std::string items = R"({"items":[
+    const std::string items = R"({"blocks":[
         {"kind":"KV","pairs":[{"k":"Model","v":"gpt-x"}]},
         {"kind":"Block","title":"Limits","variant":"card","child":{"kind":"Text","text":"inside box"}}
     ]})";
-    XX_TEST_EXPECT_EQ(mgr->updateInfoSection(inst.get(), section, std::string_view{items}), 0);
+    XX_TEST_EXPECT_EQ(
+        registerProbeContent(
+            mgr.get(), inst.get(), "info_probe.section", "info", "Probe Info", items
+        ),
+        0
+    );
 
     auto tui = std::make_shared<TUIClientAgentIO>(io.get_executor(), "session");
     tui->setPluginManager(mgr);

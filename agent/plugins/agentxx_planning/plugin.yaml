@@ -4,8 +4,8 @@ description: "Two-level task planning tool (agentxx_planning, write/read modes: 
 entry: libagentxx_planning.so
 depends:
 # ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧) ----
-# - agentxx.client.info_section 可选: CLI 无 Info 栏时注册失败降级 (仅数据不渲染)
-#   (规划不再依赖专用 planning 接口，改用通用持久化+事件)
+# - client 侧 Info 栏是 `agentxx.client.info` 槽位上的界面内容: CLI 没有 Info 栏时
+#   注册失败降级 (仅数据不渲染); 规划不依赖专用 planning 接口, 用通用持久化 + 事件
 # - agentxx.client.msg_decor 可选: 工具行内容 (`agentxx.client.tool` 上的声明项 + 内容)
 #   与实时装饰 (`update_tool_decor`); CLI 无消息渲染面时注册失败降级
 interfaces:
@@ -16,6 +16,5 @@ interfaces:
   optional:
     - agentxx.agent.config
     - agentxx.client.msg_decor
-    - agentxx.client.info_section
     - agentxx.client.action
     - agentxx.client.overlay

@@ -2,14 +2,14 @@
 ///
 /// 行为 (受环境变量控制, 供同一 DSO 先失败后成功的两段式用例):
 /// - 未设置 `AGENTXX_TEST_CLIENT_START_OK`:
-///   start 依次完成全部 UI 注册并逐一经句柄自检 (register 后立即 update,
-///   返回非 0 即提前失败), 然后**主动失败** (返回 NULL + error):
-///     1. 状态栏项 `test_client_start_fail.status` (+ update 自检)
-///     2. 侧边栏面板 `test_client_start_fail.panel` (+ update 自检)
-///     3. Info 栏段落 `test_client_start_fail.info` (+ update 自检)
+///   start 依次完成全部 UI 注册并逐一自检 (注册后立即推一份内容,
+///   返回失败即提前失败), 然后**主动失败** (返回 NULL + error):
+///     1. 状态栏内容 `test_client_start_fail.status` (+ 推一份自检)
+///     2. 侧边栏面板内容 `test_client_start_fail.panel` (+ 推一份自检)
+///     3. Info 栏内容 `test_client_start_fail.info` (+ 推一份自检)
 ///     4. 斜杠命令 `test_client_start_fail_cmd`
 ///     5. 事件订阅 (`agentxx.client.ready` 频道)
-///   句柄自检保证"走到最后一步"意味着前面的注册真实生效, 主程序回滚必须
+///   推送自检保证"走到最后一步"意味着前面的注册真实生效, 主程序回滚必须
 ///   全部撤销; 测试随后断言无任何残留。
 /// - 已设置该环境变量: start 直接成功返回 (供第二次加载验证回滚后同名
 ///   UI 项/命令/订阅可完整重新注册)。
@@ -148,12 +148,26 @@ bool waitCall(CallResult& call) {
     });
 }
 
-/// 结果正文 → 句柄指针 (调用方持锁; 空/非法给 nullptr)
-void* handleOfLocked(const CallResult& result) {
-    if (!result.done || result.status != PLUGINXX_OPERATOR_OK || result.handleText[0] == '\0') {
-        return nullptr;
+/// 内容生成函数: 回 `user_data` 指的那份文档 (本用例只验证注册与回滚)
+void PLUGINXX_CALL echoDocGenerate(
+    const PluginxxHost*           /*host*/,
+    const PluginxxStringView*     /*ctx_json*/,
+    void*                         user_data,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               /*error_out*/
+) {
+    if (!notify || !notify->done) {
+        return;
     }
-    return reinterpret_cast<void*>(static_cast<uintptr_t>(std::strtoull(result.handleText, nullptr, 10)));
+    const char* doc = user_data != nullptr ? static_cast<const char*>(user_data) : "{}";
+    std::string payload{"{\json\:"};
+    payload += doc;
+    payload += "}";
+    const PluginxxStringView view{
+        payload.data(),
+        static_cast<uint64_t>(payload.size())
+    };
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
 }
 
 /// 提交一次表调用, 只要"受理且成功" (不关心正文)
@@ -168,24 +182,63 @@ bool submitOk(StartFn&& start) {
     return call.status == PLUGINXX_OPERATOR_OK;
 }
 
-/// 提交一次表调用并取回句柄 (正文 = 地址十进制文本)
-template<typename StartFn>
-void* submitHandle(StartFn&& start) {
-    CallResult     call;
-    PluginxxString err{nullptr, 0};
-    if (!start(&callDone, &call, &err) || !waitCall(call)) {
-        return nullptr;
-    }
-    std::lock_guard<std::mutex> lock(call.mutex);
-    return handleOfLocked(call);
-}
-
 struct ProbeCtx {
     const PluginxxHost* host    = nullptr;
     bool                started = false;
 };
 
-/// 注册事务: 每步注册后立即用句柄操作自检; 失败时把步骤名写进 `error`
+/// 注册一份界面内容: 声明项 (位置/标题) + 内容 (生成函数) + 推一份文档自检
+bool registerContent(
+    const PluginxxHost*         host,
+    const AgentxxClientUiIface* ui,
+    const char*                 id,
+    const char*                 slot,
+    const char*                 title,
+    const char*                 dataJson,
+    const char*                 docJson,
+    PluginxxString*             error
+) {
+    auto fail = [host, error](const char* what) {
+        setError(host, error, what);
+        return false;
+    };
+    PluginxxUiEntrySpec entry{};
+    entry.version     = 1;
+    entry.struct_size = sizeof(PluginxxUiEntrySpec);
+    entry.item_id     = sv(id);
+    entry.type        = sv(slot);
+    entry.data_json   = sv(dataJson);
+    if (!submitOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->register_ui_item(host, &entry, cb, ud, err);
+        })) {
+        return fail("client start: register_ui_item failed");
+    }
+
+    PluginxxUiContentSpec spec{};
+    spec.version     = 1;
+    spec.struct_size = sizeof(PluginxxUiContentSpec);
+    spec.id          = sv(id);
+    spec.slot        = sv(slot);
+    spec.title       = sv(title);
+    spec.generate    = &echoDocGenerate;
+    spec.user_data   = const_cast<char*>(docJson);
+    if (!submitOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->register_ui_content(host, &spec, cb, ud, err);
+        })) {
+        return fail("client start: register_ui_content failed");
+    }
+
+    const auto idSv  = sv(id);
+    const auto docSv = sv(docJson);
+    if (!submitOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            return ui->push_ui_content(host, &idSv, &docSv, cb, ud, err);
+        })) {
+        return fail("client start: push_ui_content failed");
+    }
+    return true;
+}
+
+/// 注册事务: 每份内容注册后立即推一份自检; 失败时把步骤名写进 `error`
 bool registerAll(const PluginxxHost* host, ProbeCtx* ctx, PluginxxString* error) {
     auto fail = [host, error](const char* what) {
         setError(host, error, what);
@@ -193,68 +246,45 @@ bool registerAll(const PluginxxHost* host, ProbeCtx* ctx, PluginxxString* error)
     };
     const auto* ui
         = static_cast<const AgentxxClientUiIface*>(queryIface(host, AGENTXX_IFACE_CLIENT_UI));
-    if (!ui || !ui->register_status_item) {
-        return fail("client start: ui table missing register_status_item");
+    if (!ui || !ui->register_ui_item || !ui->register_ui_content || !ui->push_ui_content) {
+        return fail("client start: ui table missing declarative content members");
     }
 
-    const auto statusInit = sv(R"({"text":"probe: 0"})");
-    const auto statusId   = sv("test_client_start_fail.status");
-    auto*      status     = static_cast<AgentxxStatusItem*>(submitHandle(
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->register_status_item(host, &statusId, &statusInit, 0, 10, cb, ud, err);
-        }
-    ));
-    if (!status) {
-        return fail("client start: register_status_item failed");
+    if (!registerContent(
+            host,
+            ui,
+            "test_client_start_fail.status",
+            "status",
+            "",
+            R"({"align":0,"order":10})",
+            R"({"blocks":[{"kind":"Text","text":"probe: 1","dim":true}]})",
+            error
+        )) {
+        return false;
     }
-    const auto statusUpdate = sv(R"({"text":"probe: 1"})");
-    if (ui->update_status_item
-        && !submitOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-               return ui->update_status_item(host, status, &statusUpdate, cb, ud, err);
-           })) {
-        return fail("client start: update_status_item failed");
+    if (!registerContent(
+            host,
+            ui,
+            "test_client_start_fail.panel",
+            "panel",
+            "Probe",
+            R"({"title":"Probe"})",
+            R"({"blocks":[{"kind":"text","text":"probe"}]})",
+            error
+        )) {
+        return false;
     }
-
-    if (!ui->register_panel) {
-        return fail("client start: ui table missing register_panel");
-    }
-    const auto panelId    = sv("test_client_start_fail.panel");
-    const auto panelProps = sv(R"({"title":"Probe"})");
-    auto*      panel      = static_cast<AgentxxPanel*>(submitHandle(
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->register_panel(host, &panelId, &panelProps, cb, ud, err);
-        }
-    ));
-    if (!panel) {
-        return fail("client start: register_panel failed");
-    }
-    const auto panelItems = sv(R"({"items":[{"kind":"text","text":"probe"}]})");
-    if (ui->update_panel
-        && !submitOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-               return ui->update_panel(host, panel, &panelItems, cb, ud, err);
-           })) {
-        return fail("client start: update_panel failed");
-    }
-
-    if (!ui->register_info_section) {
-        return fail("client start: ui table missing register_info_section");
-    }
-    const auto infoId    = sv("test_client_start_fail.info");
-    const auto infoProps = sv(R"({"title":"Probe Info"})");
-    auto*      info      = static_cast<AgentxxInfoSection*>(submitHandle(
-        [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->register_info_section(host, &infoId, &infoProps, cb, ud, err);
-        }
-    ));
-    if (!info) {
-        return fail("client start: register_info_section failed");
-    }
-    const auto infoItems = sv(R"({"items":[{"kind":"text","text":"probe"}]})");
-    if (ui->update_info_section
-        && !submitOk([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-               return ui->update_info_section(host, info, &infoItems, cb, ud, err);
-           })) {
-        return fail("client start: update_info_section failed");
+    if (!registerContent(
+            host,
+            ui,
+            "test_client_start_fail.info",
+            "info",
+            "Probe Info",
+            R"({"title":"Probe Info"})",
+            R"({"blocks":[{"kind":"text","text":"probe"}]})",
+            error
+        )) {
+        return false;
     }
 
     if (!ui->register_command) {

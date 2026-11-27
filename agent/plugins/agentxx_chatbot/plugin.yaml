@@ -9,6 +9,5 @@ interfaces:
     # 工具表: 往人设 root 上注册 chatbot_* 工具
     - agentxx.agent.tools
   optional:
-    # client 侧「机器人」栏: 没有侧边栏的精简主程序上只少一个面板, 不影响收发消息
-    # (事件订阅与跨端数据通道是 client 侧基础表, 不单独声明)
-    - agentxx.client.panel
+    # (client 侧「机器人」栏是 `agentxx.client.panel` 槽位上的界面内容,
+    #  没有侧边栏的精简主程序上只少这一块, 不影响收发消息)

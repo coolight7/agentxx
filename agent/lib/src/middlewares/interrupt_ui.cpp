@@ -724,9 +724,9 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
         return withIndent(std::move(row));
     }
     if (block.kind == "custom") {
-        // 自定义块已并入描述层: `props.items` 作为组件树展开, 其余按 fallback 文本
+        // 自定义块已并入描述层: `props.items` 作为块数组展开, 其余按 fallback 文本
         if (block.props.is_object() && block.props.contains("items")) {
-            auto parsed = pluginxx::ui::parseBlocks(block.props);
+            auto parsed = pluginxx::ui::parseBlocks(block.props["items"]);
             if (!parsed.empty()) {
                 Item row     = pluginxx::ui::build::column({});
                 row.children = std::move(parsed);

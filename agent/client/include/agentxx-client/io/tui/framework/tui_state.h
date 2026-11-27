@@ -198,8 +198,8 @@ struct TUIRenderState {
     /// - 测试可直接经 mutate 注入假注册表, 驱动装饰渲染路径
     std::shared_ptr<const agentxx::plugin::ClientUiRegistry> pluginRegistry;
     /// client 插件的声明式界面快照 (状态栏 / 面板 / Info 段落的内容都从这里读)
-    /// - 每帧开头由主渲染器从 ClientPluginManager 拉取; 旧注册项
-    ///   (`register_status_item` 一类) 在管理器里就已经写进同一套注册表
+    /// - 每帧开头由主渲染器从 ClientPluginManager 拉取 (插件注册的声明项 + 内容
+    ///   都在管理器里写进同一套注册表)
     /// - 测试可直接经 mutate 注入假快照, 驱动内容渲染路径
     std::shared_ptr<const agentxx::plugin::ClientUiSnapshot> uiContent;
 

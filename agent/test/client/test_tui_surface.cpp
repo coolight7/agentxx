@@ -734,13 +734,13 @@ TestResult testTuiSurface() {
                     XX_TEST_EXPECT_EQ(singleObj->segments[0].newStr, std::string{"y"});
                 }
             }
-            // 旧写法 (顶层 old_str/new_str)
+            // 顶层 `old_str`/`new_str` 不再支持: 只认 `edits` (段列表为空)
             auto legacy
                 = parsePluginDiffPayload(R"({"path":"/c.cpp","old_str":"x","new_str":"y"})");
             XX_TEST_EXPECT_TRUE(legacy.has_value());
             if (legacy) {
                 XX_TEST_EXPECT_EQ(legacy->path, std::string{"/c.cpp"});
-                XX_TEST_EXPECT_EQ(legacy->segments.size(), size_t{1});
+                XX_TEST_EXPECT_EQ(legacy->segments.size(), size_t{0});
             }
             // 裸数组: 无文件路径的多段
             auto bareArray = parsePluginDiffPayload(R"([{"old_str":"x","new_str":"y"}])");
@@ -783,14 +783,14 @@ TestResult testTuiSurface() {
             }
         }
 
-        // 2. 单段 (旧写法) 上屏: 路径 + 两侧文本
+        // 2. 单段 (`edits` 一项) 上屏: 路径 + 两侧文本
         {
             SurfaceFixture fx;
             auto           comp = createUniversalOverlay(
                 fx.ctx,
                 AGENTXX_OVERLAY_DIFF,
                 "文件改动",
-                R"({"path":"/tmp/one.cpp","old_str":"int one = 1;","new_str":"int one = 2;"})",
+                R"({"path":"/tmp/one.cpp","edits":[{"old_str":"int one = 1;","new_str":"int one = 2;"}]})",
                 "{}",
                 "test",
                 [] {}

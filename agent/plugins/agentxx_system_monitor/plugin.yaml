@@ -4,11 +4,11 @@ description: "System resource monitor: CPU/memory/GPU usage on Windows/Linux/And
 entry: libagentxx_system_monitor.so
 depends:
 # ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧) ----
-# - agentxx.client.info_section / agentxx.client.command 可选: CLI 无 Info 栏时注册失败降级;
-#   无命令输入面的主程序下 /sysinfo 不可用 (数据接收不受影响)
+# - client 侧 Info 栏与状态栏是 `agentxx.client.info|status` 槽位上的界面内容:
+#   CLI 没有这两处时注册失败降级
+# - agentxx.client.command 可选: 无命令输入面的主程序下 /sysinfo 不可用 (数据接收不受影响)
 interfaces:
   require:
     - agentxx.agent.core
   optional:
-    - agentxx.client.info_section
     - agentxx.client.command

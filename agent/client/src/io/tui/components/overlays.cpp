@@ -2882,8 +2882,8 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
             utilxx_base::Json items = utilxx_base::Json::array();
             try {
                 auto j = utilxx_base::Json::parse(payload.empty() ? "{}" : payload);
-                if (j.is_object() && j.contains("items") && j["items"].is_array()) {
-                    items = j["items"];
+                if (j.is_object() && j.contains("blocks") && j["blocks"].is_array()) {
+                    items = j["blocks"];
                 } else if (j.is_array()) {
                     items = std::move(j);
                 }

@@ -760,7 +760,7 @@ TestResult testTuiUiItems() {
         ctx.form  = form.get();
         agentxx::client::UiRenderResult res;
         auto                            items = pluginxx::ui::parseBlocks(Json::parse(
-            R"({"items":[{"kind":"Control","id":"mode","control":"buttons",
+            R"({"blocks":[{"kind":"Control","id":"mode","control":"buttons",
                "options":[{"value":"fast","label":"Fast"},{"value":"safe","label":"Safe"}]}]})"
         ));
         agentxx::client::initFormState(*form, items);
@@ -821,7 +821,7 @@ TestResult testTuiUiItems() {
         auto form  = std::make_shared<agentxx::client::UiFormState>();
         ctx.form   = form.get();
         auto items = pluginxx::ui::parseBlocks(Json::parse(
-            R"({"items":[{"kind":"Control","id":"opt","control":"select",
+            R"({"blocks":[{"kind":"Control","id":"opt","control":"select",
                "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}]})"
         ));
         agentxx::client::initFormState(*form, items);
@@ -841,7 +841,7 @@ TestResult testTuiUiItems() {
         auto form  = std::make_shared<agentxx::client::UiFormState>();
         ctx.form   = form.get();
         auto items = pluginxx::ui::parseBlocks(Json::parse(
-            R"({"items":[{"kind":"Control","id":"url","control":"text","label":"URL",
+            R"({"blocks":[{"kind":"Control","id":"url","control":"text","label":"URL",
                 "help":"如 https://api.example.com/v1"}]})"
         ));
         agentxx::client::initFormState(*form, items);
@@ -901,7 +901,7 @@ TestResult testTuiUiItems() {
         auto form  = std::make_shared<agentxx::client::UiFormState>();
         ctx.form   = form.get();
         auto items = pluginxx::ui::parseBlocks(Json::parse(
-            R"({"items":[{"kind":"Control","id":"num","control":"number","label":"Num",
+            R"({"blocks":[{"kind":"Control","id":"num","control":"number","label":"Num",
                 "integer":true,"value":5,"help":"范围 1 ~ 100"}]})"
         ));
         agentxx::client::initFormState(*form, items);
@@ -1324,7 +1324,7 @@ TestResult testTuiUiItems() {
         auto form  = std::make_shared<agentxx::client::UiFormState>();
         ctx.form   = form.get();
         auto items = pluginxx::ui::parseBlocks(Json::parse(
-            R"({"items":[{"kind":"Control","id":"pwd","control":"password",
+            R"({"blocks":[{"kind":"Control","id":"pwd","control":"password",
                 "label":"密码","help":"请输入密码"}]})"
         ));
         agentxx::client::initFormState(*form, items);

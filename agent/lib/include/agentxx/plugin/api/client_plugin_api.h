@@ -49,7 +49,7 @@
 ///   (用 `agentxx::plugin::clientHandleFromText` 转回), 查询类给 JSON / 纯文本,
 ///   无结果类给空串;
 /// - `cb` 传 `NULL` 时主程序只受理、不回程 (fire-and-forget), 适用于 `show_toast` /
-///   `update_panel` / `unregister_*` / `request_cancel` 一类不关心结果的成员;
+///   `unregister_*` / `request_cancel` 一类不关心结果的成员;
 /// - 顺序: 同一实例按**受理顺序**执行。注册类调用要先 `co_await` (或等回调)
 ///   拿到句柄再继续;
 /// - client 侧没有保留的同步成员: 连 `is_visible` 这类查询也走异步
@@ -122,12 +122,6 @@ extern "C" {
 /// SESSION_SWITCH→`...session_switch` / UI_LAYOUT→`...ui_layout` /
 /// PLUGIN_DATA→`agentxx.client.plugin.<插件名>.<事件>`
 
-/* ==================== 展示扩展句柄 (不透明) ==================== */
-
-typedef struct AgentxxStatusItem  AgentxxStatusItem;  ///< 状态栏项句柄
-typedef struct AgentxxPanel       AgentxxPanel;       ///< 侧边栏面板句柄
-typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段落句柄
-
 /* ==================== 工具行: 只有声明式内容 ==================== */
 
 /// 工具行（折叠头 + 展开体）由声明式界面提供，不再有回调注册：
@@ -144,7 +138,7 @@ typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段
 typedef struct AgentxxUiActionContext {
     uint32_t           struct_size; ///< 主程序填 sizeof; 0 = 基线布局
     int32_t            version;     ///< 结构体版本 (当前 == 1)
-    PluginxxStringView owner_id;    ///< 归属: section_id / panel_id / tool_call_id / "__overlay"
+    PluginxxStringView owner_id;    ///< 归属: 内容 id / tool_call_id / "__overlay"
     PluginxxStringView action_id;   ///< 按钮声明的 action_id
     PluginxxStringView action_args; ///< 参数 JSON object dump (空 = 无参)
 } AgentxxUiActionContext;
@@ -173,15 +167,15 @@ typedef int32_t(PLUGINXX_CALL* AgentxxClientCommandExecuteFn)(
 typedef enum AgentxxOverlayType {
     AGENTXX_OVERLAY_MERMAID = 0, ///< 状态图: payload = mermaid 源码
     AGENTXX_OVERLAY_TEXT    = 1, ///< 文本/Markdown: payload = 原文
-    /// 对比: payload = JSON, 支持单段与多段 (段 = 一次替换)
+    /// 对比: payload = JSON, 支持单段与多段 (段 = 一次替换), 段统一放在 `edits` 里
     /// - 多段: `{"path":"a.cpp","edits":[{"old_str":"..","new_str":".."}, ...]}`
-    /// - 单段: `{"path":"a.cpp","old_str":"..","new_str":".."}` (旧写法)
+    /// - 单段: `{"path":"a.cpp","edits":[{"old_str":"..","new_str":".."}]}`
     /// - `edits` 也接受**单个对象** (少写一层数组的形态): 工具参数会自动互转对象与
     ///   单元素数组, 界面层两种形态都认 (见 ToolcallWrapNode::autoFixArgsType)
     /// - 裸数组 `[{"old_str":"..","new_str":".."}, ...]` 按"无路径的多段"处理
     /// 多段时每段各渲染一份逐行差异, 段间以分隔行隔开, 路径只在首段展示
     AGENTXX_OVERLAY_DIFF = 2,
-    AGENTXX_OVERLAY_CUSTOM = 3 ///< 自定义: payload = JSON {"items":[...]} (同 panel/items schema)
+    AGENTXX_OVERLAY_CUSTOM = 3 ///< 自定义: payload = JSON {"blocks":[...]} (同 panel/info 文档 schema)
 } AgentxxOverlayType;
 
 /// 通用 overlay 参数 (全部只读借用, 主程序拷贝后使用)
@@ -212,131 +206,17 @@ typedef struct AgentxxOverlaySpec {
 /* v2: 全部成员改成异步操作契约 (句柄经完成回调 payload 交回), 见文件头 */
 /* v3: 追加声明式界面 (声明项 / 内容 / 插件自建槽位), 与共享 UI 表同一形状 */
 /* v4: 删掉工具行回调 (register_tool_renderer / unregister_tool_renderer): 工具行只走
- *     `agentxx.client.tool` 上的声明项 + 内容, 不保留回调注册 */
-#define AGENTXX_IFACE_CLIENT_UI_VERSION     4 /* 追加成员 / 语义变化 -> +1 */
-#define AGENTXX_IFACE_CLIENT_UI_MIN_VERSION 4 /* 只在破坏性改动时 +1 (优先换 IID) */
+ *     `agentxx.client.tool` 上的声明项 + 内容, 不保留回调注册
+ * v5: 删掉状态栏项 / 侧边栏面板 / Info 栏段落的九个成员 (register/update/unregister):
+ *     三处都只走 `agentxx.client.status|panel|info` 上的声明项 + 内容 */
+#define AGENTXX_IFACE_CLIENT_UI_VERSION     5 /* 追加成员 / 语义变化 -> +1 */
+#define AGENTXX_IFACE_CLIENT_UI_MIN_VERSION 5 /* 只在破坏性改动时 +1 (优先换 IID) */
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_IFACE_CLIENT_UI_BASELINE_SIZE sizeof(AgentxxClientUiIface)
 
 typedef struct AgentxxClientUiIface {
     int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_UI_VERSION
     uint32_t struct_size;
-
-    /* ---- 状态栏项 ---- */
-    /// 注册状态栏项; 句柄经完成回调交回 (`payload` = 进程内地址的十进制文本,
-    /// 用 `agentxx::plugin::clientHandleFromText` 转回句柄; 主程序持有, 卸载自动清理)
-    /// - id: 全局唯一, 建议 "{插件名}.{项名}" (如 "codegraph.index")
-    /// - initialJson: {"text": "...", "tooltip": "..."} (text 必填)
-    /// - align: 0=左侧 1=右侧; order: 组内排序 (小在前)
-    /// - 主程序不支持该子能力 (函数指针 NULL) 或 id 冲突时按失败交回
-    /// - **与声明式界面同一份存储**: 主程序把它写成 `agentxx.client.status` 上的一个
-    ///   声明项 (`data` = `{"align","order"}`) 加一份内容, 界面画的是那份内容;
-    ///   新插件直接用下文的 `register_ui_item` + `register_ui_content` 即可
-    ///   (同一个 id 用两套接口时后写的生效)
-    PluginxxOperatorHandle*(PLUGINXX_CALL* register_status_item)(
-        const PluginxxHost*       host,
-        const PluginxxStringView* id,
-        const PluginxxStringView* initialJson,
-        int32_t                   align,
-        int32_t                   order,
-        PluginxxOperatorCallback  cb,
-        void*                     ud,
-        PluginxxString*           error_out
-    );
-    /// 更新状态栏项文本 ({"text": "..."}); 句柄无效按失败交回
-    PluginxxOperatorHandle*(PLUGINXX_CALL* update_status_item)(
-        const PluginxxHost*       host,
-        AgentxxStatusItem*        item,
-        const PluginxxStringView* json,
-        PluginxxOperatorCallback  cb,
-        void*                     ud,
-        PluginxxString*           error_out
-    );
-    /// 注销状态栏项 (句柄随后失效)
-    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_status_item)(
-        const PluginxxHost*      host,
-        AgentxxStatusItem*       item,
-        PluginxxOperatorCallback cb,
-        void*                    ud,
-        PluginxxString*          error_out
-    );
-
-    /* ---- 侧边栏面板 ---- */
-    /// 注册侧边栏面板; 句柄经完成回调交回 (形态同 register_status_item)
-    /// - id: 全局唯一, 建议 "{插件名}.{面板名}"
-    /// - propsJson: {"title": "..."} (title 必填; 显示在 tab 栏)
-    /// - 与声明式界面同一份存储 (tab 也按同一个 id 建); 新插件用
-    ///   `register_ui_item` + `register_ui_content` 写到 `agentxx.client.panel` 上
-    PluginxxOperatorHandle*(PLUGINXX_CALL* register_panel)(
-        const PluginxxHost*       host,
-        const PluginxxStringView* id,
-        const PluginxxStringView* propsJson,
-        PluginxxOperatorCallback  cb,
-        void*                     ud,
-        PluginxxString*           error_out
-    );
-    /// 更新面板内容: itemsJson = {"items":[ …组件项… ]}
-    /// - 组件来自**界面描述层** (`pluginxx::ui`, 独立库 cxx_pluginxx_ui): 规范写法是
-    ///   组件名 PascalCase、字段 camelCase, 例:
-    ///   {"kind":"Text","text":"CPU","type":"body","color":"normal"},
-    ///   {"kind":"Progress","label":"cpu","value":0.5},
-    ///   {"kind":"Button","label":"Rebuild","action":{"kind":"call","name":"rebuild"}}
-    /// - 文本样式用 `color` (normal/hint/accent/title/error/…) 与 `type`
-    ///   (body/caption/title); 插件用 SDK 的构建器 (`pluginxx::ui::build`) 或 kit
-    ///   拼装即可, 不必手写 JSON
-    /// - 未知组件与本客户端不支持的组件由主程序按自身能力降级 (最多降到文本),
-    ///   不会因此清空面板; 客户端支持哪些组件见 `get_client_state().ui`
-    /// - button 项被用户点击时: 主程序投递到插件执行线程按动作派发
-    ///   (dispatch 走能力/动作绑定, 见 `bind_action_handler`)
-    PluginxxOperatorHandle*(PLUGINXX_CALL* update_panel)(
-        const PluginxxHost*       host,
-        AgentxxPanel*             panel,
-        const PluginxxStringView* itemsJson,
-        PluginxxOperatorCallback  cb,
-        void*                     ud,
-        PluginxxString*           error_out
-    );
-    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_panel)(
-        const PluginxxHost*      host,
-        AgentxxPanel*            panel,
-        PluginxxOperatorCallback cb,
-        void*                    ud,
-        PluginxxString*          error_out
-    );
-
-    /* ---- 侧边栏 Info 栏段落 ---- */
-    /// 注册 Info 栏段落; 句柄经完成回调交回 (形态同 register_status_item)
-    /// - id: 全局唯一, 建议 "{插件名}.{段名}"
-    /// - propsJson: {"title": "..."} (title 可选; 空则无段落标题)
-    /// - 与声明式界面同一份存储; 新插件用 `register_ui_item` +
-    ///   `register_ui_content` 写到 `agentxx.client.info` 上
-    PluginxxOperatorHandle*(PLUGINXX_CALL* register_info_section)(
-        const PluginxxHost*       host,
-        const PluginxxStringView* id,
-        const PluginxxStringView* propsJson,
-        PluginxxOperatorCallback  cb,
-        void*                     ud,
-        PluginxxString*           error_out
-    );
-    /// 更新 Info 栏段落内容: itemsJson 同 update_panel 的 items schema
-    ///   (如 {"kind":"Text","text":"index: 42","color":"hint"});
-    ///   列表项由主程序按侧边栏 Append 段样式以 "|  xxx" 前缀展示
-    PluginxxOperatorHandle*(PLUGINXX_CALL* update_info_section)(
-        const PluginxxHost*       host,
-        AgentxxInfoSection*       section,
-        const PluginxxStringView* itemsJson,
-        PluginxxOperatorCallback  cb,
-        void*                     ud,
-        PluginxxString*           error_out
-    );
-    /// 注销 Info 栏段落 (句柄随后失效)
-    PluginxxOperatorHandle*(PLUGINXX_CALL* unregister_info_section)(
-        const PluginxxHost*      host,
-        AgentxxInfoSection*      section,
-        PluginxxOperatorCallback cb,
-        void*                    ud,
-        PluginxxString*          error_out
-    );
 
     /* ---- 斜杠命令 ---- */
     /// 注册斜杠命令: 用户输入 "/{name}" 触发 (name 不含 '/' 与空格)
@@ -378,7 +258,7 @@ typedef struct AgentxxClientUiIface {
     /* ---- 工具消息装饰 ---- */
     /// 更新/删除本插件对某次工具调用的消息装饰 (插件执行线程约束):
     /// - 装饰内容为语义 JSON, UI 按通用渲染器展示: 折叠头 displayName/summary +
-    ///   展开体 items (界面描述层 schema, 同 update_panel)
+    ///   展开体 items (界面描述层 schema)
     ///   {"displayName": "Plan",              // 可选; 折叠头显示名 (缺省原始 toolName)
     ///    "summary": "[~] a; [ ] b",          // 可选; 折叠头一行摘要 (缺省回退参数预览)
     ///    "items": [                          // 可选; 展开体内容
@@ -415,7 +295,7 @@ typedef struct AgentxxClientUiIface {
      * docs/zh-cn/design/plugins.md §9 的追加策略)。
      */
     /// 绑定动作处理器 (插件执行线程约束):
-    /// - target_id: 归属键 (section_id / panel_id / tool_call_id); 空串 = 本实例
+    /// - target_id: 归属键 (内容 id / tool_call_id); 空串 = 本实例
     ///   默认绑定 (方案 A fallback: 精确匹配优先, 未命中回落到 "")
     /// - 同一 (plugin, target_id) 重复绑定覆盖; on_action 为 NULL 则按参数错未受理
     PluginxxOperatorHandle*(PLUGINXX_CALL* bind_action_handler)(

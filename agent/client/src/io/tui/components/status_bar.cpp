@@ -83,7 +83,7 @@ Element StatusBarComponent::OnRender() {
 
     // ---- 插件状态栏项 (左侧 align=0 / 右侧 align=1) ----
     // 只有一条绘制路径: 位置与画什么都在声明式注册表里 (`register_ui_entry` +
-    // `register_ui_content`; 旧 `register_status_item` 由管理器写进同一套注册表)
+    // `register_ui_content`, 插件自己拼好整行)
     std::vector<Element> leftPluginItems;
     std::vector<Element> rightPluginItems;
     {

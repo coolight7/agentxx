@@ -1,13 +1,15 @@
-/// builtin_tool_renderers.cpp —— lib 内置工具的工具特化渲染器
+/// builtin_tool_renderers.cpp —— lib 内置工具的工具行内容
 ///
-/// 背景: 工具特化渲染 (见 docs/zh-cn/design/plugins.md "工具特化渲染架构") 通常由
-/// 提供工具的插件注册; lib 内置工具 (agentxx_share_store / agentxx_subagent)
-/// 没有对应插件, 因此由主程序自身注册内置渲染器
-/// (见 ClientPluginManager::registerBuiltinToolRenderer)。
+/// 背景: 工具行内容 (`agentxx.client.tool` 上的声明项 + 内容) 通常由提供工具的
+/// 插件注册; lib 内置工具 (agentxx_share_store / agentxx_subagent) 没有对应插件,
+/// 因此由主程序自身注册 (见 ClientPluginManager::registerBuiltinToolContent)。
 ///
-/// 渲染范围: 显示名注册时给定, 这里只产出折叠态的一行内容 (与插件渲染器的
-/// 折叠内容回调同一形态)。不提供展开内容 —— 展开体保持主程序默认展示
-/// (参数 JSON + 结果文本), 特化渲染不隐藏工具的原始信息。
+/// 与插件内容的区别只在“谁来算”: 内置工具行的折叠内容是一个普通函数, 在 client
+/// io 线程同步跑完; 插件内容跑生成函数 (插件执行线程, 异步契约)。两者都进同一张
+/// 渲染表与同一个按 (调用, 折叠/展开) 分键的缓存, 界面读取方式完全一致。
+///
+/// 渲染范围: 显示名注册时给定, 这里只产出折叠态的一行内容。不提供展开内容 ——
+/// 展开体保持主程序默认展示 (参数 JSON + 结果文本), 特化渲染不隐藏工具的原始信息。
 ///
 /// 折叠内容**不带**分隔符 `" · "`: 头行格式由界面统一拼装。
 ///
@@ -231,56 +233,24 @@ std::string renderSubagentCollapsed(const ClientToolRenderInput& in) {
     return !name.empty() ? name : task;
 }
 
-/// 渲染回调公共外壳: 调用具体折叠内容逻辑 → 经完成回调交回结果
-/// - 空内容 = 本次无自定义内容 (界面走默认渲染)
-/// - 回调内部立即 `done` 就是同步完成, 与改造前一样当帧拿到内容
-template<typename Fn>
-int32_t runCollapsedRenderer(
-    void*                        userData,
-    const ClientToolRenderInput* input,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*              error_out,
-    Fn&&                         fn
-) {
-    (void)error_out;
-    if (!input || !notify || !notify->done) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    (void)userData; // 内置渲染器无实例状态 (多实例契约: 不依赖可变全局)
-
-    const std::string text = fn(*input);
-    const PluginxxStringView view{text.data(), static_cast<uint64_t>(text.size())};
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
-    return 0;
-}
-
 } // namespace
 
-int32_t PLUGINXX_CALL builtinRenderShareStoreCollapsed(
-    void*                         userData,
-    const ClientToolRenderInput*  input,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
-) {
-    return runCollapsedRenderer(userData, input, notify, error_out, renderShareStoreCollapsed);
+std::string builtinShareStoreSummary(const ClientToolRenderInput& input) {
+    return renderShareStoreCollapsed(input);
 }
 
-int32_t PLUGINXX_CALL builtinRenderSubagentCollapsed(
-    void*                         userData,
-    const ClientToolRenderInput*  input,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
-) {
-    return runCollapsedRenderer(userData, input, notify, error_out, renderSubagentCollapsed);
+std::string builtinSubagentSummary(const ClientToolRenderInput& input) {
+    return renderSubagentCollapsed(input);
 }
 
-void registerBuiltinToolRenderers(ClientPluginManager& mgr) {
-    mgr.registerBuiltinToolRenderer(
-        kToolShareStore,
-        kNameShareStore,
-        &builtinRenderShareStoreCollapsed
-    );
-    mgr.registerBuiltinToolRenderer(kToolSubagent, kNameSubagent, &builtinRenderSubagentCollapsed);
+void registerBuiltinToolRows(ClientPluginManager& mgr) {
+    ClientToolRowContent shareStore;
+    shareStore.summary = &builtinShareStoreSummary;
+    mgr.registerBuiltinToolContent(kToolShareStore, kNameShareStore, std::move(shareStore));
+
+    ClientToolRowContent subagent;
+    subagent.summary = &builtinSubagentSummary;
+    mgr.registerBuiltinToolContent(kToolSubagent, kNameSubagent, std::move(subagent));
 }
 
 } // namespace plugin

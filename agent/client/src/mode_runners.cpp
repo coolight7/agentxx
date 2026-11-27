@@ -102,7 +102,7 @@ static std::shared_ptr<agentxx::plugin::ClientPluginManager> setupClientPlugins(
     auto mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(ex, workerThreads);
     mgr->setUiAdapter(std::make_shared<AdapterT>(io));
     mgr->setSessionId(sessionId);
-    agentxx::plugin::registerBuiltinToolRenderers(*mgr);
+    agentxx::plugin::registerBuiltinToolRows(*mgr);
     // TUI 端点: 组件上下文 (ctx_.pluginManager) 在 start() 的 UI 线程构建时
     // 读取, 故 setPluginManager 必须在 start() 之前调用 (见各模式加载顺序)
     if constexpr (std::is_same_v<IoT, TUIClientAgentIO>) {

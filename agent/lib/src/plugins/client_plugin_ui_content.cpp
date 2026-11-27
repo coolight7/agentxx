@@ -517,6 +517,11 @@ int32_t ClientPluginManager::registerUiContent(
     requestUiContent(fullId);
     // 工具行内容: 接成按工具名的渲染器 (结果进按调用分键的缓存)
     syncToolContentRenderer(inst, fullId);
+    if (uiAdapter_) {
+        if (const auto* registered = uiContent_.findContent(fullId)) {
+            uiAdapter_->onContentRegistered(registered->slot, registered->id, registered->title);
+        }
+    }
     return PLUGINXX_RESULT_OK;
 }
 
@@ -531,12 +536,18 @@ int32_t ClientPluginManager::unregisterUiContent(
     if (fullId.empty()) {
         return PLUGINXX_RESULT_ERR_PERMISSION;
     }
+    const auto*       content = uiContent_.findContent(fullId);
+    const std::string slot    = content != nullptr ? content->slot : std::string{};
+    const std::string shortId = content != nullptr ? content->id : std::string{};
     if (uiContent_.contents().erase(fullId) == 0) {
         return PLUGINXX_RESULT_ERR_NOT_FOUND;
     }
     uiGenerating_.erase(fullId);
     removeToolContentRenderer(fullId);
     publishUiContentSnapshot();
+    if (uiAdapter_ && !slot.empty()) {
+        uiAdapter_->onContentRemoved(slot, shortId);
+    }
     return PLUGINXX_RESULT_OK;
 }
 
@@ -554,6 +565,9 @@ int32_t ClientPluginManager::pushUiContent(
     }
     if (uiContent_.findContent(fullId) == nullptr) {
         return PLUGINXX_RESULT_ERR_NOT_FOUND;
+    }
+    if (!acceptUiJsonSize(contentJson, "push_ui_content", inst->name)) {
+        return PLUGINXX_RESULT_ERR_ARG;
     }
     const Json body = parseSafe(contentJson);
     if (!body.is_object()) {
@@ -832,6 +846,10 @@ void ClientPluginManager::finishUiGeneration(
         (void)payload;
         return;
     }
+    if (!acceptUiJsonSize(jsonText, "ui content", content->plugin)) {
+        // 超限按"这一份不采用"处理: 保留上一份内容, 不让它进快照
+        return;
+    }
     const std::string payload = uiContent_.buildContentPayload(fullId, jsonText, {});
     if (payload.empty()) {
         return;
@@ -844,8 +862,10 @@ void ClientPluginManager::finishUiGeneration(
 
 /// 停用 / 卸载: 声明项、内容与自建槽位一起撤销
 void ClientPluginManager::detachUiContent(std::string_view instanceName) {
+    std::vector<std::pair<std::string, std::string>> removed; // (槽位, 短名)
     for (auto it = uiContent_.contents().begin(); it != uiContent_.contents().end();) {
         if (it->second.plugin == instanceName) {
+            removed.emplace_back(it->second.slot, it->second.id);
             uiGenerating_.erase(it->first);
             removeToolContentRenderer(it->first);
             it = uiContent_.contents().erase(it);
@@ -855,22 +875,123 @@ void ClientPluginManager::detachUiContent(std::string_view instanceName) {
     }
     uiContent_.detachOwner(instanceName);
     publishUiContentSnapshot();
+    if (uiAdapter_) {
+        for (const auto& [slot, shortId] : removed) {
+            uiAdapter_->onContentRemoved(slot, shortId);
+        }
+    }
 }
 
 // =====================================================================
 // 工具行内容: 注册一份内容 → 按 (调用, 折叠/展开) 各生成一份
 // =====================================================================
 
+int ClientPluginManager::registerBuiltinToolContent(
+    std::string_view     toolName,
+    std::string_view     displayName,
+    ClientToolRowContent content
+) {
+    if (toolName.empty()) {
+        return PLUGINXX_RESULT_ERR_ARG;
+    }
+    const std::string fullId = fullUiIdOf(kBuiltinRendererOwner, toolName);
+    if (fullId.empty()) {
+        return PLUGINXX_RESULT_ERR_ARG;
+    }
+    const std::string title
+        = displayName.empty() ? std::string{toolName} : std::string{displayName};
+
+    // 声明项: `agentxx.client.tool` 上的 {"tool":"…","displayName":"…"}
+    Json data = Json::object();
+    data["tool"]        = std::string{toolName};
+    data["displayName"] = title;
+    const std::string dataJson = data.dump();
+    {
+        auto it = uiContent_.entries().find(fullId);
+        if (it != uiContent_.entries().end()) {
+            it->second.type     = std::string{kClientUiSlotTool};
+            it->second.dataJson = dataJson;
+            it->second.rev += 1;
+        } else {
+            pluginxx::host::UiEntry entry;
+            entry.plugin   = std::string{kBuiltinRendererOwner};
+            entry.pluginId = std::string{kBuiltinRendererOwner};
+            entry.id       = fullId;
+            entry.type     = std::string{kClientUiSlotTool};
+            entry.dataJson = dataJson;
+            entry.seq      = uiContent_.nextEntrySeq();
+            uiContent_.entries().emplace(fullId, std::move(entry));
+        }
+    }
+
+    // 内容: 生成函数留空 (主程序在 client io 线程同步算), 变量按工具行约定声明
+    std::vector<std::string> deps = {
+        std::string{kClientUiVarToolName},
+        std::string{kClientUiVarToolArgs},
+        std::string{kClientUiVarToolResult},
+        std::string{kClientUiVarToolWidth},
+        std::string{kClientUiVarToolPart},
+        std::string{kClientUiVarToolState},
+    };
+    std::string depsJson = "[";
+    for (size_t i = 0; i < deps.size(); ++i) {
+        if (i > 0) {
+            depsJson += ',';
+        }
+        depsJson += '\"' + deps[i] + '\"';
+    }
+    depsJson += ']';
+    {
+        auto it = uiContent_.contents().find(fullId);
+        if (it != uiContent_.contents().end()) {
+            it->second.slot  = std::string{kClientUiSlotTool};
+            it->second.title = title;
+            it->second.deps  = deps;
+            it->second.rev += 1;
+        } else {
+            pluginxx::host::UiContent entry;
+            entry.plugin   = std::string{kBuiltinRendererOwner};
+            entry.pluginId = std::string{kBuiltinRendererOwner};
+            entry.id       = std::string{toolName};
+            entry.fullId   = fullId;
+            entry.slot     = std::string{kClientUiSlotTool};
+            entry.title    = title;
+            entry.depsJson = depsJson;
+            entry.deps     = deps;
+            entry.seq      = uiContent_.nextContentSeq();
+            uiContent_.contents().emplace(fullId, std::move(entry));
+        }
+    }
+
+    builtinToolRows_[fullId] = std::move(content);
+    publishUiContentSnapshot();
+    // 接成按工具名的渲染器 (内容同步算, 不投递到插件线程)
+    syncToolContentRenderer(nullptr, fullId);
+    if (uiAdapter_) {
+        if (const auto* registered = uiContent_.findContent(fullId)) {
+            uiAdapter_->onContentRegistered(registered->slot, registered->id, registered->title);
+        }
+    }
+    return PLUGINXX_RESULT_OK;
+}
+
 void ClientPluginManager::syncToolContentRenderer(
     ClientPluginInstance* inst,
     std::string_view      fullId
 ) {
-    if (!inst || fullId.empty()) {
+    if (fullId.empty()) {
         return;
     }
     auto* content = uiContent_.findContent(fullId);
-    if (content == nullptr || content->spec.generate == nullptr
-        || content->slot != kClientUiSlotTool) {
+    if (content == nullptr || content->slot != kClientUiSlotTool) {
+        removeToolContentRenderer(fullId);
+        return;
+    }
+    // `inst` 为空 = 主程序内置工具行 (无实例与租约, 内容由 `builtinToolRows_` 同步算)
+    const bool builtin = (inst == nullptr);
+    const auto rowIt   = builtinToolRows_.find(fullId);
+    const bool hasRow  = builtin && rowIt != builtinToolRows_.end();
+    if (!hasRow && content->spec.generate == nullptr) {
         removeToolContentRenderer(fullId);
         return;
     }
@@ -887,9 +1008,8 @@ void ClientPluginManager::syncToolContentRenderer(
     }
     if (toolName.empty()) {
         XX_LOGW(
-            "[client_plugin] `{}` tool content `{}` ignored: its declaration item needs "
+            "[client_plugin] tool content `{}` ignored: its declaration item needs "
             "{{\"tool\":\"…\"}}",
-            inst->name,
             content->id
         );
         return;
@@ -903,34 +1023,34 @@ void ClientPluginManager::syncToolContentRenderer(
         bound->lease->alive.store(false, std::memory_order_release);
     }
     bound->manager         = this;
-    bound->plugin          = inst->name;
+    bound->plugin          = builtin ? std::string{kBuiltinRendererOwner} : inst->name;
     bound->toolName        = toolName;
     bound->displayName     = displayName.empty() ? toolName : displayName;
     bound->deps            = content->deps;
-    bound->generate        = content->spec.generate;
-    bound->generateUd      = content->spec.user_data;
-    bound->hostView        = inst->hostView();
-    bound->lease           = std::make_shared<ClientToolRendererLease>();
-    bound->lease->instance = inst->self;
+    bound->row             = hasRow ? rowIt->second : ClientToolRowContent{};
+    bound->generate        = builtin ? nullptr : content->spec.generate;
+    bound->generateUd      = builtin ? nullptr : content->spec.user_data;
+    bound->hostView        = builtin ? nullptr : inst->hostView();
+    bound->lease           = builtin ? nullptr : std::make_shared<ClientToolRendererLease>();
+    if (bound->lease) {
+        bound->lease->instance = inst->self;
+    }
     bound->active.store(true, std::memory_order_release);
 
     ClientToolRenderReg reg;
-    reg.plugin      = inst->name;
+    reg.plugin      = bound->plugin;
     reg.toolName    = toolName;
     reg.displayName = bound->displayName;
-    reg.collapsedFn = &ClientPluginManager::toolContentRenderCollapsed;
-    reg.expandedFn  = &ClientPluginManager::toolContentRenderExpanded;
-    reg.userData    = bound.get();
-    reg.lease       = bound->lease;
+    reg.binding     = bound;
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
         auto                        cur      = std::make_shared<ClientUiRegistry>(*uiRegistry_);
         bool                        replaced = false;
         for (auto& r : cur->toolRenderers) {
-            if (r.plugin == inst->name && r.toolName == toolName) {
-                // 后注册的生效 (与回调式注册项同一规则)
-                if (r.lease) {
-                    r.lease->alive.store(false, std::memory_order_release);
+            if (r.plugin == reg.plugin && r.toolName == toolName) {
+                // 后注册的生效
+                if (r.binding && r.binding->lease) {
+                    r.binding->lease->alive.store(false, std::memory_order_release);
                 }
                 r        = reg;
                 replaced = true;
@@ -956,14 +1076,14 @@ void ClientPluginManager::removeToolContentRenderer(std::string_view fullId) {
     if (binding->lease) {
         binding->lease->alive.store(false, std::memory_order_release);
     }
-    void* const raw = binding.get();
+    void* const                 raw = binding.get();
     std::lock_guard<std::mutex> lock(uiMutex_);
     auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
     cur->toolRenderers.erase(
         std::remove_if(
             cur->toolRenderers.begin(),
             cur->toolRenderers.end(),
-            [raw](const ClientToolRenderReg& r) { return r.userData == raw; }
+            [raw](const ClientToolRenderReg& r) { return r.binding.get() == raw; }
         ),
         cur->toolRenderers.end()
     );
@@ -979,24 +1099,6 @@ std::string ClientPluginManager::toolContentContextJson(
         ctx[dep] = parseSafe(clientUiVariableJson(dep, &scope));
     }
     return ctx.dump();
-}
-
-int32_t PLUGINXX_CALL ClientPluginManager::toolContentRenderCollapsed(
-    void*                        user_data,
-    const ClientToolRenderInput* input,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*              error_out
-) {
-    return toolContentRender(user_data, input, notify, error_out, /*summary=*/true);
-}
-
-int32_t PLUGINXX_CALL ClientPluginManager::toolContentRenderExpanded(
-    void*                        user_data,
-    const ClientToolRenderInput* input,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*              error_out
-) {
-    return toolContentRender(user_data, input, notify, error_out, /*summary=*/false);
 }
 
 int32_t ClientPluginManager::toolContentRender(
@@ -1086,12 +1188,9 @@ void PLUGINXX_CALL ClientPluginManager::toolContentDone(
         } else if (doc.is_array()) {
             text = doc.dump();
         } else if (doc.is_object()) {
-            for (const char* key : {"blocks", "items"}) {
-                const auto it = doc.find(key);
-                if (it != doc.end() && it->is_array()) {
-                    text = it->dump();
-                    break;
-                }
+            const auto it = doc.find("blocks");
+            if (it != doc.end() && it->is_array()) {
+                text = it->dump();
             }
         }
     }

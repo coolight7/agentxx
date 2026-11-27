@@ -17,7 +17,7 @@
 ///        b. 运行时装饰 (update_tool_decor, 订阅 `agentxx.client.delta` 频道): 仅覆盖本进程实时
 ///           调用, 用于展开头显示语义名 ("Plan")
 ///        TUI 按通用渲染器展示, 无任何 plan 特化代码;
-///     ② Info 栏段落渲染最近一次规划概览
+///     ② Info 栏段落 (槽位 `info` 上的内容) 渲染最近一次规划概览
 #include "agentxx/plugin/api/agentxx_broadcast_ids.h"
 #include "agentxx_planning_plugin.h"
 #include "utilxx_base/json.h"
@@ -676,8 +676,9 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_destroy(
 ///      没有 update_tool_decor 推送, 依赖这份内容才能特化渲染
 ///   ② 运行时装饰 (update_tool_decor): 订阅 EVT_DELTA, 工具行插入/更新时
 ///      推送装饰 (显示名 + 折叠内容 + 展开体 items)
-/// - Info 栏段落 "Plan" (懒注册): EVT_PLUGIN_DATA planning 事件驱动,
-///   展示最近一次规划概览; client_attached 重发快照自愈
+/// - Info 栏段落 "Plan" (槽位 `info` 上的内容, 在 client start 事务里注册):
+///   EVT_PLUGIN_DATA planning 事件驱动, 展示最近一次规划概览;
+///   client_attached 重发快照自愈
 /// - EVT_SESSION_SWITCH → 清理装饰与段落
 /// =====================================================================
 
@@ -690,8 +691,8 @@ struct ClientCtx : agentxx::plugin::ClientPluginBase {
     /// CLI 等不支持时成员 NULL 降级: planning 仍推送内容, 只是按钮不可点)
     const AgentxxClientUiIface* ui = nullptr;
     std::string                 last_plan_json;    ///< 最近一次规划内容缓存 (Info 段落)
-    /// 声明式内容 (agentxx.client.info 上的 Plan) 是否已登记
-    bool content_registered = false;
+    /// Info 栏段落 "Plan" (槽位 `info` 上的内容; 主程序不支持时保持 NULL)
+    std::shared_ptr<agentxx::plugin::Content> section;
     /// 进行中 planning 工具调用的参数缓存 (tool_call_id → arguments JSON;
     /// 工具行插入时缓存, 完成后摘除)
     std::map<std::string, std::string> pending_args;
@@ -995,92 +996,11 @@ static void clearToolDecors(ClientCtx& ctx) {
     agentxx::plugin::clientUpdateToolDecor(ctx.host, ctx.ui, {}, {});
 }
 
-/// 声明式内容 (agentxx.client.info 上的 Plan): 用最近缓存生成与段落同一份 items
-///
-/// 与 [refreshPlanSection] 同源 (都走 [buildPlanItems]), 所以两套写法显示一致;
-/// 差别只在“谁来算”: 内容路径由主程序在需要时问一次。
-static void PLUGINXX_CALL generatePlanContent(
-    const PluginxxHost*           /*host*/,
-    const PluginxxStringView*     /*ctx_json*/,
-    void*                         ud,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               /*error_out*/
-) {
-    auto* ctx = static_cast<ClientCtx*>(ud);
-    if (ctx == nullptr || notify == nullptr || notify->done == nullptr) {
-        return;
-    }
-    utilxx_base::Json items = utilxx_base::Json::array();
-    if (!ctx->last_plan_json.empty()) {
-        utilxx_base::Json plan;
-        try {
-            plan = utilxx_base::Json::parse(ctx->last_plan_json);
-        } catch (...) {
-            plan = utilxx_base::Json::object();
-        }
-        if (plan.is_object()) {
-            items = buildPlanItems(plan, /*graphAsButton=*/true);
-        }
-    }
-    utilxx_base::Json doc  = utilxx_base::Json::object();
-    doc["items"]           = items;
-    utilxx_base::Json body = utilxx_base::Json::object();
-    body["json"]           = doc;
-    const std::string        payload = body.dump();
-    const PluginxxStringView view{payload.data(), payload.size()};
-    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
-}
-
-/// 懒注册 Info 栏段落 (主程序不支持 info_section 时保持 NULL 静默降级)
-///
-/// 注册是表调用: 这里**提交即返回**, 句柄受理后写回实例槽位 (见
-/// `ClientPluginBase::ensureInfoSection`) —— 插件执行线程上不等 client io 线程。
-static void ensureSection(ClientCtx& ctx) {
-    if (!ctx.ui || !ctx.host) {
-        return;
-    }
-    if (ctx.ui->register_info_section) {
-        ctx.ensureInfoSection(kSectionId, R"_({"title":"Plan"})_");
-    }
-    // 声明式内容: 同一 id 的段落内容 (新写法; 旧段落继续推, 主程序优先画内容)
-    if (!ctx.content_registered && ctx.ui->register_ui_item && ctx.ui->register_ui_content) {
-        const auto idSv = agentxx::plugin::PluginStringView::fromCstr(kSectionId);
-        const auto slotSv = agentxx::plugin::PluginStringView::fromCstr("info");
-        constexpr std::string_view kProps = R"_({"title":"Plan"})_";
-        const auto                 propsSv
-            = agentxx::plugin::PluginStringView::from(kProps.data(), kProps.size());
-
-        PluginxxUiEntrySpec entry{};
-        entry.version     = 1;
-        entry.struct_size = sizeof(PluginxxUiEntrySpec);
-        entry.item_id     = idSv;
-        entry.type        = slotSv;
-        entry.data_json   = propsSv;
-        ctx.ui->register_ui_item(ctx.host, &entry, nullptr, nullptr, nullptr);
-
-        PluginxxUiContentSpec content{};
-        content.version     = 1;
-        content.struct_size = sizeof(PluginxxUiContentSpec);
-        content.id          = idSv;
-        content.slot        = slotSv;
-        content.title       = propsSv;
-        content.generate    = &generatePlanContent;
-        content.user_data   = &ctx;
-        ctx.ui->register_ui_content(ctx.host, &content, nullptr, nullptr, nullptr);
-        ctx.content_registered = true;
-    }
-}
-
-/// 注销 Info 段落并清空缓存 (回到 "无规划" 态: 无 plan 时侧栏不显示空段落)
+/// 清空 Info 段落 (回到 "无规划" 态: 推空文档后界面不画这一段)
 static void clearSection(ClientCtx& ctx) {
-    ctx.clearInfoSection(kSectionId);
     ctx.last_plan_json.clear();
-    // 内容路径同一份数据: 让主程序按"无规划"重新生成一次 (两边写同一个内容, 不能只清一边)
-    if (ctx.content_registered && ctx.ui && ctx.host && ctx.ui->update_ui_slot) {
-        const auto        slotSv = agentxx::plugin::PluginStringView::fromCstr("info");
-        const std::string ids    = fmt::format(R"(["{}"])", kSectionId);
-        const auto        idsSv  = agentxx::plugin::PluginStringView::from(ids.data(), ids.size());
-        ctx.ui->update_ui_slot(ctx.host, &slotSv, &idsSv, nullptr, nullptr, nullptr);
+    if (ctx.section) {
+        ctx.section->publish(R"_({"blocks":[]})_");
     }
 }
 
@@ -1088,13 +1008,9 @@ static void clearSection(ClientCtx& ctx) {
 ///
 /// - Todo: title + 各 todo 行 (icon+content)
 /// - Note: title + 内容
+/// - 内容为空时推空文档 (界面跳过空段落, 不显示孤立标题)
 static void refreshPlanSection(ClientCtx& ctx) {
-    if (!ctx.host || !ctx.ui || !ctx.ui->update_info_section) {
-        return;
-    }
-    ensureSection(ctx);
-    AgentxxInfoSection* section = ctx.infoSection(kSectionId);
-    if (!section || ctx.last_plan_json.empty()) {
+    if (!ctx.section || ctx.last_plan_json.empty()) {
         return;
     }
     utilxx_base::Json plan;
@@ -1107,23 +1023,11 @@ static void refreshPlanSection(ClientCtx& ctx) {
         return;
     }
 
-    // 段落 items 与工具消息展开体同源 (同一构建函数), 仅 Graph 表现形式不同:
+    // 段落 blocks 与工具消息展开体同源 (同一构建函数), 仅 Graph 表现形式不同:
     // 段落用可点按钮 (点击经 action_id 派发弹窗), 消息展开体用内联状态图
-    const auto items = buildPlanItems(plan, /*graphAsButton=*/true);
-    if (items.empty()) {
-        return; // 内容为空不推送, 避免出现只有标题的空段落
-    }
     utilxx_base::Json payload = utilxx_base::Json::object();
-    payload["items"]          = items;
-    const std::string json    = payload.dump();
-    agentxx::plugin::clientUpdateInfoSection(ctx.host, ctx.ui, section, json);
-    // 声明式内容同步刷新: 与旧段落写同一份内容 (主程序画的是它; 老客户端没有这个成员)
-    if (ctx.content_registered && ctx.ui->update_ui_slot) {
-        const auto        slotSv = agentxx::plugin::PluginStringView::fromCstr("info");
-        const std::string ids    = fmt::format(R"(["{}"])", kSectionId);
-        const auto        idsSv  = agentxx::plugin::PluginStringView::from(ids.data(), ids.size());
-        ctx.ui->update_ui_slot(ctx.host, &slotSv, &idsSv, nullptr, nullptr, nullptr);
-    }
+    payload["blocks"]         = buildPlanItems(plan, /*graphAsButton=*/true);
+    ctx.section->publish(payload.dump());
 }
 
 /// 规划频道 (`plugin.agentxx_planning.planning`): 对端发布的规划 JSON
@@ -1231,13 +1135,43 @@ extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL agentxx_client_plugin_get_info(
     );
 }
 
-/// 注册工具行内容 (按 tool_name 注册)
+/// 注册本插件画的两处界面内容 (协程, 各要等两条表调用)
 ///
-/// 由工具参数/结果直接推导折叠内容与展开体, **重启恢复/重连/切换会话后由 Sync 回放
-/// 的历史工具消息同样特化渲染** (这些消息没有 EVT_DELTA 装饰推送)。
+/// - 工具行内容 (按 tool_name 注册): 由工具参数/结果直接推导折叠内容与展开体,
+///   **重启恢复/重连/切换会话后由 Sync 回放的历史工具消息同样特化渲染**
+///   (这些消息没有 EVT_DELTA 装饰推送)
+/// - Info 段落内容 (槽位 `info`): 之后由 [refreshPlanSection] 推文档
+///
 /// 主程序无消息渲染面 (cli) 或未加载 ui 表时拿到空句柄 → 仅记日志,
-/// 工具行保持默认展示, 不影响其他功能。
-static asio::awaitable<void> registerPlanningToolRow(ClientCtx& ctx) {
+/// 这两处保持主程序的默认展示, 不影响其他功能。
+static asio::awaitable<void> registerPlanningUi(ClientCtx& ctx) {
+    // Info 段落先注册: 规划事件到达时通常已经就绪
+    if (ctx.ui) {
+        utilxx_base::Json data = utilxx_base::Json::object();
+        data["title"]          = kDisplayName;
+        ctx.section            = co_await agentxx::plugin::clientRegisterContentAsync(
+            ctx,
+            agentxx::plugin::ContentSpec{
+                .slot  = "info",
+                .id    = kSectionId,
+                .title = kDisplayName,
+                .data  = data,
+            }
+        );
+        if (!ctx.section) {
+            if (ctx.host && ctx.iface.log && ctx.iface.log->log) {
+                auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
+                    "agentxx_planning client: register info content failed "
+                    "(sidebar shows no plan)"
+                );
+                ctx.iface.log->log(ctx.host, 3, &warnSv);
+            }
+        } else {
+            // 注册前收到的规划已经放在缓存里, 这里补推一次
+            refreshPlanSection(ctx);
+        }
+    }
+
     auto row = co_await agentxx::plugin::clientRegisterToolRowAsync(
         ctx,
         kNamePlanning,
@@ -1271,14 +1205,10 @@ static asio::awaitable<void> registerPlanningToolRow(ClientCtx& ctx) {
 }
 
 /// client 侧注册事务 (start 的实际内容): 动作绑定 + client 事件订阅。
-/// 工具行内容是异步注册 (要等两条表调用), 由 create 那一侧另起一条协程, 见
-/// [registerPlanningToolRow]。
+/// 界面内容 (Info 段落 + 工具行) 是异步注册 (各要等两条表调用),
+/// 由 create 那一侧另起一条协程, 见 [registerPlanningUi]。
 static int planningClientSetup(ClientCtx* ctx) {
     const PluginxxHost* host = ctx->host;
-
-    // Info 段落先提交注册 (提交即返回): 句柄到了由 refreshPlanSection 使用,
-    // 规划事件到达时通常已经就绪
-    ensureSection(*ctx);
 
     // 通用交互绑定 (方案 A fallback: target_id="" 本实例默认绑定, 一次永久生效):
     // - Info 段 / decor 按钮均以 action_id="planning.open_graph" 声明,
@@ -1406,7 +1336,7 @@ extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL agentxx_client_plugin_create(
                 return;
             }
             c.spawn([later](ClientCtx& inst, pluginxx::OpCtl&) -> asio::awaitable<void> {
-                co_await registerPlanningToolRow(inst);
+                co_await registerPlanningUi(inst);
                 later.ok();
                 co_return;
             });

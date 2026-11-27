@@ -191,7 +191,7 @@ void renderItems(
 /// 渲染单个组件项 (追加到 out.rows)
 void renderItem(const pluginxx::ui::Item& item, const UiRenderCtx& ctx, UiRenderResult& out);
 
-/// 渲染描述 JSON (块数组 / `{"blocks":[…]}` / `{"items":[…]}` / `{title,subtitle,blocks}`)
+/// 渲染描述 JSON (块数组 / `{"blocks":[…]}` / `{title,subtitle,blocks}`)
 /// - 内部完成解析 + 按本客户端能力适配 (主程序不必自己适配)
 void renderItemJson(const utilxx_base::Json& json, const UiRenderCtx& ctx, UiRenderResult& out);
 

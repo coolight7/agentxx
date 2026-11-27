@@ -5,10 +5,10 @@ entry: libagentxx_codegraph.so
 depends:
 # ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧) ----
 # - agentxx.agent.core: 工具/通知/事件核心接口 (= api_version 核心, agent 主程序恒支持)
-# - agentxx.client.info_section: 可选 —— CLI 无 Info 栏时注册失败降级 (仅数据不渲染)
+# - client 侧 Info 栏是 `agentxx.client.info` 槽位上的界面内容: CLI 没有 Info 栏时
+#   注册失败降级 (仅数据不渲染)
 interfaces:
   require:
     - agentxx.agent.core
     - agentxx.agent.prompt
-  optional:
-    - agentxx.client.info_section
+  optional: []

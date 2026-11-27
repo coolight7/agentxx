@@ -3,7 +3,7 @@
 /// 侧边栏「机器人」栏的渲染 (快照 → 界面描述层组件)
 ///
 /// 只做组件拼装, 不碰主程序接口: client 插件入口 (chatbot_client.cpp) 解析出
-/// [PanelSnapshot] 后调 [panelItemsOf], 再把结果提交给 `update_panel`。
+/// [PanelSnapshot] 后调 [panelItemsOf], 再把结果当成面板内容推给主程序。
 /// 因此本文件可以编进测试直接断言组件树 (见 `chatbot_core` 模块)。
 #include "chatbot_panel.h"
 

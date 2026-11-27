@@ -169,7 +169,7 @@
   (显示名在声明项注册时确定, 折叠头取内容纯文本首行、展开体取 `blocks`, 见
   [plugins.md](plugins.md) 的"工具特化渲染架构"); ` · ` 由本组件统一加, 内容只给正文。
   折叠内容按 `失败结果首行 > 自定义折叠内容 > 未就绪留空 > 默认 (运行中提示 / 结果首行)`
-  选择; 展开体同理 (失败 → 默认参数+结果, 自定义 items → 未就绪留空 → 默认)。
+  选择; 展开体同理 (失败 → 默认参数+结果, 自定义块 → 未就绪留空 → 默认)。
 
 弹窗统一用 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h) 的面性风格外框
 (圆角 + 标题栏/内容区/底栏分区, 不画边框与分割线); 文案统一走
@@ -1203,4 +1203,4 @@ UTF-8 字节按旧代码页解码 —— 中文整屏乱码, 且一个中文字�
 | 状态栏/输入栏/消息列表的按钮点击散落在全局事件处理里 | `agent_tui.cpp` | 各组件自行处理自身区域内点击 (回调在加载时注入) |
 | 上下文弹窗点击消息, 展开/折叠的是"别的消息" (消息多、滚动后尤其明显) | `ContextOverlay` 折叠头命中框 (子项元素内的 `reflect`: 视口外子项残留测量大框) | 改为按 `Scrollable::visibleBoxes()` + 子项->消息下标映射命中 (回归测试见 `agentxx_test tui_context_overlay`) |
 | 设置条目变多或终端过矮时, 末尾条目被裁掉 (看不到也点不到); 之前靠压缩条目间距回避 | `SettingsOverlay` | 条目改为分组显示 (标题只占一行), 内容区限高 + `vscroll_indicator \| yframe` 滚动 (选中项带 `focus` 自动滚入视口, 滚轮 = 上/下移动选中项); 回归测试见 `agentxx_test tui_settings` |
-| 工具消息刚出现时会闪一下非特化内容 (占位提示显示 `[工具] Read · 正在调用工具...`, 工具消息却先显示 `agentxx_filesystem_read · {"path":...}`, 下一帧才"变回来"); 结果到达 (输入特征变化) 时再闪一次原始结果首行 | 折叠头/占位行的工具内容查询 (`queryToolCollapsed` / `queryToolExpanded` + `renderClientToolCollapsed` / `renderClientToolExpanded`) | 两部分回调只在 client io 线程执行, 结果写入语义缓存前是 `pending` 帧。该帧不画 ` · ` (折叠只画名字)、展开体留空, **不拿默认内容顶替**; 同一调用同一部分的上一份内容在输入特征变化的那一帧继续用 —— 因此不会出现"比上一帧信息更少"或"内容消失一帧再回来"; 见 plugins.md §工具特化渲染架构第 6 条; 回归测试见 `agentxx_test tui_tool_header` 的 `testTuiToolHeaderPendingContent` |
+| 工具消息刚出现时会闪一下非特化内容 (占位提示显示 `[工具] Read · 正在调用工具...`, 工具消息却先显示 `agentxx_filesystem_read · {"path":...}`, 下一帧才"变回来"); 结果到达 (输入特征变化) 时再闪一次原始结果首行 | 折叠头/占位行的工具内容查询 (`queryToolCollapsed` / `queryToolExpanded` + `renderClientToolCollapsed` / `renderClientToolExpanded`) | 两部分内容只在 client io 线程生成, 结果写入语义缓存前是 `pending` 帧。该帧不画 ` · ` (折叠只画名字)、展开体留空, **不拿默认内容顶替**; 同一调用同一部分的上一份内容在输入特征变化的那一帧继续用 —— 因此不会出现"比上一帧信息更少"或"内容消失一帧再回来"; 见 plugins.md §工具特化渲染架构第 6 条; 回归测试见 `agentxx_test tui_tool_header` 的 `testTuiToolHeaderPendingContent` |

@@ -529,7 +529,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 降级: 未知 kind 渲染 `fallback`；行式前端 (CLI/日志) 用描述层的 `plainText` 输出纯文本
   - 插件侧用描述层构建器与 kit 组装（`agentxx::ui::build` / `agentxx::ui::kit::…`，
     扩展 kit 在产品 [agentxx_ui_kit.g.h](/agent/lib/include/agentxx/plugin/api/agentxx_ui_kit.g.h) 里），
-    经 `ClientPluginBase::setPanelItems/setInfoSectionItems/showItemsOverlay/setToolDecor` 直接提交;
+    经 `Content::publish` (内容) 与 `showItemsOverlay`/`setToolDecor` 提交;
     能力协商用客户端状态快照的 `ui` 段（`uiCapabilities()` / `supportsBlock()`）
 - **插件表单**: 面板/Info 段落/overlay 内的控件由**主程序维护状态** (值/勾选/选中/焦点/校验),
   插件不进入 UI 线程; 结果经动作通道回传 (`__submit` + `{"values":{...}}` / `__cancel`),
@@ -703,7 +703,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     插件 Info 段落排在它之后; 数据随 `WireContextStats` 下发 (服务端每次推送携带当前
     累计值, 客户端覆盖显示, 与状态栏的"上下文占用"不是同一个量 —— 后者随压缩回落),
     服务端尚未推送过用量时显示"( 无数据 )"; 详见 [tui.md](tui.md) §2.7
-  - 插件 Info 栏段落扩展: client 插件可经 register_info_section 向侧边栏
+  - 插件 Info 栏段落扩展: client 插件可在 `info` 槽位注册内容向侧边栏
     Info tab 注入段落 (标题 + 组件项, 与面板同一套描述层), 渲染在
     Append 组件列表之后; TUI 每帧从 client 插件注册表快照读取, 无需缓存
 - **TUI 渲染模块化**: 将消息列表、侧边栏、弹窗、编辑工具渲染拆分到独立文件
@@ -2451,7 +2451,7 @@ agent/
 │
 ├── js/                           # 给 JS 插件随目录分发的脚本
 │   ├── agentxx_ui_kit.js         # agentxx 扩展 kit 的 JS 产物 (全局 pluginxx.ui.kit)
-│   └── README.md                 # 用法与现状 (JS 桥暂无界面注册入口)
+│   └── README.md                 # 用法与现状 (JS 侧界面入口与 kit 用法)
 │
 └── script/                       # 编译/测试脚本
     ├── gen_ui_kit.ps1            # 重新生成界面扩展 kit (改 schema/ 后跑)

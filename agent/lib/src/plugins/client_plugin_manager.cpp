@@ -50,30 +50,6 @@
 /// 可执行目录 helper
 using agentxx::plugin::getExecutableDirPath;
 
-/// 状态栏项主程序句柄实现 (全局作用域, 与
-/// [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h)
-/// 的 C 不透明类型对应 —— vtable 函数签名中的 AgentxxStatusItem 即此类型,
-/// 不能在命名空间内另行定义)
-struct AgentxxStatusItem {
-    agentxx::plugin::ClientPluginInstance* inst = nullptr;
-    std::string                            id;
-    std::string                            plugin;
-};
-
-/// 面板主程序句柄实现
-struct AgentxxPanel {
-    agentxx::plugin::ClientPluginInstance* inst = nullptr;
-    std::string                            id;
-    std::string                            plugin;
-};
-
-/// Info 栏段落主程序句柄实现
-struct AgentxxInfoSection {
-    agentxx::plugin::ClientPluginInstance* inst = nullptr;
-    std::string                            id;
-    std::string                            plugin;
-};
-
 /// 全局快捷键主程序句柄实现
 struct AgentxxKeybind {
     agentxx::plugin::ClientPluginInstance* inst = nullptr;
@@ -329,9 +305,6 @@ ClientPluginInstance::~ClientPluginInstance() {
         NativeLoader::close(dlHandle);
         dlHandle = nullptr;
     }
-    statusItemHandles.clear();
-    panelHandles.clear();
-    infoSectionHandles.clear();
 }
 
 // =====================================================================
@@ -931,15 +904,6 @@ std::vector<ClientPluginManager::PluginListView> ClientPluginManager::list() con
         v.optionalDepends    = inst->optionalDepends;
         v.requiredInterfaces = inst->interfaces.require;
         v.optionalInterfaces = inst->interfaces.optional;
-        for (const auto& s : inst->statusItemRegs) {
-            v.statusItems.push_back(s.id);
-        }
-        for (const auto& p : inst->panelRegs) {
-            v.panels.push_back(p.id);
-        }
-        for (const auto& s : inst->infoSectionRegs) {
-            v.infoSections.push_back(s.id);
-        }
         for (const auto& c : inst->commandRegs) {
             v.commands.push_back(c.name);
         }
@@ -1282,22 +1246,23 @@ void ClientPluginManager::performToolRender(
         snapshot = uiRegistry_;
     }
     // 快照强引用保活: hit 指向快照内的注册记录, 后续插件回调期间不得失效
-    // 查找顺序与 [renderClientToolCollapsed/Expanded] 一致: 插件注册项优先,
-    // 未命中再查主程序内置项
+    // 查找顺序与 [renderClientToolCollapsed/Expanded] 一致: 插件内容优先,
+    // 未命中再取主程序内置工具行
     const bool                 wantCollapsedFlag = (req.part == ClientToolRenderPart::Collapsed);
-    const ClientToolRenderReg* hit           = nullptr;
-    const auto                 hasFn         = [wantCollapsedFlag](const ClientToolRenderReg& r) {
-        return wantCollapsedFlag ? (r.collapsedFn != nullptr) : (r.expandedFn != nullptr);
+    const ClientToolRenderReg* hit              = nullptr;
+    const auto                 usable           = [wantCollapsedFlag](const ClientToolRenderReg& r) {
+        return r.binding != nullptr
+               && (wantCollapsedFlag ? r.binding->hasSummary() : r.binding->hasBody());
     };
     for (const auto& r : snapshot->toolRenderers) {
-        if (r.toolName == req.toolName && hasFn(r)) {
+        if (r.toolName == req.toolName && usable(r) && r.binding->generate != nullptr) {
             hit = &r;
             break;
         }
     }
     if (!hit) {
-        for (const auto& r : snapshot->builtinToolRenderers) {
-            if (r.toolName == req.toolName && hasFn(r)) {
+        for (const auto& r : snapshot->toolRenderers) {
+            if (r.toolName == req.toolName && usable(r)) {
                 hit = &r;
                 break;
             }
@@ -1309,13 +1274,16 @@ void ClientPluginManager::performToolRender(
     }
     entry.plugin = hit->plugin;
 
+    // 插件内容才有实例与租约; 内置工具行归主程序自己, 不随插件禁用/卸载失效
+    const bool isPluginContent = (hit->binding->generate != nullptr);
     std::shared_ptr<ClientPluginInstance> owner;
-    if (!hit->builtin) {
-        if (!hit->lease || !hit->lease->alive.load(std::memory_order_acquire)) {
+    if (isPluginContent) {
+        if (!hit->binding->lease
+            || !hit->binding->lease->alive.load(std::memory_order_acquire)) {
             storeUnmatched();
             return;
         }
-        owner = hit->lease->instance.lock();
+        owner = hit->binding->lease->instance.lock();
         if (!owner || !owner->enabled || !owner->lifetime || !owner->lifetime->acceptsOperations()) {
             storeUnmatched();
             return;
@@ -1340,10 +1308,11 @@ void ClientPluginManager::performToolRender(
 
     /// 实例仍可执行 (租约有效 + 启用中 + 生命周期允许)
     const auto ownerReady = [&hit, &owner]() {
-        return hit->lease && hit->lease->alive.load(std::memory_order_acquire) && owner
+        return hit->binding && hit->binding->lease
+               && hit->binding->lease->alive.load(std::memory_order_acquire) && owner
                && owner->enabled && owner->lifetime && owner->lifetime->acceptsOperations();
     };
-    if (!hit->builtin && !ownerReady()) {
+    if (isPluginContent && !ownerReady()) {
         storeUnmatched();
         return;
     }
@@ -1383,43 +1352,35 @@ void ClientPluginManager::performToolRender(
     );
     auto       notify = slot->notify();
     ReplySlot* raw    = slot.release();
-    const auto cb     = wantCollapsed ? hit->collapsedFn : hit->expandedFn;
 
-    if (hit->builtin) {
-        // 主程序内置渲染器: 进程生命周期函数 (主程序自身实现), 无插件实例/租约,
-        // 不经插件禁用/卸载路径, 直接在 io 线程执行
-        PluginxxString err{nullptr, 0};
-        int32_t        rc = AGENTXX_RESULT_ERR_INTERNAL;
+    // 主程序内置工具行: 内容当场在 io 线程算完 (不跑插件代码、不投递)
+    if (!isPluginContent) {
+        const ClientToolContentBinding* binding = hit->binding.get();
+        std::string                     text;
         try {
-            rc = cb(hit->userData, &input, &notify, &err);
-        } catch (...) {
-            rc = AGENTXX_RESULT_ERR_INTERNAL;
-        }
-        if (err.data) {
-            XX_LOGW(
-                "[client_plugin] tool renderer `{}` not accepted: {}",
-                toolName,
-                std::string{err.data, static_cast<size_t>(err.size)}
-            );
-            if (owner) {
-                agentxx::plugin::PluginString::free(owner->hostView(), &err);
+            const auto& fn = wantCollapsed ? binding->row.summary : binding->row.body;
+            if (fn) {
+                text = fn(input);
             }
+        } catch (const std::exception& e) {
+            XX_LOGW("[client_plugin] tool row `{}` threw: {}", toolName, e.what());
+        } catch (...) {
+            XX_LOGW("[client_plugin] tool row `{}` threw", toolName);
         }
-        if (rc != 0) {
-            ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
-        }
+        const PluginxxStringView view{text.data(), static_cast<uint64_t>(text.size())};
+        ReplySlot::onDone(raw, PLUGINXX_OPERATOR_OK, &view);
         return;
     }
 
-    // 插件渲染器: 回调投到插件执行器 (渲染回调是异步契约, 内容经 notify 交回)
+    // 插件内容: 生成函数投到插件执行器 (异步契约, 结果经 notify 交回)
     //
     // `hit` 指向当前注册表快照, 不能跨投递持有 (快照可能被替换释放):
-    // 只捕回调与它的 userData。
-    void*      renderUd = hit->userData;
-    const bool queued   = pluginxx::dispatchToPlugin(
+    // 只捕内容绑定 (shared_ptr 保证存活) 与回调入参。
+    auto       binding   = hit->binding;
+    const bool queued    = pluginxx::dispatchToPlugin(
         owner,
         "client tool render " + toolName,
-        [renderUd, cb, req, notify, owner, raw, toolCallId, toolName, wantCollapsed]() mutable {
+        [binding, req, notify, owner, raw, toolCallId, toolName, wantCollapsed]() mutable {
             ClientToolRenderInput view;
             view.toolCallId = toolCallId;
             view.toolName   = toolName;
@@ -1432,15 +1393,21 @@ void ClientPluginManager::performToolRender(
             PluginxxString err{nullptr, 0};
             int32_t        rc = AGENTXX_RESULT_ERR_INTERNAL;
             try {
-                rc = cb(renderUd, &view, &notify, &err);
+                rc = ClientPluginManager::toolContentRender(
+                    binding.get(),
+                    &view,
+                    &notify,
+                    &err,
+                    wantCollapsed
+                );
             } catch (const std::exception& e) {
-                XX_LOGW("[client_plugin] tool renderer `{}` threw: {}", toolName, e.what());
+                XX_LOGW("[client_plugin] tool content `{}` threw: {}", toolName, e.what());
             } catch (...) {
-                XX_LOGW("[client_plugin] tool renderer `{}` threw", toolName);
+                XX_LOGW("[client_plugin] tool content `{}` threw", toolName);
             }
             if (err.data) {
                 XX_LOGW(
-                    "[client_plugin] tool renderer `{}` not accepted: {}",
+                    "[client_plugin] tool content `{}` not accepted: {}",
                     toolName,
                     std::string{err.data, static_cast<size_t>(err.size)}
                 );
@@ -1448,7 +1415,7 @@ void ClientPluginManager::performToolRender(
                     agentxx::plugin::PluginString::free(hostView, &err);
                 }
             }
-            if (rc != 0) {
+            if (rc != PLUGINXX_RESULT_OK) {
                 // 未受理: 按“没有自定义内容”收尾
                 ReplySlot::onDone(raw, PLUGINXX_OPERATOR_FAILED, nullptr);
             }
@@ -1832,9 +1799,6 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
                 return item.plugin == inst->name;
             });
         };
-        drop(reg->statusItems);
-        drop(reg->panels);
-        drop(reg->infoSections);
         drop(reg->toolDecors);
         drop(reg->toolRenderers);
         drop(reg->actionBindings);
@@ -1847,23 +1811,8 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
         uiRegistry_ = std::move(reg);
     }
 
-    if (uiAdapter_) {
-        for (const auto& s : inst->statusItemRegs) {
-            uiAdapter_->onStatusItemRemoved(s.id);
-        }
-        for (const auto& p : inst->panelRegs) {
-            uiAdapter_->onPanelRemoved(p.id);
-        }
-        for (const auto& is : inst->infoSectionRegs) {
-            uiAdapter_->onInfoSectionRemoved(is.id);
-        }
-    }
-
     // 订阅句柄 (广播订阅) 由插件框架的注册表按归属回收: 禁用/卸载时
     // `removeChannelsOwnedBy` 与订阅句柄一并清掉, 这里不再逐个断链。
-    inst->statusItemRegs.clear();
-    inst->panelRegs.clear();
-    inst->infoSectionRegs.clear();
     inst->commandRegs.clear();
     inst->keybindRegs.clear();
     inst->toolDecorRegs.clear();
@@ -2039,280 +1988,6 @@ const void* PLUGINXX_CALL
         return &g_clientIfaceNet;
     }
     return nullptr;
-}
-
-// ---- 状态栏项 ----
-
-PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_status_item(
-    const PluginxxHost*       host,
-    const PluginxxStringView* id,
-    const PluginxxStringView* initial_json,
-    int32_t                   align,
-    int32_t                   order,
-    PluginxxOperatorCallback  cb,
-    void*                     ud,
-    PluginxxString*           error_out
-) {
-    if (!id || !id->data || id->size == 0) {
-        pluginxx::setTableOpError(error_out, "register_status_item: id is required");
-        return nullptr;
-    }
-    auto idCopy = copyView(*id);
-    auto json   = initial_json && initial_json->data
-                      ? copyView(*initial_json)
-                      : std::string{"{}"};
-    return asyncClientTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        "client.ui.register_status_item",
-        [idCopy = std::move(idCopy), json = std::move(json), align, order](
-            ClientPluginInstance* inst,
-            ClientPluginManager*  mgr
-        ) -> std::string {
-            return clientHandleResult(
-                static_cast<AgentxxStatusItem*>(
-                    mgr->registerStatusItem(inst, idCopy, json, align, order)
-                ),
-                "register_status_item"
-            );
-        }
-    );
-}
-
-PluginxxOperatorHandle* PLUGINXX_CALL xx_cupdate_status_item(
-    const PluginxxHost*       host,
-    AgentxxStatusItem*        item,
-    const PluginxxStringView* json,
-    PluginxxOperatorCallback  cb,
-    void*                     ud,
-    PluginxxString*           error_out
-) {
-    if (!item || !json || !json->data) {
-        pluginxx::setTableOpError(error_out, "update_status_item: item and json are required");
-        return nullptr;
-    }
-    auto jsonCopy = copyView(*json);
-    return asyncClientTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        "client.ui.update_status_item",
-        [item, jsonCopy = std::move(jsonCopy)](
-            ClientPluginInstance* inst,
-            ClientPluginManager*  mgr
-        ) -> std::string {
-            return clientStatusResult(
-                mgr->updateStatusItem(inst, item, jsonCopy),
-                "update_status_item"
-            );
-        }
-    );
-}
-
-PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_status_item(
-    const PluginxxHost*      host,
-    AgentxxStatusItem*       item,
-    PluginxxOperatorCallback cb,
-    void*                    ud,
-    PluginxxString*          error_out
-) {
-    if (!item) {
-        pluginxx::setTableOpError(error_out, "unregister_status_item: item is required");
-        return nullptr;
-    }
-    return asyncClientTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        "client.ui.unregister_status_item",
-        [item](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
-            mgr->unregisterStatusItem(inst, item);
-            return {};
-        }
-    );
-}
-
-// ---- 侧边栏面板 ----
-
-PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_panel(
-    const PluginxxHost*       host,
-    const PluginxxStringView* id,
-    const PluginxxStringView* props_json,
-    PluginxxOperatorCallback  cb,
-    void*                     ud,
-    PluginxxString*           error_out
-) {
-    if (!id || !id->data || id->size == 0) {
-        pluginxx::setTableOpError(error_out, "register_panel: id is required");
-        return nullptr;
-    }
-    auto idCopy  = copyView(*id);
-    auto props   = props_json && props_json->data
-                       ? copyView(*props_json)
-                       : std::string{"{}"};
-    return asyncClientTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        "client.ui.register_panel",
-        [idCopy = std::move(idCopy), props = std::move(props)](
-            ClientPluginInstance* inst,
-            ClientPluginManager*  mgr
-        ) -> std::string {
-            return clientHandleResult(
-                static_cast<AgentxxPanel*>(mgr->registerPanel(inst, idCopy, props)),
-                "register_panel"
-            );
-        }
-    );
-}
-
-PluginxxOperatorHandle* PLUGINXX_CALL xx_cupdate_panel(
-    const PluginxxHost*       host,
-    AgentxxPanel*             panel,
-    const PluginxxStringView* items_json,
-    PluginxxOperatorCallback  cb,
-    void*                     ud,
-    PluginxxString*           error_out
-) {
-    if (!panel || !items_json || !items_json->data) {
-        pluginxx::setTableOpError(error_out, "update_panel: panel and items are required");
-        return nullptr;
-    }
-    auto items = copyView(*items_json);
-    return asyncClientTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        "client.ui.update_panel",
-        [panel, items = std::move(items)](
-            ClientPluginInstance* inst,
-            ClientPluginManager*  mgr
-        ) -> std::string {
-            return clientStatusResult(mgr->updatePanel(inst, panel, items), "update_panel");
-        }
-    );
-}
-
-PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_panel(
-    const PluginxxHost*      host,
-    AgentxxPanel*            panel,
-    PluginxxOperatorCallback cb,
-    void*                    ud,
-    PluginxxString*          error_out
-) {
-    if (!panel) {
-        pluginxx::setTableOpError(error_out, "unregister_panel: panel is required");
-        return nullptr;
-    }
-    return asyncClientTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        "client.ui.unregister_panel",
-        [panel](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
-            mgr->unregisterPanel(inst, panel);
-            return {};
-        }
-    );
-}
-
-// ---- Info 栏段落 ----
-
-PluginxxOperatorHandle* PLUGINXX_CALL xx_cregister_info_section(
-    const PluginxxHost*       host,
-    const PluginxxStringView* id,
-    const PluginxxStringView* props_json,
-    PluginxxOperatorCallback  cb,
-    void*                     ud,
-    PluginxxString*           error_out
-) {
-    if (!id || !id->data || id->size == 0) {
-        pluginxx::setTableOpError(error_out, "register_info_section: id is required");
-        return nullptr;
-    }
-    auto idCopy = copyView(*id);
-    auto props  = props_json && props_json->data
-                      ? copyView(*props_json)
-                      : std::string{"{}"};
-    return asyncClientTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        "client.ui.register_info_section",
-        [idCopy = std::move(idCopy), props = std::move(props)](
-            ClientPluginInstance* inst,
-            ClientPluginManager*  mgr
-        ) -> std::string {
-            return clientHandleResult(
-                static_cast<AgentxxInfoSection*>(mgr->registerInfoSection(inst, idCopy, props)),
-                "register_info_section"
-            );
-        }
-    );
-}
-
-PluginxxOperatorHandle* PLUGINXX_CALL xx_cupdate_info_section(
-    const PluginxxHost*       host,
-    AgentxxInfoSection*       section,
-    const PluginxxStringView* items_json,
-    PluginxxOperatorCallback  cb,
-    void*                     ud,
-    PluginxxString*           error_out
-) {
-    if (!section || !items_json || !items_json->data) {
-        pluginxx::setTableOpError(error_out, "update_info_section: section and items are required");
-        return nullptr;
-    }
-    auto items = copyView(*items_json);
-    return asyncClientTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        "client.ui.update_info_section",
-        [section, items = std::move(items)](
-            ClientPluginInstance* inst,
-            ClientPluginManager*  mgr
-        ) -> std::string {
-            return clientStatusResult(
-                mgr->updateInfoSection(inst, section, items),
-                "update_info_section"
-            );
-        }
-    );
-}
-
-PluginxxOperatorHandle* PLUGINXX_CALL xx_cunregister_info_section(
-    const PluginxxHost*      host,
-    AgentxxInfoSection*      section,
-    PluginxxOperatorCallback cb,
-    void*                    ud,
-    PluginxxString*          error_out
-) {
-    if (!section) {
-        pluginxx::setTableOpError(error_out, "unregister_info_section: section is required");
-        return nullptr;
-    }
-    return asyncClientTableCall(
-        host,
-        cb,
-        ud,
-        error_out,
-        "client.ui.unregister_info_section",
-        [section](ClientPluginInstance* inst, ClientPluginManager* mgr) -> std::string {
-            mgr->unregisterInfoSection(inst, section);
-            return {};
-        }
-    );
 }
 
 PluginxxOperatorHandle* PLUGINXX_CALL xx_cupdate_tool_decor(
@@ -3344,15 +3019,6 @@ static const AgentxxClientUiIface* clientUiIface() {
     static const AgentxxClientUiIface table = {
         /* version */ AGENTXX_IFACE_CLIENT_UI_VERSION,
         /* struct_size */ sizeof(AgentxxClientUiIface),
-        /* register_status_item */ xx_cregister_status_item,
-        /* update_status_item */ xx_cupdate_status_item,
-        /* unregister_status_item */ xx_cunregister_status_item,
-        /* register_panel */ xx_cregister_panel,
-        /* update_panel */ xx_cupdate_panel,
-        /* unregister_panel */ xx_cunregister_panel,
-        /* register_info_section */ xx_cregister_info_section,
-        /* update_info_section */ xx_cupdate_info_section,
-        /* unregister_info_section */ xx_cunregister_info_section,
         /* register_command */ xx_cregister_command,
         /* unregister_command */ xx_cunregister_command,
         /* show_toast */ xx_cshow_toast,
@@ -3543,709 +3209,6 @@ const PluginxxHostVtable* ClientPluginManager::hostVtable() {
 // =====================================================================
 // ClientPluginManager 内部实现 (vtable 强类型入口)
 // =====================================================================
-
-namespace {
-
-/// 旧状态栏项文本的可见长度 (与旧绘制一致: 只取第一行, 超长补 "...")
-constexpr size_t kLegacyStatusTextMaxChars = 24;
-
-/// 状态栏文本按旧绘制的方式裁剪 (第一行 + 最多 [kLegacyStatusTextMaxChars] 个字符)
-std::string legacyStatusText(std::string_view text) {
-    std::string out{text};
-    const auto  nl = out.find('\n');
-    if (nl != std::string::npos) {
-        out.resize(nl);
-    }
-    if (const auto idx = utilxx_base::findIndexByUtf8Length(out, kLegacyStatusTextMaxChars);
-        idx > 0 && idx < out.size()) {
-        out.resize(idx);
-        out += "...";
-    }
-    return out;
-}
-
-/// 旧状态栏项 → 界面描述层 JSON
-///
-/// - 有 `segments` / `sparkline` / `meter` 时给一行横排组件 (趋势图高度固定一行);
-/// - 否则给一行文本; 富片段一项都用不上时也退回文本 (与旧绘制的回退一致)。
-std::string legacyStatusContentJson(
-    const utilxx_base::Json& props,
-    bool                     hasRich,
-    std::string_view         text
-) {
-    using utilxx_base::Json;
-    Json blocks = Json::array();
-    if (hasRich) {
-        Json children = Json::array();
-        if (const auto segs = props.find("segments"); segs != props.end() && segs->is_array()) {
-            for (const auto& seg : *segs) {
-                if (!seg.is_object()) {
-                    continue;
-                }
-                const std::string segText = seg.value("text", std::string{});
-                if (segText.empty()) {
-                    continue;
-                }
-                Json cell;
-                cell["kind"]  = "Text";
-                cell["text"]  = segText;
-                cell["color"] = seg.value("color", std::string{"hint"});
-                children.push_back(std::move(cell));
-            }
-        }
-        if (const auto sp = props.find("sparkline"); sp != props.end() && sp->is_object()) {
-            Json item = *sp;
-            item["kind"]   = "Sparkline";
-            item["height"] = 1; // 状态栏只有一行高
-            children.push_back(std::move(item));
-        }
-        if (const auto mt = props.find("meter"); mt != props.end() && mt->is_object()) {
-            Json item = *mt;
-            item["kind"] = "Progress";
-            children.push_back(std::move(item));
-        }
-        if (!children.empty()) {
-            Json row;
-            row["kind"]     = "Row";
-            row["gap"]      = 8;
-            row["children"] = std::move(children);
-            blocks.push_back(std::move(row));
-        }
-    }
-    if (blocks.empty()) {
-        Json line;
-        line["kind"] = "Text";
-        line["text"] = legacyStatusText(text);
-        line["dim"]  = true; // 旧绘制: 纯文本项用 theme.dim()
-        blocks.push_back(std::move(line));
-    }
-    Json doc;
-    doc["blocks"] = std::move(blocks);
-    return doc.dump();
-}
-
-/// 旧 items (面板 / Info 段落) → 界面描述层 JSON
-/// - 旧 items 就是描述层的块数组, 原样交给渲染器
-std::string legacyItemsContentJson(const utilxx_base::Json& items) {
-    utilxx_base::Json doc = utilxx_base::Json::object();
-    doc["items"]          = items;
-    return doc.dump();
-}
-
-/// 旧注册项的全名 (注册 / 更新 / 注销三处必须算出同一个名字)
-///
-/// 名字带了自己的 `plugin.` 前缀就原样用; 带了别人的前缀时旧接口没有校验,
-/// 仍然挂在当前插件名下 (旧接口不因此丢项)。
-std::string legacyUiFullId(std::string_view instanceName, std::string_view rawId) {
-    std::string id = clientUiFullName(instanceName, rawId);
-    if (id.empty()) {
-        id = "plugin." + std::string{instanceName} + "." + std::string{rawId};
-    }
-    return id;
-}
-
-} // namespace
-
-std::string ClientPluginManager::upsertLegacyUi(
-    ClientPluginInstance* inst,
-    std::string_view      rawId,
-    std::string_view      slot,
-    std::string_view      entryDataJson,
-    std::string_view      title,
-    std::string_view      json
-) {
-    if (!inst || rawId.empty()) {
-        return {};
-    }
-    const std::string fullId = legacyUiFullId(inst->name, rawId);
-    // 声明项: 位置信息 (align / order / 标题) 进 data, 界面按它排序与定位
-    auto entryIt = uiContent_.entries().find(fullId);
-    if (entryIt != uiContent_.entries().end()) {
-        entryIt->second.type     = std::string{slot};
-        entryIt->second.dataJson = std::string{entryDataJson};
-        entryIt->second.rev += 1;
-    } else {
-        pluginxx::host::UiEntry entry;
-        entry.plugin   = inst->name;
-        entry.pluginId = inst->name;
-        entry.id       = fullId;
-        entry.type     = std::string{slot};
-        entry.dataJson = std::string{entryDataJson};
-        entry.seq      = uiContent_.nextEntrySeq();
-        uiContent_.entries().emplace(fullId, std::move(entry));
-    }
-    // 内容: 没有生成函数, 每次变化推一份 (注册时先给一份, 界面因此不会空着)
-    auto contentIt = uiContent_.contents().find(fullId);
-    if (contentIt != uiContent_.contents().end()) {
-        contentIt->second.slot  = std::string{slot};
-        contentIt->second.title = std::string{title};
-    } else {
-        pluginxx::host::UiContent content;
-        content.plugin   = inst->name;
-        content.pluginId = inst->name;
-        content.id       = std::string{rawId};
-        content.fullId   = fullId;
-        content.slot     = std::string{slot};
-        content.title    = std::string{title};
-        content.depsJson = "[]";
-        content.seq      = uiContent_.nextContentSeq();
-        uiContent_.contents().emplace(fullId, std::move(content));
-    }
-    pushLegacyUi(fullId, json);
-    return fullId;
-}
-
-void ClientPluginManager::pushLegacyUi(std::string_view fullId, std::string_view json) {
-    if (fullId.empty()) {
-        return;
-    }
-    const std::string payload = uiContent_.buildContentPayload(fullId, json, {});
-    if (payload.empty()) {
-        return;
-    }
-    publishUiContentSnapshot();
-}
-
-void ClientPluginManager::dropLegacyUi(std::string_view fullId) {
-    if (fullId.empty()) {
-        return;
-    }
-    bool changed = false;
-    // 内容: 插件自己给它注册过生成函数时保留 (那一份由声明式接口管, 不随旧句柄失效);
-    // 旧注册项建出来的内容 (没有生成函数) 跟着句柄一起摘
-    bool contentKept = false;
-    if (auto it = uiContent_.contents().find(fullId); it != uiContent_.contents().end()) {
-        if (it->second.spec.generate != nullptr) {
-            contentKept = true;
-        } else {
-            uiContent_.contents().erase(it);
-            uiGenerating_.erase(std::string{fullId});
-            changed = true;
-        }
-    }
-    // 声明项与内容同名: 内容已由插件接手时声明项也留着 (它记的是位置信息)
-    if (!contentKept && uiContent_.entries().erase(std::string{fullId}) > 0) {
-        changed = true;
-    }
-    if (changed) {
-        publishUiContentSnapshot();
-    }
-}
-
-void* ClientPluginManager::registerStatusItem(
-    ClientPluginInstance* inst,
-    PluginxxStringView    id,
-    PluginxxStringView    json,
-    int                   align,
-    int                   order
-) {
-    if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
-        return nullptr;
-    }
-    // 执行期复查：请求可能排在 IO 队列里，等执行时实例已进入 Closing/Disabled。
-    if (!acceptsRegistration(inst)) {
-        XX_LOGW(
-            "[client_plugin] `{}` registerStatusItem rejected: closing or disabled",
-            inst->name
-        );
-        return nullptr;
-    }
-    std::string idStr = svToStr(id);
-    if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientStatusItem})) {
-        XX_LOGW(
-            "[client_plugin] status item `{}` rejected: interface agentxx.client.status_item unsupported",
-            idStr
-        );
-        return nullptr;
-    }
-    // id 冲突检查 (全局)
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        for (const auto& s : uiRegistry_->statusItems) {
-            if (s.id == idStr) {
-                XX_LOGW("[client_plugin] status item id `{}` already registered", idStr);
-                return nullptr;
-            }
-        }
-    }
-    // 解析 initial_json → text (与富片段)
-    std::string       text;
-    utilxx_base::Json props;
-    try {
-        props = utilxx_base::Json::parse(
-            agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToSv(json)
-        );
-        text = props.value("text", "");
-    } catch (...) {
-        text.clear();
-    }
-    if (text.empty()) {
-        text = idStr;
-    }
-    // 富展示片段 (segments/sparkline/meter): 注册时即可给出, 更新时同 updateStatusItem
-    const bool hasRich
-        = props.is_object()
-          && (props.contains("segments") || props.contains("sparkline") || props.contains("meter"));
-
-    auto handle    = std::make_shared<AgentxxStatusItem>();
-    handle->inst   = inst;
-    handle->id     = idStr;
-    handle->plugin = inst->name;
-
-    ClientStatusItem reg;
-    reg.plugin = inst->name;
-    reg.id     = handle->id;
-    reg.text   = text;
-    reg.rich   = hasRich ? props : utilxx_base::Json::object();
-    reg.align  = align;
-    reg.order  = order;
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        cur->statusItems.push_back(reg);
-        uiRegistry_ = std::move(cur);
-    }
-    inst->statusItemRegs.push_back(std::move(reg));
-    inst->statusItemHandles.push_back(handle);
-    if (uiAdapter_) {
-        uiAdapter_->onStatusItemRegistered(handle->id, props, align, order);
-    }
-    // 镜像到声明式注册表: 位置信息进声明项, 画什么由内容给出 (两边同一套存储)
-    utilxx_base::Json entryData;
-    entryData["align"] = align;
-    entryData["order"] = order;
-    (void)upsertLegacyUi(
-        inst,
-        idStr,
-        kClientUiSlotStatus,
-        entryData.dump(),
-        std::string{},
-        legacyStatusContentJson(props, hasRich, text)
-    );
-    return handle.get();
-}
-
-int ClientPluginManager::updateStatusItem(
-    ClientPluginInstance* inst,
-    void*                 item,
-    PluginxxStringView    json
-) {
-    auto h = static_cast<AgentxxStatusItem*>(item);
-    if (!inst || !h) {
-        return AGENTXX_RESULT_ERR_STATE;
-    }
-    if (!acceptUiJsonSize(svToSv(json), "update_status_item", inst->name)) {
-        return AGENTXX_RESULT_ERR_LIMIT;
-    }
-    utilxx_base::Json props;
-    std::string       text;
-    try {
-        props = utilxx_base::Json::parse(
-            agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToSv(json)
-        );
-        text = props.value("text", "");
-    } catch (...) {
-        text.clear();
-    }
-    // 富展示片段 (segments/sparkline/meter): 与 text 同为可选, 两者都为空才算非法更新
-    const bool hasRich
-        = props.is_object()
-          && (props.contains("segments") || props.contains("sparkline") || props.contains("meter"));
-    // 富片段存在时 text 可省略 (状态栏以富内容为主, 文本仅作降级)
-    if (!hasRich && text.empty()) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        for (auto& s : cur->statusItems) {
-            if (s.id == h->id) {
-                s.text = text;
-                s.rich = hasRich ? props : utilxx_base::Json::object();
-                ++s.version;
-                break;
-            }
-        }
-        uiRegistry_ = std::move(cur);
-    }
-    for (auto& s : inst->statusItemRegs) {
-        if (s.id == h->id) {
-            s.text = text;
-            s.rich = hasRich ? props : utilxx_base::Json::object();
-            ++s.version;
-            break;
-        }
-    }
-    if (uiAdapter_) {
-        uiAdapter_->onStatusItemUpdated(h->id, props);
-    }
-    pushLegacyUi(
-        legacyUiFullId(inst->name, h->id),
-        legacyStatusContentJson(props, hasRich, text)
-    );
-    return AGENTXX_RESULT_OK;
-}
-
-void ClientPluginManager::unregisterStatusItem(ClientPluginInstance* inst, void* item) {
-    auto h = static_cast<AgentxxStatusItem*>(item);
-    if (!inst || !h) {
-        return;
-    }
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        auto&                       vec = cur->statusItems;
-        for (auto it = vec.begin(); it != vec.end(); ++it) {
-            if (it->id == h->id) {
-                vec.erase(it);
-                break;
-            }
-        }
-        uiRegistry_ = std::move(cur);
-    }
-    auto& regs = inst->statusItemRegs;
-    regs.erase(
-        std::remove_if(
-            regs.begin(),
-            regs.end(),
-            [&](const auto& s) {
-                return s.id == h->id;
-            }
-        ),
-        regs.end()
-    );
-    if (uiAdapter_) {
-        uiAdapter_->onStatusItemRemoved(h->id);
-    }
-    dropLegacyUi(legacyUiFullId(inst->name, h->id));
-    h->inst = nullptr; // 句柄失效
-}
-
-void* ClientPluginManager::registerPanel(
-    ClientPluginInstance* inst,
-    PluginxxStringView    id,
-    PluginxxStringView    props_json
-) {
-    if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
-        return nullptr;
-    }
-    if (!acceptsRegistration(inst)) {
-        XX_LOGW("[client_plugin] `{}` registerPanel rejected: closing or disabled", inst->name);
-        return nullptr;
-    }
-    std::string idStr = svToStr(id);
-    if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientPanel})) {
-        XX_LOGW(
-            "[client_plugin] panel `{}` rejected: interface agentxx.client.panel unsupported",
-            idStr
-        );
-        return nullptr;
-    }
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        for (const auto& p : uiRegistry_->panels) {
-            if (p.id == idStr) {
-                XX_LOGW("[client_plugin] panel id `{}` already registered", idStr);
-                return nullptr;
-            }
-        }
-    }
-    utilxx_base::Json props;
-    std::string       title;
-    try {
-        props = utilxx_base::Json::parse(
-            agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json)
-        );
-        title = props.value("title", "");
-    } catch (...) {
-        title.clear();
-    }
-    if (title.empty()) {
-        title = idStr;
-    }
-
-    auto handle    = std::make_shared<AgentxxPanel>();
-    handle->inst   = inst;
-    handle->id     = idStr;
-    handle->plugin = inst->name;
-
-    ClientPanel reg;
-    reg.plugin = inst->name;
-    reg.id     = handle->id;
-    reg.title  = title;
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        cur->panels.push_back(reg);
-        uiRegistry_ = std::move(cur);
-    }
-    inst->panelRegs.push_back(std::move(reg));
-    inst->panelHandles.push_back(handle);
-    if (uiAdapter_) {
-        uiAdapter_->onPanelRegistered(handle->id, props);
-    }
-    // 镜像到声明式注册表 (注册时还没有内容项, 先给一份空列表)
-    utilxx_base::Json entryData;
-    entryData["title"] = title;
-    (void)upsertLegacyUi(
-        inst,
-        idStr,
-        kClientUiSlotPanel,
-        entryData.dump(),
-        title,
-        legacyItemsContentJson(utilxx_base::Json::array())
-    );
-    return handle.get();
-}
-
-int ClientPluginManager::updatePanel(
-    ClientPluginInstance* inst,
-    void*                 panel,
-    PluginxxStringView    items_json
-) {
-    auto h = static_cast<AgentxxPanel*>(panel);
-    if (!inst || !h) {
-        return AGENTXX_RESULT_ERR_STATE;
-    }
-    if (!acceptUiJsonSize(svToSv(items_json), "update_panel", inst->name)) {
-        return AGENTXX_RESULT_ERR_LIMIT;
-    }
-    utilxx_base::Json items = utilxx_base::Json::array();
-    try {
-        auto j = utilxx_base::Json::parse(
-            agentxx::plugin::PluginStringView::empty(items_json) ? "{}" : svToSv(items_json)
-        );
-        if (j.contains("items") && j["items"].is_array()) {
-            items = j["items"];
-        }
-    } catch (...) {
-        return AGENTXX_RESULT_ERR_JSON;
-    }
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        for (auto& p : cur->panels) {
-            if (p.id == h->id) {
-                p.items = items;
-                ++p.version;
-                break;
-            }
-        }
-        uiRegistry_ = std::move(cur);
-    }
-    for (auto& p : inst->panelRegs) {
-        if (p.id == h->id) {
-            p.items = items;
-            ++p.version;
-            break;
-        }
-    }
-    utilxx_base::Json payload = utilxx_base::Json::object();
-    payload["items"]          = items;
-    if (uiAdapter_) {
-        uiAdapter_->onPanelUpdated(h->id, payload);
-    }
-    pushLegacyUi(legacyUiFullId(inst->name, h->id), legacyItemsContentJson(items));
-    return AGENTXX_RESULT_OK;
-}
-
-void ClientPluginManager::unregisterPanel(ClientPluginInstance* inst, void* panel) {
-    auto h = static_cast<AgentxxPanel*>(panel);
-    if (!inst || !h) {
-        return;
-    }
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        auto&                       vec = cur->panels;
-        for (auto it = vec.begin(); it != vec.end(); ++it) {
-            if (it->id == h->id) {
-                vec.erase(it);
-                break;
-            }
-        }
-        uiRegistry_ = std::move(cur);
-    }
-    auto& regs = inst->panelRegs;
-    regs.erase(
-        std::remove_if(
-            regs.begin(),
-            regs.end(),
-            [&](const auto& p) {
-                return p.id == h->id;
-            }
-        ),
-        regs.end()
-    );
-    if (uiAdapter_) {
-        uiAdapter_->onPanelRemoved(h->id);
-    }
-    dropLegacyUi(legacyUiFullId(inst->name, h->id));
-    h->inst = nullptr;
-}
-
-void* ClientPluginManager::registerInfoSection(
-    ClientPluginInstance* inst,
-    PluginxxStringView    id,
-    PluginxxStringView    props_json
-) {
-    if (!inst || agentxx::plugin::PluginStringView::empty(id)) {
-        return nullptr;
-    }
-    if (!acceptsRegistration(inst)) {
-        XX_LOGW(
-            "[client_plugin] `{}` registerInfoSection rejected: closing or disabled",
-            inst->name
-        );
-        return nullptr;
-    }
-    std::string idStr = svToStr(id);
-    if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientInfoSection})) {
-        XX_LOGW(
-            "[client_plugin] info section `{}` rejected: interface agentxx.client.info_section unsupported",
-            idStr
-        );
-        return nullptr;
-    }
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        for (const auto& s : uiRegistry_->infoSections) {
-            if (s.id == idStr) {
-                XX_LOGW("[client_plugin] info section id `{}` already registered", idStr);
-                return nullptr;
-            }
-        }
-    }
-    utilxx_base::Json props;
-    std::string       title;
-    try {
-        props = utilxx_base::Json::parse(
-            agentxx::plugin::PluginStringView::empty(props_json) ? "{}" : svToSv(props_json)
-        );
-        title = props.value("title", "");
-    } catch (...) {
-        title.clear();
-    }
-
-    auto handle    = std::make_shared<AgentxxInfoSection>();
-    handle->inst   = inst;
-    handle->id     = idStr;
-    handle->plugin = inst->name;
-
-    ClientInfoSection reg;
-    reg.plugin = inst->name;
-    reg.id     = handle->id;
-    reg.title  = title;
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        cur->infoSections.push_back(reg);
-        uiRegistry_ = std::move(cur);
-    }
-    inst->infoSectionRegs.push_back(std::move(reg));
-    inst->infoSectionHandles.push_back(handle);
-    if (uiAdapter_) {
-        uiAdapter_->onInfoSectionRegistered(handle->id, props);
-    }
-    // 镜像到声明式注册表 (段落标题同时进声明项 data 与内容 title)
-    utilxx_base::Json entryData;
-    entryData["title"] = title;
-    (void)upsertLegacyUi(
-        inst,
-        idStr,
-        kClientUiSlotInfo,
-        entryData.dump(),
-        title,
-        legacyItemsContentJson(utilxx_base::Json::array())
-    );
-    return handle.get();
-}
-
-int ClientPluginManager::updateInfoSection(
-    ClientPluginInstance* inst,
-    void*                 section,
-    PluginxxStringView    items_json
-) {
-    auto h = static_cast<AgentxxInfoSection*>(section);
-    if (!inst || !h) {
-        return AGENTXX_RESULT_ERR_STATE;
-    }
-    if (!acceptUiJsonSize(svToSv(items_json), "update_info_section", inst->name)) {
-        return AGENTXX_RESULT_ERR_LIMIT;
-    }
-    utilxx_base::Json items = utilxx_base::Json::array();
-    try {
-        auto j = utilxx_base::Json::parse(
-            agentxx::plugin::PluginStringView::empty(items_json) ? "{}" : svToSv(items_json)
-        );
-        if (j.contains("items") && j["items"].is_array()) {
-            items = j["items"];
-        }
-    } catch (...) {
-        return AGENTXX_RESULT_ERR_JSON;
-    }
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        for (auto& s : cur->infoSections) {
-            if (s.id == h->id) {
-                s.items = items;
-                ++s.version;
-                break;
-            }
-        }
-        uiRegistry_ = std::move(cur);
-    }
-    for (auto& s : inst->infoSectionRegs) {
-        if (s.id == h->id) {
-            s.items = items;
-            ++s.version;
-            break;
-        }
-    }
-    utilxx_base::Json payload = utilxx_base::Json::object();
-    payload["items"]          = items;
-    if (uiAdapter_) {
-        uiAdapter_->onInfoSectionUpdated(h->id, payload);
-    }
-    pushLegacyUi(legacyUiFullId(inst->name, h->id), legacyItemsContentJson(items));
-    return AGENTXX_RESULT_OK;
-}
-
-void ClientPluginManager::unregisterInfoSection(ClientPluginInstance* inst, void* section) {
-    auto h = static_cast<AgentxxInfoSection*>(section);
-    if (!inst || !h) {
-        return;
-    }
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        auto                        cur = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-        auto&                       vec = cur->infoSections;
-        for (auto it = vec.begin(); it != vec.end(); ++it) {
-            if (it->id == h->id) {
-                vec.erase(it);
-                break;
-            }
-        }
-        uiRegistry_ = std::move(cur);
-    }
-    auto& regs = inst->infoSectionRegs;
-    regs.erase(
-        std::remove_if(
-            regs.begin(),
-            regs.end(),
-            [&](const auto& s) {
-                return s.id == h->id;
-            }
-        ),
-        regs.end()
-    );
-    if (uiAdapter_) {
-        uiAdapter_->onInfoSectionRemoved(h->id);
-    }
-    dropLegacyUi(legacyUiFullId(inst->name, h->id));
-    h->inst = nullptr;
-}
 
 int ClientPluginManager::updateToolDecor(
     ClientPluginInstance* inst,
@@ -4918,42 +3881,6 @@ namespace {
 
 } // namespace
 
-int ClientPluginManager::registerBuiltinToolRenderer(
-    std::string_view   toolName,
-    std::string_view   displayName,
-    ClientToolRenderFn collapsedFn,
-    ClientToolRenderFn expandedFn,
-    void*              userData
-) {
-    if (toolName.empty()) {
-        return AGENTXX_RESULT_ERR_ARG;
-    }
-    ClientToolRenderReg reg;
-    reg.plugin      = std::string{kBuiltinRendererOwner};
-    reg.toolName    = std::string{toolName};
-    reg.displayName = displayName.empty() ? reg.toolName : std::string{displayName};
-    reg.collapsedFn = collapsedFn;
-    reg.expandedFn  = expandedFn;
-    reg.userData    = userData;
-    reg.builtin     = true;
-    // 内置渲染器无插件实例与租约: 不做租约登记, 也不随插件禁用/卸载失效
-    std::lock_guard<std::mutex> lock(uiMutex_);
-    auto                        cur      = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-    bool                        replaced = false;
-    for (auto& r : cur->builtinToolRenderers) {
-        if (r.toolName == reg.toolName) {
-            r        = reg;
-            replaced = true;
-            break;
-        }
-    }
-    if (!replaced) {
-        cur->builtinToolRenderers.push_back(std::move(reg));
-    }
-    uiRegistry_ = std::move(cur);
-    return AGENTXX_RESULT_OK;
-}
-
 int ClientPluginManager::bindActionHandler(
     ClientPluginInstance* inst,
     PluginxxStringView    target_id,
@@ -5249,8 +4176,8 @@ std::vector<ClientRegionSize> ClientPluginManager::regionSizes() const {
 
 namespace {
 
-/// 按工具名查特化渲染注册项 (插件注册项优先, 未命中再查主程序内置项)
-/// - `wantCollapsed` 决定"该注册项给了对应部分回调"的判据
+/// 按工具名查工具行内容 (插件内容优先, 未命中再取主程序内置工具行)
+/// - `wantCollapsed` 决定"该内容有对应部分"的判据
 const ClientToolRenderReg* findToolRenderReg(
     const ClientUiRegistry* reg,
     std::string_view        toolName,
@@ -5259,13 +4186,18 @@ const ClientToolRenderReg* findToolRenderReg(
     if (!reg || toolName.empty()) {
         return nullptr;
     }
-    for (const auto* list : {&reg->toolRenderers, &reg->builtinToolRenderers}) {
-        for (const auto& r : *list) {
-            const bool hasFn
-                = wantCollapsed ? (r.collapsedFn != nullptr) : (r.expandedFn != nullptr);
-            if (r.toolName == toolName && hasFn) {
-                return &r;
-            }
+    const auto usable = [wantCollapsed](const ClientToolRenderReg& r) {
+        return r.binding != nullptr
+               && (wantCollapsed ? r.binding->hasSummary() : r.binding->hasBody());
+    };
+    for (const auto& r : reg->toolRenderers) {
+        if (r.toolName == toolName && usable(r) && r.binding->generate != nullptr) {
+            return &r;
+        }
+    }
+    for (const auto& r : reg->toolRenderers) {
+        if (r.toolName == toolName && usable(r)) {
+            return &r;
         }
     }
     return nullptr;
@@ -5296,51 +4228,48 @@ ClientToolRenderInput makeRenderInput(
 
 /// 没有渲染缓存时的“当场取结果”收尾 (单元测试 / 未挂载管理器)
 ///
-/// 回调在本次调用栈上立即 `done` 时能拿到内容; 插件稍后才 `done` 时本次没有内容
-/// (这种环境没有地方接晚到的结果, 与旧的同步形态行为一致)。
-struct ImmediateReply {
-    int32_t     status = PLUGINXX_OPERATOR_FAILED;
-    std::string text;
-    bool        done = false;
-};
-
-void PLUGINXX_CALL immediateReplyDone(
-    void*                     ud,
-    int32_t                   status,
-    const PluginxxStringView* payload
+/// 只用于主程序内置工具行 (内容同步算完); 插件内容在这种环境里没有地方接晚到的结果,
+/// 本次返回空, 界面走默认渲染。
+std::string callHostRowNow(
+    const ClientToolRenderReg*   reg,
+    const ClientToolRenderInput* input
 ) {
-    auto* slot = static_cast<ImmediateReply*>(ud);
-    if (slot == nullptr || slot->done) {
-        return;
-    }
-    slot->done   = true;
-    slot->status = status;
-    if (payload != nullptr && payload->data != nullptr) {
-        slot->text.assign(payload->data, static_cast<size_t>(payload->size));
-    }
-}
-
-/// 直接调用一个渲染回调, 只收当场交回的内容 (`RendererFn` = 折叠或展开回调)
-template<typename RendererFn>
-std::string callRendererNow(RendererFn fn, void* userData, const ClientToolRenderInput* input) {
-    if (fn == nullptr || input == nullptr) {
+    if (reg == nullptr || reg->binding == nullptr || input == nullptr) {
         return {};
     }
-    ImmediateReply            slot;
-    const PluginxxOperatorNotify notify{&immediateReplyDone, &slot};
-    int32_t                   rc = AGENTXX_RESULT_ERR_INTERNAL;
+    const auto& fn = input->summary ? reg->binding->row.summary : reg->binding->row.body;
+    if (!fn) {
+        return {};
+    }
     try {
-        rc = fn(userData, input, &notify, nullptr);
+        return fn(*input);
     } catch (...) {
-        rc = AGENTXX_RESULT_ERR_INTERNAL;
-    }
-    if (rc != 0 || !slot.done || slot.status != PLUGINXX_OPERATOR_OK) {
         return {};
     }
-    return slot.text;
 }
 
 } // namespace
+
+std::string toolRowCollapsedText(const utilxx_base::Json& doc) {
+    std::string plain = pluginxx::ui::plainTextJson(doc);
+    if (const auto nl = plain.find('\n'); nl != std::string::npos) {
+        plain.resize(nl);
+    }
+    return plain;
+}
+
+std::string toolRowExpandedJson(const utilxx_base::Json& doc) {
+    if (doc.is_array()) {
+        return doc.dump();
+    }
+    if (doc.is_object()) {
+        const auto it = doc.find("blocks");
+        if (it != doc.end() && it->is_array()) {
+            return it->dump();
+        }
+    }
+    return {};
+}
 
 std::string_view toolDisplayNameFor(
     const ClientUiRegistry* reg,
@@ -5358,13 +4287,17 @@ std::string_view toolDisplayNameFor(
             }
         }
     }
-    // 2. 类型级注册项的名字 (插件项优先, 未命中再查内置项)
+    // 2. 类型级注册项的名字 (插件内容优先, 未命中再取主程序内置工具行)
     if (!toolName.empty()) {
-        for (const auto* list : {&reg->toolRenderers, &reg->builtinToolRenderers}) {
-            for (const auto& r : *list) {
-                if (r.toolName == toolName && !r.displayName.empty()) {
-                    return r.displayName;
-                }
+        for (const auto& r : reg->toolRenderers) {
+            if (r.toolName == toolName && r.binding && r.binding->generate != nullptr
+                && !r.displayName.empty()) {
+                return r.displayName;
+            }
+        }
+        for (const auto& r : reg->toolRenderers) {
+            if (r.toolName == toolName && !r.displayName.empty()) {
+                return r.displayName;
             }
         }
     }
@@ -5415,7 +4348,7 @@ ClientToolCollapsedResult renderClientToolCollapsed(
             maxWidth,
             /*summary=*/true
         );
-        res.text = callRendererNow(r->collapsedFn, r->userData, &input);
+        res.text = callHostRowNow(r, &input);
         return res;
     }
 
@@ -5498,7 +4431,7 @@ ClientToolExpandedResult renderClientToolExpanded(
             maxWidth,
             /*summary=*/false
         );
-        const auto text  = callRendererNow(r->expandedFn, r->userData, &input);
+        const auto text  = callHostRowNow(r, &input);
         if (acceptUiJsonSize(text, "tool_renderer output", r->plugin)) {
             try {
                 res.items = utilxx_base::Json::parse(text);

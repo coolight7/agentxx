@@ -48,44 +48,6 @@ struct ClientToolRendererLease {
     std::atomic<bool>                   alive{true};
 };
 
-/// 状态栏项注册记录 (UI 注册表快照条目; 所有字段为主程序拷贝, 可跨线程读取)
-struct ClientStatusItem {
-    std::string plugin;    ///< 所属插件名
-    std::string id;        ///< 全局唯一 id
-    std::string text;      ///< 当前文本 (纯文本形态; 渲染至少显示它)
-    int         align = 0; ///< 0=左侧 1=右侧
-    int         order = 0; ///< 组内排序 (小在前)
-    /// 富展示描述 (可选): `{"segments":[{text,color}],"sparkline":{...},"meter":{...}}`
-    ///
-    /// 状态栏只有一行高度, 因此这些片段按"单行组件"渲染 (迷你趋势图高度强制为 1,
-    /// 计量条取一行); `text` 作为无法渲染富内容时的降级文本。空对象 = 只用 `text`。
-    utilxx_base::Json rich = utilxx_base::Json::object();
-    /// 内容版本号 (每次 `update_status_item` 递增; 供缓存 key/诊断使用)
-    uint64_t version = 0;
-};
-
-/// 面板注册记录 (UI 注册表快照条目)
-struct ClientPanel {
-    std::string       plugin;                             ///< 所属插件名
-    std::string       id;                                 ///< 全局唯一 id
-    std::string       title;                              ///< tab 标题
-    utilxx_base::Json items = utilxx_base::Json::array(); ///< {"items":[{...}]} 内容
-    /// 内容版本号 (每次 `update_panel` 递增; 供缓存 key/诊断使用)
-    uint64_t version = 0;
-};
-
-/// Info 栏段落注册记录 (UI 注册表快照条目)
-/// - 渲染在侧边栏 Info tab 内 (段落标题 + items, 与面板 items schema 一致),
-///   供插件把摘要/状态信息注入 Info 栏 (如 codegraph 索引状态、系统资源占用)
-struct ClientInfoSection {
-    std::string       plugin;                             ///< 所属插件名
-    std::string       id;                                 ///< 全局唯一 id
-    std::string       title;                              ///< 段落标题 (空 = 无标题)
-    utilxx_base::Json items = utilxx_base::Json::array(); ///< {"items":[{...}]} 内容
-    /// 内容版本号 (每次 `update_info_section` 递增; 供缓存 key/诊断使用)
-    uint64_t version = 0;
-};
-
 /// 工具消息装饰注册记录 (UI 注册表快照条目; update_tool_decor 写入)
 /// - 插件对某次工具调用 (toolCallId) 的语义层渲染声明: 折叠头显示名/一行摘要
 ///   + 展开体 items (text/diagram kind); TUI 按通用渲染器展示, 无任何工具特化
@@ -126,37 +88,69 @@ struct ClientToolRenderInput {
     bool             summary  = true; ///< true = 折叠头, false = 展开体
 };
 
-/// 工具行渲染回调 (主程序内部)
+/// 主程序内置工具行的内容 (在 client io 线程同步执行; 不走插件 ABI)
 ///
-/// 异步操作契约: 返回 0 = 已受理, 内容经 `notify` 恰好一次交回 (折叠头是一行文本,
-/// 展开体是 items JSON); 返回非 0 = 没受理, 按默认渲染处理。
-using ClientToolRenderFn = int32_t(PLUGINXX_CALL*)(
-    void*                         user_data,
-    const ClientToolRenderInput*  input,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
-);
+/// 与插件内容的区别只在"谁来算": 插件内容走生成函数 (插件执行线程, 异步契约),
+/// 内置工具行由主程序自己的函数当场算完 —— 两者都登记在 `agentxx.client.tool`
+/// 槽位上, 命中与缓存走同一条路径。
+struct ClientToolRowContent {
+    /// 折叠头一行 (空串 = 本次没有内容, 走默认渲染)
+    std::function<std::string(const ClientToolRenderInput&)> summary;
+    /// 展开体块数组 JSON 文本 (空串 = 本次没有内容)
+    std::function<std::string(const ClientToolRenderInput&)> body;
+};
+
+/// 工具行内容的渲染数据 (声明项 + 内容) ; 插件内容与内置工具行共用
+///
+/// - 插件内容: `generate` 是内容的生成函数, 在插件执行线程上跑, `lease`
+///   保证卸载后不再进入插件代码
+/// - 内置工具行: `row.summary` / `row.body` 由主程序在 client io 线程同步执行,
+///   没有实例与租约
+struct ClientToolContentBinding {
+    ClientPluginManager*     manager = nullptr;
+    std::string              plugin;      ///< 归属 (实例名 / [kBuiltinRendererOwner])
+    std::string              toolName;    ///< 声明项 data 里的工具名
+    std::string              displayName; ///< 折叠头显示名 (空 = 工具名)
+    std::vector<std::string> deps;        ///< 内容声明的变量 (生成时只给这些)
+    /// 插件内容的生成函数 (与 `PluginxxUiContentSpec::generate` 同一契约)
+    void (PLUGINXX_CALL* generate)(
+        const PluginxxHost*           host,
+        const PluginxxStringView*     ctx_json,
+        void*                         user_data,
+        const PluginxxOperatorNotify* notify,
+        PluginxxString*               error_out
+    ) = nullptr;
+    void*                    generateUd = nullptr;
+    const PluginxxHost*      hostView   = nullptr; ///< 插件的主程序视图 (生成函数入参)
+    ClientToolRowContent     row;                  ///< 内置工具行的同步内容 (空 = 插件内容)
+    std::shared_ptr<ClientToolRendererLease> lease; ///< 实例租约 (卸载后不再渲染)
+    std::atomic<bool>        active{false};
+
+    /// 有折叠头内容可算
+    bool hasSummary() const {
+        return row.summary != nullptr || generate != nullptr;
+    }
+
+    /// 有展开体内容可算
+    bool hasBody() const {
+        return row.body != nullptr || generate != nullptr;
+    }
+};
 
 /// 工具行渲染记录 (UI 注册表快照条目)
 ///
-/// - **只有一份来源**: `agentxx.client.tool` 上注册的内容 (生成函数); 主程序内置工具行
-///   用同一条记录 (builtin = true, 由主程序内部注册)
+/// - **只有一份来源**: `agentxx.client.tool` 上注册的内容 (声明项 + 内容);
+///   主程序内置工具行 (lib 内置工具没有对应插件) 也登记在同一张表里,
+///   见 [ClientPluginManager::registerBuiltinToolContent]
 /// - `displayName` 在注册时归一 (空 → 工具名), 因此命中项的显示名恒非空 ——
 ///   UI 线程同步读得到, 首帧即可显示
-/// - 折叠头与展开体共用一份内容的生成函数, 各自缓存
+/// - 折叠头与展开体共用 [binding], 各自缓存
 struct ClientToolRenderReg {
-    std::string                 plugin;
-    std::string                 toolName;
-    std::string                 displayName; ///< 归一后恒非空
-    ClientToolRenderFn          collapsedFn = nullptr;
-    ClientToolRenderFn          expandedFn  = nullptr;
-    void*                       userData    = nullptr; ///< 两个回调共用
-    std::shared_ptr<ClientToolRendererLease> lease;
-    /// 主程序内置渲染器标记 (lib 内置工具无对应插件, 由主程序自身注册;
-    /// 见 [ClientPluginManager::registerBuiltinToolRenderer]):
-    /// - true 时无插件实例与 lease, 渲染时不做租约/启用状态复查
-    /// - 归属名固定为 [kBuiltinRendererOwner]; 不随插件禁用/卸载失效
-    bool builtin = false;
+    std::string plugin;
+    std::string toolName;
+    std::string displayName; ///< 归一后恒非空
+    /// 内容数据 (插件内容或内置工具行; 空 = 不可用)
+    std::shared_ptr<ClientToolContentBinding> binding;
 };
 
 /// 主程序内置渲染器的保留归属名 (写入 [ClientToolRenderReg::plugin] 与语义渲染
@@ -216,21 +210,14 @@ std::string normalizeKeybindSpec(std::string_view keys);
 
 /// UI 注册表快照 (UI 线程渲染读取; COW shared_ptr 语义)
 struct ClientUiRegistry {
-    std::vector<ClientStatusItem>  statusItems;
-    std::vector<ClientPanel>       panels;
-    std::vector<ClientInfoSection> infoSections;
     std::vector<ClientCommand>     commands;
     std::vector<ClientKeybind>     keybinds;
     /// 快捷键冲突记录 (注册受阻于已占用的键位; 见 [ClientKeybindConflict])
     /// - 与 [keybinds] 同一 COW 快照: UI 线程一次快照读到"已注册"与"未抢到"两侧信息
     std::vector<ClientKeybindConflict> keybindConflicts;
     std::vector<ClientToolDecor>       toolDecors;
+    /// 工具行内容 (插件内容与主程序内置工具行都在这里; 按 toolName 匹配)
     std::vector<ClientToolRenderReg>   toolRenderers;
-    /// 主程序内置工具特化渲染器 (lib 内置工具无插件归属, 由主程序自身注册;
-    /// 见 [ClientPluginManager::registerBuiltinToolRenderer])
-    /// - 与 toolRenderers 分表存放: 匹配优先级低于插件注册项 (插件可覆盖内置渲染)
-    /// - 随 UI 注册表快照 (COW) 一并拷贝; 生命周期 = 进程, 不随插件禁用/卸载变化
-    std::vector<ClientToolRenderReg> builtinToolRenderers;
     /// 通用动作绑定 (COW 快照: UI 线程渲染时查"该按钮是否可点", 无锁读)
     std::vector<ClientActionBinding> actionBindings;
     /// 插件名 → 实例代次 (重载同名插件后代次改变)。UI 渲染时把代次记进按钮命中框,
@@ -257,7 +244,7 @@ inline constexpr size_t kUiJsonMaxBytes = 1024 * 1024;
 ///
 /// - `args`:
 ///     - [json] 待校验的 JSON 文本 (空串视为通过)
-///     - [what] 描述用途 (日志用, 如 "update_panel")
+///     - [what] 描述用途 (日志用, 如 "push_ui_content")
 ///     - [plugin] 插件名 (日志用)
 bool acceptUiJsonSize(std::string_view json, std::string_view what, std::string_view plugin);
 
@@ -447,6 +434,14 @@ ClientToolExpandedResult renderClientToolExpanded(
     int                          maxWidth
 );
 
+/// 工具行内容文档 → 折叠头那一行文本 (`blocks` 的纯文本首行)
+///
+/// 插件内容生成结果与内置工具行共用; 文档为空时返回空串 (界面走默认渲染)。
+std::string toolRowCollapsedText(const utilxx_base::Json& doc);
+
+/// 工具行内容文档 → 展开体块数组 JSON 文本 (`blocks` 数组 dumps; 没有块返回空串)
+std::string toolRowExpandedJson(const utilxx_base::Json& doc);
+
 /// 生效显示名: `update_tool_decor` 的 displayName > 注册表注册名
 ///
 /// - 两者都空时返回空串 (调用方回退渲染消息里的原始工具名)
@@ -520,14 +515,9 @@ public:
     bool kindLoaded = false;
 
     /// 注册残留 (卸载时统一清理; 仅 io 线程)
-    /// - disable 时【完整注册信息】(statusItemRegs/panelRegs/infoSectionRegs/
-    ///   commandRegs) 保留, enable 可恢复; 仅 unload/进程销毁时随实例释放
-    /// - 活跃句柄 (statusItemHandles/panelHandles/infoSectionHandles)
-    ///   为主程序对象 (id/plugin 等), enable 期间有效
-    std::vector<ClientStatusItem>  statusItemRegs;  ///< 状态栏项注册信息 (disable 保留)
-    std::vector<ClientPanel>       panelRegs;       ///< 面板注册信息 (disable 保留)
-    std::vector<ClientInfoSection> infoSectionRegs; ///< Info 段落注册信息 (disable 保留)
-    std::vector<ClientCommand>     commandRegs;     ///< 命令注册信息 (disable 保留)
+    /// - disable 时【完整注册信息】(commandRegs) 保留, enable 可恢复;
+    ///   仅 unload/进程销毁时随实例释放
+    std::vector<ClientCommand> commandRegs; ///< 命令注册信息 (disable 保留)
     /// 全局快捷键注册信息 (同命令: disable 时随 UI 注册表摘除, enable 由 start 重声明)
     std::vector<ClientKeybind> keybindRegs;
     /// 工具消息装饰 (disable 保留, enable 恢复; 无句柄 —— 以 plugin+toolCallId 键控)
@@ -541,9 +531,6 @@ public:
     std::vector<std::shared_ptr<ClientTimerImpl>> timers;
     /// 全局快捷键句柄 (disable 期随注册表摘除, 句柄保活到实例析构)
     std::vector<std::shared_ptr<AgentxxKeybind>> keybindHandles;
-    std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项主程序句柄 (enable 期)
-    std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板主程序句柄 (enable 期)
-    std::vector<std::shared_ptr<void>> infoSectionHandles; ///< Info 段落主程序句柄 (enable 期)
 
     /// 管理器弱引用 (host vtable 回调取用)
     std::weak_ptr<ClientPluginManager> manager{};
@@ -598,9 +585,6 @@ public:
         std::string              configPath;
         bool                     enabled  = true;
         size_t                   inflight = 0;
-        std::vector<std::string> statusItems;
-        std::vector<std::string> panels;
-        std::vector<std::string> infoSections;
         std::vector<std::string> commands;
         std::vector<std::string> depends;
         std::vector<std::string> optionalDepends;
@@ -817,79 +801,6 @@ public:
     // 以下为 vtable 实现的强类型入口, 须 io 线程调用 (vtable 入口经
     // `startTableOp` 受理, 工作体在本管理器 io 线程执行)
 
-    /// 注册状态栏项; 返回主程序句柄 (nullptr = 主程序不支持或 id 冲突)
-    void* registerStatusItem(
-        ClientPluginInstance* inst,
-        PluginxxStringView    id,
-        PluginxxStringView    json,
-        int                   align,
-        int                   order
-    );
-
-    void* registerStatusItem(
-        ClientPluginInstance* inst,
-        std::string_view      id,
-        std::string_view      json,
-        int                   align,
-        int                   order
-    ) {
-        return registerStatusItem(inst, strToSv(id), strToSv(json), align, order);
-    }
-
-    /// 更新状态栏项; 返回 0 成功
-    int updateStatusItem(ClientPluginInstance* inst, void* item, PluginxxStringView json);
-
-    int updateStatusItem(ClientPluginInstance* inst, void* item, std::string_view json) {
-        return updateStatusItem(inst, item, strToSv(json));
-    }
-
-    void unregisterStatusItem(ClientPluginInstance* inst, void* item);
-    /// 注册面板; 返回主程序句柄 (nullptr = 主程序不支持或 id 冲突)
-    void* registerPanel(
-        ClientPluginInstance* inst,
-        PluginxxStringView    id,
-        PluginxxStringView    props_json
-    );
-
-    void* registerPanel(
-        ClientPluginInstance* inst,
-        std::string_view      id,
-        std::string_view      props_json
-    ) {
-        return registerPanel(inst, strToSv(id), strToSv(props_json));
-    }
-
-    /// 更新面板内容; 返回 0 成功
-    int updatePanel(ClientPluginInstance* inst, void* panel, PluginxxStringView items_json);
-
-    int updatePanel(ClientPluginInstance* inst, void* panel, std::string_view items_json) {
-        return updatePanel(inst, panel, strToSv(items_json));
-    }
-
-    void unregisterPanel(ClientPluginInstance* inst, void* panel);
-    /// 注册 Info 栏段落; 返回主程序句柄 (nullptr = 主程序不支持或 id 冲突)
-    void* registerInfoSection(
-        ClientPluginInstance* inst,
-        PluginxxStringView    id,
-        PluginxxStringView    props_json
-    );
-
-    void* registerInfoSection(
-        ClientPluginInstance* inst,
-        std::string_view      id,
-        std::string_view      props_json
-    ) {
-        return registerInfoSection(inst, strToSv(id), strToSv(props_json));
-    }
-
-    /// 更新 Info 栏段落内容; 返回 0 成功
-    int updateInfoSection(ClientPluginInstance* inst, void* section, PluginxxStringView items_json);
-
-    int updateInfoSection(ClientPluginInstance* inst, void* section, std::string_view items_json) {
-        return updateInfoSection(inst, section, strToSv(items_json));
-    }
-
-    void unregisterInfoSection(ClientPluginInstance* inst, void* section);
     /// 更新/删除工具消息装饰 (io 线程); 返回 0 成功
     /// - tool_call_id 空 = 操作本插件全部; decor_json 空串 = 删除
     int updateToolDecor(
@@ -906,22 +817,20 @@ public:
         return updateToolDecor(inst, strToSv(tool_call_id), strToSv(decor_json));
     }
 
-    /// 工具特化渲染 (Tool Renderer)
+    /// 工具行内容 (Tool Renderer)
     ///
-    /// 注册主程序内置工具特化渲染器 (非插件; lib 内置工具无对应插件, 由主程序自身声明)
-    /// - 存入 [ClientUiRegistry::builtinToolRenderers], 归属名固定为
-    ///   [kBuiltinRendererOwner]; 匹配优先级低于插件注册项 (插件可覆盖内置渲染)
-    /// - 回调为进程生命周期函数 (主程序自身实现), userData 由调用方保证存活;
-    ///   无插件实例/lease 语义: 不受插件禁用/卸载影响, 渲染前不做租约复查
-    /// - `displayName` 空 → 用 `toolName`; 两个回调都可空 (= 只改名)
+    /// 注册主程序内置工具行内容 (非插件; lib 内置工具无对应插件, 由主程序自身声明)
+    /// - 与插件内容同一份存储: `agentxx.client.tool` 槽位上的一条声明项 + 内容,
+    ///   归属名固定为 [kBuiltinRendererOwner]; 匹配优先级低于插件内容 (插件可覆盖)
+    /// - 生成函数 (summary / body) 在 client io 线程同步执行, 不走插件 ABI;
+    ///   无插件实例/租约语义: 不受插件禁用/卸载影响
+    /// - `displayName` 空 → 用 `toolName`; 两个函数都可空 (= 只改名)
     /// - 任意线程可调 (uiMutex_ 保护); 同一 tool_name 重复注册覆盖旧项
     /// 返回 0 成功
-    int registerBuiltinToolRenderer(
+    int registerBuiltinToolContent(
         std::string_view    toolName,
         std::string_view    displayName,
-        ClientToolRenderFn  collapsedFn = nullptr,
-        ClientToolRenderFn  expandedFn  = nullptr,
-        void*               userData    = nullptr
+        ClientToolRowContent content
     );
 
     /// 绑定动作处理器 (io 线程; cb 空则失败; 同 (plugin,targetId) 覆盖)
@@ -1291,52 +1200,13 @@ private:
     /// 停用 / 卸载: 声明项、内容、自建槽位一起撤销 (io 线程)
     void detachUiContent(std::string_view instanceName);
 
-    /// 旧注册项 (状态栏项 / 面板 / Info 段落) 的镜像: 登记声明项 + 一份内容
-    ///
-    /// - 旧成员 (`register_status_item` 一类) 与声明式接口共用一套存储: 这个函数给同名
-    ///   的声明项写入位置信息 (`data_json`), 再推一份内容;
-    /// - `json` 是已经算好的界面描述层 JSON —— 这类内容没有生成函数, 每次变化推一份;
-    /// - 同一名字重复登记只更新, 不新建 (注册顺序保留); 返回全名 (空 = 名字不合法)。
-    std::string upsertLegacyUi(
-        ClientPluginInstance* inst,
-        std::string_view      rawId,
-        std::string_view      slot,
-        std::string_view      entryDataJson,
-        std::string_view      title,
-        std::string_view      json
-    );
-
-    /// 推一份旧注册项的内容 (写结果 + 版本号 + 重发快照; 全名不存在时什么也不做)
-    void pushLegacyUi(std::string_view fullId, std::string_view json);
-
-    /// 撤销一条旧注册项的声明项与内容 (全名)
-    void dropLegacyUi(std::string_view fullId);
-
     /// 工具行内容 → 按调用渲染的适配数据
     ///
     /// 插件向 `agentxx.client.tool` 注册一份内容后, 主程序把它接成一条“按工具名”的
     /// 渲染器 (`ClientToolRenderReg`): 每次工具调用各生成一份, 结果仍进按 (调用,
     /// 折叠/展开) 分键的缓存。内容撤销后**不释放**它 (已投递的生成回调还会读),
     /// 只把 `active` 置假; 同一个全名再注册时复用同一份。
-    struct ClientToolContentBinding {
-        ClientPluginManager*       manager    = nullptr;
-        std::string                plugin;      ///< 实例名 (缓存条目的归属)
-        std::string                toolName;    ///< 声明项 data 里的工具名
-        std::string                displayName; ///< 折叠头显示名 (空 = 工具名)
-        std::vector<std::string>   deps;        ///< 内容声明的变量 (生成时只给这些)
-        /// 生成函数 (与 `PluginxxUiContentSpec::generate` 同一契约)
-        void (PLUGINXX_CALL* generate)(
-            const PluginxxHost*           host,
-            const PluginxxStringView*     ctx_json,
-            void*                         user_data,
-            const PluginxxOperatorNotify* notify,
-            PluginxxString*               error_out
-        ) = nullptr;
-        void*                      generateUd = nullptr;
-        const PluginxxHost*        hostView   = nullptr; ///< 插件的主程序视图 (生成函数入参)
-        std::shared_ptr<ClientToolRendererLease> lease; ///< 实例租约 (卸载后不再渲染)
-        std::atomic<bool>          active{false};
-    };
+    /// - `inst` 为空 = 主程序内置工具行 (归属 `agentxx.core`, 无实例与租约)
 
     /// 内容注册 / 变更后同步工具行渲染器 (io 线程; 非 `agentxx.client.tool` 槽位直接返回)
     void syncToolContentRenderer(ClientPluginInstance* inst, std::string_view fullId);
@@ -1350,22 +1220,10 @@ private:
         const ClientUiToolScope&        scope
     ) const;
 
-    /// 折叠头 / 展开体的适配回调 (主程序自己调: `ClientToolRenderReg` 的函数指针)
-    static int32_t PLUGINXX_CALL toolContentRenderCollapsed(
-        void*                        user_data,
-        const ClientToolRenderInput* input,
-        const PluginxxOperatorNotify* notify,
-        PluginxxString*               error_out
-    );
-    static int32_t PLUGINXX_CALL toolContentRenderExpanded(
-        void*                        user_data,
-        const ClientToolRenderInput* input,
-        const PluginxxOperatorNotify* notify,
-        PluginxxString*               error_out
-    );
+    /// 插件内容的生成入口 (投到插件执行线程后调用; 结果经 [toolContentDone] 交回)
     static int32_t toolContentRender(
-        void*                        user_data,
-        const ClientToolRenderInput* input,
+        void*                         user_data,
+        const ClientToolRenderInput*  input,
         const PluginxxOperatorNotify* notify,
         PluginxxString*               error_out,
         bool                          summary
@@ -1451,6 +1309,9 @@ private:
     /// 因为已投递的生成回调还会读它; 同一全名再注册时复用)
     std::map<std::string, std::shared_ptr<ClientToolContentBinding>, std::less<>>
         toolContentBindings_;
+
+    /// 主程序内置工具行的同步内容 (全 id → 内容; 进程生命周期, 不随插件卸载变化)
+    std::map<std::string, ClientToolRowContent, std::less<>> builtinToolRows_;
 
     /// 展示区域可见性快照 (UI 线程写, 任意线程读; 见 reportRegionVisible)
     /// - 供 `pause_when_hidden` 定时器门控与 `agentxx.client.timer` 的 is_visible 使用
@@ -1550,7 +1411,7 @@ private:
 /// UI 适配器抽象接口 (UI 无关语义层 → 具体 UI 实现)
 ///
 /// 实现方 (TUI/CLI/未来 GUI) 职责:
-/// - supportedInterfaces(): 声明支持的接口名集合 ("client.panel" 等, 常量见
+/// - supportedInterfaces(): 声明支持的接口名集合 ("client.toast" 等, 常量见
 ///   [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h)
 ///   plugin_interfaces; 主程序据此加载 "client.ui" 接口表、
 ///   子能力限制判定与插件加载限制)
@@ -1583,34 +1444,20 @@ public:
 
     /// ---- 信号回调 (client io 线程; 快速返回) ----
 
-    /// 状态栏项注册/更新/移除 (props: {"text","tooltip"})
-    virtual void onStatusItemRegistered(
-        const std::string& /*id*/,
-        const utilxx_base::Json& /*props*/,
-        int /*align*/,
-        int /*order*/
+    /// 界面内容注册 (slot 短名 + 短 id + 展示名)
+    ///
+    /// 客户端要"按内容建控件"的地方用它, 例如侧边栏按 `panel` 槽位上的内容建 tab;
+    /// 只要重绘的地方用 [onContentUpdated] 就够。同一份内容重复注册会再来一次,
+    /// 调用方要按 id 去重。
+    virtual void onContentRegistered(
+        const std::string& /*slot*/,
+        const std::string& /*shortId*/,
+        const std::string& /*title*/
     ) {}
 
+    /// 界面内容撤销 (插件注销 / 停用 / 卸载)
     virtual void
-        onStatusItemUpdated(const std::string& /*id*/, const utilxx_base::Json& /*props*/) {}
-
-    virtual void onStatusItemRemoved(const std::string& /*id*/) {}
-
-    /// 面板注册/更新/移除 (props: {"title"}; items: {"items":[...]})
-    virtual void onPanelRegistered(const std::string& /*id*/, const utilxx_base::Json& /*props*/) {}
-
-    virtual void onPanelUpdated(const std::string& /*id*/, const utilxx_base::Json& /*items*/) {}
-
-    virtual void onPanelRemoved(const std::string& /*id*/) {}
-
-    /// Info 栏段落注册/更新/移除 (props: {"title"}; items: {"items":[...]})
-    virtual void
-        onInfoSectionRegistered(const std::string& /*id*/, const utilxx_base::Json& /*props*/) {}
-
-    virtual void
-        onInfoSectionUpdated(const std::string& /*id*/, const utilxx_base::Json& /*items*/) {}
-
-    virtual void onInfoSectionRemoved(const std::string& /*id*/) {}
+        onContentRemoved(const std::string& /*slot*/, const std::string& /*shortId*/) {}
 
     /// toast 提示 (level: 0=info 1=warning 2=error)
     virtual void onToast(const std::string& /*text*/, int /*level*/) {}

@@ -357,7 +357,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderPluginPanel(const std::string& p
         return out;
     }
     auto reg = mgr->uiRegistrySnapshot();
-    // 内容来源: 声明式注册表 (旧 register_panel 写的就是这里, 面板 tab 也按同一个 id 建)
+    // 内容来源: 声明式注册表 (面板 tab 按同一个内容 id 建)
     std::shared_ptr<const agentxx::plugin::ClientUiSnapshot> uiSnap = mgr->uiContentSnapshot();
     const agentxx::plugin::ClientUiContentView* content
         = uiSnap ? uiSnap->contentOf(agentxx::plugin::kClientUiSlotPanel, panelId) : nullptr;

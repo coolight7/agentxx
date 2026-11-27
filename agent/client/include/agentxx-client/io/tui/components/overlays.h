@@ -877,7 +877,7 @@ private:
 
 /// 通用 diff overlay (open_overlay DIFF 驱动; payload 解析见 [parsePluginDiffPayload])
 ///
-/// - 支持单段与多段: `{path,old_str,new_str}` / `{path,edits:[{old_str,new_str},...]}`
+/// - 支持单段与多段: `{path,edits:[{old_str,new_str},...]}`
 ///   (`edits` 也接受单个对象); 多段时每段各渲染一份逐行差异, 段间一条分隔,
 ///   文件路径只在首段展示
 /// - 渲染走共享组件层 (Diff 项 + Divider 项, 与工具展开体同一套实现;
@@ -924,7 +924,7 @@ private:
     OverlayOptions options_;
 };
 
-/// 通用自定义 overlay (open_overlay CUSTOM 驱动; payload={"items":[...]})
+/// 通用自定义 overlay (open_overlay CUSTOM 驱动; payload={"blocks":[...]})
 ///
 /// - items schema 同 panel/items (共享组件层全部 kind, 见 ui_components.h),
 ///   button 同样走 action_id + 通用派发 (owner 固定 "__overlay", 被 fallback 接住)

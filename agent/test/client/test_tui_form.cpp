@@ -95,8 +95,6 @@ public:
         namespace pi = agentxx::plugin::plugin_interfaces;
         return {
             std::string{pi::ClientUi},
-            std::string{pi::ClientPanel},
-            std::string{pi::ClientInfoSection},
             std::string{pi::ClientOverlay},
             std::string{pi::ClientAction},
             std::string{pi::ClientComponents},
@@ -388,7 +386,7 @@ void test_overlay_form_submit_through_action_channel() {
     ctx.viewportHeight = 30;
     ctx.refreshFrameSize();
 
-    const std::string payload = R"({"items":[
+    const std::string payload = R"({"blocks":[
         {"kind":"Table","header":true,"columns":[{"title":"Path"},
                                                 {"title":"Scope","w":6}],
          "rows":[["a.txt","write"]]},
@@ -467,24 +465,68 @@ void test_overlay_form_submit_through_action_channel() {
 // 3) 面板接入点: 表单描述 → 命中区域登记 (点击回传见 `tui_widget` 的面板用例)
 // ---------------------------------------------------------------------------
 
+namespace {
+
+/// 用例要交出的文档 (生成函数读它; 同一份文档也直接推给主程序)
+const char* g_probeDoc = nullptr;
+
+/// 生成函数: 回 [g_probeDoc] 那一份 (用例只验证渲染, 不算内容)
+void PLUGINXX_CALL probeDocGenerate(
+    const PluginxxHost* /*host*/,
+    const PluginxxStringView* /*ctx_json*/,
+    void* /*user_data*/,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString* /*error_out*/
+) {
+    if (!notify || !notify->done) {
+        return;
+    }
+    std::string payload = std::string{"{\"json\":"} + (g_probeDoc ? g_probeDoc : "{}") + "}";
+    const PluginxxStringView view{payload.data(), payload.size()};
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &view);
+}
+
+/// 注册一份界面内容并推一份文档 (两者内容相同, 生成与推送不会互相覆盖)
+int32_t registerProbeContent(
+    agentxx::plugin::ClientPluginManager* mgr,
+    agentxx::plugin::ClientPluginInstance* inst,
+    const char*                            id,
+    const char*                            slot,
+    const char*                            title,
+    const std::string&                     doc
+) {
+    g_probeDoc = doc.c_str();
+    PluginxxUiContentSpec spec{};
+    spec.version     = 1;
+    spec.struct_size = sizeof(PluginxxUiContentSpec);
+    spec.id          = agentxx::plugin::PluginStringView::fromCstr(id);
+    spec.slot        = agentxx::plugin::PluginStringView::fromCstr(slot);
+    spec.title       = agentxx::plugin::PluginStringView::fromCstr(title);
+    spec.generate    = &probeDocGenerate;
+    const int32_t rc = mgr->registerUiContent(inst, &spec);
+    if (rc != PLUGINXX_RESULT_OK) {
+        return rc;
+    }
+    return mgr->pushUiContent(inst, id, doc);
+}
+
+} // namespace
+
 /// 面板内容里的表单: 渲染后控件行登记可命中区域 (owner = 面板 id)
 void test_panel_form_registers_hit_regions() {
     asio::io_context io;
     auto             mgr = std::make_shared<FormTestManager>(io.get_executor());
     mgr->setUiAdapter(std::make_shared<FormTestUiAdapter>());
-    auto  inst  = mgr->createInstance("panel_form_probe");
-    auto* panel = static_cast<AgentxxPanel*>(mgr->registerPanel(
-        inst.get(),
-        std::string_view{"panel_form_probe.panel"},
-        std::string_view{R"({"title":"Form"})"}
-    ));
-    XX_TEST_EXPECT_TRUE(panel != nullptr);
-    const std::string items = R"({"items":[
+    auto inst = mgr->createInstance("panel_form_probe");
+    const std::string items = R"({"blocks":[
         {"kind":"Control","control":"checkbox","id":"verbose","label":"Verbose","value":false},
         {"kind":"Row","gap":8,"children":[
             {"kind":"Button","label":"SAVE","variant":"normal","action":"__submit"}]}
     ]})";
-    XX_TEST_EXPECT_EQ(mgr->updatePanel(inst.get(), panel, std::string_view{items}), 0);
+    XX_TEST_EXPECT_EQ(
+        registerProbeContent(mgr.get(), inst.get(), "panel_form_probe.panel", "panel", "Form", items),
+        0
+    );
 
     auto tui = std::make_shared<TUIClientAgentIO>(io.get_executor(), "session");
     tui->setPluginManager(mgr);

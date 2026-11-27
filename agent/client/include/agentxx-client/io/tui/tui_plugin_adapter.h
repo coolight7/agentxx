@@ -19,9 +19,9 @@ namespace client {
 /// - sendPluginMessage / requestCancel / sendPluginDataUp 在 io 线程直接执行
 ///   (端点方法线程安全或本就在 io 线程)
 ///
-/// 面板挂载: onPanelRegistered 时经 postToUi 调 sidebar()->addTab, render 回调
-/// 读取 TUIClientAgentIO::renderPluginPanel (UI 线程渲染, 从注册表快照读取);
-/// 移除时 removeTab。
+/// 面板挂载: onContentRegistered 时经 postToUi 调 sidebar()->addTab, render 回调
+/// 读取 TUIClientAgentIO::renderPluginPanel (UI 线程渲染, 从内容快照读取);
+/// 内容撤销 (onContentRemoved) 时 removeTab。
 class TuiPluginAdapter : public agentxx::plugin::PluginUiAdapter {
 public:
 
@@ -35,10 +35,7 @@ public:
             // (下方逐个声明), 因此同时声明表整体 —— 清单里按表名声明依赖的插件
             // 视为已满足; 子能力不全的主程序 (cli) 不声明本项
             std::string{pi::ClientUi},
-            std::string{pi::ClientStatusItem},
-            std::string{pi::ClientPanel},
             std::string{pi::ClientToast},
-            std::string{pi::ClientInfoSection},
             std::string{pi::ClientCommand},
             // 工具消息装饰与工具行内容 (ui 表 update_tool_decor 与
             // `agentxx.client.tool` 上的声明项 + 内容): 消息列表按装饰 items 通用渲染
@@ -102,86 +99,47 @@ public:
         return j.dump();
     }
 
-    // ---- 状态栏项 ----
-    void onStatusItemRegistered(
-        const std::string& id,
-        const utilxx_base::Json& /*props*/,
-        int /*align*/,
-        int /*order*/
+    // ---- 声明式界面内容 (状态栏 / 面板 / Info 段落 / 插件自建槽位) ----
+    //
+    // 状态栏与 Info 段落每帧从内容快照渲染, 只需触发重绘;
+    // 面板要按内容 id 建/删侧边栏 tab (内容标题就是 tab 标题)。
+    void onContentRegistered(
+        const std::string& slot,
+        const std::string& shortId,
+        const std::string& title
     ) override {
-        // 状态栏每帧从注册表快照渲染, 无需额外动作; 仅触发重绘
-        if (auto tui = tui_.lock()) {
-            tui->requestRedraw();
-        }
-    }
-
-    void onStatusItemUpdated(const std::string& /*id*/, const utilxx_base::Json& /*props*/)
-        override {
-        if (auto tui = tui_.lock()) {
-            tui->requestRedraw();
-        }
-    }
-
-    void onStatusItemRemoved(const std::string& /*id*/) override {
-        if (auto tui = tui_.lock()) {
-            tui->requestRedraw();
-        }
-    }
-
-    // ---- 侧边栏面板 ----
-    void onPanelRegistered(const std::string& id, const utilxx_base::Json& props) override {
         auto tui = tui_.lock();
         if (!tui) {
             return;
         }
-        std::string title
-            = props.is_object() && props.contains("title") ? props["title"].get<std::string>() : id;
-        // 组件树 UI 线程独占: 投递 addTab (render 回调读取 renderPluginPanel)
-        tui->postToUi([tui, id, title]() {
-            tui->addPluginPanelTab(id, title);
-        });
+        if (slot == agentxx::plugin::kClientUiSlotPanel) {
+            const std::string tabTitle = title.empty() ? shortId : title;
+            tui->postToUi([tui, shortId, tabTitle]() {
+                tui->addPluginPanelTab(shortId, tabTitle);
+            });
+            return;
+        }
+        tui->requestRedraw();
     }
 
-    void onPanelUpdated(const std::string& /*id*/, const utilxx_base::Json& /*items*/) override {
+    void onContentUpdated(const std::string& /*slot*/, const std::string& /*shortId*/) override {
         if (auto tui = tui_.lock()) {
             tui->requestRedraw();
         }
     }
 
-    void onPanelRemoved(const std::string& id) override {
+    void onContentRemoved(const std::string& slot, const std::string& shortId) override {
         auto tui = tui_.lock();
         if (!tui) {
             return;
         }
-        tui->postToUi([tui, id]() {
-            tui->removePluginPanelTab(id);
-        });
-    }
-
-    // ---- Info 栏段落 (渲染进内置 Info tab; 每帧从注册表快照读取) ----
-    void onInfoSectionRegistered(
-        const std::string& /*id*/,
-        const utilxx_base::Json& /*props*/
-    ) override {
-        // 触发重绘即可, Info tab 渲染时从注册表快照读取段落
-        if (auto tui = tui_.lock()) {
-            tui->requestRedraw();
+        if (slot == agentxx::plugin::kClientUiSlotPanel) {
+            tui->postToUi([tui, shortId]() {
+                tui->removePluginPanelTab(shortId);
+            });
+            return;
         }
-    }
-
-    void onInfoSectionUpdated(
-        const std::string& /*id*/,
-        const utilxx_base::Json& /*items*/
-    ) override {
-        if (auto tui = tui_.lock()) {
-            tui->requestRedraw();
-        }
-    }
-
-    void onInfoSectionRemoved(const std::string& /*id*/) override {
-        if (auto tui = tui_.lock()) {
-            tui->requestRedraw();
-        }
+        tui->requestRedraw();
     }
 
     // ---- toast ----

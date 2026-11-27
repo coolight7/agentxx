@@ -305,7 +305,7 @@ AGENTXX_AGENT_PLUGIN_EXPORT(
 
 1. **By Functional Scope**:
    - **Agent Plugins**: Extends session execution flows (Tools, Hooks, Events, Capabilities, Resources).
-   - **Client Plugins**: Extends TUI/CLI user interface (StatusItems, Panels, InfoSections, Commands, ToolDecors).
+   - **Client Plugins**: Extends TUI/CLI user interface (status items, panels, Info sections and tool rows as content; commands; tool decors).
    - **Dual-Sided Plugins**: Exports both Agent and Client entry points in a single binary, servicing both sides simultaneously; cross-side communication utilizes Wire messages (`PluginData` agent→client / `PluginDataUp` client→agent).
 
 2. **By Compilation & Distribution**:
@@ -407,7 +407,7 @@ tables (`agentxx.client.*`). Client events are broadcast channels now — the ol
 
 | IID | Version | Capability |
 |---|---|---|
-| `agentxx_client_ui` | 4 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay`; v3 added the declarative UI members (`register_ui_item/...`, `register_ui_content/...`, `define_ui_slot/...`); v4 removed the tool-row callbacks (`register_tool_renderer / unregister_tool_renderer`) — a tool row is content on the `tool` slot. |
+| `agentxx_client_ui` | 5 | `register_command/unregister_command`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay`; v3 added the declarative UI members (`register_ui_item/...`, `register_ui_content/...`, `define_ui_slot/...`); v4 removed the tool-row callbacks (`register_tool_renderer / unregister_tool_renderer`) — a tool row is content on the `tool` slot; v5 removed the nine status-item / panel / Info-section members and their three handle types (those three places are content on the `status` / `panel` / `info` slots). |
 | `agentxx_client_session` | 1 | `get_client_state` (snapshot JSON), `send_user_input`, `request_cancel`. |
 | `agentxx_client_wire` | 1 | `send_plugin_data(topic, json)` → published on the agent bus under the same topic (topic must be the full name `agentxx.client.plugin.<plugin name>.<event>`). |
 | `agentxx_client_self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (Returns normalized absolute path configured via YAML `config`). |
@@ -430,15 +430,14 @@ The C++ kit registers them in one coroutine call:
   (leave `generate` empty, call `Content::publish(doc)` from whichever thread owns the data). `publish`
   remembers the document, so the generate call the host makes later answers with that copy and never
   reads another thread's state;
-- panel and Info documents are `{"items":[…]}`; a status item document is `{"blocks":[…]}` (a single line);
+- panel, Info and status documents are `{"blocks":[…]}` (a status item is a single line);
 - keep the returned handle alive until the instance unloads (the generate function's `user_data` points at it).
 
-The legacy members (`register_status_item` / `register_panel` / `register_info_section` and their
-`update_*` / `unregister_*`) still work: the host mirrors them onto the same registry (one declaration
-item plus one content), so there is a single drawing path. The bundled plugins
+There is exactly one path: v5 removed the nine legacy members (`register_status_item` /
+`register_panel` / `register_info_section` and their `update_*` / `unregister_*`) together with the
+three handle types, plus the kit wrappers and the JS globals that built on them. Every bundled plugin
 (`agentxx_websearch`, `agentxx_chatbot`, `agentxx_codegraph`, `agentxx_system_monitor`,
-`example_plugin`) have all moved to content; `agentxx_planning` still writes both its Info section and
-the content (lazy registration), and external plugins plus the JS bridge keep using the old members.
+`agentxx_planning`, `example_plugin`) and the JS bridge write content.
 
 ### Tool Row Content (Tool Rendering & Decor)
 

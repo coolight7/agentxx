@@ -350,16 +350,7 @@ enum BridgeMagic {
     B_CLIENT_UPDATE_UI_SLOT,
     B_CLIENT_OPEN_OVERLAY,
     B_CLIENT_CLOSE_OVERLAY,
-    // client 侧展示面 (状态栏项 / 面板 / Info 段落 / 命令 / 动作绑定 / 定时器 / 快捷键)
-    B_CLIENT_REGISTER_STATUS_ITEM,
-    B_CLIENT_UPDATE_STATUS_ITEM,
-    B_CLIENT_UNREGISTER_STATUS_ITEM,
-    B_CLIENT_REGISTER_PANEL,
-    B_CLIENT_UPDATE_PANEL,
-    B_CLIENT_UNREGISTER_PANEL,
-    B_CLIENT_REGISTER_INFO_SECTION,
-    B_CLIENT_UPDATE_INFO_SECTION,
-    B_CLIENT_UNREGISTER_INFO_SECTION,
+    // client 侧交互面 (命令 / 动作绑定 / 定时器 / 快捷键)
     B_CLIENT_REGISTER_COMMAND,
     B_CLIENT_UNREGISTER_COMMAND,
     B_CLIENT_BIND_ACTION,
@@ -643,11 +634,8 @@ struct JsCommandCall {
 /// client 表用不透明指针做句柄; JS 的 number 存指针会丢精度, 所以换成整数 token,
 /// 按类别查回真实指针。
 enum class ClientHandleKind : int32_t {
-    StatusItem  = 1, ///< AgentxxStatusItem*
-    Panel       = 2, ///< AgentxxPanel*
-    InfoSection = 3, ///< AgentxxInfoSection*
-    Timer       = 4, ///< AgentxxTimer*
-    Keybind     = 5, ///< AgentxxKeybind*
+    Timer   = 1, ///< AgentxxTimer*
+    Keybind = 2, ///< AgentxxKeybind*
 };
 
 /// JS 插件上下文 (生命周期: plugins_ / mirror / 进行中任务共享持有)
@@ -3474,17 +3462,7 @@ private:
             def("publish", B_PUBLISH, 2);
             def("setTimeout", B_SET_TIMEOUT, 2);
             def("clearTimeout", B_CLEAR_TIMEOUT, 1);
-            // 展示面: 状态栏项 / 面板 / Info 段落 (句柄用 digit token 表示)
-            def("registerStatusItem", B_CLIENT_REGISTER_STATUS_ITEM, 1);
-            def("updateStatusItem", B_CLIENT_UPDATE_STATUS_ITEM, 2);
-            def("unregisterStatusItem", B_CLIENT_UNREGISTER_STATUS_ITEM, 1);
-            def("registerPanel", B_CLIENT_REGISTER_PANEL, 1);
-            def("updatePanel", B_CLIENT_UPDATE_PANEL, 2);
-            def("unregisterPanel", B_CLIENT_UNREGISTER_PANEL, 1);
-            def("registerInfoSection", B_CLIENT_REGISTER_INFO_SECTION, 1);
-            def("updateInfoSection", B_CLIENT_UPDATE_INFO_SECTION, 2);
-            def("unregisterInfoSection", B_CLIENT_UNREGISTER_INFO_SECTION, 1);
-            // 交互面: 斜杠命令 / 按钮动作 / 定时器 / 快捷键
+            // 交互面: 斜杠命令 / 按钮动作 / 定时器 / 快捷键 (句柄用 digit token 表示)
             def("registerCommand", B_CLIENT_REGISTER_COMMAND, 1);
             def("unregisterCommand", B_CLIENT_UNREGISTER_COMMAND, 1);
             def("bindAction", B_CLIENT_BIND_ACTION, 2);
@@ -8708,7 +8686,7 @@ JSValue JsEngine::clientBridgeCall(
                         type = AGENTXX_OVERLAY_MERMAID;
                     } else if (name == "diff") {
                         type = AGENTXX_OVERLAY_DIFF;
-                    } else if (name == "custom" || name == "items") {
+                    } else if (name == "custom") {
                         type = AGENTXX_OVERLAY_CUSTOM;
                     } else {
                         type = AGENTXX_OVERLAY_TEXT;
@@ -8760,10 +8738,7 @@ JSValue JsEngine::clientBridgeCall(
             }
             const JSValueConst specObj = argv[0];
             const std::string  id      = strField(specObj, "id");
-            std::string        slot    = strField(specObj, "slot");
-            if (slot.empty()) {
-                slot = strField(specObj, "type");
-            }
+            const std::string  slot    = strField(specObj, "slot");
             if (id.empty() || slot.empty()) {
                 return JS_ThrowTypeError(ctx, "registerUiItem: id and slot required");
             }
@@ -8828,10 +8803,7 @@ JSValue JsEngine::clientBridgeCall(
             }
             const JSValueConst specObj = argv[0];
             const std::string  id      = strField(specObj, "id");
-            std::string        slot    = strField(specObj, "slot");
-            if (slot.empty()) {
-                slot = strField(specObj, "type");
-            }
+            const std::string  slot    = strField(specObj, "slot");
             if (id.empty() || slot.empty()) {
                 return JS_ThrowTypeError(ctx, "registerUiContent: slot and id required");
             }
@@ -9000,348 +8972,6 @@ JSValue JsEngine::clientBridgeCall(
                     PluginxxString*           err
                 ) { return iface.ui->update_ui_slot(host, &slotSv, &idsSv, cb, ud, err); }
             );
-        }
-
-        // ---- 展示面: 状态栏项 / 面板 / Info 段落 ----
-        // 句柄都以整数 token 给脚本 (client 表的句柄是不透明指针, number 存不下),
-        // token -> {类别, 指针, id} 记在实例的 clientHandles 里。
-        case B_CLIENT_REGISTER_STATUS_ITEM:
-        case B_CLIENT_REGISTER_PANEL:
-        case B_CLIENT_REGISTER_INFO_SECTION: {
-            if (argc < 1 || !JS_IsObject(argv[0])) {
-                return JS_ThrowTypeError(ctx, "register*: spec object required");
-            }
-            const PluginxxHost* realHost = pctx->host;
-            const ClientHandleKind kind = magic == B_CLIENT_REGISTER_STATUS_ITEM
-                                              ? ClientHandleKind::StatusItem
-                                              : (magic == B_CLIENT_REGISTER_PANEL
-                                                     ? ClientHandleKind::Panel
-                                                     : ClientHandleKind::InfoSection);
-            const JSValueConst specObj = argv[0];
-            const std::string  id      = strField(specObj, "id");
-            if (id.empty()) {
-                return JS_ThrowTypeError(ctx, "register*: id required");
-            }
-            auto idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-            // 属性 JSON: 状态项是 {text, tooltip, segments...}, 面板/段落是 {title}
-            std::string props = jsonField(specObj, "props");
-            if (props.empty()) {
-                props = "{}";
-            }
-            auto propsSv = agentxx::plugin::PluginStringView::from(props.data(), props.size());
-            // 句柄 → token 记账 (三种展示项共用; 在 JS 线程执行)
-            auto finishRegister = [pctx, kind, id, realHost, ui = iface.ui](
-                                      JSContext* c,
-                                      void*      handle
-                                  ) -> JSValue {
-                const int64_t token = ++pctx->nextCallbackToken;
-                pctx->clientHandles[token]
-                    = JsPluginCtx::ClientHandle{static_cast<int32_t>(kind), handle, id};
-                // 脚本卸载时撤销 (主程序在实例卸载时也会摘除)
-                // - 脚本自己注销过就不再碰: 句柄保活到实例析构, 但没必要再交一次
-                pctx->rollbackActions.push_back([ui, realHost, pctx, kind, token]() {
-                    auto live = pctx->clientHandles.find(token);
-                    if (live == pctx->clientHandles.end()) {
-                        return;
-                    }
-                    void* h = live->second.handle;
-                    pctx->clientHandles.erase(live);
-                    if (ui == nullptr) {
-                        return;
-                    }
-                    // 只提交, 不等结果
-                    if (kind == ClientHandleKind::StatusItem
-                        && ui->unregister_status_item) {
-                        ui->unregister_status_item(
-                            realHost,
-                            static_cast<AgentxxStatusItem*>(h),
-                            nullptr,
-                            nullptr,
-                            nullptr
-                        );
-                    } else if (kind == ClientHandleKind::Panel && ui->unregister_panel) {
-                        ui->unregister_panel(
-                            realHost,
-                            static_cast<AgentxxPanel*>(h),
-                            nullptr,
-                            nullptr,
-                            nullptr
-                        );
-                    } else if (
-                        kind == ClientHandleKind::InfoSection && ui->unregister_info_section
-                    ) {
-                        ui->unregister_info_section(
-                            realHost,
-                            static_cast<AgentxxInfoSection*>(h),
-                            nullptr,
-                            nullptr,
-                            nullptr
-                        );
-                    }
-                });
-                return JS_NewInt64(c, token);
-            };
-            if (kind == ClientHandleKind::StatusItem && iface.ui && iface.ui->register_status_item) {
-                const int32_t align = [&]() {
-                    JSValue v = JS_GetPropertyStr(ctx, specObj, "align");
-                    int32_t out = 0;
-                    if (JS_IsNumber(v)) {
-                        JS_ToInt32(ctx, &out, v);
-                    } else if (JS_IsString(v)) {
-                        out = jsToCppString(ctx, v) == "right" ? 1 : 0;
-                    }
-                    JS_FreeValue(ctx, v);
-                    return out;
-                }();
-                const int32_t order = [&]() {
-                    JSValue v = JS_GetPropertyStr(ctx, specObj, "order");
-                    int32_t out = 0;
-                    if (JS_IsNumber(v)) {
-                        JS_ToInt32(ctx, &out, v);
-                    }
-                    JS_FreeValue(ctx, v);
-                    return out;
-                }();
-                return tableOpPromise(
-                    ctx,
-                    realHost,
-                    engine,
-                    [iface, realHost, idSv, propsSv, align, order](
-                        PluginxxOperatorCallback cb,
-                        void*                     ud,
-                        PluginxxString*           err
-                    ) {
-                        return iface.ui->register_status_item(
-                            realHost,
-                            &idSv,
-                            &propsSv,
-                            align,
-                            order,
-                            cb,
-                            ud,
-                            err
-                        );
-                    },
-                    [finishRegister](JSContext* c, const JsTableResult& r) -> JSValue {
-                        if (!r.ok()) {
-                            return JS_NewInt64(c, 0);
-                        }
-                        auto* h = agentxx::plugin::clientHandleFromText<AgentxxStatusItem>(
-                            r.text()
-                        );
-                        if (h == nullptr) {
-                            return JS_NewInt64(c, 0);
-                        }
-                        return finishRegister(c, h);
-                    }
-                );
-            }
-            if (kind == ClientHandleKind::Panel && iface.ui && iface.ui->register_panel) {
-                return tableOpPromise(
-                    ctx,
-                    realHost,
-                    engine,
-                    [iface, realHost, idSv, propsSv](
-                        PluginxxOperatorCallback cb,
-                        void*                     ud,
-                        PluginxxString*           err
-                    ) {
-                        return iface.ui->register_panel(realHost, &idSv, &propsSv, cb, ud, err);
-                    },
-                    [finishRegister](JSContext* c, const JsTableResult& r) -> JSValue {
-                        if (!r.ok()) {
-                            return JS_NewInt64(c, 0);
-                        }
-                        auto* h = agentxx::plugin::clientHandleFromText<AgentxxPanel>(r.text());
-                        if (h == nullptr) {
-                            return JS_NewInt64(c, 0);
-                        }
-                        return finishRegister(c, h);
-                    }
-                );
-            }
-            if (kind == ClientHandleKind::InfoSection && iface.ui
-                && iface.ui->register_info_section) {
-                return tableOpPromise(
-                    ctx,
-                    realHost,
-                    engine,
-                    [iface, realHost, idSv, propsSv](
-                        PluginxxOperatorCallback cb,
-                        void*                     ud,
-                        PluginxxString*           err
-                    ) {
-                        return iface.ui->register_info_section(
-                            realHost,
-                            &idSv,
-                            &propsSv,
-                            cb,
-                            ud,
-                            err
-                        );
-                    },
-                    [finishRegister](JSContext* c, const JsTableResult& r) -> JSValue {
-                        if (!r.ok()) {
-                            return JS_NewInt64(c, 0);
-                        }
-                        auto* h = agentxx::plugin::clientHandleFromText<AgentxxInfoSection>(
-                            r.text()
-                        );
-                        if (h == nullptr) {
-                            return JS_NewInt64(c, 0);
-                        }
-                        return finishRegister(c, h);
-                    }
-                );
-            }
-            return JS_NewInt64(ctx, 0); ///< 0 = 失败 (主程序不支持)
-        }
-
-        case B_CLIENT_UPDATE_STATUS_ITEM:
-        case B_CLIENT_UPDATE_PANEL:
-        case B_CLIENT_UPDATE_INFO_SECTION: {
-            if (argc < 2 || !JS_IsNumber(argv[0])) {
-                return JS_ThrowTypeError(ctx, "update*: (handle, content) required");
-            }
-            int64_t token = 0;
-            JS_ToInt64(ctx, &token, argv[0]);
-            const ClientHandleKind kind = magic == B_CLIENT_UPDATE_STATUS_ITEM
-                                              ? ClientHandleKind::StatusItem
-                                              : (magic == B_CLIENT_UPDATE_PANEL
-                                                     ? ClientHandleKind::Panel
-                                                     : ClientHandleKind::InfoSection);
-            auto it = pctx->clientHandles.find(token);
-            if (it == pctx->clientHandles.end() || it->second.kind != static_cast<int32_t>(kind)) {
-                return JS_FALSE; ///< 句柄无效 / 类别不对
-            }
-            // 状态项传属性对象; 面板/段落传 items 数组或 {"items":[...]}
-            std::string content;
-            if (kind == ClientHandleKind::StatusItem) {
-                content = JS_IsString(argv[1]) ? jsToCppString(ctx, argv[1])
-                                               : valueToJsonString(ctx, argv[1]);
-            } else if (JS_IsArray(argv[1])) {
-                const std::string arr = valueToJsonString(ctx, argv[1]);
-                content               = fmt::format("{{\"items\":{}}}", arr.empty() ? "[]" : arr);
-            } else if (JS_IsString(argv[1])) {
-                content = jsToCppString(ctx, argv[1]);
-            } else {
-                content = valueToJsonString(ctx, argv[1]);
-            }
-            if (content.empty()) {
-                return JS_FALSE;
-            }
-            auto contentSv = agentxx::plugin::PluginStringView::from(content.data(), content.size());
-            if (kind == ClientHandleKind::StatusItem && iface.ui && iface.ui->update_status_item) {
-                auto* handle = static_cast<AgentxxStatusItem*>(it->second.handle);
-                return tableOkPromise(
-                    ctx,
-                    host,
-                    engine,
-                    [iface, host, handle, contentSv](
-                        PluginxxOperatorCallback cb,
-                        void*                     ud,
-                        PluginxxString*           err
-                    ) {
-                        return iface.ui->update_status_item(
-                            host,
-                            handle,
-                            &contentSv,
-                            cb,
-                            ud,
-                            err
-                        );
-                    }
-                );
-            }
-            if (kind == ClientHandleKind::Panel && iface.ui && iface.ui->update_panel) {
-                auto* handle = static_cast<AgentxxPanel*>(it->second.handle);
-                return tableOkPromise(
-                    ctx,
-                    host,
-                    engine,
-                    [iface, host, handle, contentSv](
-                        PluginxxOperatorCallback cb,
-                        void*                     ud,
-                        PluginxxString*           err
-                    ) {
-                        return iface.ui->update_panel(host, handle, &contentSv, cb, ud, err);
-                    }
-                );
-            }
-            if (kind == ClientHandleKind::InfoSection && iface.ui
-                && iface.ui->update_info_section) {
-                auto* handle = static_cast<AgentxxInfoSection*>(it->second.handle);
-                return tableOkPromise(
-                    ctx,
-                    host,
-                    engine,
-                    [iface, host, handle, contentSv](
-                        PluginxxOperatorCallback cb,
-                        void*                     ud,
-                        PluginxxString*           err
-                    ) {
-                        return iface.ui->update_info_section(
-                            host,
-                            handle,
-                            &contentSv,
-                            cb,
-                            ud,
-                            err
-                        );
-                    }
-                );
-            }
-            return JS_FALSE;
-        }
-
-        case B_CLIENT_UNREGISTER_STATUS_ITEM:
-        case B_CLIENT_UNREGISTER_PANEL:
-        case B_CLIENT_UNREGISTER_INFO_SECTION: {
-            if (argc < 1 || !JS_IsNumber(argv[0])) {
-                return JS_ThrowTypeError(ctx, "unregister*: handle required");
-            }
-            int64_t token = 0;
-            JS_ToInt64(ctx, &token, argv[0]);
-            const ClientHandleKind kind = magic == B_CLIENT_UNREGISTER_STATUS_ITEM
-                                              ? ClientHandleKind::StatusItem
-                                              : (magic == B_CLIENT_UNREGISTER_PANEL
-                                                     ? ClientHandleKind::Panel
-                                                     : ClientHandleKind::InfoSection);
-            auto it = pctx->clientHandles.find(token);
-            if (it == pctx->clientHandles.end() || it->second.kind != static_cast<int32_t>(kind)) {
-                return JS_FALSE;
-            }
-            void* handle = it->second.handle;
-            pctx->clientHandles.erase(it);
-            // 只提交, 不等结果
-            if (kind == ClientHandleKind::StatusItem && iface.ui && iface.ui->unregister_status_item) {
-                iface.ui->unregister_status_item(
-                    host,
-                    static_cast<AgentxxStatusItem*>(handle),
-                    nullptr,
-                    nullptr,
-                    nullptr
-                );
-            } else if (kind == ClientHandleKind::Panel && iface.ui && iface.ui->unregister_panel) {
-                iface.ui->unregister_panel(
-                    host,
-                    static_cast<AgentxxPanel*>(handle),
-                    nullptr,
-                    nullptr,
-                    nullptr
-                );
-            } else if (
-                kind == ClientHandleKind::InfoSection && iface.ui && iface.ui->unregister_info_section
-            ) {
-                iface.ui->unregister_info_section(
-                    host,
-                    static_cast<AgentxxInfoSection*>(handle),
-                    nullptr,
-                    nullptr,
-                    nullptr
-                );
-            }
-            return JS_TRUE;
         }
 
         // ---- 斜杠命令 (execute 同步返回动作 JSON) ----

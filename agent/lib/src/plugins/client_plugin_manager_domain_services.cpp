@@ -122,9 +122,6 @@ std::string ClientPluginManager::pluginsJson() {
         item["path"]                = v.path;
         item["config"]              = v.configPath;
         item["enabled"]             = v.enabled;
-        item["status_items"]        = v.statusItems;
-        item["panels"]              = v.panels;
-        item["info_sections"]       = v.infoSections;
         item["commands"]            = v.commands;
         item["depends"]             = v.depends;
         item["optional_depends"]    = v.optionalDepends;
@@ -148,9 +145,6 @@ std::string ClientPluginManager::pluginJson(std::string_view name) {
         item["config"]              = v.configPath;
         item["enabled"]             = v.enabled;
         item["inflight"]            = v.inflight;
-        item["status_items"]        = v.statusItems;
-        item["panels"]              = v.panels;
-        item["info_sections"]       = v.infoSections;
         item["commands"]            = v.commands;
         item["depends"]             = v.depends;
         item["optional_depends"]    = v.optionalDepends;

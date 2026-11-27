@@ -68,34 +68,81 @@ if (SIDE === "client") {
       ")",
   );
 
-  // ---- client 侧: 展示面 (状态栏项 / Info 段落 / 侧边栏面板) ----
-  // 句柄都是不透明整数 token; 0 = 主程序不支持或注册失败 (附加能力, 不报错)。
-  const status = await agentxx.registerStatusItem({
+  // ---- client 侧: 展示面 (状态栏 / Info 栏 / 侧边栏面板) ----
+  // 三处都是"槽位上的内容": 一份声明项给位置与标题, 一份内容给生成函数。
+  // 生成函数回最近一次算好的文档 (文档放在闭包变量里), 主程序来问就交这一份;
+  // 自己算好新的一份时用 pushUiContent 推过去。
+  let statusDoc = { blocks: [{ kind: "Text", text: "js: ready", dim: true }] };
+  const statusItem = await agentxx.registerUiItem({
+    slot: "status",
     id: "js.demo",
-    props: { text: "js: ready", tooltip: "example_js (client side)" },
-    align: 1,
-    order: 50,
+    data: { align: 0, order: 50 },
   });
-  const info = await agentxx.registerInfoSection({
-    id: "js.demo.info",
-    props: { title: "JS Demo" },
-  });
-  if (info) {
-    await agentxx.updateInfoSection(info, [
+  const status =
+    statusItem &&
+    (await agentxx.registerUiContent({
+      slot: "status",
+      id: "js.demo",
+      generate: () => statusDoc,
+    }));
+  const pushStatus = (text) => {
+    statusDoc = { blocks: [{ kind: "Text", text, dim: true }] };
+    if (status) {
+      agentxx.pushUiContent("js.demo", statusDoc);
+    }
+  };
+
+  let infoDoc = {
+    blocks: [
       { kind: "Text", text: "side: client", color: "hint" },
-      { kind: "Text", text: "渲染器: js_hello", color: "hint" },
-    ]);
-  }
-  const panel = await agentxx.registerPanel({ id: "js.demo.panel", props: { title: "JS Demo" } });
-  if (panel) {
-    await agentxx.updatePanel(panel, [
+      { kind: "Text", text: "工具行: js_hello", color: "hint" },
+    ],
+  };
+  const infoItem = await agentxx.registerUiItem({
+    slot: "info",
+    id: "js.demo.info",
+    data: { title: "JS Demo" },
+  });
+  const info =
+    infoItem &&
+    (await agentxx.registerUiContent({
+      slot: "info",
+      id: "js.demo.info",
+      title: "JS Demo",
+      generate: () => infoDoc,
+    }));
+  const pushInfo = (lines) => {
+    infoDoc = { blocks: lines };
+    if (info) {
+      agentxx.pushUiContent("js.demo.info", infoDoc);
+    }
+  };
+
+  let panelDoc = {
+    blocks: [
       { kind: "Text", text: "example_js (client side)", type: "title" },
       {
         kind: "Button",
         label: "打个招呼",
         action: { kind: "call", name: "js.demo.hello" },
       },
-    ]);
+    ],
+  };
+  const panelItem = await agentxx.registerUiItem({
+    slot: "panel",
+    id: "js.demo.panel",
+    data: { title: "JS Demo" },
+  });
+  const panel =
+    panelItem &&
+    (await agentxx.registerUiContent({
+      slot: "panel",
+      id: "js.demo.panel",
+      title: "JS Demo",
+      generate: () => panelDoc,
+    }));
+  if (panel) {
+    agentxx.pushUiContent("js.demo.panel", panelDoc);
   }
 
   // ---- client 侧: 斜杠命令 (execute 同步返回动作 JSON) ----
@@ -119,9 +166,7 @@ if (SIDE === "client") {
     { keys: "ctrl+alt+j", description: "example_js: 状态栏计数 +1" },
     async () => {
       keyTicks += 1;
-      if (status) {
-        await agentxx.updateStatusItem(status, { text: "js: key " + keyTicks });
-      }
+      pushStatus("js: key " + keyTicks);
     },
   );
 
@@ -131,12 +176,10 @@ if (SIDE === "client") {
     { intervalMs: 60, repeat: 2, pauseWhenHidden: true, ownerId: "js.demo.info" },
     async () => {
       timerTicks += 1;
-      if (info) {
-        await agentxx.updateInfoSection(info, [
-          { kind: "Text", text: "side: client", color: "hint" },
-          { kind: "Text", text: "timer tick " + timerTicks, color: "hint" },
-        ]);
-      }
+      pushInfo([
+        { kind: "Text", text: "side: client", color: "hint" },
+        { kind: "Text", text: "timer tick " + timerTicks, color: "hint" },
+      ]);
     },
   );
 
@@ -156,25 +199,24 @@ if (SIDE === "client") {
     async () => {
       const binds = await agentxx.listKeybinds();
       const visible = await agentxx.isRegionVisible("js.demo.info");
+      // 注销要成对来: 内容与声明项各一份
       if (info) {
-        await agentxx.unregisterInfoSection(info);
+        await agentxx.unregisterUiContent("js.demo.info");
+        await agentxx.unregisterUiItem("js.demo.info");
       }
       if (panel) {
-        await agentxx.unregisterPanel(panel);
+        await agentxx.unregisterUiContent("js.demo.panel");
+        await agentxx.unregisterUiItem("js.demo.panel");
       }
       if (status) {
-        await agentxx.unregisterStatusItem(status);
+        await agentxx.unregisterUiContent("js.demo");
+        await agentxx.unregisterUiItem("js.demo");
       }
       if (demoTimer) {
         await agentxx.cancelClientTimer(demoTimer);
       }
       if (tickBind) {
         await agentxx.unregisterKeybind(tickBind);
-      }
-      if (status) {
-        await agentxx.updateStatusItem(status, {
-          text: "js: key " + keyTicks + " (cleanup)",
-        });
       }
       agentxx.showToast(
         "cleanup: binds=" + binds.length + " visible=" + visible,

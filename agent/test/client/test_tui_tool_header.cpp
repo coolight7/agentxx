@@ -77,6 +77,57 @@ static int32_t testExpandedItems(const PluginxxOperatorNotify* notify, const std
 
 } // namespace
 
+namespace {
+
+/// 工具行内容函数 (测试夹具用): 输入这次调用, 给出一行文本 / 块数组 JSON
+using TestRowFn = std::function<std::string(const agentxx::plugin::ClientToolRenderInput&)>;
+
+/// 把旧的“回调 + notify”写法包成内容函数
+/// (行为与生产侧渲染一次内容等价: 当场交回的正文就是结果)
+template<typename Fn>
+TestRowFn textRow(Fn fn) {
+    return [fn](const agentxx::plugin::ClientToolRenderInput& in) -> std::string {
+        struct Capture {
+            std::string text;
+        } cap;
+        PluginxxOperatorNotify notify{};
+        notify.host_ud = &cap;
+        notify.done    = [](void* ud, int32_t, const PluginxxStringView* payload) {
+            auto* out = static_cast<Capture*>(ud);
+            if (payload && payload->data && payload->size > 0) {
+                out->text.assign(payload->data, static_cast<size_t>(payload->size));
+            }
+        };
+        fn(nullptr, &in, &notify, nullptr);
+        return cap.text;
+    };
+}
+
+/// 往快照里追加一条工具行 (与生产侧同一形状: 声明项 + 内容 → 渲染表)
+void addTestRow(
+    const std::shared_ptr<agentxx::plugin::ClientUiRegistry>& reg,
+    std::string                                               plugin,
+    std::string                                               toolName,
+    std::string                                               displayName,
+    TestRowFn                                                 summary,
+    TestRowFn                                                 body
+) {
+    auto binding         = std::make_shared<agentxx::plugin::ClientToolContentBinding>();
+    binding->plugin      = plugin;
+    binding->toolName    = toolName;
+    binding->displayName = displayName;
+    binding->row.summary = std::move(summary);
+    binding->row.body    = std::move(body);
+    reg->toolRenderers.push_back({
+        .plugin      = std::move(plugin),
+        .toolName    = std::move(toolName),
+        .displayName = std::move(displayName),
+        .binding     = std::move(binding),
+    });
+}
+
+} // namespace
+
 std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     auto reg = std::make_shared<agentxx::plugin::ClientUiRegistry>();
 
@@ -141,18 +192,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         }
         return 0;
     };
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_filesystem",
-        .toolName    = "agentxx_filesystem_list",
-        .displayName = "List",
-        .collapsedFn = pathCollapsed,
-    });
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_filesystem",
-        .toolName    = "agentxx_filesystem_write",
-        .displayName = "Write",
-        .collapsedFn = pathCollapsed,
-    });
+    addTestRow(reg, "agentxx_filesystem", "agentxx_filesystem_list", "List", textRow(pathCollapsed), nullptr);
+    addTestRow(reg, "agentxx_filesystem", "agentxx_filesystem_write", "Write", textRow(pathCollapsed), nullptr);
 
     // Read (折叠内容 = "[offset, limit] path")
     static auto readCollapsed
@@ -192,12 +233,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         }
         return 0;
     };
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_filesystem",
-        .toolName    = "agentxx_filesystem_read",
-        .displayName = "Read",
-        .collapsedFn = readCollapsed,
-    });
+    addTestRow(reg, "agentxx_filesystem", "agentxx_filesystem_read", "Read", textRow(readCollapsed), nullptr);
 
     // Glob (折叠内容 = 文件模式, 最多列两个)
     static auto globCollapsed
@@ -226,12 +262,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         }
         return 0;
     };
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_filesystem",
-        .toolName    = "agentxx_filesystem_glob",
-        .displayName = "Glob",
-        .collapsedFn = globCollapsed,
-    });
+    addTestRow(reg, "agentxx_filesystem", "agentxx_filesystem_glob", "Glob", textRow(globCollapsed), nullptr);
 
     // Grep (折叠内容 = '["pat"] file_patterns')
     static auto grepCollapsed
@@ -285,12 +316,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         return testCollapsedText(notify, fmt::format("[{}] {}", quoted, joinedFiles));
         return 0;
     };
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_filesystem",
-        .toolName    = "agentxx_filesystem_grep",
-        .displayName = "Grep",
-        .collapsedFn = grepCollapsed,
-    });
+    addTestRow(reg, "agentxx_filesystem", "agentxx_filesystem_grep", "Grep", textRow(grepCollapsed), nullptr);
 
     // Edit: 折叠内容 = "[+行 -行] path"; 展开内容 = 逐段 diff items
     static auto editCollapsed
@@ -360,13 +386,7 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         }
         return 0;
     };
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_filesystem",
-        .toolName    = "agentxx_filesystem_edit",
-        .displayName = "Edit",
-        .collapsedFn = editCollapsed,
-        .expandedFn  = editExpanded,
-    });
+    addTestRow(reg, "agentxx_filesystem", "agentxx_filesystem_edit", "Edit", textRow(editCollapsed), textRow(editExpanded));
 
     // Search / Fetch / FetchMD / Bash / Windows (折叠内容 = 单个参数)
     static auto queryCollapsed
@@ -414,36 +434,11 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         }
         return 0;
     };
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_websearch",
-        .toolName    = "agentxx_web_search",
-        .displayName = "Search",
-        .collapsedFn = queryCollapsed,
-    });
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_websearch",
-        .toolName    = "agentxx_web_fetch",
-        .displayName = "Fetch",
-        .collapsedFn = urlCollapsed,
-    });
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_websearch",
-        .toolName    = "agentxx_web_fetch_markdown",
-        .displayName = "FetchMD",
-        .collapsedFn = urlCollapsed,
-    });
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_execute_command",
-        .toolName    = "agentxx_execute_bash_command",
-        .displayName = "Bash",
-        .collapsedFn = commandCollapsed,
-    });
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_execute_command",
-        .toolName    = "agentxx_execute_windows_command",
-        .displayName = "Bash",
-        .collapsedFn = commandCollapsed,
-    });
+    addTestRow(reg, "agentxx_websearch", "agentxx_web_search", "Search", textRow(queryCollapsed), nullptr);
+    addTestRow(reg, "agentxx_websearch", "agentxx_web_fetch", "Fetch", textRow(urlCollapsed), nullptr);
+    addTestRow(reg, "agentxx_websearch", "agentxx_web_fetch_markdown", "FetchMD", textRow(urlCollapsed), nullptr);
+    addTestRow(reg, "agentxx_execute_command", "agentxx_execute_bash_command", "Bash", textRow(commandCollapsed), nullptr);
+    addTestRow(reg, "agentxx_execute_command", "agentxx_execute_windows_command", "Bash", textRow(commandCollapsed), nullptr);
 
     // Planning (镜像 agentxx_planning 插件注册的类型级渲染器):
     // 折叠内容 = todos 摘要, 展开内容 = 状态图 + todos + notes, 覆盖"重启恢复会话
@@ -562,30 +557,12 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         }
         return 0;
     };
-    reg->toolRenderers.push_back({
-        .plugin      = "agentxx_planning",
-        .toolName    = "agentxx_planning",
-        .displayName = "Plan",
-        .collapsedFn = planningCollapsed,
-        .expandedFn  = planningExpanded,
-    });
+    addTestRow(reg, "agentxx_planning", "agentxx_planning", "Plan", textRow(planningCollapsed), textRow(planningExpanded));
 
     // 主程序内置工具 (lib 内置实现, 没有对应插件): 主程序自身注册的渲染器
     // - 见 agentxx/plugin/builtin_tool_renderers.h (只给显示名 + 折叠内容)
-    reg->builtinToolRenderers.push_back({
-        .plugin      = std::string{agentxx::plugin::kBuiltinRendererOwner},
-        .toolName    = "agentxx_share_store",
-        .displayName = "Store",
-        .collapsedFn = &agentxx::plugin::builtinRenderShareStoreCollapsed,
-        .builtin     = true,
-    });
-    reg->builtinToolRenderers.push_back({
-        .plugin      = std::string{agentxx::plugin::kBuiltinRendererOwner},
-        .toolName    = "agentxx_subagent",
-        .displayName = "Subagent",
-        .collapsedFn = &agentxx::plugin::builtinRenderSubagentCollapsed,
-        .builtin     = true,
-    });
+    addTestRow(reg, std::string{agentxx::plugin::kBuiltinRendererOwner}, "agentxx_share_store", "Store", agentxx::plugin::builtinShareStoreSummary, nullptr);
+    addTestRow(reg, std::string{agentxx::plugin::kBuiltinRendererOwner}, "agentxx_subagent", "Subagent", agentxx::plugin::builtinSubagentSummary, nullptr);
 
     return reg;
 }
@@ -804,8 +781,8 @@ struct ToolHeaderFixture {
         mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(mgrIo.get_executor());
         // 内置工具渲染器注册到管理器的注册表: 渲染请求由管理器在 client io 线程
         // 执行时按管理器的注册表找 renderer (真机两侧同源, 见
-        // setupClientPlugins -> registerBuiltinToolRenderers)
-        agentxx::plugin::registerBuiltinToolRenderers(*mgr);
+        // setupClientPlugins -> registerBuiltinToolRows)
+        agentxx::plugin::registerBuiltinToolRows(*mgr);
         mgr->runtime()->ioThreadId.store(std::thread::id{}, std::memory_order_release);
         ctx.pluginManager = mgr;
     }
@@ -846,21 +823,22 @@ struct ToolHeaderFixture {
         bool             expanded = false,
         bool             failed   = false
     ) {
-        auto                                  reg = makeTestToolRegistry();
-        const bool                            wantCollapsed = !expanded;
-        agentxx::plugin::ClientToolRenderReg* hit           = nullptr;
-        const auto                            hasFn         = [wantCollapsed](const auto& r) {
-            return wantCollapsed ? (r.collapsedFn != nullptr) : (r.expandedFn != nullptr);
+        auto                                  reg            = makeTestToolRegistry();
+        const bool                            wantCollapsed  = !expanded;
+        agentxx::plugin::ClientToolRenderReg* hit            = nullptr;
+        const auto                            usable         = [wantCollapsed](const auto& r) {
+            return r.binding != nullptr
+                   && (wantCollapsed ? r.binding->hasSummary() : r.binding->hasBody());
         };
         for (auto& r : reg->toolRenderers) {
-            if (r.toolName == toolName && hasFn(r)) {
+            if (r.toolName == toolName && usable(r) && r.binding->generate != nullptr) {
                 hit = &r;
                 break;
             }
         }
         if (!hit) {
-            for (auto& r : reg->builtinToolRenderers) {
-                if (r.toolName == toolName && hasFn(r)) {
+            for (auto& r : reg->toolRenderers) {
+                if (r.toolName == toolName && usable(r)) {
                     hit = &r;
                     break;
                 }
@@ -890,27 +868,18 @@ struct ToolHeaderFixture {
                      : agentxx::plugin::ClientToolRenderPart::Collapsed
         );
         entry.plugin = hit->plugin;
-        // 渲染回调是异步操作契约: 内容经回调自己的 notify 交回 (此处同步收下)
-        std::string collectPayload;
-        PluginxxOperatorNotify collectNotify{};
-        collectNotify.host_ud = &collectPayload;
-        collectNotify.done    = [](void* ud, int32_t, const PluginxxStringView* payload) {
-            auto* out = static_cast<std::string*>(ud);
-            if (payload && payload->data && payload->size > 0) {
-                out->assign(payload->data, static_cast<size_t>(payload->size));
-            }
-        };
+        const auto& fn = wantCollapsed ? hit->binding->row.summary : hit->binding->row.body;
+        if (!fn) {
+            return;
+        }
+        const std::string text = fn(input);
         if (wantCollapsed) {
-            hit->collapsedFn(hit->userData, &input, &collectNotify, nullptr);
-            entry.text    = std::move(collectPayload);
+            entry.text    = text;
             entry.matched = !entry.text.empty();
-        } else {
-            hit->expandedFn(hit->userData, &input, &collectNotify, nullptr);
-            if (!collectPayload.empty()) {
-                try {
-                    entry.items = utilxx_base::Json::parse(std::string_view{collectPayload});
-                } catch (...) {
-                }
+        } else if (!text.empty()) {
+            try {
+                entry.items = utilxx_base::Json::parse(std::string_view{text});
+            } catch (...) {
             }
             entry.matched = entry.items.is_array() && !entry.items.empty();
         }

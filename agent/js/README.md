@@ -6,19 +6,28 @@
 |---|---|
 | `agentxx_ui_kit.js` | agentxx 扩展 kit：插件界面描述层的组件加载函数，写全局 `pluginxx.ui.kit`。内容是**合并后的超集**（基础 kit 的全部组件 + agentxx 自己的留白规则与常用组合），只加载它一个就够 |
 
-## 当前状态：JS 侧还没有界面入口
+## 当前状态：JS 侧已有界面入口
 
 agentxx 的 JS 插件（`agentxx_javascript_engine` 的 `interpreter.js` 能力）桥接面是
-**工具 / 钩子 / 事件 / 会话资源 / 定时器**（见引擎里的 `registerTool` / `onHook` /
-`subscribe` / `addSkillDir` …），**没有界面注册入口**：JS 插件现在提交不了面板 / Info
-段落 / overlay 的内容。所以这份 JS kit 目前是"就绪未接通"：
+**工具 / 钩子 / 事件 / 会话资源 / 定时器 / 界面内容**（见引擎里的 `registerTool` / `onHook` /
+`subscribe` / `addSkillDir` / `registerUiItem` / `registerUiContent` …）。
 
-- 它生成的组件描述与 C++ 侧同一份定义（同一个生成器、同一套组件表），不会分叉；
-- 等 JS 桥补上界面注册（或插件经自己的 C++ 壳提交：壳里 `setPanelJson` / `showItemsOverlay`
-  收 JS 给的 JSON）之后，插件脚本直接可用：
+界面只有一条路：**声明项 + 内容**，没有旧的状态栏项 / 面板 / Info 段落成员
+（`agentxx.client.ui` v5 已删除，kit 侧对应的包装也一起删了）：
+
+| 全局 | 作用 |
+|---|---|
+| `registerUiItem(spec)` / `unregisterUiItem(id)` | 声明项：`{id, slot, data, order}`，`slot` 形如 `agentxx.client.status` / `agentxx.client.panel` / `agentxx.client.info` / `agentxx.client.tool`；标题在内容上 |
+| `registerUiContent(spec)` / `unregisterUiContent(id)` | 内容：`{slot, id, title, depict, order, deps, routes, generate}`，`generate(values)` 返回一棵块树 |
+| `pushUiContent(id, doc)` | 推一份现成的文档（状态由回调或网络更新时用） |
+| `updateUiSlot(slot)` | 让主程序按当前变量重新生成该槽位的内容 |
+| `openOverlay(spec)` / `closeOverlay()` / `showToast(text, level)` | 浮层与提示 |
+
+这份 kit 生成的组件描述与 C++ 侧同一份定义（同一个生成器、同一套组件表），不会分叉；
+插件内容直接用：
 
 ```js
-// plugin.js（JS 桥提供界面入口之后）
+// plugin.js
 const kit = pluginxx.ui.kit;
 
 // 不传 env：产出中立描述，由客户端渲染前自己适配（默认做法）

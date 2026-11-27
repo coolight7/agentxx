@@ -252,21 +252,18 @@ std::optional<PluginDiffPayload> parsePluginDiffPayload(std::string_view payload
     }
 
     out.path = root.value("path", std::string{});
-    if (root.contains("edits")) {
-        // `edits` 与 `old_str`/`new_str` 互斥 (与 edit 工具参数的规则一致):
-        // 给了 `edits` 就只看它, 不再回退到单段写法
-        const auto& edits = root["edits"];
-        if (edits.is_array()) {
-            for (const auto& item : edits) {
-                takeSegment(item);
-            }
-        } else {
-            takeSegment(edits);
-        }
+    if (!root.contains("edits")) {
         return out;
     }
-    // 单段旧写法: 顶层 old_str/new_str
-    takeSegment(root);
+    // `edits` 可以是数组, 也可以是单个对象 (少写一层数组)
+    const auto& edits = root["edits"];
+    if (edits.is_array()) {
+        for (const auto& item : edits) {
+            takeSegment(item);
+        }
+    } else {
+        takeSegment(edits);
+    }
     return out;
 }
 

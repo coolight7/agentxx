@@ -206,9 +206,9 @@ inline asio::awaitable<bool> clientSubmitContentAsync(
 ///
 /// ```cpp
 /// auto r = co_await clientTableOpAsync(ctx, [&](auto cb, auto ud, auto err) {
-///     return ui->register_status_item(host, &idSv, &jsonSv, 0, 10, cb, ud, err);
+///     return ui->show_toast(host, &textSv, 0, cb, ud, err);
 /// });
-/// auto* handle = clientHandleOf<AgentxxStatusItem>(r);
+/// if (!r.ok()) { /* 记日志 */ }
 /// ```
 ///
 /// - 结果是 `pluginxx::TableOpResult`: 业务失败不抛异常, 看 `ok()` / `text()`;
@@ -226,180 +226,12 @@ inline Handle* clientHandleOf(const pluginxx::detail::TableOpResult& result) {
     return result.ok() ? agentxx::plugin::clientHandleFromText<Handle>(result.text()) : nullptr;
 }
 
-
-/// 表调用结果 → 旧状态码 (只区分“成功”与“没成功”)
-inline int32_t tableStatus(const pluginxx::detail::TableOpResult& res) {
-    return res.ok() ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_FAILED;
-}
-
 /* ==================== client 展示面便捷入口 (插件侧) ====================
  *
  * 这些函数给 client 侧的 start/mount/回调里的**同步写法**用: 调用方本来就在
  * client IO 线程时主程序内联完成 (注册完立刻可用, 不产生等待); 在插件自己的线程上会
  * 等到完成。事件回调这类不能写成协程的地方都能直接调。
  */
-
-/// 注册状态栏项 (**协程形态**; 空 id / 主程序不支持时返回 nullptr)
-template<typename Ctx>
-inline asio::awaitable<AgentxxStatusItem*> clientRegisterStatusItemAsync(
-    Ctx&         ctx,
-    std::string  id,
-    std::string  initialJson,
-    int32_t      align = 0,
-    int32_t      order = 0
-) {
-    const auto* ui = ctx.iface.ui;
-    if (!ctx.host || !ui || !ui->register_status_item || id.empty()) {
-        co_return nullptr;
-    }
-    auto idSv   = PluginStringView::from(id);
-    auto jsonSv = PluginStringView::from(initialJson);
-    auto r      = co_await detail::clientTableAwaitAsync(
-        ctx,
-        [&ctx, ui, &idSv, &jsonSv, align, order](
-                                                 PluginxxOperatorCallback cb,
-                                                 void*                    ud,
-                                                 PluginxxString*          err
-                                             ) {
-            return ui->register_status_item(ctx.host, &idSv, &jsonSv, align, order, cb, ud, err);
-        }
-    );
-    co_return clientHandleOf<AgentxxStatusItem>(r);
-}
-
-/// 更新状态栏项文本; 返回 0 成功
-inline int32_t clientUpdateStatusItem(
-    const PluginxxHost*        host,
-    const AgentxxClientUiIface* ui,
-    AgentxxStatusItem*         item,
-    std::string_view           json
-) {
-    if (!host || !ui || !ui->update_status_item || !item) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    const auto iface = ClientIfaces::query(host);
-    auto       sv    = PluginStringView::from(json.data(), json.size());
-    clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ui->update_status_item(host, item, &sv, cb, ud, err);
-    });
-    return AGENTXX_RESULT_OK;
-}
-
-/// 注销状态栏项 (只提交, 不等结果)
-inline void clientUnregisterStatusItem(
-    const PluginxxHost*        host,
-    const AgentxxClientUiIface* ui,
-    AgentxxStatusItem*         item
-) {
-    if (!host || !ui || !ui->unregister_status_item || !item) {
-        return;
-    }
-    ui->unregister_status_item(host, item, nullptr, nullptr, nullptr);
-}
-
-/// 注册侧边栏面板 (**协程形态**)
-template<typename Ctx>
-inline asio::awaitable<AgentxxPanel*> clientRegisterPanelAsync(
-    Ctx&        ctx,
-    std::string id,
-    std::string propsJson
-) {
-    const auto* ui = ctx.iface.ui;
-    if (!ctx.host || !ui || !ui->register_panel || id.empty()) {
-        co_return nullptr;
-    }
-    auto idSv  = PluginStringView::from(id);
-    auto props = PluginStringView::from(propsJson);
-    auto r     = co_await detail::clientTableAwaitAsync(
-        ctx,
-        [&ctx, ui, &idSv, &props](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->register_panel(ctx.host, &idSv, &props, cb, ud, err);
-        }
-    );
-    co_return clientHandleOf<AgentxxPanel>(r);
-}
-
-/// 更新面板内容; 返回 0 成功
-inline int32_t clientUpdatePanel(
-    const PluginxxHost*        host,
-    const AgentxxClientUiIface* ui,
-    AgentxxPanel*              panel,
-    std::string_view           itemsJson
-) {
-    if (!host || !ui || !ui->update_panel || !panel) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    const auto iface = ClientIfaces::query(host);
-    auto       sv    = PluginStringView::from(itemsJson.data(), itemsJson.size());
-    clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ui->update_panel(host, panel, &sv, cb, ud, err);
-    });
-    return AGENTXX_RESULT_OK;
-}
-
-/// 注销侧边栏面板 (只提交, 不等结果)
-inline void clientUnregisterPanel(
-    const PluginxxHost*        host,
-    const AgentxxClientUiIface* ui,
-    AgentxxPanel*              panel
-) {
-    if (!host || !ui || !ui->unregister_panel || !panel) {
-        return;
-    }
-    ui->unregister_panel(host, panel, nullptr, nullptr, nullptr);
-}
-
-/// 注册 Info 栏段落 (**协程形态**)
-template<typename Ctx>
-inline asio::awaitable<AgentxxInfoSection*> clientRegisterInfoSectionAsync(
-    Ctx&        ctx,
-    std::string id,
-    std::string propsJson
-) {
-    const auto* ui = ctx.iface.ui;
-    if (!ctx.host || !ui || !ui->register_info_section || id.empty()) {
-        co_return nullptr;
-    }
-    auto idSv  = PluginStringView::from(id);
-    auto props = PluginStringView::from(propsJson);
-    auto r     = co_await detail::clientTableAwaitAsync(
-        ctx,
-        [&ctx, ui, &idSv, &props](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ui->register_info_section(ctx.host, &idSv, &props, cb, ud, err);
-        }
-    );
-    co_return clientHandleOf<AgentxxInfoSection>(r);
-}
-
-/// 更新 Info 栏段落内容; 返回 0 成功
-inline int32_t clientUpdateInfoSection(
-    const PluginxxHost*        host,
-    const AgentxxClientUiIface* ui,
-    AgentxxInfoSection*        section,
-    std::string_view           itemsJson
-) {
-    if (!host || !ui || !ui->update_info_section || !section) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    const auto iface = ClientIfaces::query(host);
-    auto       sv    = PluginStringView::from(itemsJson.data(), itemsJson.size());
-    clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-        return ui->update_info_section(host, section, &sv, cb, ud, err);
-    });
-    return AGENTXX_RESULT_OK;
-}
-
-/// 注销 Info 栏段落 (只提交, 不等结果)
-inline void clientUnregisterInfoSection(
-    const PluginxxHost*        host,
-    const AgentxxClientUiIface* ui,
-    AgentxxInfoSection*        section
-) {
-    if (!host || !ui || !ui->unregister_info_section || !section) {
-        return;
-    }
-    ui->unregister_info_section(host, section, nullptr, nullptr, nullptr);
-}
 
 /// 更新/删除工具消息装饰 (空 decorJson = 删除); 返回 0 成功
 inline int32_t clientUpdateToolDecor(
@@ -1209,79 +1041,6 @@ public:
         iface.ui->show_toast(host, &sv, level, nullptr, nullptr, nullptr);
     }
 
-    /// 懒注册 Info 栏段落 (**提交即返回**)
-    ///
-    /// 频道/动作回调这类不能写成协程的地方用它: 注册请求立刻提交, 句柄由主程序受理后
-    /// 写回本实例的槽位。注册是异步的, 所以**同一轮**里 [infoSection] 可能还拿不到句柄 ——
-    /// 内容推送本身也是提交即返回, 下一轮事件补上即可。
-    ///
-    /// - 同一个 id 重复调用只提交一次 (受理前重入直接返回)
-    /// - 主程序不支持 Info 段落时静默降级 (永远拿不到句柄)
-    void ensureInfoSection(std::string_view id, std::string_view propsJson) {
-        if (id.empty() || !host || !iface.ui || !iface.ui->register_info_section) {
-            return;
-        }
-        const std::string key{id};
-        if (infoSections_.find(key) != infoSections_.end()) {
-            return;
-        }
-        auto slot                     = std::make_shared<std::atomic<AgentxxInfoSection*>>(nullptr);
-        infoSections_[key]            = slot;
-        auto  idSv                    = PluginStringView::from(id.data(), id.size());
-        auto  propsSv                 = PluginStringView::from(propsJson.data(), propsJson.size());
-        // 完成回调在主程序 io 线程: 只把句柄写进原子槽位, 不碰其它实例状态
-        auto* holder = new std::shared_ptr<std::atomic<AgentxxInfoSection*>>(slot);
-        PluginxxString err{nullptr, 0};
-        auto*          handle = iface.ui->register_info_section(
-            host,
-            &idSv,
-            &propsSv,
-            [](void* ud, int32_t status, const PluginxxStringView* payload) {
-                std::unique_ptr<std::shared_ptr<std::atomic<AgentxxInfoSection*>>> keep(
-                    static_cast<std::shared_ptr<std::atomic<AgentxxInfoSection*>>*>(ud)
-                );
-                if (status != PLUGINXX_OPERATOR_OK || payload == nullptr || payload->data == nullptr) {
-                    return;
-                }
-                auto* section = clientHandleFromText<AgentxxInfoSection>(
-                    std::string_view{payload->data, static_cast<size_t>(payload->size)}
-                );
-                (*keep)->store(section, std::memory_order_release);
-            },
-            holder,
-            &err
-        );
-        if (err.data != nullptr) {
-            PluginString::free(host, &err);
-        }
-        if (handle == nullptr) {
-            // 未受理: 完成回调不会被调用, 包装块自己收
-            delete holder;
-            infoSections_.erase(key);
-        }
-    }
-
-    /// 取 [ensureInfoSection] 注册出来的段落句柄 (尚未受理/不支持时为 nullptr)
-    AgentxxInfoSection* infoSection(std::string_view id) const {
-        const auto it = infoSections_.find(std::string{id});
-        if (it == infoSections_.end() || !it->second) {
-            return nullptr;
-        }
-        return it->second->load(std::memory_order_acquire);
-    }
-
-    /// 注销 [ensureInfoSection] 的段落 (**提交即返回**; 同时忘掉句柄)
-    void clearInfoSection(std::string_view id) {
-        AgentxxInfoSection* section = infoSection(id);
-        infoSections_.erase(std::string{id});
-        if (section == nullptr || !host || !iface.ui || !iface.ui->unregister_info_section) {
-            return;
-        }
-        clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.ui->unregister_info_section(host, section, cb, ud, err);
-        });
-    }
-
     /// 代发用户消息 (**协程形态**); 返回是否已受理
     asio::awaitable<bool> sendUserInputAsync(std::string sessionId, std::string text) const {
         if (!host || !iface.session || !iface.session->send_user_input) {
@@ -1309,72 +1068,20 @@ public:
 
     // ==================== 展示扩展便捷方法 ====================
     //
-    // 这些方法是展示注册接口的薄封装: 用界面描述层 (cxx_pluginxx_ui, `pluginxx::ui`)
-    // 的构建器 (`pluginxx::ui::build` / kit) 或直接构造组件项后提交给面板/Info 段落/
-    // overlay, 避免各处手写 JSON 拼装。
+    // 这些方法是展示接口的薄封装: 用界面描述层 (cxx_pluginxx_ui, `pluginxx::ui`)
+    // 的构建器 (`pluginxx::ui::build` / kit) 或直接构造组件项后提交给 overlay,
+    // 避免各处手写 JSON 拼装。
     //
-    // 更新类方法一律**提交即返回** (面板内容/状态栏文本/Info 段落是单向推送, 插件不需要
-    // 结果), 因此它们可以从任何线程调用, 包括插件执行线程与渲染回调 —— 不会等 io 线程。
+    // 打开 overlay 的方法**提交即返回**, 因此可以从任何线程调用,
+    // 包括插件执行线程与事件回调 —— 不会等 io 线程。
     //
     // 插件可用 `agentxx::ui` 指代描述层与扩展 kit (`agentxx::ui::kit`)。
 
-    /// 组件树 → 提交给主程序的 JSON 形态 (`{"items":[…]}`)
-    static std::string itemsJson(const std::vector<pluginxx::ui::Item>& items) {
+    /// 组件树 → 提交给主程序的文档形态 (`{"blocks":[…]}`)
+    static std::string blocksJson(const std::vector<pluginxx::ui::Item>& items) {
         utilxx_base::Json j = utilxx_base::Json::object();
-        j["items"]          = pluginxx::ui::dumpBlocks(items);
+        j["blocks"]         = pluginxx::ui::dumpBlocks(items);
         return j.dump();
-    }
-
-    /// 更新面板内容 (组件树直接提交; 提交即返回)
-    int32_t setPanelItems(AgentxxPanel* panel, const std::vector<pluginxx::ui::Item>& items) const {
-        return setPanelJson(panel, itemsJson(items));
-    }
-
-    /// 更新面板内容 (原始 items JSON, 形态同 `{"items":[...]}` 或裸数组)
-    int32_t setPanelJson(AgentxxPanel* panel, std::string_view itemsJson) const {
-        if (!host || !iface.ui || !iface.ui->update_panel || panel == nullptr) {
-            return AGENTXX_RESULT_ERR_UNSUPPORTED;
-        }
-        auto sv = PluginStringView::from(itemsJson.data(), itemsJson.size());
-        clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.ui->update_panel(host, panel, &sv, cb, ud, err);
-        });
-        return AGENTXX_RESULT_OK;
-    }
-
-    /// 更新 Info 栏段落内容 (组件树直接提交; 提交即返回)
-    int32_t setInfoSectionItems(
-        AgentxxInfoSection*                    section,
-        const std::vector<pluginxx::ui::Item>& items
-    ) const {
-        if (!host || !iface.ui || !iface.ui->update_info_section || section == nullptr) {
-            return AGENTXX_RESULT_ERR_UNSUPPORTED;
-        }
-        const std::string json = itemsJson(items);
-        auto              sv   = PluginStringView::from(json.data(), json.size());
-        clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.ui->update_info_section(host, section, &sv, cb, ud, err);
-        });
-        return AGENTXX_RESULT_OK;
-    }
-
-    /// 更新状态栏项文本 (参数为 `{"text":"...","tooltip":"..."}` 形态的 JSON; 提交即返回)
-    int32_t setStatusJson(AgentxxStatusItem* item, std::string_view json) const {
-        if (!host || !iface.ui || !iface.ui->update_status_item || item == nullptr) {
-            return AGENTXX_RESULT_ERR_UNSUPPORTED;
-        }
-        auto sv = PluginStringView::from(json.data(), json.size());
-        clientTableCall(host, iface, [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return iface.ui->update_status_item(host, item, &sv, cb, ud, err);
-        });
-        return AGENTXX_RESULT_OK;
-    }
-
-    /// 更新状态栏项文本 (仅文本, 由本方法组装 JSON; 提交即返回)
-    int32_t setStatusText(AgentxxStatusItem* item, std::string_view text) const {
-        utilxx_base::Json json = utilxx_base::Json::object();
-        json["text"]           = text;
-        return setStatusJson(item, json.dump());
     }
 
     /// 打开自定义 overlay (组件树作为内容)
@@ -1384,7 +1091,7 @@ public:
         const std::vector<pluginxx::ui::Item>& items,
         std::string_view                       extraJson = {}
     ) const {
-        return showOverlay(AGENTXX_OVERLAY_CUSTOM, title, itemsJson(items), extraJson);
+        return showOverlay(AGENTXX_OVERLAY_CUSTOM, title, blocksJson(items), extraJson);
     }
 
     /// 打开通用 overlay (type 见 AgentxxOverlayType; payload 语义随类型)
@@ -1413,9 +1120,7 @@ public:
     /// 打开 diff overlay (单段或多段, 每段一次替换; 主程序按逐行差异渲染)
     /// - `segments` 为空时打开一个"无变化"的 diff (不会失败)
     /// - 多段: 每段各渲染一份逐行差异, 段间以分隔行隔开, 文件路径只在首段展示
-    /// - 单段调用按旧写法 `{path,old_str,new_str}` 下发, 老主程序也能正确渲染;
-    ///   多段用的是 `edits` 字段, 老主程序不认识时只显示"(no changes)"
-    ///   (插件与客户端版本需要一起升级时按单段逐次调用即可)
+    /// - 统一用 `edits` 数组下发 (单段也是一段); 段内字段是 `old_str` / `new_str`
     int32_t showDiffOverlay(
         std::string_view                title,
         std::string_view                path,
@@ -1426,107 +1131,18 @@ public:
         if (!path.empty()) {
             payload["path"] = path;
         }
-        if (segments.size() == 1) {
-            // 单段: 用旧写法 (老主程序也能正确渲染)
-            payload["old_str"] = segments.front().oldStr;
-            payload["new_str"] = segments.front().newStr;
-        } else if (!segments.empty()) {
-            utilxx_base::Json edits = utilxx_base::Json::array();
-            for (const auto& seg : segments) {
-                utilxx_base::Json one = utilxx_base::Json::object();
-                one["old_str"]        = seg.oldStr;
-                one["new_str"]        = seg.newStr;
-                edits.push_back(std::move(one));
-            }
-            payload["edits"] = std::move(edits);
-        } else {
-            payload["old_str"] = std::string{};
-            payload["new_str"] = std::string{};
+        utilxx_base::Json edits = utilxx_base::Json::array();
+        for (const auto& seg : segments) {
+            utilxx_base::Json one = utilxx_base::Json::object();
+            one["old_str"]        = seg.oldStr;
+            one["new_str"]        = seg.newStr;
+            edits.push_back(std::move(one));
         }
+        payload["edits"] = std::move(edits);
         return showOverlay(AGENTXX_OVERLAY_DIFF, title, payload.dump(), extraJson);
     }
 
     // ==================== 组件树就地构建 ====================
-
-    /// 面板内容就地构建器 (作用域结束时自动提交)
-    ///
-    /// 用途: 插件刷新面板的常见写法是"重新构造整棵组件树并提交", 用本句柄可省掉
-    /// 临时变量与显式提交调用:
-    /// ```c++
-    /// auto ui = panelItems(panel);
-    /// ui.add(pluginxx::ui::build::title("System"));
-    /// ui.add(pluginxx::ui::build::progress(cpu, 100, "%"));
-    /// // 离开作用域时自动 update_panel (需要检查返回值时显式调用 commit())
-    /// ```
-    class PanelWriter {
-    public:
-
-        PanelWriter(const ClientPluginBase* base, AgentxxPanel* panel) :
-            base_(base),
-            panel_(panel) {}
-
-        ~PanelWriter() {
-            commit();
-        }
-
-        PanelWriter(const PanelWriter&)            = delete;
-        PanelWriter& operator=(const PanelWriter&) = delete;
-
-        PanelWriter(PanelWriter&& other) noexcept :
-            base_(other.base_),
-            panel_(other.panel_),
-            items_(std::move(other.items_)),
-            committed_(other.committed_) {
-            other.committed_ = true; // 源对象不再提交 (树已移走)
-        }
-
-        /// 组件树 (用 `pluginxx::ui::build` / kit 构造组件后追加)
-        std::vector<pluginxx::ui::Item>& items() {
-            return items_;
-        }
-
-        std::vector<pluginxx::ui::Item>& operator*() {
-            return items_;
-        }
-
-        /// 追加一个组件项
-        PanelWriter& add(pluginxx::ui::Item item) {
-            items_.push_back(std::move(item));
-            return *this;
-        }
-
-        /// 追加一组组件项
-        PanelWriter& add(std::vector<pluginxx::ui::Item> items) {
-            for (auto& item : items) {
-                items_.push_back(std::move(item));
-            }
-            return *this;
-        }
-
-        /// 提交 (幂等; 返回主程序状态码, `AGENTXX_RESULT_OK` = 成功)
-        int32_t commit() {
-            if (committed_) {
-                return AGENTXX_RESULT_OK;
-            }
-            committed_ = true;
-            if (base_ == nullptr) {
-                return AGENTXX_RESULT_ERR_UNSUPPORTED;
-            }
-            return base_->setPanelItems(panel_, items_);
-        }
-
-    private:
-
-        const ClientPluginBase*         base_  = nullptr;
-        AgentxxPanel*                   panel_ = nullptr;
-        std::vector<pluginxx::ui::Item> items_{};
-        bool                            committed_ = false;
-    };
-
-    /// 面板内容就地构建 (见 [PanelWriter])
-    PanelWriter panelItems(AgentxxPanel* panel) const {
-        return PanelWriter(this, panel);
-    }
 
     /// 工具消息装饰参数 (折叠头显示名/摘要 + 展开体组件树)
     struct DecorSpec {
@@ -1672,7 +1288,7 @@ public:
     }
 
     /// 展示区域尺寸 (宽/高; 未上报时返回 0)
-    /// - 区域 id 为面板/Info 段落的注册 id (`update_panel` / `update_info_section` 的 id)
+    /// - 区域 id 为界面内容的注册 id (`register_ui_content` 的 id)
     /// - 主程序在每次布局后更新快照, 值变化时会另发 `agentxx.client.ui_layout` 频道;
     ///   老主程序 (未声明 `agentxx.client.layout`) 该接口返回 0, 插件应降级为固定宽度
     struct RegionSize {
@@ -1927,8 +1543,6 @@ public:
 private:
 
     std::shared_ptr<std::atomic<bool>> lifeToken_ = std::make_shared<std::atomic<bool>>(true);
-    /// 懒注册的 Info 段落槽位 (id → 句柄; 句柄由主程序受理后写回, 只在插件执行线程上读写)
-    std::map<std::string, std::shared_ptr<std::atomic<AgentxxInfoSection*>>> infoSections_;
     /// 界面能力段解析结果 (能力在客户端生命周期内不变; 见 [uiCapabilities])
     mutable bool                       uiCapsCached_ = false;
     mutable pluginxx::ui::Capabilities uiCapsCache_{};

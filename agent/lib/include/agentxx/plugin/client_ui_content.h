@@ -79,8 +79,7 @@ pluginxx::host::UiSlotCatalog buildClientUiSlotCatalog();
 /// - 带别人的前缀 → 空串 (拒绝);
 /// - 没有前缀 → 补上。
 ///
-/// 旧注册项 (`register_status_item` 一类) 也走这条规则, 这样两类接口给同一个名字时
-/// 落在同一条内容上。
+/// 声明项与内容用同一个名字 (同一个槽位上的内容按它查), 插件写短名即可。
 std::string clientUiFullName(std::string_view instanceName, std::string_view raw);
 
 /// 一条声明项 (界面线程读的拷贝)

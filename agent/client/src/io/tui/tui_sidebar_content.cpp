@@ -173,7 +173,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         avail = sidebar_ ? sidebar_->width() - 4 : 40;
     }
 
-    // Plan 段落已拆分至 agentxx_planning 插件 client 侧 (经 register_info_section
+    // Plan 段落已拆分至 agentxx_planning 插件 client 侧 (经 info 槽位上的内容
     // 注入, 见 agent/plugins/agentxx_planning), TUI 不再硬编码渲染
 
     // 当前会话标题 (信息侧边栏第一段): 标题来自会话库 meta.title
@@ -204,7 +204,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     //   [handleSidebarRegionClick] 定位后派发 (滚动容器内不用 reflect 判定)
     if (auto mgr = pluginManager_) {
         auto reg = mgr->uiRegistrySnapshot();
-        // 内容来源: 声明式注册表 (旧 register_info_section 也写这里)
+        // 内容来源: 声明式注册表
         std::shared_ptr<const agentxx::plugin::ClientUiSnapshot> uiSnap
             = mgr->uiContentSnapshot();
         if (reg && uiSnap) {
@@ -379,7 +379,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     }
 
     // 已加载组件 (Plugin/Memory/Skill/MCP) 展示:
-    // - CodeGraph 索引状态与系统资源占用由对应插件经 register_info_section
+    // - CodeGraph 索引状态与系统资源占用由对应插件经 info 槽位上的内容
     //   注入本 Info 栏 (见下方 "插件扩展 Info 段落"), TUI 不再单独渲染
     // - Failed 组 [view] 按钮命中经 shellHits_ 登记 (帧首由主渲染器清空):
     //   无失败项时该按钮不渲染, 因此不会占用任何点击区域

@@ -518,8 +518,8 @@ path/to/agentxx_test --log-level warn string_util regex
 - 表单: 控件状态由主程序维护 (`UiFormState`; 点击/键盘/校验/取值只有一份实现),
   提交经动作通道回传 `__submit` + `{"values":{...}}` / `__cancel`;
   中断描述 (`InterruptView`) 也走同一套渲染与交互, 仅结果去处不同
-  (结果通道回传 `{"values":{...}}`); 插件侧便捷方法见 `plugin_kit.h` 的
-  `setPanelItems`/`showItemsOverlay`/`registerTimer`/`registerKeybind` 等
+  (结果通道回传 `{"values":{...}}`); 插件侧先注册内容 (`Content`) 再 `publish` 文档,
+  overlay / 定时器 / 快捷键用 `showItemsOverlay`/`registerTimer`/`registerKeybind` 等
 - 能力名 `agentxx.client.components` / `agentxx.client.form` / `agentxx.client.layout`
   (能力协商, 老主程序缺失即降级); 详见 `docs/zh-cn/design/plugins.md` §9.1~§9.6
   与 `docs/zh-cn/design/tui.md` §2.2/§2.6
@@ -883,12 +883,12 @@ path/to/agentxx_test --log-level warn string_util regex
   `timer` / `keybind` 全部 v2 异步, **没有保留的同步成员** (连 `is_visible` 也走异步);
   渲染回调与命令 `execute` 也是异步 (主程序给 `PluginxxOperatorNotify`, 回调可立即
   `notify` 交出内容 = 同步完成)。插件按“要不要结果”选写法: **不要结果**用
-  `clientTableCall(...)` 或 `ClientPluginBase` 的提交即返回方法 (`setPanelJson` /
-  `setStatusJson` / `setInfoSectionItems` / `showOverlay` / `open*`), **要结果**用
+  `clientTableCall(...)` 或 `ClientPluginBase` 的提交即返回方法 (`showOverlay` /
+  `showToast` / `open*`), 界面内容用 `clientRegisterContentAsync` + `Content::publish`,
+  **要结果**用
   `co_await clientTableOpAsync(ctx, ...)` + `clientHandleOf<T>` (没有同步入口: 插件执行
   线程与 client io 线程是两条线程, 等结果一律协程或 `tableOpCallback` 形态)。
-  懒注册 Info 段落用 `ClientPluginBase::ensureInfoSection(id, props)` (提交即返回, 句柄
-  受理后写回槽位, 用 `infoSection(id)` 取); 回答型回调收尾用 `notifyText` / `notifyError`
+  回答型回调收尾用 `notifyText` / `notifyError`
   (回调要把 `notify` 的两个字段按值带走再传给协程, 指针在回调返回后不再可用)。
   新写的注册事务用协程形态: `ClientPluginBase` 继承
   `pluginxx::PluginBaseT<ClientIfaces>` (有 `ctx.spawn(...)` / `bridge()`), 用
@@ -1042,13 +1042,14 @@ path/to/agentxx_test --log-level warn string_util regex
     (见 [plugins.md](docs/zh-cn/design/plugins.md) 的“工具特化渲染架构”)
   - **状态栏项 / 侧边栏面板 / Info 段落也是"声明项 + 内容"**: kit 用
     `co_await clientRegisterContentAsync(ctx, ContentSpec{.slot, .id, .title, .data, .deps, .generate})`
-    注册 (`status` / `panel` / `info` 槽位, 面板与 Info 的文档是 `{"items":[…]}`、状态栏是 `{"blocks":[…]}`)。
+    注册 (`status` / `panel` / `info` 槽位, 面板与 Info 的文档也是 `{"blocks":[…]}`、状态栏是一行 `{"blocks":[…]}`)。
     `generate` 留空就是"只推不算": 数据由频道回调更新时算好文档就 `Content::publish(doc)`,
     它记住这一份并推给主程序, 生成函数 (插件执行线程) 之后回的是那份拷贝 —— **不要**在生成函数里
-    直接读别的线程写的状态。旧成员 (`register_status_item` / `register_panel` /
-    `register_info_section` 与 `update_*`) 仍然可用 (主程序镜像到同一份注册表), 但自带插件
-    (`agentxx_websearch` / `agentxx_chatbot` / `agentxx_codegraph` / `agentxx_system_monitor` /
-    `example_plugin`) 已全部改走内容
+    直接读别的线程写的状态。九个子能力成员 (`register_status_item` / `update_status_item` /
+    `unregister_status_item` / `register_panel` / `update_panel` / `unregister_panel` /
+    `register_info_section` / `update_info_section` / `unregister_info_section`) 与三个句柄类型
+    **已删除** (`agentxx.client.ui` v5), 三处只有"声明项 + 内容"这一条路径;
+    JS 桥对应的 `registerStatusItem` 一类全局同时删除
   - **参数自愈的适用范围**: 凡是把参数交给工具的地方都用这一份实现 —— 前台工具调用
     (`ToolcallWrapNode`, 内置工具与插件工具不区分) 与后台工具任务 (`AsyncWorkManager` 的
     `kind=tool`, 提交后执行前); 数值取整与布尔认词规则见

@@ -61,7 +61,7 @@ struct ChatbotClientCtx : public agentxx::plugin::ClientPluginBase {
         if (!panel) {
             return;
         }
-        const std::string json = itemsJson(ac::panelItemsOf(snapshot));
+        const std::string json = blocksJson(ac::panelItemsOf(snapshot));
         if (!force && json == renderedJson) {
             return;
         }

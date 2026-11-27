@@ -244,62 +244,46 @@ static int32_t uiUpdateToolDecor(
     return call.ok() ? 0 : -1;
 }
 
-static AgentxxStatusItem* uiRegisterStatusItem(
+/// 注册一份声明项 (界面内容的位置与参数); 返回 0 成功
+static int32_t uiRegisterUiItem(
     const PluginxxHost*         host,
     const AgentxxClientUiIface* ui,
     std::string_view            id,
-    std::string_view            initialJson,
-    int32_t                     align = 0,
-    int32_t                     order = 0
+    std::string_view            slot,
+    std::string_view            dataJson
 ) {
-    if (!ui || !ui->register_status_item) {
-        return nullptr;
-    }
-    auto idSv   = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-    auto jsonSv = agentxx::plugin::PluginStringView::from(initialJson.data(), initialJson.size());
-    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
-        return ui->register_status_item(host, &idSv, &jsonSv, align, order, cb, cud, err);
-    });
-    return handleOf<AgentxxStatusItem>(call);
-}
-
-static void
-    uiUnregisterStatusItem(const PluginxxHost* host, const AgentxxClientUiIface* ui, AgentxxStatusItem* item) {
-    if (!ui || !ui->unregister_status_item || !item) {
-        return;
-    }
-    ui->unregister_status_item(host, item, nullptr, nullptr, nullptr);
-}
-
-static AgentxxPanel* uiRegisterPanel(
-    const PluginxxHost*         host,
-    const AgentxxClientUiIface* ui,
-    std::string_view            id,
-    std::string_view            propsJson
-) {
-    if (!ui || !ui->register_panel) {
-        return nullptr;
-    }
-    auto idSv    = agentxx::plugin::PluginStringView::from(id.data(), id.size());
-    auto propsSv = agentxx::plugin::PluginStringView::from(propsJson.data(), propsJson.size());
-    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
-        return ui->register_panel(host, &idSv, &propsSv, cb, cud, err);
-    });
-    return handleOf<AgentxxPanel>(call);
-}
-
-static int32_t uiUpdatePanel(
-    const PluginxxHost*         host,
-    const AgentxxClientUiIface* ui,
-    AgentxxPanel*               panel,
-    std::string_view            itemsJson
-) {
-    if (!ui || !ui->update_panel) {
+    if (!ui || !ui->register_ui_item) {
         return -1;
     }
-    auto jsonSv = agentxx::plugin::PluginStringView::from(itemsJson.data(), itemsJson.size());
+    auto idSv   = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+    auto slotSv = agentxx::plugin::PluginStringView::from(slot.data(), slot.size());
+    auto dataSv = agentxx::plugin::PluginStringView::from(dataJson.data(), dataJson.size());
+    PluginxxUiEntrySpec spec{};
+    spec.version     = 1;
+    spec.struct_size = sizeof(PluginxxUiEntrySpec);
+    spec.item_id     = idSv;
+    spec.type        = slotSv;
+    spec.data_json   = dataSv;
     const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
-        return ui->update_panel(host, panel, &jsonSv, cb, cud, err);
+        return ui->register_ui_item(host, &spec, cb, cud, err);
+    });
+    return call.ok() ? 0 : -1;
+}
+
+/// 推一份算好的界面内容 (内容要已注册); 返回 0 成功
+static int32_t uiPushContent(
+    const PluginxxHost*         host,
+    const AgentxxClientUiIface* ui,
+    std::string_view            id,
+    std::string_view            docJson
+) {
+    if (!ui || !ui->push_ui_content) {
+        return -1;
+    }
+    auto idSv  = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+    auto docSv = agentxx::plugin::PluginStringView::from(docJson.data(), docJson.size());
+    const auto call = clientCall(host, [&](PluginxxOperatorCallback cb, void* cud, PluginxxString* err) {
+        return ui->push_ui_content(host, &idSv, &docSv, cb, cud, err);
     });
     return call.ok() ? 0 : -1;
 }
@@ -476,10 +460,7 @@ public:
         return {// 与 TuiPluginAdapter 声明集保持一致 (完整消息渲染面主程序):
                 // ui 表整体 + 全部子能力
                 std::string{pi::ClientUi},
-                std::string{pi::ClientStatusItem},
-                std::string{pi::ClientPanel},
                 std::string{pi::ClientToast},
-                std::string{pi::ClientInfoSection},
                 std::string{pi::ClientCommand},
                 std::string{pi::ClientMsgDecor},
                 std::string{pi::ClientAction},
@@ -489,36 +470,18 @@ public:
         };
     }
 
-    void onStatusItemRegistered(
-        const std::string& id,
-        const utilxx_base::Json& /*props*/,
-        int /*align*/,
-        int /*order*/
+    void onContentRegistered(
+        const std::string& slot,
+        const std::string& shortId,
+        const std::string& /*title*/
     ) override {
         std::lock_guard<std::mutex> lock(m_);
-        ++statusRegistered_;
-        lastStatusId_ = id;
+        ++contentRegistered_;
+        lastContentSlot_ = slot;
+        lastContentId_   = shortId;
     }
 
-    void onStatusItemUpdated(const std::string& id, const utilxx_base::Json& /*props*/) override {
-        std::lock_guard<std::mutex> lock(m_);
-        ++statusUpdated_;
-        lastStatusId_ = id;
-    }
-
-    void onStatusItemRemoved(const std::string& id) override {
-        std::lock_guard<std::mutex> lock(m_);
-        ++statusRemoved_;
-        lastStatusId_ = id;
-    }
-
-    void onPanelRegistered(const std::string& id, const utilxx_base::Json& /*props*/) override {
-        std::lock_guard<std::mutex> lock(m_);
-        ++panelRegistered_;
-        lastPanelId_ = id;
-    }
-
-    /// 声明式内容更新 (旧注册项更新走上面那几个; 新写法都到这一条)
+    /// 声明式内容更新 (推一份 / 生成函数回一份都到这里)
     void onContentUpdated(const std::string& slot, const std::string& shortId) override {
         std::lock_guard<std::mutex> lock(m_);
         ++contentUpdated_;
@@ -526,37 +489,11 @@ public:
         lastContentId_   = shortId;
     }
 
-    void onPanelUpdated(const std::string& id, const utilxx_base::Json& /*items*/) override {
+    void onContentRemoved(const std::string& slot, const std::string& shortId) override {
         std::lock_guard<std::mutex> lock(m_);
-        ++panelUpdated_;
-        lastPanelId_ = id;
-    }
-
-    void onPanelRemoved(const std::string& id) override {
-        std::lock_guard<std::mutex> lock(m_);
-        ++panelRemoved_;
-        lastPanelId_ = id;
-    }
-
-    void onInfoSectionRegistered(
-        const std::string& id,
-        const utilxx_base::Json& /*props*/
-    ) override {
-        std::lock_guard<std::mutex> lock(m_);
-        ++infoSectionRegistered_;
-        lastInfoSectionId_ = id;
-    }
-
-    void onInfoSectionUpdated(const std::string& id, const utilxx_base::Json& /*items*/) override {
-        std::lock_guard<std::mutex> lock(m_);
-        ++infoSectionUpdated_;
-        lastInfoSectionId_ = id;
-    }
-
-    void onInfoSectionRemoved(const std::string& id) override {
-        std::lock_guard<std::mutex> lock(m_);
-        ++infoSectionRemoved_;
-        lastInfoSectionId_ = id;
+        ++contentRemoved_;
+        lastContentSlot_ = slot;
+        lastContentId_   = shortId;
     }
 
     void onToast(const std::string& text, int level) override {
@@ -604,24 +541,9 @@ public:
     }
 
     // ---- 读取 (加锁) ----
-    int statusRegistered() const {
+    int contentRegistered() const {
         std::lock_guard<std::mutex> lock(m_);
-        return statusRegistered_;
-    }
-
-    int statusUpdated() const {
-        std::lock_guard<std::mutex> lock(m_);
-        return statusUpdated_;
-    }
-
-    int panelRegistered() const {
-        std::lock_guard<std::mutex> lock(m_);
-        return panelRegistered_;
-    }
-
-    int panelUpdated() const {
-        std::lock_guard<std::mutex> lock(m_);
-        return panelUpdated_;
+        return contentRegistered_;
     }
 
     int contentUpdated() const {
@@ -629,19 +551,9 @@ public:
         return contentUpdated_;
     }
 
-    int infoSectionRegistered() const {
+    int contentRemoved() const {
         std::lock_guard<std::mutex> lock(m_);
-        return infoSectionRegistered_;
-    }
-
-    int infoSectionUpdated() const {
-        std::lock_guard<std::mutex> lock(m_);
-        return infoSectionUpdated_;
-    }
-
-    int infoSectionRemoved() const {
-        std::lock_guard<std::mutex> lock(m_);
-        return infoSectionRemoved_;
+        return contentRemoved_;
     }
 
     int toastCount() const {
@@ -723,16 +635,9 @@ public:
 private:
 
     mutable std::mutex m_;
-    int                statusRegistered_      = 0;
-    int                statusUpdated_         = 0;
-    int                statusRemoved_         = 0;
-    int                panelRegistered_       = 0;
-    int                panelUpdated_          = 0;
-    int                panelRemoved_          = 0;
-    int                infoSectionRegistered_ = 0;
-    int                infoSectionUpdated_    = 0;
-    int                infoSectionRemoved_    = 0;
-    int                contentUpdated_        = 0;
+    int                contentRegistered_ = 0;
+    int                contentUpdated_    = 0;
+    int                contentRemoved_    = 0;
     std::string        lastContentSlot_;
     std::string        lastContentId_;
     int                toastCount_            = 0;
@@ -742,9 +647,6 @@ private:
     int                overlayCloseCount_     = 0;
     int                lastToastLvl_          = 0;
     int                lastOverlayType_       = -1;
-    std::string        lastStatusId_;
-    std::string        lastPanelId_;
-    std::string        lastInfoSectionId_;
     std::string        lastToast_;
     std::string        lastSent_;
     std::string        lastDataTopic_;
@@ -1032,15 +934,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     XX_TEST_EXPECT_TRUE(mgr->hasPluginExecutor());
 
     // ---- 2. UI 注册表 ----
-    // 三处展示位置都是"声明项 + 内容": 旧注册表 (statusItems / panels / infoSections) 空着,
-    // 界面只读内容 (一条绘制路径)
+    // 三处展示位置都是"声明项 + 内容": 界面只读内容快照 (一条绘制路径)
     {
         auto reg = mgr->uiRegistrySnapshot();
         XX_TEST_EXPECT_TRUE(reg != nullptr);
         if (reg) {
-            XX_TEST_EXPECT_TRUE(reg->statusItems.empty());
-            XX_TEST_EXPECT_TRUE(reg->panels.empty());
-            XX_TEST_EXPECT_TRUE(reg->infoSections.empty());
             XX_TEST_EXPECT_TRUE(reg->commands.size() >= 2);
         }
         // 内容由 start 事务注册并推一份初始文档 (推送是提交即返回, 等它落到快照上)
@@ -1240,10 +1138,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     }
     XX_TEST_EXPECT_FALSE(mgr->hasCommand("no_such_command"));
 
-    // 三处位置都是"声明项 + 内容": 适配器的旧注册信号不再触发 (内容只走 onContentUpdated)
-    XX_TEST_EXPECT_EQ(adapter->statusRegistered(), 0);
-    XX_TEST_EXPECT_EQ(adapter->panelRegistered(), 0);
-    XX_TEST_EXPECT_EQ(adapter->infoSectionRegistered(), 0);
+    // 三处位置都是"声明项 + 内容": 适配器收到的是内容注册与更新信号
+    XX_TEST_EXPECT_TRUE(adapter->contentRegistered() >= 3);
+    XX_TEST_EXPECT_TRUE(adapter->contentUpdated() >= 3);
 
     // ---- 3. 事件分发 ----
     // READY: 插件回调更新状态栏 + 跨端 send_plugin_data("hello");
@@ -1287,10 +1184,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             agentxx::plugin::kClientUiSlotInfo,
             "example_plugin.info"
         );
-        if (info == nullptr || !info->parsed.contains("items")) {
+        if (info == nullptr || !info->parsed.contains("blocks")) {
             return false;
         }
-        const auto& items = info->parsed["items"];
+        const auto& items = info->parsed["blocks"];
         if (!items.is_array() || items.empty()) {
             return false;
         }
@@ -1372,21 +1269,6 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(reg != nullptr);
         if (reg) {
             bool any = false;
-            for (const auto& s : reg->statusItems) {
-                if (s.plugin == "example_plugin") {
-                    any = true;
-                }
-            }
-            for (const auto& p : reg->panels) {
-                if (p.plugin == "example_plugin") {
-                    any = true;
-                }
-            }
-            for (const auto& s : reg->infoSections) {
-                if (s.plugin == "example_plugin") {
-                    any = true;
-                }
-            }
             for (const auto& c : reg->commands) {
                 if (c.plugin == "example_plugin") {
                     any = true;
@@ -1452,21 +1334,6 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         auto reg = mgr->uiRegistrySnapshot();
         bool any = false;
         if (reg) {
-            for (const auto& s : reg->statusItems) {
-                if (s.plugin == "example_plugin") {
-                    any = true;
-                }
-            }
-            for (const auto& p : reg->panels) {
-                if (p.plugin == "example_plugin") {
-                    any = true;
-                }
-            }
-            for (const auto& s : reg->infoSections) {
-                if (s.plugin == "example_plugin") {
-                    any = true;
-                }
-            }
             for (const auto& c : reg->commands) {
                 if (c.plugin == "example_plugin") {
                     any = true;
@@ -1749,15 +1616,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     {
         namespace fs = std::filesystem;
 
-        // 11.1 clientStateJson 暴露主程序接口清单 (Mock 适配器: status_item/
-        //      panel/toast/info_section/command)
+        // 11.1 clientStateJson 暴露主程序接口清单 (Mock 适配器: ui 表整体 /
+        //      toast / command / 消息装饰 / 动作 / overlay / 定时器 / 快捷键)
         auto stateJson = mgr->clientStateJson();
         XX_TEST_EXPECT_TRUE(stateJson.find("\"interfaces\"") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.panel") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.toast") != std::string::npos);
         XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.command") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.status_item") != std::string::npos);
-        // 未置位的能力不得出现 (prompt_modal 仍未实现, 预留位不置)
-        XX_TEST_EXPECT_FALSE(stateJson.find("agentxx.client.prompt_modal") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(stateJson.find("agentxx.client.msg_decor") != std::string::npos);
         // 本次实现的能力 (定时器/快捷键) 由 Mock 适配器声明, 应出现在清单里
         // (接口名就是表 IID: 下划线形式 `<应用名>_client_<表名>`)
         XX_TEST_EXPECT_TRUE(stateJson.find("agentxx_client_timer") != std::string::npos);
@@ -1839,7 +1704,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             {
                 std::ofstream f(gateDir / "plugin.yaml", std::ios::binary | std::ios::trunc);
                 f << "name: gate_ok_iface\nentry: libexample_plugin.so\ndepends:\n"
-                     "interfaces:\n  require:\n    - agentxx.client.panel\n    - agentxx.client.command\n"
+                     "interfaces:\n  require:\n    - agentxx.client.command\n"
+                     "    - agentxx.client.msg_decor\n"
                      "  optional:\n    - agentxx.client.toast\n";
             }
             auto okInst = co_await mgr->loadNativeAsync(gateDir.string());
@@ -1880,7 +1746,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 mgr->onReady();
                 co_await drainPlugin(mgr, "example_plugin");
                 XX_TEST_EXPECT_TRUE(readyPayload.find("\"interfaces\"") != std::string::npos);
-                XX_TEST_EXPECT_TRUE(readyPayload.find("agentxx.client.panel") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(
+                    readyPayload.find("agentxx.client.msg_decor") != std::string::npos
+                );
                 if (broadcasts11 && sub) {
                     XX_TEST_EXPECT_TRUE(
                         agentxx::plugin::unsubscribePluginBroadcastNoWait(
@@ -2189,35 +2057,41 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             auto reg            = mgr->uiRegistrySnapshot();
             bool hasPlanSection = false;
-            for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_planning.plan") {
-                    hasPlanSection = true;
-                    XX_TEST_EXPECT_EQ(sec.title, std::string{"Plan"});
-                    std::string dump = sec.items.dump();
-                    XX_TEST_EXPECT_TRUE(dump.find("Graph") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("[~] do step 1") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("[#] done step 0") != std::string::npos);
-                    XX_TEST_EXPECT_TRUE(dump.find("test note 123") != std::string::npos);
-                    // 验证 "|- " 前缀 + Graph 按钮的布局契约: 前缀文本与按钮是**相邻两项**
-                    // (客户端把相邻的 Text + Button 渲染在同一行, 按钮紧跟文本之后),
-                    // 动作是 dispatch (描述层规范写法)
-                    XX_TEST_EXPECT_TRUE(sec.items.is_array());
-                    XX_TEST_EXPECT_TRUE(sec.items.size() >= 3);
-                    const auto& graphPrefix = sec.items[0];
-                    XX_TEST_EXPECT_EQ(graphPrefix.value("kind", ""), std::string{"Text"});
-                    XX_TEST_EXPECT_EQ(graphPrefix.value("text", ""), std::string{"|- "});
-                    const auto& graphButton = sec.items[1];
-                    XX_TEST_EXPECT_EQ(graphButton.value("kind", ""), std::string{"Button"});
-                    XX_TEST_EXPECT_EQ(graphButton.value("label", ""), std::string{"Graph"});
-                    // 前缀与按钮之间不夹别的项, 否则客户端不会合并到同一行
-                    XX_TEST_EXPECT_TRUE(sec.items[2].is_object());
-                    XX_TEST_EXPECT_EQ(sec.items[2].value("kind", ""), std::string{"Text"});
-                    // 动作按描述层解析: 短写字符串与对象写法等价 (dispatch + 名字)
-                    const auto graphAction = pluginxx::ui::parseAction(graphButton["action"]);
-                    XX_TEST_EXPECT_EQ(graphAction.kind, pluginxx::ui::Action::Kind::Call);
-                    XX_TEST_EXPECT_EQ(graphAction.name, std::string{"planning.open_graph"});
-                    // 状态图源码经 dispatch 动作派发时由插件自持 (不随按钮双发)
-                }
+            // 段落是 `info` 槽位上的一份内容 (插件推 `{"blocks":[…]}`)
+            auto planSnap = mgr->uiContentSnapshot();
+            const auto* planContent
+                = planSnap
+                      ? planSnap->contentOf(agentxx::plugin::kClientUiSlotInfo, "agentxx_planning.plan")
+                      : nullptr;
+            if (planContent != nullptr) {
+                hasPlanSection = true;
+                XX_TEST_EXPECT_EQ(planContent->title, std::string{"Plan"});
+                XX_TEST_EXPECT_TRUE(planContent->parsed.is_object());
+                const auto& secItems = planContent->parsed["blocks"];
+                std::string dump     = secItems.dump();
+                XX_TEST_EXPECT_TRUE(dump.find("Graph") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(dump.find("[~] do step 1") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(dump.find("[#] done step 0") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(dump.find("test note 123") != std::string::npos);
+                // 验证 "|- " 前缀 + Graph 按钮的布局契约: 前缀文本与按钮是**相邻两项**
+                // (客户端把相邻的 Text + Button 渲染在同一行, 按钮紧跟文本之后),
+                // 动作是 dispatch (描述层规范写法)
+                XX_TEST_EXPECT_TRUE(secItems.is_array());
+                XX_TEST_EXPECT_TRUE(secItems.size() >= 3);
+                const auto& graphPrefix = secItems[0];
+                XX_TEST_EXPECT_EQ(graphPrefix.value("kind", ""), std::string{"Text"});
+                XX_TEST_EXPECT_EQ(graphPrefix.value("text", ""), std::string{"|- "});
+                const auto& graphButton = secItems[1];
+                XX_TEST_EXPECT_EQ(graphButton.value("kind", ""), std::string{"Button"});
+                XX_TEST_EXPECT_EQ(graphButton.value("label", ""), std::string{"Graph"});
+                // 前缀与按钮之间不夹别的项, 否则客户端不会合并到同一行
+                XX_TEST_EXPECT_TRUE(secItems[2].is_object());
+                XX_TEST_EXPECT_EQ(secItems[2].value("kind", ""), std::string{"Text"});
+                // 动作按描述层解析: 短写字符串与对象写法等价 (dispatch + 名字)
+                const auto graphAction = pluginxx::ui::parseAction(graphButton["action"]);
+                XX_TEST_EXPECT_EQ(graphAction.kind, pluginxx::ui::Action::Kind::Call);
+                XX_TEST_EXPECT_EQ(graphAction.name, std::string{"planning.open_graph"});
+                // 状态图源码经 dispatch 动作派发时由插件自持 (不随按钮双发)
             }
             XX_TEST_EXPECT_TRUE(hasPlanSection);
 
@@ -2309,8 +2183,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 bool hasRenderer = false;
                 for (const auto& r : reg->toolRenderers) {
                     if (r.plugin == "agentxx_planning" && r.toolName == "agentxx_planning") {
-                        hasRenderer
-                            = (r.collapsedFn != nullptr || r.expandedFn != nullptr);
+                        hasRenderer = r.binding != nullptr && r.binding->generate != nullptr;
                     }
                 }
                 XX_TEST_EXPECT_TRUE(hasRenderer);
@@ -2397,9 +2270,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             co_await drainPlugin(mgr, "agentxx_planning");
             reg                        = mgr->uiRegistrySnapshot();
             bool hasPlanSecAfterSwitch = false;
-            for (const auto& sec : reg->infoSections) {
-                if (sec.id == "agentxx_planning.plan") {
-                    hasPlanSecAfterSwitch = true;
+            // 会话切换后段落被推成空文档 (`items` 为空), 界面据此不画这一段
+            if (auto snap = mgr->uiContentSnapshot()) {
+                if (const auto* planAfter
+                    = snap->contentOf(agentxx::plugin::kClientUiSlotInfo, "agentxx_planning.plan")) {
+                    const auto& items = planAfter->parsed["blocks"];
+                    hasPlanSecAfterSwitch = items.is_array() && !items.empty();
                 }
             }
             XX_TEST_EXPECT_FALSE(hasPlanSecAfterSwitch);
@@ -2960,15 +2836,15 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 diffSpec.type    = AGENTXX_OVERLAY_DIFF;
                 diffSpec.title   = agentxx::plugin::PluginStringView::fromCstr("D");
                 diffSpec.payload = agentxx::plugin::PluginStringView::fromCstr(
-                    R"({"path":"a","old_str":"x","new_str":"y"})"
+                    R"({"path":"a","edits":[{"old_str":"x","new_str":"y"}]})"
                 );
                 diffSpec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
                 XX_TEST_EXPECT_EQ(uiOpenOverlay(exHost, ui, &diffSpec), 0);
                 XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), 2);
                 XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_DIFF);
 
-                // SDK 便捷方法 showDiffOverlay: 单段按旧写法下发 (老主程序也能渲染),
-                // 多段用 `edits` 数组下发; 空段列表打开"无变化"的 diff
+                // SDK 便捷方法 showDiffOverlay: 段统一放在 `edits` 数组里下发
+                // (单段也是一段); 空段列表打开"无变化"的 diff
                 struct SdkProbe : agentxx::plugin::ClientPluginBase {};
 
                 SdkProbe sdk;
@@ -2992,9 +2868,17 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 {
                     auto payload = utilxx_base::Json::parse(adapter->lastOverlayPayload());
                     XX_TEST_EXPECT_EQ(payload.value("path", std::string{}), "/p/a.cpp");
-                    XX_TEST_EXPECT_EQ(payload.value("old_str", std::string{}), "old();");
-                    XX_TEST_EXPECT_EQ(payload.value("new_str", std::string{}), "new();");
-                    XX_TEST_EXPECT_FALSE(payload.contains("edits"));
+                    XX_TEST_EXPECT_TRUE(payload.contains("edits"));
+                    XX_TEST_EXPECT_EQ(payload["edits"].size(), size_t{1});
+                    XX_TEST_EXPECT_EQ(
+                        payload["edits"][0].value("old_str", std::string{}),
+                        "old();"
+                    );
+                    XX_TEST_EXPECT_EQ(
+                        payload["edits"][0].value("new_str", std::string{}),
+                        "new();"
+                    );
+                    XX_TEST_EXPECT_FALSE(payload.contains("old_str"));
                 }
 
                 XX_TEST_EXPECT_EQ(
@@ -3854,7 +3738,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             if (ui) {
                 // 迟到注册: 实例已销毁 -> 安全失败, 不访问已释放对象
                 XX_TEST_EXPECT_TRUE(
-                    uiRegisterStatusItem(oldHost, ui, "late.probe", R"({"text":"x"})") == nullptr
+                    uiRegisterUiItem(oldHost, ui, "late.probe", "status", "{}") != 0
                 );
 
                 // 同名重载: 旧指针不得路由到新实例
@@ -3863,20 +3747,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 if (instB) {
                     XX_TEST_EXPECT_TRUE(instB->hostView() != oldHost);
                     XX_TEST_EXPECT_TRUE(
-                        uiRegisterStatusItem(oldHost, ui, "late.probe", R"({"text":"x"})")
-                        == nullptr
+                        uiRegisterUiItem(oldHost, ui, "late.probe", "status", "{}") != 0
                     );
                     // 新实例自己的 host 视图可以注册 (证明失败来自指针失效而非环境)
-                    auto* item = uiRegisterStatusItem(
-                        instB->hostView(),
-                        ui,
-                        "late.probe",
-                        R"({"text":"x"})"
+                    XX_TEST_EXPECT_EQ(
+                        uiRegisterUiItem(instB->hostView(), ui, "late.probe", "status", "{}"),
+                        0
                     );
-                    XX_TEST_EXPECT_TRUE(item != nullptr);
-                    if (item) {
-                        uiUnregisterStatusItem(instB->hostView(), ui, item);
-                    }
                     XX_TEST_EXPECT_TRUE(
                         co_await mgr2->unloadAsync("example_plugin", std::chrono::seconds{5})
                     );
@@ -3886,9 +3763,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     }
 
     // ---- 26. 客户端加载期 start 失败的真实 DSO 回滚 (UI 项) ----
-    // 测试插件 start 依次注册 状态栏项/面板/Info 段落/命令/订阅, 每步注册后
-    // 立即经句柄自检 (update 必须成功, 保证"走到最后一步"意味着前面的注册
-    // 真实生效), 然后主动失败: 主程序必须回滚全部 UI 注册与订阅。
+    // 测试插件 start 依次注册状态栏 / 面板 / Info 栏三份内容与命令/订阅, 每步注册后
+    // 立即自检 (推一份内容, 保证"走到最后一步"意味着前面的注册真实生效),
+    // 然后主动失败: 主程序必须回滚全部 UI 注册与订阅。
     // 随后置 `AGENTXX_TEST_CLIENT_START_OK` 再次加载同一 DSO 必须完整成功
     // (证明 id/命令/订阅无残留冲突), 卸载后再次清空。
     {
@@ -3899,29 +3776,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         mgr2->setSessionId("sess-rollback");
 
         const std::string dsoPath = AGENTXX_TEST_CLIENT_START_FAIL_PLUGIN_PATH;
-        auto              findInRegistry
-            = [](const std::shared_ptr<const agentxx::plugin::ClientUiRegistry>& reg,
-                 const char*                                                     id) {
-                  if (!reg) {
-                      return false;
-                  }
-                  for (const auto& s : reg->statusItems) {
-                      if (s.id == id) {
-                          return true;
-                      }
-                  }
-                  for (const auto& p : reg->panels) {
-                      if (p.id == id) {
-                          return true;
-                      }
-                  }
-                  for (const auto& s : reg->infoSections) {
-                      if (s.id == id) {
-                          return true;
-                      }
-                  }
-                  return false;
-              };
+        // 这三份内容是否还在快照里 (槽位 + 短名)
+        auto hasContent = [](const std::shared_ptr<const agentxx::plugin::ClientUiSnapshot>& snap,
+                             std::string_view                                              slot,
+                             const char*                                                   id) {
+            return snap != nullptr && snap->contentOf(slot, id) != nullptr;
+        };
 
         // 第一次加载: 全注册后失败, 主程序回滚
         clearSystemEnvVar("AGENTXX_TEST_CLIENT_START_OK");
@@ -3929,11 +3789,17 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_TRUE(failed == nullptr);
         XX_TEST_EXPECT_FALSE(mgr2->hasCommand("test_client_start_fail_cmd"));
         {
-            auto reg = mgr2->uiRegistrySnapshot();
-            XX_TEST_EXPECT_TRUE(reg != nullptr);
-            XX_TEST_EXPECT_FALSE(findInRegistry(reg, "test_client_start_fail.status"));
-            XX_TEST_EXPECT_FALSE(findInRegistry(reg, "test_client_start_fail.panel"));
-            XX_TEST_EXPECT_FALSE(findInRegistry(reg, "test_client_start_fail.info"));
+            auto snap = mgr2->uiContentSnapshot();
+            XX_TEST_EXPECT_TRUE(snap != nullptr);
+            XX_TEST_EXPECT_FALSE(
+                hasContent(snap, agentxx::plugin::kClientUiSlotStatus, "test_client_start_fail.status")
+            );
+            XX_TEST_EXPECT_FALSE(
+                hasContent(snap, agentxx::plugin::kClientUiSlotPanel, "test_client_start_fail.panel")
+            );
+            XX_TEST_EXPECT_FALSE(
+                hasContent(snap, agentxx::plugin::kClientUiSlotInfo, "test_client_start_fail.info")
+            );
         }
 
         // 第二次加载: 同名注册必须完整重新成功 (无残留冲突)
@@ -3944,40 +3810,60 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         if (ok) {
             XX_TEST_EXPECT_EQ(ok->name, "test_client_start_fail_plugin");
             XX_TEST_EXPECT_TRUE(mgr2->hasCommand("test_client_start_fail_cmd"));
-            auto reg = mgr2->uiRegistrySnapshot();
-            XX_TEST_EXPECT_TRUE(reg != nullptr);
-            if (reg) {
-                bool statusOk = false;
-                for (const auto& s : reg->statusItems) {
-                    if (s.id == "test_client_start_fail.status") {
-                        statusOk = (s.text == "probe: 1");
-                    }
+            auto snap = mgr2->uiContentSnapshot();
+            XX_TEST_EXPECT_TRUE(snap != nullptr);
+            if (snap) {
+                const auto* status = snap->contentOf(
+                    agentxx::plugin::kClientUiSlotStatus,
+                    "test_client_start_fail.status"
+                );
+                XX_TEST_EXPECT_TRUE(status != nullptr);
+                if (status != nullptr) {
+                    XX_TEST_EXPECT_TRUE(status->hasResult);
+                    XX_TEST_EXPECT_TRUE(
+                        status->json.find("probe: 1") != std::string::npos
+                    );
                 }
-                bool panelOk = false;
-                for (const auto& p : reg->panels) {
-                    if (p.id == "test_client_start_fail.panel") {
-                        panelOk = (p.title == "Probe");
-                    }
+                const auto* panel = snap->contentOf(
+                    agentxx::plugin::kClientUiSlotPanel,
+                    "test_client_start_fail.panel"
+                );
+                XX_TEST_EXPECT_TRUE(panel != nullptr);
+                if (panel != nullptr) {
+                    XX_TEST_EXPECT_EQ(panel->title, std::string{"Probe"});
                 }
-                bool infoOk = false;
-                for (const auto& s : reg->infoSections) {
-                    if (s.id == "test_client_start_fail.info") {
-                        infoOk = (s.title == "Probe Info");
-                    }
+                const auto* info = snap->contentOf(
+                    agentxx::plugin::kClientUiSlotInfo,
+                    "test_client_start_fail.info"
+                );
+                XX_TEST_EXPECT_TRUE(info != nullptr);
+                if (info != nullptr) {
+                    XX_TEST_EXPECT_EQ(info->title, std::string{"Probe Info"});
                 }
-                XX_TEST_EXPECT_TRUE(statusOk);
-                XX_TEST_EXPECT_TRUE(panelOk);
-                XX_TEST_EXPECT_TRUE(infoOk);
             }
             // 卸载: UI 项与命令再次清空
             XX_TEST_EXPECT_TRUE(
                 co_await mgr2->unloadAsync("test_client_start_fail_plugin", std::chrono::seconds{5})
             );
             XX_TEST_EXPECT_FALSE(mgr2->hasCommand("test_client_start_fail_cmd"));
-            auto regAfter = mgr2->uiRegistrySnapshot();
-            XX_TEST_EXPECT_FALSE(findInRegistry(regAfter, "test_client_start_fail.status"));
-            XX_TEST_EXPECT_FALSE(findInRegistry(regAfter, "test_client_start_fail.panel"));
-            XX_TEST_EXPECT_FALSE(findInRegistry(regAfter, "test_client_start_fail.info"));
+            auto snapAfter = mgr2->uiContentSnapshot();
+            XX_TEST_EXPECT_FALSE(
+                hasContent(
+                    snapAfter,
+                    agentxx::plugin::kClientUiSlotStatus,
+                    "test_client_start_fail.status"
+                )
+            );
+            XX_TEST_EXPECT_FALSE(
+                hasContent(
+                    snapAfter,
+                    agentxx::plugin::kClientUiSlotPanel,
+                    "test_client_start_fail.panel"
+                )
+            );
+            XX_TEST_EXPECT_FALSE(
+                hasContent(snapAfter, agentxx::plugin::kClientUiSlotInfo, "test_client_start_fail.info")
+            );
         }
 #else
         // 独立构建未接线测试插件: 跳过
@@ -4031,9 +3917,9 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
     // ---- 28. 主程序内置工具特化渲染: agentxx_share_store / agentxx_subagent ----
     // lib 内置工具没有对应插件, 渲染器由主程序自身注册
-    // (registerBuiltinToolRenderers → ClientPluginManager::registerBuiltinToolRenderer):
-    // 存入 builtinToolRenderers 分表, 渲染走与插件渲染器相同的路径
-    // (client io 线程执行 + 语义缓存), 展开体保持主程序通用展示 (不提供 items)。
+    // (registerBuiltinToolRows → ClientPluginManager::registerBuiltinToolContent):
+    // 登记成 `agentxx.client.tool` 上的声明项 + 内容, 渲染走与插件内容相同的路径
+    // (client io 线程同步算 + 语义缓存), 展开体保持主程序通用展示 (不提供 blocks)。
     {
         auto mgr2     = std::make_shared<agentxx::plugin::ClientPluginManager>(ex);
         auto adapter2 = std::make_shared<MockPluginUiAdapter>();
@@ -4055,26 +3941,44 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_FALSE(res.matched);
         }
 
-        // 28.2 注册: 内置渲染器与插件渲染器分表存放; 重复注册幂等
-        agentxx::plugin::registerBuiltinToolRenderers(*mgr2);
+        // 28.2 注册: 内置工具行登记成 `agentxx.client.tool` 上的声明项 + 内容;
+        // 重复注册幂等
+        agentxx::plugin::registerBuiltinToolRows(*mgr2);
         {
+            auto content = mgr2->uiContentSnapshot();
+            XX_TEST_EXPECT_TRUE(content != nullptr);
+            if (content) {
+                XX_TEST_EXPECT_EQ(
+                    content->contentsOn(agentxx::plugin::kClientUiSlotTool).size(),
+                    size_t{2}
+                );
+                const auto* store = content->contentOf(
+                    agentxx::plugin::kClientUiSlotTool,
+                    "agentxx_share_store"
+                );
+                XX_TEST_EXPECT_TRUE(store != nullptr);
+                if (store) {
+                    XX_TEST_EXPECT_EQ(store->title, std::string{"Store"});
+                }
+            }
             auto reg = mgr2->uiRegistrySnapshot();
             XX_TEST_EXPECT_TRUE(reg != nullptr);
             if (reg) {
-                XX_TEST_EXPECT_EQ(reg->builtinToolRenderers.size(), size_t{2});
-                XX_TEST_EXPECT_TRUE(reg->toolRenderers.empty());
-                for (const auto& r : reg->builtinToolRenderers) {
-                    XX_TEST_EXPECT_TRUE(r.builtin);
+                XX_TEST_EXPECT_EQ(reg->toolRenderers.size(), size_t{2});
+                for (const auto& r : reg->toolRenderers) {
+                    XX_TEST_EXPECT_TRUE(r.binding != nullptr);
                     XX_TEST_EXPECT_EQ(
                         r.plugin,
                         std::string{agentxx::plugin::kBuiltinRendererOwner}
                     );
-                    XX_TEST_EXPECT_TRUE(r.collapsedFn != nullptr);
+                    // 内置工具行只给折叠内容; 展开体保持默认展示
+                    XX_TEST_EXPECT_TRUE(r.binding->row.summary != nullptr);
+                    XX_TEST_EXPECT_TRUE(r.binding->row.body == nullptr);
                 }
             }
         }
-        agentxx::plugin::registerBuiltinToolRenderers(*mgr2);
-        XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->builtinToolRenderers.size(), size_t{2});
+        agentxx::plugin::registerBuiltinToolRows(*mgr2);
+        XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->toolRenderers.size(), size_t{2});
 
         // 28.3 share_store new: 操作 + 新增 id (取自结果 JSON; 区间只有 get 才有)
         {
@@ -4272,44 +4176,54 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         // 28.10 匹配优先级: 插件注册项优先于主程序内置项 (同一 tool_name)
         {
-            // 插件侧渲染回调是异步操作契约: 内容经回调自己的 notify 交回
-            auto pluginCollapsed = +[](void*                         ud,
-                                       const agentxx::plugin::ClientToolRenderInput* input,
-                                       const PluginxxOperatorNotify* notify,
-                                       PluginxxString*               errorOut) -> int32_t {
-                (void)ud;
-                (void)input;
-                (void)errorOut;
-                auto text = agentxx::plugin::PluginStringView::fromCstr("plugin wins");
+            // 插件内容有自己的生成函数 (在插件执行线程上算)
+            auto pluginGenerate = +[](const PluginxxHost*,
+                                      const PluginxxStringView* ctx,
+                                      void*,
+                                      const PluginxxOperatorNotify* notify,
+                                      PluginxxString*) {
+                (void)ctx;
+                auto doc = agentxx::plugin::PluginStringView::fromCstr(
+                    R"({"json":{"blocks":[{"kind":"Text","text":"plugin wins"}]}})"
+                );
                 if (notify && notify->done) {
-                    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &text);
+                    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &doc);
                 }
-                return 0;
             };
 
             agentxx::plugin::ClientUiRegistry reg;
-            reg.builtinToolRenderers.push_back({
+            auto builtinBinding = std::make_shared<agentxx::plugin::ClientToolContentBinding>();
+            builtinBinding->plugin      = std::string{agentxx::plugin::kBuiltinRendererOwner};
+            builtinBinding->toolName    = "agentxx_share_store";
+            builtinBinding->displayName = "Store";
+            builtinBinding->row.summary = &agentxx::plugin::builtinShareStoreSummary;
+            reg.toolRenderers.push_back({
                 .plugin      = std::string{agentxx::plugin::kBuiltinRendererOwner},
                 .toolName    = "agentxx_share_store",
                 .displayName = "Store",
-                .collapsedFn = &agentxx::plugin::builtinRenderShareStoreCollapsed,
-                .builtin     = true,
+                .binding     = builtinBinding,
             });
+
+            auto pluginBinding = std::make_shared<agentxx::plugin::ClientToolContentBinding>();
+            pluginBinding->plugin      = "some_plugin";
+            pluginBinding->toolName    = "agentxx_share_store";
+            pluginBinding->displayName = "PluginStore";
+            pluginBinding->generate    = pluginGenerate;
             reg.toolRenderers.push_back({
                 .plugin      = "some_plugin",
                 .toolName    = "agentxx_share_store",
                 .displayName = "PluginStore",
-                .collapsedFn = pluginCollapsed,
+                .binding     = pluginBinding,
             });
 
             const std::string args = R"({"opt":"new","text":"a\nb"})";
-            // 显示名: 插件注册项优先
+            // 显示名: 插件内容优先
             XX_TEST_EXPECT_EQ(
                 agentxx::plugin::toolDisplayNameFor(&reg, {}, "agentxx_share_store"),
                 std::string_view{"PluginStore"}
             );
 
-            // 无语义缓存 = 同步执行回调 (不进入异步请求路径)
+            // 无语义缓存: 只能算内置工具行 (插件内容需要执行线程)
             auto withPlugin = agentxx::plugin::renderClientToolCollapsed(
                 &reg,
                 nullptr,
@@ -4321,11 +4235,33 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_EQ(withPlugin.text, std::string{"plugin wins"});
+            XX_TEST_EXPECT_TRUE(withPlugin.text.empty());
             XX_TEST_EXPECT_FALSE(withPlugin.pending);
 
-            // 插件项不存在时回退主程序内置渲染器
+            // 有缓存: 选中插件内容 (等它的生成结果), 不落到内置工具行
+            agentxx::plugin::ClientToolRenderCache cache;
+            auto pendingPlug = agentxx::plugin::renderClientToolCollapsed(
+                &reg,
+                &cache,
+                "call_prec_1b",
+                "agentxx_share_store",
+                args,
+                "",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(pendingPlug.pending);
+            XX_TEST_EXPECT_EQ(pendingPlug.pendingPlugin, std::string{"some_plugin"});
+
+            // 插件内容不存在时回退主程序内置工具行
             reg.toolRenderers.clear();
+            reg.toolRenderers.push_back({
+                .plugin      = std::string{agentxx::plugin::kBuiltinRendererOwner},
+                .toolName    = "agentxx_share_store",
+                .displayName = "Store",
+                .binding     = builtinBinding,
+            });
             XX_TEST_EXPECT_EQ(
                 agentxx::plugin::toolDisplayNameFor(&reg, {}, "agentxx_share_store"),
                 std::string_view{"Store"}
@@ -4365,7 +4301,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(afterUnload.matched);
             XX_TEST_EXPECT_EQ(afterUnload.summary, "new #9");
-            XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->builtinToolRenderers.size(), size_t{2});
+            XX_TEST_EXPECT_EQ(
+                mgr2->uiRegistrySnapshot()->toolRenderers.size(),
+                size_t{2}
+            );
         }
     }
 
@@ -4387,10 +4326,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         // 29.1 表整体 + 全部已实现子能力 (第三方插件按表名声明时同样不再误报)
         const std::string_view tuiUiInterfaces[] = {
             pi::ClientUi,
-            pi::ClientStatusItem,
-            pi::ClientPanel,
             pi::ClientToast,
-            pi::ClientInfoSection,
             pi::ClientCommand,
             pi::ClientMsgDecor,
             pi::ClientAction,
@@ -4827,47 +4763,45 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         );
         XX_TEST_EXPECT_TRUE(ifaceUi != nullptr);
         if (inst && ifaceUi) {
-            // 超大描述: 单条 JSON 超过 1 MiB (主程序在入口处直接拒绝, 不解析不落表)
+            // 超大内容: 单条 JSON 超过 1 MiB (主程序在入口处直接拒绝, 不解析不落快照)
             const std::string huge = std::string{"{\"items\":[{\"kind\":\"text\",\"text\":\""}
                                      + std::string(1024 * 1024 + 64, 'x') + "\"}]}";
             XX_TEST_EXPECT_TRUE(huge.size() > agentxx::plugin::kUiJsonMaxBytes);
 
-            PluginxxStringView idSv
-                = agentxx::plugin::PluginStringView::from(std::string_view{"example_plugin.big"});
-            PluginxxStringView propSv
-                = agentxx::plugin::PluginStringView::from(std::string_view{"{\"title\":\"Big\"}"});
-            auto* panel = uiRegisterPanel(
-                inst->hostView(),
-                ifaceUi,
-                "example_plugin.big",
-                std::string_view{propSv.data, static_cast<size_t>(propSv.size)}
-            );
-            (void)idSv;
-            XX_TEST_EXPECT_TRUE(panel != nullptr);
-            if (panel) {
-                // 正常大小先写一次: 后续"拒绝"要与这次的内容对比
-                const std::string small{"{\"items\":[{\"kind\":\"text\",\"text\":\"ok\"}]}"};
-                XX_TEST_EXPECT_EQ(uiUpdatePanel(inst->hostView(), ifaceUi, panel, small), 0);
+            // 用 example_plugin 自己注册的面板内容 (它 start 时已注册并推过一份)
+            const std::string panelId{"example_plugin.panel"};
+            XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+                auto snap = mgr->uiContentSnapshot();
+                return snap != nullptr
+                    && snap->contentOf(agentxx::plugin::kClientUiSlotPanel, panelId) != nullptr;
+            }));
 
-                XX_TEST_EXPECT_TRUE(uiUpdatePanel(inst->hostView(), ifaceUi, panel, huge) != 0);
+            // 正常大小先推一次: 后续"拒绝"要与这次的内容对比
+            const std::string small{R"({"blocks":[{"kind":"text","text":"ok"}]})"};
+            XX_TEST_EXPECT_EQ(uiPushContent(inst->hostView(), ifaceUi, panelId, small), 0);
+            XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+                auto snap = mgr->uiContentSnapshot();
+                if (!snap) {
+                    return false;
+                }
+                const auto* c = snap->contentOf(agentxx::plugin::kClientUiSlotPanel, panelId);
+                return c != nullptr && c->json == small;
+            }));
 
-                // 注册表内容保持为上一次成功写入 (拒绝不留半截状态)
-                {
-                    auto                                reg   = mgr->uiRegistrySnapshot();
-                    const agentxx::plugin::ClientPanel* found = nullptr;
-                    for (const auto& p : reg->panels) {
-                        if (p.id == "example_plugin.big") {
-                            found = &p;
-                        }
-                    }
+            XX_TEST_EXPECT_TRUE(uiPushContent(inst->hostView(), ifaceUi, panelId, huge) != 0);
+
+            // 内容保持为上一次成功推送 (拒绝不留半截状态)
+            {
+                auto snap = mgr->uiContentSnapshot();
+                XX_TEST_EXPECT_TRUE(snap != nullptr);
+                if (snap) {
+                    const auto* found = snap->contentOf(
+                        agentxx::plugin::kClientUiSlotPanel,
+                        panelId
+                    );
                     XX_TEST_EXPECT_TRUE(found != nullptr);
-                    if (found) {
-                        XX_TEST_EXPECT_EQ(found->items.size(), size_t{1});
-                        XX_TEST_EXPECT_EQ(
-                            found->items[0].value("text", std::string{}),
-                            std::string{"ok"}
-                        );
-                        XX_TEST_EXPECT_EQ(found->version, uint64_t{1}); // 只有第一次成功更新
+                    if (found != nullptr) {
+                        XX_TEST_EXPECT_EQ(found->json, small);
                     }
                 }
             }
@@ -5016,8 +4950,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     if (hit) {
                         XX_TEST_EXPECT_EQ(hit->plugin, std::string{"example_js"});
                         XX_TEST_EXPECT_EQ(hit->displayName, std::string{"JS Hello"});
-                        XX_TEST_EXPECT_TRUE(hit->collapsedFn != nullptr);
-                        XX_TEST_EXPECT_TRUE(hit->expandedFn != nullptr);
+                        XX_TEST_EXPECT_TRUE(hit->binding != nullptr);
+                        XX_TEST_EXPECT_TRUE(
+                            hit->binding != nullptr && hit->binding->generate != nullptr
+                        );
                     }
                 }
 
@@ -5076,36 +5012,50 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_EQ(otherJs.displayName, std::string{"js_async_wait"});
                 XX_TEST_EXPECT_TRUE(!otherJs.matched);
 
-                // 展示面: 状态栏项 / Info 段落 / 面板 / 命令 (脚本注册, 句柄是整数 token)
+                // 展示面: 状态栏 / Info 栏 / 面板 / 命令 (脚本注册槽位上的内容)
                 {
-                    auto reg = mgrJs->uiRegistrySnapshot();
-                    bool hasStatus = false;
-                    std::string statusText;
-                    for (const auto& s : reg->statusItems) {
-                        if (s.id == "js.demo") {
-                            hasStatus  = true;
-                            statusText = s.text;
+                    // 内容先由主程序问一次 (脚本的 generate 回它算好的那一份)
+                    XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+                        auto snap = mgrJs->uiContentSnapshot();
+                        if (!snap) {
+                            return false;
+                        }
+                        const auto* status = snap->contentOf(
+                            agentxx::plugin::kClientUiSlotStatus,
+                            "js.demo"
+                        );
+                        return status != nullptr && status->hasResult;
+                    }));
+                    auto snap = mgrJs->uiContentSnapshot();
+                    XX_TEST_EXPECT_TRUE(snap != nullptr);
+                    if (snap) {
+                        const auto* status = snap->contentOf(
+                            agentxx::plugin::kClientUiSlotStatus,
+                            "js.demo"
+                        );
+                        XX_TEST_EXPECT_TRUE(status != nullptr);
+                        if (status != nullptr) {
+                            XX_TEST_EXPECT_TRUE(
+                                status->json.find("js: ready") != std::string::npos
+                            );
+                        }
+                        const auto* info = snap->contentOf(
+                            agentxx::plugin::kClientUiSlotInfo,
+                            "js.demo.info"
+                        );
+                        XX_TEST_EXPECT_TRUE(info != nullptr);
+                        if (info != nullptr) {
+                            XX_TEST_EXPECT_EQ(info->title, std::string{"JS Demo"});
+                        }
+                        const auto* panel = snap->contentOf(
+                            agentxx::plugin::kClientUiSlotPanel,
+                            "js.demo.panel"
+                        );
+                        XX_TEST_EXPECT_TRUE(panel != nullptr);
+                        if (panel != nullptr) {
+                            XX_TEST_EXPECT_EQ(panel->title, std::string{"JS Demo"});
                         }
                     }
-                    XX_TEST_EXPECT_TRUE(hasStatus);
-                    XX_TEST_EXPECT_EQ(statusText, std::string{"js: ready"});
-
-                    bool hasInfo = false;
-                    for (const auto& sec : reg->infoSections) {
-                        if (sec.id == "js.demo.info") {
-                            hasInfo = true;
-                            XX_TEST_EXPECT_EQ(sec.title, std::string{"JS Demo"});
-                        }
-                    }
-                    XX_TEST_EXPECT_TRUE(hasInfo);
-
-                    bool hasPanel = false;
-                    for (const auto& p : reg->panels) {
-                        if (p.id == "js.demo.panel") {
-                            hasPanel = true;
-                        }
-                    }
-                    XX_TEST_EXPECT_TRUE(hasPanel);
                     XX_TEST_EXPECT_TRUE(mgrJs->hasCommand("jsdemo"));
                 }
 
@@ -5121,19 +5071,20 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_EQ(adapterJs->lastToast(), std::string{"hello from JS"});
                 }
 
-                // 快捷键: 派发后脚本更新状态栏文本
+                // 快捷键: 派发后脚本推一份新的状态栏内容
                 mgrJs->postKeybindInvocation("ctrl+alt+j");
-                co_await sleepMs(80);
-                {
-                    auto        reg  = mgrJs->uiRegistrySnapshot();
-                    std::string text = "(missing)";
-                    for (const auto& s : reg->statusItems) {
-                        if (s.id == "js.demo") {
-                            text = s.text;
-                        }
+                XX_TEST_EXPECT_TRUE(co_await waitUntil([&] {
+                    auto snap = mgrJs->uiContentSnapshot();
+                    if (!snap) {
+                        return false;
                     }
-                    XX_TEST_EXPECT_EQ(text, std::string{"js: key 1"});
-                }
+                    const auto* status = snap->contentOf(
+                        agentxx::plugin::kClientUiSlotStatus,
+                        "js.demo"
+                    );
+                    return status != nullptr
+                        && status->json.find("js: key 1") != std::string::npos;
+                }));
 
                 // 按钮动作: 面板 button 派发 → 脚本回调 (fire-and-forget)
                 {
@@ -5155,12 +5106,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     bool fired = false;
                     for (int i = 0; i < 120 && !fired; ++i) {
                         co_await sleepMs(10);
-                        auto reg = mgrJs->uiRegistrySnapshot();
-                        for (const auto& sec : reg->infoSections) {
-                            if (sec.id == "js.demo.info"
-                                && sec.items.dump().find("timer tick 2") != std::string::npos) {
-                                fired = true;
-                            }
+                        auto snap = mgrJs->uiContentSnapshot();
+                        if (!snap) {
+                            continue;
+                        }
+                        const auto* info = snap->contentOf(
+                            agentxx::plugin::kClientUiSlotInfo,
+                            "js.demo.info"
+                        );
+                        if (info != nullptr && info->json.find("timer tick 2") != std::string::npos) {
+                            fired = true;
                         }
                     }
                     XX_TEST_EXPECT_TRUE(fired);
@@ -5181,26 +5136,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(
                         adapterJs->lastToast().find("visible=true") != std::string::npos
                     );
-                    // 状态栏项 / 面板 / Info 段落与另一个键位都已注销
-                    auto reg = mgrJs->uiRegistrySnapshot();
-                    bool hasStatus = false;
-                    bool hasInfo   = false;
-                    bool hasPanel  = false;
-                    for (const auto& s : reg->statusItems) {
-                        if (s.id == "js.demo") {
-                            hasStatus = true;
-                        }
-                    }
-                    for (const auto& sec : reg->infoSections) {
-                        if (sec.id == "js.demo.info") {
-                            hasInfo = true;
-                        }
-                    }
-                    for (const auto& p : reg->panels) {
-                        if (p.id == "js.demo.panel") {
-                            hasPanel = true;
-                        }
-                    }
+                    // 状态栏 / Info 栏 / 面板三份内容与另一个键位都已注销
+                    auto snap      = mgrJs->uiContentSnapshot();
+                    bool hasStatus = snap != nullptr
+                        && snap->contentOf(agentxx::plugin::kClientUiSlotStatus, "js.demo") != nullptr;
+                    bool hasInfo = snap != nullptr
+                        && snap->contentOf(agentxx::plugin::kClientUiSlotInfo, "js.demo.info")
+                               != nullptr;
+                    bool hasPanel = snap != nullptr
+                        && snap->contentOf(agentxx::plugin::kClientUiSlotPanel, "js.demo.panel")
+                               != nullptr;
                     XX_TEST_EXPECT_TRUE(!hasStatus);
                     XX_TEST_EXPECT_TRUE(!hasInfo);
                     XX_TEST_EXPECT_TRUE(!hasPanel);

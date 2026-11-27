@@ -1104,7 +1104,7 @@ struct ClientCtx : agentxx::plugin::ClientPluginBase {
     }
 };
 
-static std::string buildInfoItemsJson(ClientCtx& c) {
+static std::string buildInfoDocJson(ClientCtx& c) {
     // 组件项经描述层与扩展 kit 组装 (文本行用 kit::text, 进度用构建器)
     std::vector<pluginxx::ui::Item> items;
     auto                            pushText = [&](const std::string& text, std::string color = {}) {
@@ -1144,7 +1144,7 @@ static std::string buildInfoItemsJson(ClientCtx& c) {
         }
     }
     utilxx_base::Json out;
-    out["items"] = pluginxx::ui::dumpBlocks(items);
+    out["blocks"] = pluginxx::ui::dumpBlocks(items);
     return out.dump();
 }
 
@@ -1155,7 +1155,7 @@ static void refreshSection(ClientCtx& c) {
     }
     // 文档在这里算 (状态也在这里更新), publish 记住一份, 生成函数 (插件执行线程)
     // 之后回的是那份拷贝
-    c.section->publish(buildInfoItemsJson(c));
+    c.section->publish(buildInfoDocJson(c));
 }
 
 /// 取频道载荷 JSON 对象 (非法/空值返回空对象)

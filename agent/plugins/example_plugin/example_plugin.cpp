@@ -44,11 +44,11 @@ constexpr const char* kExampleProgressTopic = "plugin.example_plugin.progress";
 struct ClientCtx : public agentxx::plugin::ClientPluginBase {
     const AgentxxClientUiIface* ui = nullptr;
     /// 状态栏项内容 (声明项 + 内容; start 事务注册, 卸载时主程序撤销)
-    std::shared_ptr<agentxx::plugin::Content> status_item;
+    std::shared_ptr<agentxx::plugin::Content> statusContent;
     /// 侧边栏面板内容
-    std::shared_ptr<agentxx::plugin::Content> panel;
+    std::shared_ptr<agentxx::plugin::Content> panelContent;
     /// Info 段落内容
-    std::shared_ptr<agentxx::plugin::Content> info_section;
+    std::shared_ptr<agentxx::plugin::Content> infoContent;
     int                                       turn_count = 0;
 };
 
@@ -683,16 +683,16 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
             return;
         }
         ++ctx->turn_count;
-        if (ctx->status_item) {
+        if (ctx->statusContent) {
             // 状态栏的文档是 `{"blocks":[...]}`: 只画一行文本
             utilxx_base::Json line;
             line["kind"] = "Text";
             line["text"] = fmt::format("turns: {}", ctx->turn_count);
             utilxx_base::Json doc;
             doc["blocks"] = utilxx_base::Json::array({line});
-            ctx->status_item->publish(doc.dump());
+            ctx->statusContent->publish(doc.dump());
         }
-        if (ctx->info_section) {
+        if (ctx->infoContent) {
             // 组件项用描述层与 kit 组装 (不必手写 JSON 字符串与转义)
             std::vector<pluginxx::ui::Item> items;
             utilxx_base::Json               turnsText;
@@ -702,8 +702,8 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
                 {"text", "Example Info section is live"}
             }));
             utilxx_base::Json doc;
-            doc["items"] = pluginxx::ui::dumpBlocks(items);
-            ctx->info_section->publish(doc.dump());
+            doc["blocks"] = pluginxx::ui::dumpBlocks(items);
+            ctx->infoContent->publish(doc.dump());
         }
     });
 }
@@ -711,7 +711,7 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
 /// 示例频道 (`plugin.example_plugin.progress`): 对端/本端发出的进度值
 static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payload_json, void* ud) {
     auto* ctx = static_cast<ClientCtx*>(ud);
-    if (!ctx || !ctx->host || !ctx->panel) {
+    if (!ctx || !ctx->host || !ctx->panelContent) {
         return;
     }
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctx), [&] {
@@ -731,10 +731,10 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
         items.push_back(agentxx::ui::kit::badge({
             {"text", "updated"}
         }));
-        if (ctx->panel) {
+        if (ctx->panelContent) {
             utilxx_base::Json doc;
-            doc["items"] = pluginxx::ui::dumpBlocks(items);
-            ctx->panel->publish(doc.dump());
+            doc["blocks"] = pluginxx::ui::dumpBlocks(items);
+            ctx->panelContent->publish(doc.dump());
         }
     });
 }
@@ -757,7 +757,7 @@ static asio::awaitable<void> exampleClientSetupAsync(ClientCtx& ctx) {
         utilxx_base::Json data = utilxx_base::Json::object();
         data["align"]          = 0;
         data["order"]          = 10;
-        ctx.status_item        = co_await agentxx::plugin::clientRegisterContentAsync(
+        ctx.statusContent = co_await agentxx::plugin::clientRegisterContentAsync(
             ctx,
             agentxx::plugin::ContentSpec{
                 .slot = "status",
@@ -765,14 +765,14 @@ static asio::awaitable<void> exampleClientSetupAsync(ClientCtx& ctx) {
                 .data = data,
             }
         );
-        if (!ctx.status_item) {
+        if (!ctx.statusContent) {
             throw std::runtime_error("register status item failed (declarative content rejected)");
         }
     }
     {
         utilxx_base::Json data = utilxx_base::Json::object();
         data["title"]          = "Example";
-        ctx.panel              = co_await agentxx::plugin::clientRegisterContentAsync(
+        ctx.panelContent = co_await agentxx::plugin::clientRegisterContentAsync(
             ctx,
             agentxx::plugin::ContentSpec{
                 .slot  = "panel",
@@ -781,14 +781,14 @@ static asio::awaitable<void> exampleClientSetupAsync(ClientCtx& ctx) {
                 .data  = data,
             }
         );
-        if (!ctx.panel) {
+        if (!ctx.panelContent) {
             throw std::runtime_error("register panel failed (declarative content rejected)");
         }
     }
     {
         utilxx_base::Json data = utilxx_base::Json::object();
         data["title"]          = "Example Info";
-        ctx.info_section       = co_await agentxx::plugin::clientRegisterContentAsync(
+        ctx.infoContent = co_await agentxx::plugin::clientRegisterContentAsync(
             ctx,
             agentxx::plugin::ContentSpec{
                 .slot  = "info",
@@ -797,7 +797,7 @@ static asio::awaitable<void> exampleClientSetupAsync(ClientCtx& ctx) {
                 .data  = data,
             }
         );
-        if (!ctx.info_section) {
+        if (!ctx.infoContent) {
             throw std::runtime_error("register info section failed (declarative content rejected)");
         }
     }
@@ -809,13 +809,13 @@ static asio::awaitable<void> exampleClientSetupAsync(ClientCtx& ctx) {
         line["text"] = "turns: 0";
         utilxx_base::Json doc;
         doc["blocks"] = utilxx_base::Json::array({line});
-        ctx.status_item->publish(doc.dump());
+        ctx.statusContent->publish(doc.dump());
     }
     {
         utilxx_base::Json doc;
-        doc["items"] = utilxx_base::Json::array();
-        ctx.panel->publish(doc.dump());
-        ctx.info_section->publish(doc.dump());
+        doc["blocks"] = utilxx_base::Json::array();
+        ctx.panelContent->publish(doc.dump());
+        ctx.infoContent->publish(doc.dump());
     }
 
     // 命令回调是异步操作契约: 动作 JSON 经回调自己的 notify 交回 (本插件同步给).
