@@ -468,6 +468,13 @@ public:
     inline static const std::string graphDataKey_tempLLMThinking{"xx_ModelCallWrap_tempLLMThinking"
     };
     inline static const std::string graphDataKey_tempLLMContent{"xx_ModelCallWrap_tempLLMContent"};
+    /// 上一次模型调用回报的 token 用量, 同时是"开始下一次请求会带多大上下文"的判断依据
+    /// - 写入: `modelcall` 每次**成功**调用写 `usage.total_tokens`; 上下文压缩 (自动/手动)
+    ///   写完会话后改写为压缩后的 token 数
+    /// - 压缩必须改写: 压缩换掉了整份请求载荷, 旧用量不再描述当前上下文, 而失败的重试与
+    ///   中断恢复都不会刷新它 —— 不修改会让同一轮内的后续尝试继续按压缩前的旧值判断,
+    ///   反复触发压缩
+    /// - 读取: `SummarizationMiddlewareHandle::onModelcallRunFunc`
     inline static const std::string graphDataKey_LLMTokenUsage{"xx_ModelCallWrap_LLMTokenUsage"};
     /// LLM 压缩 (summarization) 连续失败计数
     /// - 每次 agent 轮执行清理; 同一轮内重试/多轮 modelcall 累积,

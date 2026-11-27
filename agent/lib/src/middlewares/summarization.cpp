@@ -877,6 +877,49 @@ asio::awaitable<void>
                                        .count());
         const auto oldTokens = tokenUsage;
 
+        // 确定性压缩 (toolcall 去重/探索折叠 + 噪音清理)
+        // - 从这里开始需要就地改写: 拷一份会话上下文再改, 最后整体写回
+        auto messages = std::vector<neograph::ChatMessage>{session->messages()};
+        doSummarizeToolcall(messages);
+        cleanNoiseMessages(messages);
+
+        // 冷却检查: 上次压缩后消息增长不足 (<= 2 条), 说明普通 LLM 摘要已经降不下来,
+        // 本次不做任何改写 (不追加提示消息 / 不重写会话 / 不复位计数)。
+        // 复位计数会让再下一次触发升级成又一次真实的 LLM 压缩, 这里保持计数不变
+        size_t lastSummarizedMsgCount = 0;
+        {
+            const auto& countJson
+                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
+                    sessionId,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationLastMsgCount
+                );
+            if (countJson.is_number_integer()) {
+                lastSummarizedMsgCount = countJson.get<size_t>();
+            }
+        }
+        size_t currentFailCount = 0;
+        {
+            const auto& fcJson
+                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
+                    sessionId,
+                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount
+                );
+            if (fcJson.is_number_integer()) {
+                currentFailCount = fcJson.get<size_t>();
+            }
+        }
+        const bool coolDownActive
+            = (currentFailCount == 0 && lastSummarizedMsgCount > 0
+               && messages.size() <= lastSummarizedMsgCount + 2);
+        if (coolDownActive) {
+            XX_LOGD(
+                "SummarizationMiddlewareHandle: 上次压缩后消息增长不足 ({} <= {} + 2), 处于冷却期, 跳过本次压缩",
+                messages.size(),
+                lastSummarizedMsgCount
+            );
+            co_return;
+        }
+
         // 1. 触发压缩时，先发送一条 viewMessage 提示 "正在压缩上下文"
         // - 自动压缩经 NodeInterrupt 中断父轮次派生压缩子代理, resume 后本函数
         //   从头重新执行 (压缩请求命中中断结果缓存, 不再派生): 第二次执行必须
@@ -925,54 +968,12 @@ asio::awaitable<void>
             }
         }
 
-        // 确定性压缩 (toolcall 去重/探索折叠 + 噪音清理)
-        // - 从这里开始需要就地改写: 拷一份会话上下文再改, 最后整体写回
-        auto messages = std::vector<neograph::ChatMessage>{session->messages()};
-        doSummarizeToolcall(messages);
-        cleanNoiseMessages(messages);
-
-        // 冷却检查: 若上次压缩后消息增长不足 (<= 2 条) 且当前消息数仍 >= 75% 上限，
-        // 说明普通的 LLM 摘要无法把消息数降下来，为避免每轮 modelcall 都反复派生 subagent
-        // 做无效压缩, 直接降级硬截断以彻底释放空间
-        size_t lastSummarizedMsgCount = 0;
-        {
-            const auto& countJson
-                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
-                    sessionId,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationLastMsgCount
-                );
-            if (countJson.is_number_integer()) {
-                lastSummarizedMsgCount = countJson.get<size_t>();
-            }
-        }
-        size_t currentFailCount = 0;
-        {
-            const auto& fcJson
-                = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<utilxx_base::Json>(
-                    sessionId,
-                    agentxx::middleware::MiddlewareContext::graphDataKey_summarizationFailCount
-                );
-            if (fcJson.is_number_integer()) {
-                currentFailCount = fcJson.get<size_t>();
-            }
-        }
-        const bool coolDownActive
-            = (currentFailCount == 0 && lastSummarizedMsgCount > 0
-               && messages.size() <= lastSummarizedMsgCount + 2);
-
         // LLM 同上下文压缩
         const size_t systemCount = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
 
         std::vector<neograph::ChatMessage> compressedMessages;
         bool                               compacted = false;
-        if (coolDownActive) {
-            XX_LOGD(
-                "SummarizationMiddlewareHandle: 上次压缩后消息增长不足 ({} <= {} + 2), 处于冷却期, 跳过重复 LLM 压缩",
-                messages.size(),
-                lastSummarizedMsgCount
-            );
-            compressedMessages = messages;
-        } else if (messages.size() > systemCount) {
+        if (messages.size() > systemCount) {
             // 同上下文压缩请求: 当前完整上下文 (system + 全部消息) + 末尾压缩指令。
             // 最近的消息也交给模型: 由它在摘要里写清末尾要点 (进行中的动作, 最近一次
             // 工具调用的结果, 下一步), 因此压缩后不再原样保留最近消息
@@ -1088,6 +1089,15 @@ asio::awaitable<void>
         agentxx::nodes::updateMessagesMeta(agentCtxPtr, in.state, in.ctx.thread_id);
         // 压缩完成属"事实"变更: 立即落盘, 不等轮末节流窗口
         session->persistNow("compaction");
+        // 压缩换掉了整份请求载荷: 上一次成功调用回报的 token 用量已经不再描述当前上下文。
+        // 不更新的话, 本轮的后续尝试 (失败重试 / 中断恢复后重新执行本函数) 仍读到压缩前的
+        // 旧值, 会判定"仍超过 75%"而再压一遍 —— 这里写成压缩后的实测值;
+        // 下一次成功调用由 modelcall 用上游回报的真实用量覆盖
+        agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
+            sessionId,
+            agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage,
+            newTokens
+        );
 
         // 压缩完成: 后续请求的上下文已经改变, 这也是唯一值得改写提示词注入内容的
         // 时机 —— 只标记, 不读盘 (实际重取在下一个 model call 的 start 回调里)。
@@ -1310,6 +1320,12 @@ asio::awaitable<bool>
     session->replaceMessages(std::move(compressedMessages));
     // 手动压缩在轮次外执行: 立即落盘 (无轮末权威保存作为保证)
     session->persistNow("manual-compaction");
+    // 同自动压缩: 改写 token 用量, 否则压缩后的第一轮请求仍按压缩前的旧值判断, 会立刻再压一次
+    agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
+        sessionId,
+        agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage,
+        newTokens
+    );
     // 压缩完成: 标记提示词来源需要重取 (只置位, 下一次 model call 的 start 回调读盘)
     if (agentCtxPtr->promptSources) {
         agentCtxPtr->promptSources->markDirty(

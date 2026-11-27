@@ -293,18 +293,23 @@ static agentxx::middleware::SummarizationToolHandle makeBothTruncateHandle() {
 
 /// 运行前把消息写入会话 (会话是 LLM 上下文的唯一权威, 图状态不再保存 messages 通道),
 /// 运行后从会话读回中间件处理过的上下文
+/// - `keepExistingTokenUsage` = true 时不动图上已有的 token 用量 (模拟"压缩完成后紧接着的
+///   一次重试": 用量由上一次执行写入), 用于验证重复触发
 static asio::awaitable<std::vector<neograph::ChatMessage>> runModelcall(
     const std::shared_ptr<agentxx::middleware::SummarizationMiddlewareHandle>& handle,
     const std::shared_ptr<agentxx::agent::AgentContext>&                       ctx,
     std::string_view                                                           sessionId,
     std::vector<neograph::ChatMessage>                                         messages,
-    std::optional<size_t> apiTokenUsage = std::nullopt
+    std::optional<size_t> apiTokenUsage       = std::nullopt,
+    bool                  keepExistingTokenUsage = false
 ) {
     auto session = ctx->getSession(sessionId);
     session->replaceMessages(std::move(messages));
 
     // 注入/清除 api token usage (模拟上一次 LLM 调用返回的 usage)
-    if (apiTokenUsage.has_value()) {
+    if (keepExistingTokenUsage) {
+        // 保留图上已有值 (上一次执行写入的压缩后大小)
+    } else if (apiTokenUsage.has_value()) {
         ctx->middlewareHandleContext->setGraphDataItemValue(
             sessionId,
             agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage,
@@ -2058,7 +2063,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
         env->session()->setModelName("small"); // max=1000, budget=30
         env->subagent->summary = "S1";
 
-        std::vector<neograph::ChatMessage> msgs{
+        // 每轮都从同一份 9 条上下文出发 (模拟长会话: 上下文被压缩后又长回阈值以上)。
+        // 条数没有增长时会被冷却判定挡下, 不再产生"没有实际压缩却写一条提示"的空压缩,
+        // 这也是重复触发修复后的行为
+        const std::vector<neograph::ChatMessage> baseMsgs{
             makeMsg("system", "sys"),
             makeMsg("user", "u1"),
             makeMsg("assistant", "a1"),
@@ -2072,13 +2080,11 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
         constexpr int kRounds = 5;
         for (int round = 0; round < kRounds; ++round) {
-            auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
-            // 每轮压缩结果作为下一轮输入 (模拟同一会话持续推进)
+            auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, baseMsgs, 900);
             XX_TEST_EXPECT_FALSE(res.empty());
             XX_TEST_EXPECT_EQ(res[0].content, std::string{"sys"});
-            msgs = res;
 
-            // 压缩结果同步回会话上下文 (崩溃后重启不丢压缩结果, 也不会立即重复压缩)
+            // 压缩结果同步回会话上下文 (崩溃后重启不丢压缩结果)
             auto& session = *env->session();
             XX_TEST_EXPECT_TRUE(session.llmMessagesJson().is_array());
             XX_TEST_EXPECT_EQ(session.llmMessagesJson().size(), res.size());
@@ -2221,6 +2227,156 @@ asio::awaitable<TestResult> run_summarization_tests() {
             }
         }
         XX_TEST_EXPECT_TRUE(hasSummaryNote);
+    }
+
+    // --- T21. 压缩后 token 用量被改写: 同一轮的后续重试不再重复触发压缩 ---
+    // 背景: 触发依据是上一次**成功**调用回报的 usage; 压缩写完会话后不改写它, 失败重试
+    // 与中断恢复后的重新执行会继续按压缩前的旧值判断"仍然超过 75%", 于是反复压缩、
+    // 反复重写上下文 (现场会话里同一次模型调用出现过三条 "375272->..." 提示)
+    {
+        auto env = std::make_shared<SummarizationTestEnv>();
+        env->session()->setModelName("small"); // max=1000 → 阈值 750
+        env->subagent->summary = "S_once";
+
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeMsg("assistant", "a1"),
+            makeMsg("user", "u2"),
+            makeMsg("assistant", "a2"),
+            makeMsg("user", "u3"),
+            makeMsg("assistant", "a3"),
+            makeMsg("user", "u4"),
+            makeMsg("assistant", "a4"),
+        };
+
+        // ① 上一次成功调用回报 900 token (>= 750) → 触发压缩
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
+        XX_TEST_EXPECT_EQ(res.size(), size_t{3}); // system + 压缩提示 + 摘要
+        XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
+
+        // 压缩后: token 用量被改成压缩后的大小 (低于阈值), 供本轮后续判断使用
+        const size_t usageAfterCompact
+            = env->ctx->middlewareHandleContext->getGraphDataItemValue<size_t>(
+                env->sessionId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage
+            );
+        XX_TEST_EXPECT_TRUE(usageAfterCompact > 0);
+        XX_TEST_EXPECT_TRUE(usageAfterCompact < 750);
+
+        // ② 同一轮的后续重试 (上下文不变, 用量沿用刚写入的压缩后大小) → 不再触发压缩
+        const size_t tipsBefore = env->session()->viewWindow().size();
+        auto         res2       = co_await runModelcall(
+            env->handle,
+            env->ctx,
+            env->sessionId,
+            env->session()->messages(),
+            std::nullopt,
+            /*keepExistingTokenUsage=*/true
+        );
+        XX_TEST_EXPECT_EQ(res2.size(), size_t{3});
+        XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1}); // 未再派生压缩
+        XX_TEST_EXPECT_EQ(env->session()->viewWindow().size(), tipsBefore);    // 未再追加提示
+    }
+
+    // --- T22. 冷却期命中: 不改写会话 / 不追加提示消息 / 不复位冷却基准 ---
+    // 复位冷却基准会让再下一次触发升级成一次真实的 LLM 压缩 (现场发生过:
+    // 375272->36702 之后又出现一次 375272->36269 的真实压缩子代理调用)
+    {
+        auto env = std::make_shared<SummarizationTestEnv>();
+        env->session()->setModelName("small");
+        env->subagent->summary = "S_cooldown";
+
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeMsg("assistant", "a1"),
+            makeMsg("user", "u2"),
+            makeMsg("assistant", "a2"),
+            makeMsg("user", "u3"),
+            makeMsg("assistant", "a3"),
+            makeMsg("user", "u4"),
+            makeMsg("assistant", "a4"),
+        };
+
+        // 上次压缩后的条数远超当前条数 → 处于冷却期
+        env->ctx->middlewareHandleContext->setGraphDataItemValue<size_t>(
+            env->sessionId,
+            agentxx::middleware::MiddlewareContext::graphDataKey_summarizationLastMsgCount,
+            size_t{300}
+        );
+        const size_t tipsBefore = env->session()->viewWindow().size();
+
+        auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
+        // 上下文原样保留 (没有被替换成 system + 摘要)
+        XX_TEST_EXPECT_EQ(res.size(), msgs.size());
+        for (size_t i = 0; i < msgs.size(); ++i) {
+            XX_TEST_EXPECT_EQ(res[i].content, msgs[i].content);
+        }
+        // 未派生压缩子代理, 也未追加提示消息
+        XX_TEST_EXPECT_TRUE(env->subagent->receivedArguments.empty());
+        XX_TEST_EXPECT_EQ(env->session()->viewWindow().size(), tipsBefore);
+        // 冷却基准保持 300 (复位会导致下一次触发真的压缩一遍)
+        XX_TEST_EXPECT_EQ(
+            env->ctx->middlewareHandleContext->getGraphDataItemValue<size_t>(
+                env->sessionId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_summarizationLastMsgCount
+            ),
+            size_t{300}
+        );
+        // 用量未被改写 (本次什么都没做)
+        XX_TEST_EXPECT_EQ(
+            env->ctx->middlewareHandleContext->getGraphDataItemValue<size_t>(
+                env->sessionId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage
+            ),
+            size_t{900}
+        );
+    }
+
+    // --- T23. 手动压缩同样改写 token 用量: 压缩后的第一轮请求不再自动再压一次 ---
+    {
+        auto env = std::make_shared<SummarizationTestEnv>();
+        env->session()->setModelName("small");
+        env->subagent->summary = "S_manual";
+
+        std::vector<neograph::ChatMessage> msgs{
+            makeMsg("system", "sys"),
+            makeMsg("user", "u1"),
+            makeMsg("assistant", "a1"),
+            makeMsg("user", "u2"),
+            makeMsg("assistant", "a2"),
+            makeMsg("user", "u3"),
+            makeMsg("assistant", "a3"),
+            makeMsg("user", "u4"),
+            makeMsg("assistant", "a4"),
+        };
+        env->session()->replaceMessages(msgs);
+
+        const bool ok = co_await env->handle->compactSessionContext(env->sessionId);
+        XX_TEST_EXPECT_TRUE(ok);
+        XX_TEST_EXPECT_EQ(env->session()->messages().size(), size_t{3});
+        XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
+
+        const size_t usageAfterManual
+            = env->ctx->middlewareHandleContext->getGraphDataItemValue<size_t>(
+                env->sessionId,
+                agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage
+            );
+        XX_TEST_EXPECT_TRUE(usageAfterManual > 0);
+        XX_TEST_EXPECT_TRUE(usageAfterManual < 750);
+
+        // 紧接着的一次 modelcall: 沿用压缩后的用量 → 不再自动压缩
+        auto res = co_await runModelcall(
+            env->handle,
+            env->ctx,
+            env->sessionId,
+            env->session()->messages(),
+            std::nullopt,
+            /*keepExistingTokenUsage=*/true
+        );
+        XX_TEST_EXPECT_EQ(res.size(), size_t{3});
+        XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
     }
 
     co_return TestResult{g_sum_passed, g_sum_failed};

@@ -1274,6 +1274,12 @@ agent/script/build_plugins.sh --config Release --jobs 8 --list
   "值不值得重试"。不要在错误文本/状态码上加"这类不重试"的判断，也不要按 400/413 与
   `context length` 一类字样推断"上下文超限 → 先压缩再重试"（误判代价是白压一次历史，
   而上下文长度只由默认超过上限 75% 触发的自动压缩处理）。两条警告原文在该文件头部
+- **重试会重新跑一遍压缩判定**: `modelcall` 的重试循环每次都调
+  `handle->onModelcallRunFunc` (中断恢复后也从头重新执行), 所以"改写上下文"的代码必须让
+  触发依据跟着失效 —— 自动/手动压缩写完会话后要把 `graphDataKey_LLMTokenUsage` 改写成压缩
+  后的 token 数 (它只由**成功**调用写入, 失败重试不刷新): 不改写就会按压缩前的旧值判定
+  "仍超 75%", 同一轮内反复压缩 (现场一次调用连出三条 `Summarized LLM Context` 提示, 还多
+  派生了两次压缩子代理)。冷却分支命中时只跳过, 不要复位 `summarizationLastMsgCount`
 - **"卡在 llm 节点很久、既不超时也不重试、日志什么都没有"** 先看块间超时为什么没触发:
   `read_chunk_timeout` 按"这次读有没有收到字节"重置, 上游/网关的保活心跳 (SSE 注释
   `: ping`、Anthropic 的 `{"type":"ping"}`、空 delta 事件) 就能让它永不到期。补的判据是
