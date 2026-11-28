@@ -15,6 +15,7 @@
 #include "agentxx/event/naming.h"
 #include "agentxx/plugin/api/agentxx_broadcast_ids.h"
 #include "agentxx/plugin/plugin_mount.h"
+#include "agentxx/plugin/plugin_paths.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -343,6 +344,9 @@ std::string PluginManager::configJson() {
     out["dataDir"]     = c->agentConfig->dataDir;
     out["projectRoot"] = c->agentConfig->workDir;
     out["language"]    = getLanguage();
+    // 插件数据/安装目录根 (单个插件自己的数据目录在 `get_own_info` 的 `dataDir`)
+    out["pluginDataRoot"]    = agentxx::plugin::pluginDataRoot(c->agentConfig->dataDir);
+    out["pluginInstallRoot"] = agentxx::plugin::pluginInstallRoot(c->agentConfig->dataDir);
 #if XX_IS_WIN_D
     out["platform"] = "windows";
 #elif XX_IS_MACOS_D
@@ -355,6 +359,31 @@ std::string PluginManager::configJson() {
     out["platform"] = "android";
 #endif
     return out.dump();
+}
+
+std::string PluginManager::dataDirOfPlugin(PluginInstance& inst) {
+    if (inst.dataDirResolved) {
+        return inst.dataDir;
+    }
+    inst.dataDirResolved = true;
+    auto c               = primaryAgent_.lock();
+    const std::string dataDir
+        = (c && c->agentConfig) ? c->agentConfig->dataDir : std::string{};
+    if (dataDir.empty()) {
+        return inst.dataDir; // 没配持久化: 保持空 (插件不落盘)
+    }
+    std::string error;
+    inst.dataDir = agentxx::plugin::ensurePluginDataDir(dataDir, inst.name, &error);
+    if (inst.dataDir.empty()) {
+        XX_LOGW(
+            "Plugin `{}` data dir unavailable ({}); the plugin will not persist anything",
+            inst.name,
+            error
+        );
+    } else {
+        XX_LOGD("Plugin `{}` data dir: {}", inst.name, inst.dataDir);
+    }
+    return inst.dataDir;
 }
 
 std::string PluginManager::getLanguage() {

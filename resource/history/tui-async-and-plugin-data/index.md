@@ -23,4 +23,16 @@
 
 ## 状态
 
-进行中 (见 [work.md](work.md))
+已完成 (三个任务都已提交; 实施过程与验证见 [work.md](work.md))
+
+## 结论
+
+- **TUI 分页滚动**: 页请求在飞期间用 `LazyScrollable::setScrollSuspended` 吞滚轮,
+  页响应处理完才放开; 8 秒看门狗防丢页后一直不动
+- **async 工具行**: 五个 `agentxx_async_*` 在 `registerBuiltinToolRows` 里有显示名与
+  折叠内容 (运行中不再只有默认文案)
+- **插件数据目录**: 布局落到 `{data_dir}/plugins/data/{插件 id}/`, 唯一实现
+  `agentxx/plugin/plugin_paths.h`; 插件经 `get_own_info` 的 `dataDir` 字段 /
+  SDK 的 `ctx.dataDirAsync()` 取, 不再自己拼 `data_dir`; 四个插件 (planning /
+  codegraph / screen_capture / chatbot) 与 `http.download` 都迁到新位置
+- 偏差: 安装根用复数 `plugins/installed` (用户原话 `plugin/installed`)

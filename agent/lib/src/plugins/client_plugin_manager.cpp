@@ -20,6 +20,7 @@
 #include "agentxx/event/events.h"
 #include "agentxx/event/naming.h"
 #include "agentxx/plugin/api/agentxx_broadcast_ids.h"
+#include "agentxx/plugin/plugin_paths.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -392,7 +393,31 @@ std::shared_ptr<ClientPluginInstance> ClientPluginManager::createInstance(std::s
     auto inst     = std::make_shared<ClientPluginInstance>(std::move(name));
     inst->manager = weak_from_this();
     inst->self    = inst;
+    // 插件数据目录尽早解析并建好 (插件在 start 里就会经 get_own_info 取它)
+    (void)dataDirOfPlugin(*inst);
     return inst;
+}
+
+std::string ClientPluginManager::dataDirOfPlugin(ClientPluginInstance& inst) {
+    if (inst.dataDirResolved) {
+        return inst.dataDir;
+    }
+    inst.dataDirResolved = true;
+    if (dataDir_.empty()) {
+        return inst.dataDir; // 没有数据目录: 插件不落盘
+    }
+    std::string error;
+    inst.dataDir = agentxx::plugin::ensurePluginDataDir(dataDir_, inst.name, &error);
+    if (inst.dataDir.empty()) {
+        XX_LOGW(
+            "[client_plugin] `{}` data dir unavailable ({}); it will not persist anything",
+            inst.name,
+            error
+        );
+    } else {
+        XX_LOGD("[client_plugin] `{}` data dir: {}", inst.name, inst.dataDir);
+    }
+    return inst.dataDir;
 }
 
 /// 实例加载完成: 登记实例代次 (UI 点击携带代次, 派发时复查; 重载同名插件后
@@ -471,6 +496,10 @@ void ClientPluginManager::setUiAdapter(std::shared_ptr<PluginUiAdapter> adapter)
 
 void ClientPluginManager::setSessionId(std::string sessionId) {
     sessionId_ = std::move(sessionId);
+}
+
+void ClientPluginManager::setDataDir(std::string dataDir) {
+    dataDir_ = std::move(dataDir);
 }
 
 InterfaceSet ClientPluginManager::hostSupportedInterfaces() const {
@@ -3816,6 +3845,8 @@ std::string ClientPluginManager::getOwnInfoJson(ClientPluginInstance* inst) {
     j["description"]    = inst->description;
     j["path"]           = inst->path;
     j["config"]         = inst->configPath;
+    // 插件数据目录 (`{data_dir}/plugins/data/{插件 id}/`; 没有数据目录时为空串)
+    j["dataDir"]        = dataDirOfPlugin(*inst);
     return j.dump();
 }
 

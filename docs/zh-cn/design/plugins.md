@@ -381,6 +381,23 @@ co_await toolAsync(
    - `jsonEscape(host, jsonIface, text)`: 文本 → JSON 字符串字面量 (含引号);
      优先经主程序 `json_escape` 接口, 接口缺失/失败时回退本地转义, 供手工拼装 JSON 文本
    - 插件内 `using agentxx::plugin::xxx;` 引入后按原名调用 (内置插件已统一改用)
+7. **插件数据目录 (`dataDirAsync()`, 两端同一套规范)**:
+   - 目录布局由主程序决定并只实现一份 (`agentxx/plugin/plugin_paths.h`):
+     `{data_dir}/plugins/data/{插件 id}/` 是插件自己的持久化位置 (缓存 / 索引 / 下载 / 媒体 /
+     状态文件), `{data_dir}/plugins/installed/` 预留给以后的"安装式插件"
+   - 主程序在**加载实例时**就算好并建好目录 (`PluginManager` / `ClientPluginManager` 的
+     `createInstance`), 经 `get_own_info` 的 `dataDir` 字段交给插件; SDK 封装成协程
+     `co_await ctx.dataDirAsync()` (agent 侧与 client 侧同名同义)
+   - 空串 = 本进程没有数据目录 (yaml 里没配 `data_dir` = 不落盘) 或建目录失败:
+     插件据此降级 (不写任何文件), **不要**自己回退到 `~/.agentxx`
+   - 插件**不自己拼** `data_dir`: 布局改动只需改 `plugin_paths.h` 一处, 插件二进制不用重编;
+     插件 id 做目录名时会安全化 (`[A-Za-z0-9._-]` 以外的字符换成 `_`), 不会写出数据根
+   - 目录按插件 id 划分、**不按 agent 划分**: 同一插件被多个 agent 挂载时仍是同一份数据
+     (实例进程一份, 见 §3)
+   - 现有写入方: `agentxx_planning` (`plans/`)、`agentxx_codegraph` (`sqlite/codegraph/`)、
+     `agentxx_screen_capture` (`captures/`)、`agentxx_chatbot` (`media/{账号}/`)、
+     `http.download` (`data/downloads/`, 布局由 `utilxx::NetHub` 固定为
+     `<根>/<属主 id>/data/downloads/`)
 
 **后台任务 spawn (主程序托管)**：`spawn` 启动的后台协作任务 (如周期采集 `while (!ctl.canceled()) { co_await sleepAsync(c, 1000); ... }`, `ctl` 为 `OpCtl`) 自 API v1 起注册到主程序 `agentxx.agent.tasks` 接口表，与工具/能力 op 同构管理：
 
@@ -582,7 +599,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 | `agentxx.broadcasts` | 4 | 广播: `declare_broadcast` (声明频道: 缓存/发布权限/订阅补当前值/限频/scope) + `publish_broadcast` + `subscribe_broadcast(_ex)` (带流结束回调) + `read_broadcast` + `unsubscribe_broadcast` + `end_broadcast`。插件的通知面与跨端数据都走它, 见 §20。v3 = 加 `end_broadcast` 与 `subscribe_broadcast_ex` (订阅侧收 `on_end`); v4 = 7 个成员改成异步操作契约 (见 §8.0): **订阅句柄以十进制文本放在 `payload` 里交回** (插件侧用 `pluginxx::pluginxxSubscriptionFromText` 转回), `unsubscribe_broadcast` 多一个 `host` 参数 (原来只能从入参推), 基线重置为整表长度 |
 | `agentxx.capabilities` | 10 | `register_capability/unregister_capability/invoke_capability/capability_info/list_capabilities` (另有 `unregister_capability_ex`; v7 删掉 `op_cancel`, 取消统一走 `agentxx.cancel`)。`invoke_capability` 带 `timeout_ms` (这一次调用的超时, `< 0` = 用声明里的值); v10 把原来的 `invoke_capability_ex` 并了回来 —— 调用只有一种入口, 不再有“成员不存在就退回旧签名”那条路。能力行按 **scope** 隔离 (同一个插件挂在多个 agent 上时各一行), 一个能力可以由多家登记实现行, 取值链按 `(priority 升序, 登记序号)` 排序后取首行 —— **功能埋点的实现行就是能力行** (见 §21.4)。v8 = 登记 / 注销 / 两道自省改成异步操作契约 (调用本来就是操作契约, 不变); 清单 JSON 与登记结论经 `payload` 交回, 未声明按 `not_declared` 失败 |
 | `agentxx.scheduler` | 2 | 调度与驱动: `is_io_thread` / `sleep` / `offload` / `request_driver` / `cancel_driver` (driver ticket/wake 协议, 见 §16; 早期的 `post_to_io` 与 `op_cancel` 已删, 独立的 `coroutine_runtime` 表已并入) |
-| `agentxx.plugins` | 2 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上)。v2 = 三个成员改成异步操作契约 (清单经 `payload` 交回, `get_plugin` 找不到按 `not_found` 失败) |
+| `agentxx.plugins` | 2 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上; `get_own_info` / `get_plugin` 带 `dataDir` = 本插件数据目录, 见 §6 第 7 条)。v2 = 三个成员改成异步操作契约 (清单经 `payload` 交回, `get_plugin` 找不到按 `not_found` 失败) |
 | `agentxx.config` | 4 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言)。v3 起不再含业务成员 (`get_tool_prompt`/`get_session_work_dir` 已分别迁到 `agentxx_agent_prompt` / `agentxx_agent_session`); v4 = 五个成员改成异步操作契约 (配置 JSON / 语言码经 `payload` 交回) |
 | `agentxx.cancel` | 3 | `op_cancel` (取消一个操作句柄; 原先分散在 tools/feature 的同名成员已收拢到这里)。v3 起 `is_canceled` 迁到 `agentxx_agent_session` (会话是业务概念, 框架表只管通用取消句柄) |
 | `agentxx.json` | 1 | `json_get_string/json_escape` |
@@ -2895,7 +2912,7 @@ v4 起这 7 个成员都是**异步操作契约**（见 §8.0）：返回 `Plugi
 | op | 主要参数 |
 |---|---|
 | `http.fetch` | `url`, `method`, `headers`, `body` / `bodyBase64` / `json`, `timeoutMs`, `maxBytes`, `followRedirects`, `maxRedirects`, `format` (`markdown`), `responseType` (`text`/`bytes`), `tlsVerify` |
-| `http.download` | `url`, `fileName`, `timeoutMs` → 落盘 `<data_dir>/<插件 id>/data/downloads/`, 结果带 `path` / `bytes` |
+| `http.download` | `url`, `fileName`, `timeoutMs` → 落盘 `<插件数据目录>/data/downloads/` (`{data_dir}/plugins/data/{插件 id}/data/downloads/`, 子路径由 `utilxx::NetHub` 固定), 结果带 `path` / `bytes` |
 | `http.serve` / `http.route` / `http.respond` | `host` (缺省 `127.0.0.1`) / `port` / `path` / `requestId` |
 | `ws.connect` | `url` 或 `host`+`port`+`path`, `id`, `headers`, `subprotocols` (数组), `timeoutMs`, `maxMessageBytes` |
 | `ws.send` / `ws.ping` / `ws.close` | `id` + `text` / `dataBase64` / `code` + `reason` |

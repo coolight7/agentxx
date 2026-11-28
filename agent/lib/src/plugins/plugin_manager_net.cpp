@@ -6,6 +6,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 
 #include "agentxx/plugin/api/agentxx_broadcast_ids.h"
+#include "agentxx/plugin/plugin_paths.h"
 
 #include "agentxx/event/hub.h"
 
@@ -48,7 +49,12 @@ std::shared_ptr<PluginNetService> PluginManager::netService() {
     if (auto ctx = primaryAgent_.lock(); ctx && ctx->agentConfig) {
         dataDir = ctx->agentConfig->dataDir;
     }
-    netService_ = PluginNetService::create(std::move(hooks), dataDir);
+    // 落盘根用插件数据根: 下载落 `<插件数据目录>/data/downloads/` (NetHub 再拼属主 id),
+    // 与 `agentxx/plugin/plugin_paths.h` 的布局一致; 没配 data_dir 时不设 (下载报 no_data_dir)
+    netService_ = PluginNetService::create(
+        std::move(hooks),
+        agentxx::plugin::pluginDataRoot(dataDir)
+    );
     return netService_;
 }
 

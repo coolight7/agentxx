@@ -67,6 +67,31 @@ namespace asio = ::boost::asio;
 namespace agentxx {
 namespace plugin {
 
+/* ==================== 插件数据目录 (两端共用) ==================== */
+
+/// 从 `get_own_info` / `get_plugin` 的摘要 JSON 里取插件数据目录 (`dataDir` 字段)
+///
+/// - 主程序在加载实例时就算好并建好了目录: `{data_dir}/plugins/data/{插件 id}/`
+/// - 空串 = 本进程没有数据目录 (主程序没配 `data_dir`) 或建目录失败: 插件不落盘
+/// - 解析失败/字段缺失/字段非字符串均返回空串 (不抛异常)
+///
+/// - `args`:
+///     - [ownInfoJson] 主程序返回的插件摘要 JSON (可为空)
+inline std::string dataDirOfOwnInfo(std::string_view ownInfoJson) {
+    if (ownInfoJson.empty()) {
+        return {};
+    }
+    try {
+        const auto j = utilxx_base::Json::parse(std::string{ownInfoJson});
+        if (!j.is_object()) {
+            return {};
+        }
+        return j.value("dataDir", std::string{});
+    } catch (...) {
+        return {};
+    }
+}
+
 /* ==================== 通用 SDK 名的引入 (pluginxx/kit/kit.h) ====================
  *
  * 插件源码一直书写 `agentxx::plugin::Xxx`, 为保持**插件源码零改动**, 这里把插件框架通用

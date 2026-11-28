@@ -1528,10 +1528,11 @@ asio::awaitable<bool> chatbotStartBody(
         errorOut = message;
         co_return false;
     }
-    // 主程序配置 (dataDir 等) 必须在填本实例的 `config` 成员**之前**取:
-    // 成员名 `config` 会遮蔽基类的 `config()` 方法, 所以这里用限定调用
-    const std::string mainConfigJson = co_await ctx.configAsync();
-    ctx.config                       = std::move(config);
+    // 插件数据目录 (主程序加载实例时就建好; 空串 = 本进程不落盘)
+    // 必须在填本实例的 `config` 成员**之前**取: 成员名 `config` 会遮蔽基类的
+    // `config()` 一类方法, 取数据目录走 `dataDirAsync()` 不受影响, 但顺序上先取更稳。
+    const std::string dataDir = co_await ctx.dataDirAsync();
+    ctx.config                = std::move(config);
 
     // ---- 2. 校验通过: 起插件 io 线程 + 初始化调度层 ----
     // ---- 2. 起插件 io 线程与网络入口 ----
@@ -1551,15 +1552,6 @@ asio::awaitable<bool> chatbotStartBody(
         ctx.stopIo();
         co_return false;
     }
-    const auto dataDir = [&mainConfigJson]() {
-        try {
-            const auto cfg = Json::parse(mainConfigJson);
-            return cfg.value("dataDir", std::string{});
-        } catch (const std::exception&) {
-            return std::string{};
-        }
-    }();
-
     // ---- 3. 挂人设根 ----
     // 顺序: 先在插件 io 线程上初始化调度对象 (不涉及主程序), 再在主程序 io 线程上挂根。
     {

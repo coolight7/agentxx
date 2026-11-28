@@ -78,6 +78,7 @@ private:
     asio::awaitable<void> doSend(OutboundMessage msg, SendResultFn done);
 
     asio::any_io_executor  ex_;
+    /// 插件数据目录 (`{data_dir}/plugins/data/agentxx_chatbot/`; 空 = 不落盘)
     std::string            dataDir_;
     std::string            mediaRoot_;
     /// 插件网络入口 (插件实例持有; 本对象不比它活得久)

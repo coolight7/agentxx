@@ -2,8 +2,8 @@
 /// - 从 libagentxx src/tools/planning 拆分独立:
 ///   - agent 侧工具 agentxx_planning (原 agentxx_planning_write 改名):
 ///     mode=write 写入会话规划 state (经通用接口: 持久化到
-///     {dataDir}/plans + 发布 planning 事件, 不再依赖专用 planning 接口表) 并持久化到
-///     {dataDir}/plans/{thread_id}.json (供 read 模式跨轮次读取);
+///     `<插件数据目录>/plans` + 发布 planning 事件, 不再依赖专用 planning 接口表) 并持久化到
+///     `<插件数据目录>/plans/{thread_id}.json` (供 read 模式跨轮次读取);
 ///     mode=read 返回本会话此前保存的规划内容
 ///   - 规划写入成功后发布 "plugin.agentxx_planning.planning" 插件事件 (载荷为完整
 ///     规划 JSON); 订阅主程序约定事件 agentxx.agent.host.client_attached, 客户端接入/
@@ -151,7 +151,7 @@ Each item: `state` is one of `pending` / `in_progress` / `completed` / `failed`,
 constexpr std::string_view kArgNotesDesc = R"_((write only) MEMO LAYER: Any additional notes.
 Use this to record important information, tips, reminders, or identity/role-playing prompts.)_";
 
-/// ==================== 规划持久化 ({dataDir}/plans/) ====================
+/// ==================== 规划持久化 (`<插件数据目录>/plans/`) ====================
 /// - 文件名: thread_id 经字符清洗 (非 [A-Za-z0-9._-] → '_') 截断后追加
 ///   FNV1a-32 哈希后缀, 确定且无碰撞歧义 (同 thread_id 恒定同名)
 /// - 写入原子化: 先写 .tmp 再 rename (Windows 下 rename 不覆盖已有目标,
@@ -187,31 +187,16 @@ std::string planningFileName(const std::string& tid) {
     return base;
 }
 
-/// 主程序数据目录 (AgentConfig dataDir; 经 agentxx.agent.config 接口表)
-/// - **协程形态**: 表成员是“提交 + co_await”, 插件执行线程上不能同步等;
-///   结果写进 `ctx.dataDir` 缓存, 之后的回调 (工具/事件) 不再调表
+/// 本插件的数据目录 (`{data_dir}/plugins/data/agentxx_planning/`)
+/// - 经 SDK 的 `dataDirAsync()` 取 (主程序加载时就建好; 没配 data_dir 时为空串)
+/// - **协程形态**: 插件执行线程上不能同步等表; 结果写进 `ctx.dataDir` 缓存,
+///   之后的回调 (工具/事件) 不再调表
 asio::awaitable<void> resolveDataDirAsync(PluginCtx& ctx) {
-    if (!ctx.host || !ctx.iface.config || !ctx.iface.config->get_config) {
-        co_return;
-    }
-    auto r = co_await tableOpAsync(
-        ctx,
-        [&ctx](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return ctx.iface.config->get_config(ctx.host, cb, ud, err);
-        }
-    );
-    if (!r.ok()) {
-        co_return;
-    }
-    try {
-        auto o      = utilxx_base::Json::parse(std::string{r.text()});
-        ctx.dataDir = o.value("dataDir", std::string{});
-    } catch (...) {
-    }
+    ctx.dataDir = co_await ctx.dataDirAsync();
     co_return;
 }
 
-/// 规划保存目录 ({dataDir}/plans; dataDir 不可用时为空)
+/// 规划保存目录 (`<插件数据目录>/plans`; 数据目录不可用时为空)
 std::filesystem::path plansDir(const PluginCtx& ctx) {
     if (ctx.dataDir.empty()) {
         return {};
@@ -528,7 +513,7 @@ static asio::awaitable<void>
                     );
                 }
 
-                // 通用接口: 持久化到 {dataDir}/plans + 事件发布 (主程序/客户端通用处理)
+                // 通用接口: 持久化到插件数据目录的 plans/ + 事件发布 (主程序/客户端通用处理)
                 publishPlanningEvent(c, planJson);
 
                 return "success";

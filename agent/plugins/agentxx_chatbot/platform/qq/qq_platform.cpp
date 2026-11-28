@@ -118,9 +118,10 @@ bool QqPlatform::start(const AccountConfig& cfg, PlatformEventSink& sink) {
         }
         api_ = std::make_unique<QqApi>(net_, ex_, cfg.appId, cfg.appSecret, cfg.apiBase);
 
-        // 媒体目录: {data_dir}/chatbot/media/{accountId}
+        // 媒体目录: `<插件数据目录>/media/{accountId}`
+        // (主程序传进来的是 `{data_dir}/plugins/data/agentxx_chatbot/`)
         if (!dataDir_.empty()) {
-            const fs::path root = utilxx_base::utf8ToPath(dataDir_) / "chatbot" / "media" / cfg.id;
+            const fs::path root = utilxx_base::utf8ToPath(dataDir_) / "media" / cfg.id;
             std::error_code ec;
             fs::create_directories(root, ec);
             if (!ec) {
@@ -380,7 +381,7 @@ void QqPlatform::downloadAttachment(const std::string& accountId, MediaRef& ref)
     }
     const std::string fileName
         = ref.fileName.empty() ? qqFileNameOfUrl(ref.url) : ref.fileName;
-    // 落盘目录: {data_dir}/chatbot/media/{accountId}/ (按附件大类分子目录, 便于排查)
+    // 落盘目录: `<插件数据目录>/media/{accountId}/` (按附件大类分子目录, 便于排查)
     const fs::path dir = utilxx_base::utf8ToPath(mediaRoot_) / mediaKindName(ref.kind);
     std::error_code ec;
     fs::create_directories(dir, ec);

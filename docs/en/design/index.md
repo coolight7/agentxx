@@ -530,7 +530,8 @@ mcp:
   # Sub-paths created under data_dir:
   #   - {data_dir}/sqlite/global.db                     Global settings (TUI settings, themes, etc.)
   #   - {data_dir}/sqlite/sessions/{sessionId}/          Session data (session.db, including store table)
-  #   - {data_dir}/sqlite/codegraph/<hashed_path>/index.db CodeGraph index database
+  #   - {data_dir}/plugins/data/{plugin id}/              Plugin-owned data (plans/index/captures/media/downloads)
+  #   - {data_dir}/plugins/installed/                     Installed plugins (reserved)
   # data_dir: ~/.agentxx
 
   # Session working directory (leave empty/unconfigured = uses current process working directory)
@@ -585,8 +586,8 @@ plugin:
           - "**/third_party/**"
         load_cwd: true                     # Indexes current working directory if paths is omitted
         use_gitignore: true                # Respects .gitignore rules, .gitmodules submodules, and .git
-                                           # Index database: {data_dir}/sqlite/codegraph/<hashed_path>/index.db
-                                           # (skipped if data_dir is unconfigured)
+                                           # Index database: {data_dir}/plugins/data/agentxx_codegraph/sqlite/codegraph/<hashed_path>/index.db
+                                           # (plugin data directory comes from the host; skipped if data_dir is unconfigured)
 
   # Permission prompt mode (default ask; see PermissionMode)
   # - ask:     Allows reads/writes within working directory, prompts user for external paths (default)

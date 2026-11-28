@@ -97,11 +97,15 @@ static std::shared_ptr<agentxx::plugin::ClientPluginManager> setupClientPlugins(
     std::shared_ptr<IoT>       io,
     const std::string&         sessionId,
     const ClientPluginConfigs& plugins,
-    size_t                     workerThreads
+    size_t                     workerThreads,
+    const std::string&         dataDir = {}
 ) {
     auto mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(ex, workerThreads);
     mgr->setUiAdapter(std::make_shared<AdapterT>(io));
     mgr->setSessionId(sessionId);
+    // 插件数据目录 `{data_dir}/plugins/data/{插件 id}/` (见 plugin_paths.h);
+    // 空 dataDir = 本进程没有持久化目录, 插件拿到的 dataDir 为空 (不落盘)
+    mgr->setDataDir(dataDir);
     agentxx::plugin::registerBuiltinToolRows(*mgr);
     // TUI 端点: 组件上下文 (ctx_.pluginManager) 在 start() 的 UI 线程构建时
     // 读取, 故 setPluginManager 必须在 start() 之前调用 (见各模式加载顺序)
@@ -243,7 +247,8 @@ static asio::awaitable<void>
         io,
         sessionId,
         plugins,
-        agent->getContext()->agentConfig->pluginThreadPoolWorkers
+        agent->getContext()->agentConfig->pluginThreadPoolWorkers,
+        agent->getContext()->agentConfig->dataDir
     );
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
@@ -306,7 +311,8 @@ static asio::awaitable<void>
             tui,
             sessionId,
             plugins,
-            agent->getContext()->agentConfig->pluginThreadPoolWorkers
+            agent->getContext()->agentConfig->pluginThreadPoolWorkers,
+            agent->getContext()->agentConfig->dataDir
         );
     tui->start();
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
@@ -350,7 +356,8 @@ static asio::awaitable<void> runRemoteCliAsync(
     std::string         token,
     std::string         model,
     ClientPluginConfigs plugins,
-    size_t              workerThreads
+    size_t              workerThreads,
+    std::string         dataDir
 ) {
     auto ex = co_await asio::this_coro::executor;
     auto io = std::make_shared<StdIOClientAgentIO>();
@@ -366,7 +373,8 @@ static asio::awaitable<void> runRemoteCliAsync(
         io,
         sessionId,
         plugins,
-        workerThreads
+        workerThreads,
+        dataDir
     );
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
@@ -439,7 +447,8 @@ void runRemoteCli(
     std::string_view    token,
     std::string_view    model,
     ClientPluginConfigs plugins,
-    size_t              workerThreads
+    size_t              workerThreads,
+    std::string         dataDir
 ) {
     asio::io_context ctx;
     asio::co_spawn(
@@ -449,7 +458,8 @@ void runRemoteCli(
             std::string{token},
             std::string{model},
             std::move(plugins),
-            workerThreads
+            workerThreads,
+            std::move(dataDir)
         ),
         asio::detached
     );
@@ -461,7 +471,8 @@ static asio::awaitable<void> runRemoteTuiAsync(
     std::string         token,
     std::string         model,
     ClientPluginConfigs plugins,
-    size_t              workerThreads
+    size_t              workerThreads,
+    std::string         dataDir
 ) {
     auto ex = co_await asio::this_coro::executor;
 
@@ -479,7 +490,8 @@ static asio::awaitable<void> runRemoteTuiAsync(
         io,
         sessionId,
         plugins,
-        workerThreads
+        workerThreads,
+        dataDir
     );
     io->start();
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
@@ -593,7 +605,8 @@ void runRemoteTui(
     std::string_view    token,
     std::string_view    model,
     ClientPluginConfigs plugins,
-    size_t              workerThreads
+    size_t              workerThreads,
+    std::string         dataDir
 ) {
     asio::io_context ctx;
     asio::co_spawn(
@@ -603,7 +616,8 @@ void runRemoteTui(
             std::string{token},
             std::string{model},
             std::move(plugins),
-            workerThreads
+            workerThreads,
+            std::move(dataDir)
         ),
         asio::detached
     );

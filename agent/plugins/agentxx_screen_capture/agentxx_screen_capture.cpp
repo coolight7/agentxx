@@ -153,7 +153,7 @@ static agentxx::plugin::ToolResult framesResult(
 static const char* kScreenCaptureDefaultDepict
     = "Capture screen frames or control streaming on Windows: capture all screens, mouse screen, or a specific screen; "
       "get screen count; start/stop streaming (streamed frames are pushed as plugin events to topic 'plugin.agentxx_screen_capture.frame'). "
-      "Captured frames are saved as PNG files under the host dataDir 'captures/' directory; "
+      "Captured frames are saved as PNG files under the plugin data directory 'captures/' folder; "
       "the result only contains frame metadata (size/offset/screen) plus the image file path — "
       "pixel data never enters the conversation.";
 
@@ -185,7 +185,7 @@ static asio::awaitable<void>
               )
               .boolean(
                   "save_images",
-                  "Save each captured frame as a PNG file under the host dataDir 'captures/' directory and return its file path. Pixels never enter the conversation. Default: true.",
+                  "Save each captured frame as a PNG file under the plugin data directory 'captures/' folder and return its file path. Pixels never enter the conversation. Default: true.",
                   false,
                   true
               )
@@ -301,21 +301,16 @@ static void screenCaptureAgentStart(
         return;
     }
     ctx.spawn([later](ScreenCapturePluginCtx& c, pluginxx::OpCtl&) -> asio::awaitable<void> {
-        const std::string cfgStr = co_await c.configAsync();
-        if (!cfgStr.empty() && cfgStr != "{}") {
-            try {
-                auto        j       = utilxx_base::Json::parse(cfgStr);
-                std::string dataDir = j.value("dataDir", std::string{});
-                if (!dataDir.empty()) {
-                    namespace fs              = std::filesystem;
-                    fs::path        targetDir = fs::path(dataDir) / "captures";
-                    std::error_code ec;
-                    fs::create_directories(targetDir, ec);
-                    if (!ec) {
-                        c.captures_dir = targetDir.string();
-                    }
-                }
-            } catch (...) {
+        // 截图落盘目录: 插件自己的数据目录下的 captures/ (主程序加载时就建好目录)
+        // 空 = 没有数据目录 (不落盘), 截图结果只给元数据
+        const std::string dataDir = co_await c.dataDirAsync();
+        if (!dataDir.empty()) {
+            namespace fs              = std::filesystem;
+            fs::path        targetDir = fs::path(dataDir) / "captures";
+            std::error_code ec;
+            fs::create_directories(targetDir, ec);
+            if (!ec) {
+                c.captures_dir = targetDir.string();
             }
         }
         later.ok();

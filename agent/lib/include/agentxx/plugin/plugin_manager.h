@@ -95,6 +95,15 @@ public:
     /// 加载总耗时 (毫秒; 由 PluginManager 记录)
     uint64_t loadMs = 0;
 
+    /// 本插件的数据目录 `{data_dir}/plugins/data/{插件 id}/`
+    /// - 加载时由 [PluginManager::createInstance] 解析并建好目录
+    /// - 空串 = 主程序没配 `data_dir` (不落盘) 或建目录失败: 插件据此降级
+    /// - 插件经 `get_own_info` 的 `dataDir` 字段拿到它 (不自己拼 data_dir)
+    std::string dataDir;
+
+    /// 数据目录是否已解析过 (`dataDir` 为空也要只解析一次)
+    bool dataDirResolved = false;
+
     // ---- 挂载记录的只读视图 (诊断 / 测试 / 清单用; 每次调用返回合并后的拷贝) ----
     //
     // 注册记录本身按挂载分开保存在 [PluginMount::Entry] 里 (同一实例挂到多个 agent
@@ -678,6 +687,13 @@ public:
     std::shared_ptr<agentxx::agent::AgentContext> primaryAgentContext() const {
         return primaryAgent_.lock();
     }
+
+    /// 本插件的数据目录 `{data_dir}/plugins/data/{插件 id}/` (首次调用时创建)
+    ///
+    /// - 实例已解析过就直接返回缓存值 (见 [PluginInstance::dataDir])
+    /// - `data_dir` 没配 (不落盘) 或建目录失败时返回空串, 插件据此降级
+    /// - 目录规范见 [agentxx/plugin/plugin_paths.h](/agent/lib/include/agentxx/plugin/plugin_paths.h)
+    std::string dataDirOfPlugin(PluginInstance& inst);
 
 protected:
 

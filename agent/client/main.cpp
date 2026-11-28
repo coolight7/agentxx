@@ -1225,13 +1225,27 @@ Options:
             config->logPrintSummarizationResultTokenCount  = true;
             // 远程 client 进程只加载 client 侧插件 (yaml plugins 段经 sides
             // 过滤, 见 ClientPluginManager::loadConfiguredClientPlugins)
-            runRemoteTui(agentUrl, agentToken, remoteModel, config->plugins, config->pluginThreadPoolWorkers);
+            runRemoteTui(
+                agentUrl,
+                agentToken,
+                remoteModel,
+                config->plugins,
+                config->pluginThreadPoolWorkers,
+                config->dataDir
+            );
         } else {
             config->logPrintToolcall                       = false;
             config->logPrintMessagesBeforeLLM              = false;
             config->logPrintMessagesBeforeLLMWithSystemMsg = false;
             config->logPrintSummarizationResultTokenCount  = false;
-            runRemoteCli(agentUrl, agentToken, remoteModel, config->plugins, config->pluginThreadPoolWorkers);
+            runRemoteCli(
+                agentUrl,
+                agentToken,
+                remoteModel,
+                config->plugins,
+                config->pluginThreadPoolWorkers,
+                config->dataDir
+            );
         }
         return 0;
     }

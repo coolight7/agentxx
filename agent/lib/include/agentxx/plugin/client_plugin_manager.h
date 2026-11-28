@@ -514,6 +514,14 @@ public:
     /// 禁用 / 卸载时据此决定要不要先让运行器把脚本卸掉
     bool kindLoaded = false;
 
+    /// 本插件的数据目录 `{data_dir}/plugins/data/{插件 id}/` (首次解析时创建)
+    /// - 空串 = 客户端没有数据目录 (不落盘) 或建目录失败: 插件据此降级
+    /// - 插件经 `get_own_info` 的 `dataDir` 字段拿到它, 不自己拼 data_dir
+    std::string dataDir;
+
+    /// 数据目录是否已解析过 (`dataDir` 为空也要只解析一次)
+    bool dataDirResolved = false;
+
     /// 注册残留 (卸载时统一清理; 仅 io 线程)
     /// - disable 时【完整注册信息】(commandRegs) 保留, enable 可恢复;
     ///   仅 unload/进程销毁时随实例释放
@@ -577,6 +585,7 @@ public:
     ///   (测试模块 `boundaries` 会校验三者一致)
     inline static constexpr size_t kInterfaceTableCount = 10 + 6;
 
+    /// 清单行 (诊断与界面展示主程序视图)
     struct PluginListView {
         std::string              name;
         std::string              version;
@@ -617,6 +626,17 @@ public:
     /// 当前会话 sessionId (get_client_state 数据源; mode_runners 启动时注入,
     /// 会话切换时经 ClientEventSink::onSessionSwitched 自动更新)
     void setSessionId(std::string sessionId);
+
+    /// 主程序数据根目录 (`data_dir`; 插件数据目录由它派生)
+    ///
+    /// - 空串 = 客户端没有可用数据目录: 插件拿到的 `dataDir` 为空, 不落盘
+    /// - 只在加载插件之前调用 (实例创建时就用它算目录)
+    void setDataDir(std::string dataDir);
+
+    /// 本插件的数据目录 `{data_dir}/plugins/data/{插件 id}/` (首次解析时创建)
+    /// - 与 agent 侧同一条实现: `agentxx/plugin/plugin_paths.h`
+    /// - 空串 = 没有数据目录或建目录失败 (插件据此降级)
+    std::string dataDirOfPlugin(ClientPluginInstance& inst);
 
     // ==================== 生命周期 (须 client io 线程) ====================
 
@@ -1267,6 +1287,10 @@ private:
     std::string sessionId_ = "session";
     std::string connState_ = "connecting";
     std::string startupProgress_;
+
+    /// 主程序数据根目录 (`data_dir`): 插件数据目录由它派生
+    /// - 空串 = 没有数据目录, 插件拿到的 `dataDir` 为空 (不落盘)
+    std::string dataDir_;
 
     /// 服务端已加载的 agent 侧插件结构化信息 (io 线程写读): 来自主程序约定
     /// 事件 `agentxx.agent.host.server_plugins` (WirePluginData; 载荷

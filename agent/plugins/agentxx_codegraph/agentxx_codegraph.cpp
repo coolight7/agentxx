@@ -22,6 +22,7 @@ namespace agentxx_codegraph_plugin {
 using CodeGraphManager = agentxx_codegraph_plugin::CodeGraphManager;
 
 struct HostConfig {
+    /// 本插件数据目录 (`{data_dir}/plugins/data/agentxx_codegraph/`; 空 = 不落盘)
     std::string              dataDir;
     std::string              projectRoot;
     std::vector<std::string> loadPaths;
@@ -41,6 +42,8 @@ static asio::awaitable<HostConfig> readHostConfigAsync(PluginCtx& ctx) {
     if (!host || !ctx.iface.config) {
         co_return cfg;
     }
+    // 索引库放在插件自己的数据目录下 (主程序加载时建好; 空 = 不落盘)
+    cfg.dataDir = co_await ctx.dataDirAsync();
     // 表成员是异步操作契约: 提交 + co_await (create 跑在插件执行线程, 不能同步等)
     if (ctx.iface.config->get_config) {
         auto r = co_await tableOpAsync(
@@ -52,7 +55,6 @@ static asio::awaitable<HostConfig> readHostConfigAsync(PluginCtx& ctx) {
         const std::string s{r.ok() ? r.text() : std::string_view{}};
         if (!s.empty()) {
             agentxx::plugin::ArgReader args(s);
-            cfg.dataDir     = args.value<std::string>("dataDir", std::string{});
             cfg.projectRoot = args.value<std::string>("projectRoot", std::string{});
         }
     }
@@ -817,14 +819,19 @@ static void PLUGINXX_CALL on_client_attached(const PluginxxStringView*, void* ud
 
 using namespace agentxx_codegraph_plugin;
 
-/// 实例初始化 (协程): 打开索引库并初始化 (可降级: dataDir 缺失 / 初始化失败时保持 mgr 为空)
+/// 实例初始化 (协程): 打开索引库并初始化 (可降级: 无插件数据目录 / 初始化失败时保持 mgr 为空)
 ///
 /// 接口存在性校验放在 createCtxEntry 的 check 里 (同步、不碰表), 这里只做需要
 /// co_await 的配置读取与本地初始化。
 static asio::awaitable<std::string> codegraphInit(PluginCtx& ctx) {
     auto cfg = co_await readHostConfigAsync(ctx);
     if (cfg.dataDir.empty()) {
-        pluginLog(ctx.host, ctx.iface.log, 3, "agentxx_codegraph: dataDir not set, skip tools");
+        pluginLog(
+            ctx.host,
+            ctx.iface.log,
+            3,
+            "agentxx_codegraph: plugin data dir not available, skip tools"
+        );
         co_return std::string{};
     }
 
@@ -935,7 +942,7 @@ extern "C" PLUGINXX_EXPORT void agentxx_agent_plugin_create(
 
 /// 挂载事务 (mount 的实际内容): 工具/prompt/事件订阅 (**协程形态**)。
 /// - `ref` 为本次挂载的 agent 引用, 提示词/工具/订阅都记在该 agent 名下
-/// - dataDir 缺失或 initialize 失败时 mgr 为空: 保持降级加载, mount 直接完成
+/// - 插件数据目录缺失或 initialize 失败时 mgr 为空: 保持降级加载, mount 直接完成
 ///   (与迁移前 create 的降级行为一致)。
 /// - 每条注册都 `co_await` 完再继续: 登记本身已经生效, 等结果只为了拿到失败原因;
 ///   `co_await` 期间不占线程 (主程序在 IO 线程上是内联完成的, 不会多一次等待)

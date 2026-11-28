@@ -3951,7 +3951,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
 
         // 28.2 注册: 内置工具行登记成 `agentxx.client.tool` 上的声明项 + 内容;
-        // 重复注册幂等
+        // 重复注册幂等 (7 条 = share_store/subagent + 后台任务族 5 条)
         agentxx::plugin::registerBuiltinToolRows(*mgr2);
         {
             auto content = mgr2->uiContentSnapshot();
@@ -3959,7 +3959,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             if (content) {
                 XX_TEST_EXPECT_EQ(
                     content->contentsOn(agentxx::plugin::kClientUiSlotTool).size(),
-                    size_t{2}
+                    size_t{7}
                 );
                 const auto* store = content->contentOf(
                     agentxx::plugin::kClientUiSlotTool,
@@ -3973,7 +3973,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto reg = mgr2->uiRegistrySnapshot();
             XX_TEST_EXPECT_TRUE(reg != nullptr);
             if (reg) {
-                XX_TEST_EXPECT_EQ(reg->toolRenderers.size(), size_t{2});
+                XX_TEST_EXPECT_EQ(reg->toolRenderers.size(), size_t{7});
                 for (const auto& r : reg->toolRenderers) {
                     XX_TEST_EXPECT_TRUE(r.binding != nullptr);
                     XX_TEST_EXPECT_EQ(
@@ -3987,7 +3987,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             }
         }
         agentxx::plugin::registerBuiltinToolRows(*mgr2);
-        XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->toolRenderers.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->toolRenderers.size(), size_t{7});
 
         // 28.3 share_store new: 操作 + 新增 id (取自结果 JSON; 区间只有 get 才有)
         {
@@ -4312,7 +4312,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_EQ(afterUnload.summary, "new #9");
             XX_TEST_EXPECT_EQ(
                 mgr2->uiRegistrySnapshot()->toolRenderers.size(),
-                size_t{2}
+                size_t{7}
             );
         }
     }

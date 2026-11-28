@@ -8,6 +8,7 @@
 /// 线程约定: 除 [postToWorkerThread] 外都在 client io 线程执行 (通用表入口先投递);
 /// 广播注册表内部有锁, 因此 UI 线程直接发布也不会与插件侧订阅冲突。
 #include "agentxx/plugin/client_plugin_manager.h"
+#include "agentxx/plugin/plugin_paths.h"
 
 #include "agentxx/event/naming.h"
 #include "agentxx/plugin/api/agentxx_broadcast_ids.h"
@@ -88,8 +89,12 @@ bool ClientPluginManager::postToWorkerThread(std::function<void()> fn) {
 std::string ClientPluginManager::configJson() {
     // 客户端进程自己的配置: 界面语言 + 平台 (路径类配置属于 agent 侧, 界面进程
     // 不参与 agent 决策, 见 docs/zh-cn/design/configuration.md 第 5 节)
+    // 例外: 插件数据目录是客户端插件自己的落盘位置 (与 agent 侧同一套规范)
     utilxx_base::Json out;
-    out["language"] = getLanguage();
+    out["language"]          = getLanguage();
+    out["dataDir"]           = dataDir_;
+    out["pluginDataRoot"]    = agentxx::plugin::pluginDataRoot(dataDir_);
+    out["pluginInstallRoot"] = agentxx::plugin::pluginInstallRoot(dataDir_);
 #if XX_IS_WIN_D
     out["platform"] = "windows";
 #elif XX_IS_MACOS_D

@@ -101,7 +101,7 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
 | | `agentxx_codegraph_callers` / `agentxx_codegraph_callees` | 调用图正向/反向追踪 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用流程径 |
 | | 实际注册 5 工具 (search/context/callers/callees/path; 日志 `loaded (6 tools)` 中的第 6 个是 client 侧 Info 段, 非 agent 工具); 仅当该插件经 yaml `plugin.list` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
-| **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录; 双端插件: 规划持久化到 `{dataDir}/plans/{thread}.json`, 发布 `plugin.agentxx_planning.planning` 事件, client 侧经类型级工具渲染器 (实时+历史回溯) 与实时装饰+Info 段落渲染, 订阅 `agentxx.agent.host.client_attached` 做接入重发自愈) |
+| **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录; 双端插件: 规划持久化到 `<插件数据目录>/plans/{thread}.json` (即 `{data_dir}/plugins/data/agentxx_planning/plans/`), 发布 `plugin.agentxx_planning.planning` 事件, client 侧经类型级工具渲染器 (实时+历史回溯) 与实时装饰+Info 段落渲染, 订阅 `agentxx.agent.host.client_attached` 做接入重发自愈) |
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 (单任务字段 subagent/message, 或批量 tasks 数组并行; 由 SubagentManager 中间件持有单实例注入, 默认注册 `subagent_task`) |
 | | `tool_skill_search` 逻辑 | 延迟加载工具/技能的搜索: `ToolSkillSearchSubAgentTask` 仅为 system prompt 模板 (当前未独立注册为 tool, 由 subagent 按需内联检索逻辑) |
 | **数据** | `agentxx_share_store` | 会话级文本寄存，节省上下文 |
@@ -770,7 +770,7 @@ AGENTXX_LOG_MODULES="plugin.=warn,plugin.agentxx_codegraph=debug" agentxx tui
 | **AudioStream** | 系统音频/麦克风/程序音频流捕获 (插件 `agentxx_audio_stream`, 全平台跳过构建: 实现未启用) |
 | **TextSelectionMonitor** | 系统级文本选择事件监听 (插件 `agentxx_text_selection_monitor`, 仅 Windows UI Automation) |
 | **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 (插件 `agentxx_system_monitor`, Windows 经 PDH/DXGI、Linux/Android 解析 `/proc`+sysfs、macOS 经 mach `host_statistics` + IOKit `IOAccelerator`; 工具 + 周期采集 + client 侧渲染; 能力 `agentxx.system_usage` 给出当前系统负担快照 —— CPU/GPU 占用、内存与显存的占用率与**可用量/总量**) |
-| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp; 已拆分为插件 `agentxx_codegraph`): 索引范围由插件参数配置 (yaml `plugin.list` 段该插件条目的 `args`，字段语义由插件定义)：`paths` 加载路径列表 (可多个目录，未配置时按 `load_cwd` 默认索引当前工作目录)、`ignore_paths` 忽略路径 (支持 `*` 通配符)、`use_gitignore` 默认忽略 `.gitignore` 规则与 `.gitmodules` 子模块目录；遍历按目录剪枝 (忽略目录整棵子树不进入)，文件监听增量索引应用同一套过滤；sqlite 数据库存于 `{dataDir}/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用；dataDir 由 yaml `data_dir` 指定，未配置 dataDir 时插件自动跳过、索引不落盘） |
+| **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp; 已拆分为插件 `agentxx_codegraph`): 索引范围由插件参数配置 (yaml `plugin.list` 段该插件条目的 `args`，字段语义由插件定义)：`paths` 加载路径列表 (可多个目录，未配置时按 `load_cwd` 默认索引当前工作目录)、`ignore_paths` 忽略路径 (支持 `*` 通配符)、`use_gitignore` 默认忽略 `.gitignore` 规则与 `.gitmodules` 子模块目录；遍历按目录剪枝 (忽略目录整棵子树不进入)，文件监听增量索引应用同一套过滤；sqlite 数据库存于 `<插件数据目录>/sqlite/codegraph/<折叠路径>/index.db`（即 `{data_dir}/plugins/data/agentxx_codegraph/sqlite/codegraph/...`，深层折叠 + 单段截断控制长度，路径前缀匹配复用；插件数据目录由主程序加载实例时建好，未配置 `data_dir` 时插件自动跳过、索引不落盘） |
 
 ### 依赖注入
 
@@ -940,7 +940,8 @@ mcp:
 # 配置后数据子路径:
 #   - {data_dir}/sqlite/global.db                     全局设置 (TUI 设置等)
 #   - {data_dir}/sqlite/sessions/{sessionId}/          会话数据 (session.db, 含 store 表)
-#   - {data_dir}/sqlite/codegraph/<折叠路径>/index.db CodeGraph 索引
+#   - {data_dir}/plugins/data/{插件 id}/               插件自己的数据 (规划/索引/截图/媒体/下载)
+#   - {data_dir}/plugins/installed/                    安装式插件落点 (预留)
 # data_dir: ~/.agentxx
 
 # 会话工作目录 (留空/不配置 = 使用进程当前工作目录, 即启动目录)
@@ -1000,8 +1001,8 @@ plugin:
           - "**/third_party/**"
         load_cwd: true                     # 未配置 paths 时默认加载当前工作目录
         use_gitignore: true                # 默认忽略 .gitignore 规则/.gitmodules 子模块/.git
-                                           # 索引库: {data_dir}/sqlite/codegraph/<折叠路径>/index.db
-                                           # (data_dir 未配置时不落盘、插件自动跳过)
+                                           # 索引库: {data_dir}/plugins/data/agentxx_codegraph/sqlite/codegraph/<折叠路径>/index.db
+                                           # (插件数据目录由主程序提供; data_dir 未配置时不落盘、插件自动跳过)
 
 # 权限询问处理模式 (默认 ask, 见 PermissionMode)
 # - ask:     当前工作目录内允许读写, 其他路径询问用户 (默认)

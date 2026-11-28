@@ -612,6 +612,9 @@ std::shared_ptr<PluginInstance> PluginManager::createInstance(std::string name) 
     auto inst     = std::make_shared<PluginInstance>(std::move(name));
     inst->self    = inst;
     inst->manager = shared_from_this();
+    // 插件数据目录尽早解析并建好: 插件在 `start` / `mount` 里就会用到它 (经
+    // get_own_info), 也便于加载失败时一眼看出路径。解析过就直接用缓存值
+    (void)dataDirOfPlugin(*inst);
     return inst;
 }
 
@@ -1194,6 +1197,8 @@ std::string PluginManager::getPluginJson(const std::string& name) {
     item["description"]         = inst->description;
     item["path"]                = inst->path;
     item["config"]              = inst->configPath;
+    // 插件数据目录 (`{data_dir}/plugins/data/{插件 id}/`; 没配 data_dir 时为空)
+    item["dataDir"]             = dataDirOfPlugin(*inst);
     item["enabled"]             = inst->enabled.load();
     // 工具按挂载汇总 (与 listPluginsJson 同一来源: 实例本身的只读视图不带工具)
     PluginListView view;

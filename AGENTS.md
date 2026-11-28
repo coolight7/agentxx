@@ -620,6 +620,19 @@ path/to/agentxx_test --log-level warn string_util regex
 - 分页参数统一命名 (2026-10): `agentxx_filesystem_read` 与 `agentxx_share_store` 的分页参数
   统一为 `offset`/`limit` (均按行计); `agentxx_share_store` 的 `opt` 取值为 `get`/`new`/`update`
   (原 `insert`/`set`), 且 `offset`/`limit` **仅 `get` 时有效** (`new`/`update` 传入即忽略, 文本原样存储)
+- 插件数据目录规范 (2026-11): 布局唯一实现在
+  `agent/lib/include/agentxx/plugin/plugin_paths.h` —— `{data_dir}/plugins/data/{插件 id}/`
+  是插件自己的持久化位置 (缓存/索引/截图/媒体/下载/状态), `{data_dir}/plugins/installed/`
+  预留给以后的安装式插件; `data_dir` 为空时一律空串 (= 不落盘, **不**回退 `~/.agentxx`)。
+  主程序在 `PluginManager` / `ClientPluginManager` 的 `createInstance` 就算好并建好目录
+  (实例缓存 `dataDir`), 经 `get_own_info` 的 `dataDir` 字段交给插件; 插件侧写
+  `co_await ctx.dataDirAsync()` (两端同名), **不要**自己拼 `data_dir` (也不要经
+  `get_config` 读主程序 dataDir 再拼子目录)。插件 id 做目录名时会安全化
+  (`[A-Za-z0-9._-]` 以外换 `_`, 改过名的追加短哈希, `a/b` 与 `a_b` 不撞车); 目录按
+  插件 id 划分、不按 agent 划分。`http.download` 也落在插件数据目录下的
+  `data/downloads/` (由 `PluginNetService` 传入插件数据根)。现有写入方:
+  planning (`plans/`) / codegraph (`sqlite/codegraph/`) / screen_capture (`captures/`) /
+  chatbot (`media/{账号}/`)
 - 插件工具提示词归属 (2026-10): 插件工具的提示词 (depict + 参数说明) 写在**插件自身**字面量里
   (少数插件经 `agentxx.agent.prompt` 接口表注入, 如 execute_command/codegraph/planning);
   `AgentPrompt::toolPrompt` (prompt.cpp) 只保留内置工具 (share_store / subagent /

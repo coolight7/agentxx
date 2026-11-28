@@ -6,6 +6,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/plugin/plugin_paths.h"
 #include "agentxx/plugins/session_cancel_snapshot.h"
 #include "asio/co_spawn.hpp"
 #include "asio/io_context.hpp"
@@ -594,6 +595,73 @@ void PLUGINXX_CALL
 
 TestResult testPluginRuntime() {
     TestResult result;
+
+    /// 插件数据目录规范 (`agentxx/plugin/plugin_paths.h`):
+    /// 路径拼接、插件 id 安全化与目录创建
+    {
+        namespace fs = std::filesystem;
+        namespace p  = agentxx::plugin;
+        // 没配 data_dir = 不落盘: 一律空串 (不回退 ~/.agentxx)
+        XX_TEST_EXPECT_TRUE(p::pluginDataRoot("").empty());
+        XX_TEST_EXPECT_TRUE(p::pluginInstallRoot("").empty());
+        XX_TEST_EXPECT_TRUE(p::pluginDataDirOf("", "agentxx_planning").empty());
+        std::string err;
+        XX_TEST_EXPECT_TRUE(p::ensurePluginDataDir("", "agentxx_planning", &err).empty());
+        XX_TEST_EXPECT_FALSE(err.empty());
+
+        // 布局: {data_dir}/plugins/data[/{id}] 与 {data_dir}/plugins/installed
+        XX_TEST_EXPECT_EQ(p::pluginDataRoot("/tmp/dd"), std::string{"/tmp/dd/plugins/data"});
+        XX_TEST_EXPECT_EQ(p::pluginInstallRoot("/tmp/dd"), std::string{"/tmp/dd/plugins/installed"});
+        XX_TEST_EXPECT_EQ(
+            p::pluginDataDirOf("/tmp/dd", "agentxx_chatbot"),
+            std::string{"/tmp/dd/plugins/data/agentxx_chatbot"}
+        );
+
+        // 插件 id 安全化: 路径分隔符 / 点号组合不会把文件写出数据根
+        // 合法 id 原样保留 (不改名就不加哈希后缀, 目录名对用户可见)
+        XX_TEST_EXPECT_EQ(p::sanitizePluginId("agentxx-fs_1.0"), std::string{"agentxx-fs_1.0"});
+        // 改过名的 id 保留可读前缀, 再追加原 id 的短哈希: 不同 id 不会撞进同一目录
+        const auto slashId = p::sanitizePluginId("a/b");
+        XX_TEST_EXPECT_TRUE(slashId.starts_with("a_b-"));
+        XX_TEST_EXPECT_FALSE(slashId == p::sanitizePluginId("a_b"));
+        const auto escapeId = p::sanitizePluginId("../x");
+        XX_TEST_EXPECT_TRUE(escapeId.starts_with(".._x-"));
+        XX_TEST_EXPECT_TRUE(escapeId.find('/') == std::string::npos);
+        XX_TEST_EXPECT_FALSE(escapeId == std::string{".."});
+        // 全点号在文件系统上有特殊含义: 换成加前缀的名字
+        XX_TEST_EXPECT_EQ(p::sanitizePluginId(".."), std::string{"_.."});
+        XX_TEST_EXPECT_EQ(p::sanitizePluginId(""), std::string{"_"});
+        // 中文按字节逐个换下划线 (结果是纯 ASCII 目录名)
+        const auto cnId = p::sanitizePluginId("中文");
+        XX_TEST_EXPECT_TRUE(cnId.starts_with("______-"));
+        XX_TEST_EXPECT_TRUE(
+            cnId.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+            == std::string::npos
+        );
+
+        // 建目录幂等, 返回值就是插件数据目录 (本地路径以 UTF-8 正斜杠给出)
+        const auto base = fs::temp_directory_path() / "agentxx_test_plugin_paths";
+        std::error_code ec;
+        fs::remove_all(base, ec);
+        const std::string dataDir = base.generic_string();
+        const auto        dir     = p::ensurePluginDataDir(dataDir, "demo_plugin", &err);
+        XX_TEST_EXPECT_FALSE(dir.empty());
+        XX_TEST_EXPECT_TRUE(err.empty());
+        XX_TEST_EXPECT_TRUE(fs::is_directory(utilxx_base::utf8ToPath(dir)));
+        XX_TEST_EXPECT_EQ(dir, dataDir + "/plugins/data/demo_plugin");
+        // 再调一次不报错 (幂等)
+        XX_TEST_EXPECT_EQ(p::ensurePluginDataDir(dataDir, "demo_plugin", &err), dir);
+        // 非法 id 写入的目录落在数据根内, 不会逃出去
+        const auto nested = p::ensurePluginDataDir(dataDir, "../escape", &err);
+        XX_TEST_EXPECT_TRUE(nested.starts_with(dataDir + "/plugins/data/.._escape-"));
+        XX_TEST_EXPECT_TRUE(err.empty());
+        XX_TEST_EXPECT_TRUE(fs::is_directory(utilxx_base::utf8ToPath(nested)));
+        XX_TEST_EXPECT_EQ(
+            utilxx_base::utf8ToPath(nested).parent_path(),
+            utilxx_base::utf8ToPath(dataDir + "/plugins/data")
+        );
+        fs::remove_all(base, ec);
+    }
 
     /// 会话取消快照: 登记/查询可跨线程进行 (插件线程问 `is_canceled` 不等 IO)
     {

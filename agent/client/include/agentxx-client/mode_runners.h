@@ -27,16 +27,18 @@ void runRemoteCli(
     std::string_view    url,
     std::string_view    token,
     std::string_view    model,
-    ClientPluginConfigs plugins        = {},
-    size_t              workerThreads  = 0
+    ClientPluginConfigs plugins       = {},
+    size_t              workerThreads = 0,
+    std::string         dataDir       = {}
 );
 
 void runRemoteTui(
     std::string_view    url,
     std::string_view    token,
     std::string_view    model,
-    ClientPluginConfigs plugins        = {},
-    size_t              workerThreads  = 0
+    ClientPluginConfigs plugins       = {},
+    size_t              workerThreads = 0,
+    std::string         dataDir       = {}
 );
 
 } // namespace client

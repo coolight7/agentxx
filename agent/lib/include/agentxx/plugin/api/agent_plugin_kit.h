@@ -867,6 +867,29 @@ public:
     // 配置 / 参数 / 配置路径 / 语言类协程入口由基类
     // [pluginxx::PluginBaseT] 提供 (它已统一改成 asio 协程形态)。
 
+    /// 本插件的数据目录 (**协程形态**): `{data_dir}/plugins/data/{插件 id}/`
+    ///
+    /// - 主程序加载实例时就建好了目录: 插件自己的持久化 (缓存 / 索引 / 下载 /
+    ///   媒体 / 状态文件) 一律放这里, **不要**自己拼 `data_dir`
+    /// - 空串 = 本进程没有数据目录 (主程序没配 `data_dir`) 或建目录失败:
+    ///   插件据此降级为不落盘
+    /// - 目录规范与命名安全化见
+    ///   [plugin_paths.h](/agent/lib/include/agentxx/plugin/plugin_paths.h)
+    /// - 高频值建议在 `start` / `mount` 里取一次缓存 (查询经表调用)
+    asio::awaitable<std::string> dataDirAsync() const {
+        if (!host || !iface.plugins || !iface.plugins->get_own_info) {
+            co_return std::string{};
+        }
+        auto r = co_await asyncTableOp(
+            *this,
+            co_await asio::this_coro::executor,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.plugins->get_own_info(host, cb, ud, err);
+            }
+        );
+        co_return r.ok() ? dataDirOfOwnInfo(r.text()) : std::string{};
+    }
+
     /// 写入会话共享存储 (**协程形态**; `co_await` 后取 `.text()` 读 id)
     ///
     /// 第一个参数是插件实例上下文 (带驱动桥), 返回 asio 协程操作。

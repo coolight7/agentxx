@@ -1003,6 +1003,28 @@ public:
         co_return r.ok() ? std::string{r.text()} : std::string{};
     }
 
+    /// 本插件的数据目录 (**协程形态**): `{data_dir}/plugins/data/{插件 id}/`
+    ///
+    /// - 主程序加载时就建好了目录, 插件自己的持久化 (缓存 / 配置 / 下载 / 媒体)
+    ///   一律放这里, **不要**自己拼 `data_dir`
+    /// - 空串 = 本进程没有数据目录 (主程序没配 `data_dir`) 或建目录失败:
+    ///   插件据此降级为不落盘
+    /// - 目录规范与命名安全化见
+    ///   [plugin_paths.h](/agent/lib/include/agentxx/plugin/plugin_paths.h)
+    /// - 高频值建议在 `start` 里取一次缓存 (查询要经表调用, 不是本地读写)
+    asio::awaitable<std::string> dataDirAsync() const {
+        if (!host || !iface.self || !iface.self->get_own_info) {
+            co_return std::string{};
+        }
+        auto r = co_await detail::clientTableAwaitAsync(
+            *this,
+            [this](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.self->get_own_info(host, cb, ud, err);
+            }
+        );
+        co_return r.ok() ? dataDirOfOwnInfo(r.text()) : std::string{};
+    }
+
     /// 当前语言代码 (**协程形态**)
     asio::awaitable<std::string> languageAsync() const {
         if (!host || !iface.config || !iface.config->get_language) {
