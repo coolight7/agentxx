@@ -3,7 +3,7 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/prompt_sources.h"
-#include "agentxx/plugins/session_cancel_snapshot.h"
+#include "agentxx/plugin/session_cancel_snapshot.h"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
 #include "utilxx_base/log.h"
@@ -119,11 +119,8 @@ struct SessionStoreHooks {
     /// - 消息已含分配 id; `msgIdCounter` / `viewSeqCounter` 为替换后的计数,
     ///   与追加路径同意义 (供重启恢复延续 id 分配与增量补拉)
     /// - 实现应删掉会话库里的旧行再按传入顺序写回 (一次事务)
-    std::function<void(
-        const std::vector<ViewMessage>&,
-        uint64_t                        msgIdCounter,
-        uint64_t                        viewSeqCounter
-    )>
+    std::function<
+        void(const std::vector<ViewMessage>&, uint64_t msgIdCounter, uint64_t viewSeqCounter)>
         onRewriteViewMessages;
 };
 
@@ -426,9 +423,8 @@ public:
     /// 按 id 逐条替换上下文消息 (插件接口表 `update_llm_messages`)
     /// - 找不到的 id 不算失败, 记在 `missing` 里: 插件可能持有压缩前的旧 id
     /// - 有命中时递增上下文版本号并按既有节流落盘
-    LlmMessageUpdateResult updateMessagesByIds(
-        std::vector<std::pair<std::string, neograph::ChatMessage>> updates
-    );
+    LlmMessageUpdateResult
+        updateMessagesByIds(std::vector<std::pair<std::string, neograph::ChatMessage>> updates);
     // -------------------------------------------------------------------
     // io 线程专用写入接口
     // -------------------------------------------------------------------
@@ -764,7 +760,6 @@ private:
 
     std::shared_ptr<neograph::graph::CancelToken> cancelToken_  = nullptr;
     uint64_t                                      msgIdCounter_ = 0;
-
 
     /// 展示历史持久化序号计数 (每次 appendViewMessage 递增; = 历史总条数)
     uint64_t viewSeqCounter_ = 0;

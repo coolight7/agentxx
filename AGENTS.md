@@ -230,7 +230,7 @@ path/to/agentxx_test --log-level warn string_util regex
           `host/tables_impl.h` (C ABI 入口 + `queryGenericPluginIface<I,M>`) +
           `host/domain_services.h` (`DomainServices`: 通用表需要主程序数据的入口) +
           `host/broadcast_registry.h` + `host/capability_chain.h` (频道登记表 / 实现链);
-          agentxx 侧主程序实现见 `agent/lib/src/plugins/plugin_manager_domain_services.cpp`
+          agentxx 侧主程序实现见 `agent/lib/src/plugin/plugin_manager_domain_services.cpp`
           (工作线程池 / 配置 / 语言 / 插件清单, 广播后端包装 `agentxx::events::EventBus`)
           与 `plugin_manager_vtable.cpp` (业务表 + `query_interface` 先查通用表)
         - 生命周期公共实现也在插件框架: `host/lifecycle.h` 的 `PluginHostLifecycle<InstanceT>`
@@ -1284,7 +1284,7 @@ agent/script/build_plugins.sh --config Release --jobs 8 --list
     (服务端系统态时间 +60%, 场景耗时 +15%), 收益与轮末主动归还重合
 - Debug 插桩: 单一开关 `AGENTXX_ENABLE_SANITIZER` (默认 ON) 同时启用 ASan + UBSan
   (GCC/Clang: `-fsanitize=address` + `-fsanitize=undefined -fno-sanitize-recover=undefined`)
-  与插件框架定向探针 (`lib/src/plugins/*.cpp`、`test/plugin/*.cpp`); MSVC 只有 ASan
+  与插件框架定向探针 (`lib/src/plugin/*.cpp`、`test/plugin/*.cpp`); MSVC 只有 ASan
   (`/fsanitize=address`), UBSan/探针自动忽略; 已移除 TSAN 支持。
   插桩与探针**都只在非 Release 配置生效** (`XX_IS_RELEASE_D=0`): Release 无 sanitizer
   编译/链接参数, 探针若仍插桩会因缺少 `__ubsan_handle_*` 运行库符号而链接失败

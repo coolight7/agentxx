@@ -154,7 +154,7 @@ auto b64 = utilxx_base::base64Encode(data);
   主程序只需 `class MyManager : public pluginxx::PluginHostLifecycle<MyInstance>` +
   实现 `pluginxx::DomainServices` (工作线程池、配置/语言、插件清单) + 在 `query_interface`
   里先调 `queryGenericPluginIface` 再分发自己的业务表。
-  agentxx 侧对应实现见 `agent/lib/src/plugins/plugin_manager_domain_services.cpp`
+  agentxx 侧对应实现见 `agent/lib/src/plugin/plugin_manager_domain_services.cpp`
   (工作线程池 / 配置 / 语言 / 插件清单; 广播事件后端包装 `agentxx::events::EventBus`,
   主题**不做任何补齐**, 命名规则统一为全名, 见 `agentxx/event/naming.h`)
 
@@ -1728,7 +1728,7 @@ MediaType 只有 image/audio/video），而是把本地路径写进输入 ——
 > capability 返回 `int`、tool 返回普通值、跨边界传 STL 参数必须编译失败）。
 >
 > 插件框架定向探针：`AGENTXX_ENABLE_SANITIZER=ON`（默认开启，与 ASan/UBSan 同一开关）
-> 且**非 Release 配置**（`XX_IS_RELEASE_D=0`）时，对 `lib/src/plugins/*.cpp` 与
+> 且**非 Release 配置**（`XX_IS_RELEASE_D=0`）时，对 `lib/src/plugin/*.cpp` 与
 > `test/plugin/*.cpp` 追加 `-fsanitize=undefined`
 > （运行库经顶层非 Release 的 sanitizer 链接参数注入），不重编第三方依赖；用于 `PluginManager`/
 > `ClientPluginManager` 与 header-only 的 Operation/InstanceLifetime 运行时的未定义行为验证。
@@ -2778,7 +2778,7 @@ v4 起这 7 个成员都是**异步操作契约**（见 §8.0）：返回 `Plugi
 
 插件只认广播表, 而主程序与客户端上行的话题在**事件总线**上; 客户端能拿到的插件数据也只能由
 服务端端点从总线的 `plugin.` 前缀转发 (`WirePluginData`)。两跳都在
-`agent/lib/src/plugins/plugin_manager_broadcast_bridge.cpp`:
+`agent/lib/src/plugin/plugin_manager_broadcast_bridge.cpp`:
 
 ```text
 总线 agentxx.agent.* / agentxx.client.*  ──[mirrorBusValue]──▶  广播频道
@@ -2878,7 +2878,7 @@ v4 起这 7 个成员都是**异步操作契约**（见 §8.0）：返回 `Plugi
 - **通用网络服务** `utilxx::NetHub` (在 `cxx_utilxx` 里, 与插件无关): 自有网络线程,
   socket 状态全在那条线程上, 按**属主 id** 隔离资源;
 - **本项目的适配** `agentxx::plugin::PluginNetService`
-  (`agent/lib/{include/agentxx/plugin/net_service.h,src/plugins/net_service.cpp}`):
+  (`agent/lib/{include/agentxx/plugin/net_service.h,src/plugin/net_service.cpp}`):
   属主 id = 插件实例名, 事件发到 `plugin.<插件 id>.net` 广播, 完成回调按
   `PLUGINXX_OPERATOR_OK/CANCELED/FAILED` 上报, 插件禁用/卸载时 `shutdownOwner`
   把它名下的服务、连接与未完成请求一起收掉。

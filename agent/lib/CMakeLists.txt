@@ -47,7 +47,7 @@ file(GLOB_RECURSE agentxx_SOURCES
 # - GCC/Clang 下非 Release 全局已带 UBSan, 此处为定向复核保留同一开关;
 #   MSVC 无 UBSan 实现, 跳过
 if (AGENTXX_ENABLE_SANITIZER AND NOT XX_IS_MSVC_D AND NOT XX_IS_RELEASE_D)
-  file(GLOB _agentxx_plugin_probe_sources CONFIGURE_DEPENDS "src/plugins/*.cpp")
+  file(GLOB _agentxx_plugin_probe_sources CONFIGURE_DEPENDS "src/plugin/*.cpp")
   set_source_files_properties(${_agentxx_plugin_probe_sources} PROPERTIES
     COMPILE_OPTIONS "-fsanitize=undefined;-fno-sanitize-recover=undefined"
   )

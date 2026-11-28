@@ -7,7 +7,7 @@
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/plugin_paths.h"
-#include "agentxx/plugins/session_cancel_snapshot.h"
+#include "agentxx/plugin/session_cancel_snapshot.h"
 #include "asio/co_spawn.hpp"
 #include "asio/io_context.hpp"
 #include "asio/thread_pool.hpp"
@@ -25,8 +25,8 @@
 #include <algorithm>
 #include <atomic>
 #include <barrier>
-#include <cstddef>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <fmt/format.h>
 #include <future>
@@ -63,9 +63,9 @@ struct RuntimeFixture {
         = std::make_shared<PluginManager>(std::weak_ptr<agentxx::agent::AgentContext>{});
     /// 本夹具的 agent 上下文与挂载 (登记记录落在挂载上)
     std::shared_ptr<agentxx::agent::AgentContext> ctx;
-    std::shared_ptr<PluginMount>                 mount;
-    std::shared_ptr<PluginInstance> provider;
-    std::shared_ptr<PluginInstance> caller;
+    std::shared_ptr<PluginMount>                  mount;
+    std::shared_ptr<PluginInstance>               provider;
+    std::shared_ptr<PluginInstance>               caller;
 
     /// 注意: 参数不能与成员 `ctx` 同名 —— 同名时成员恒为空, 临时上下文在构造
     /// 结束时释放, 其析构会关掉管理器上的全部实例。
@@ -81,8 +81,8 @@ struct RuntimeFixture {
         ctx->pluginManager = manager;
         mount              = manager->attachMountSync(ctx);
         ctx->pluginMount   = mount;
-        provider = instance("provider", 1);
-        caller   = instance("caller", 2);
+        provider           = instance("provider", 1);
+        caller             = instance("caller", 2);
     }
 
     std::shared_ptr<PluginInstance> instance(std::string name, uint64_t generation) {
@@ -138,7 +138,9 @@ struct RuntimeFixture {
             return;
         }
         auto reached = std::make_shared<std::atomic<bool>>(false);
-        asio::post(ex, [reached] { reached->store(true, std::memory_order_release); });
+        asio::post(ex, [reached] {
+            reached->store(true, std::memory_order_release);
+        });
         for (int i = 0; i < 2000 && !reached->load(std::memory_order_acquire); ++i) {
             // 插件线程可能正在同步等 io (同步桥查表): 等待期间顺手推进 io,
             // 否则两边互等 (插件线程等 io 的完成, 而 io 没人跑)
@@ -258,12 +260,12 @@ struct RuntimeFixture {
 };
 
 struct CallbackState {
-    int             calls                   = 0;
-    int             status                  = -1;
-    bool            protectedDuringCallback = false;
-    bool            onIo                    = false;
+    int  calls                   = 0;
+    int  status                  = -1;
+    bool protectedDuringCallback = false;
+    bool onIo                    = false;
     /// 结果正文
-    std::string     result;
+    std::string result;
     /// 结果元数据 JSON (无元数据为空)
     std::string     payload;
     RuntimeFixture* fixture = nullptr;
@@ -274,7 +276,7 @@ struct CallbackState {
         const PluginxxStringView* result,
         const PluginxxStringView* payload
     ) {
-        auto& state   = *static_cast<CallbackState*>(ud);
+        auto& state = *static_cast<CallbackState*>(ud);
         ++state.calls;
         state.status  = status;
         state.result  = svToStr(result);
@@ -283,12 +285,9 @@ struct CallbackState {
     }
 
     /// 框架层的单段完成回调 (直接驱动 OpCore 的用例用): 结果只有一段
-    static void PLUGINXX_CALL onOpDone(
-        void*                     ud,
-        int32_t                   status,
-        const PluginxxStringView* payload
-    ) {
-        auto& state  = *static_cast<CallbackState*>(ud);
+    static void PLUGINXX_CALL
+        onOpDone(void* ud, int32_t status, const PluginxxStringView* payload) {
+        auto& state = *static_cast<CallbackState*>(ud);
         ++state.calls;
         state.status = status;
         state.result = svToStr(payload);
@@ -301,8 +300,7 @@ struct CallbackState {
     /// 它不是工作池线程也不是任意线程 —— 旧断言写的 `onIo` 就是这个意思。
     void noteCallbackContext() {
         if (fixture) {
-            onIo                    = fixture->manager->isIoThread()
-                                      || fixture->manager->isPluginThread();
+            onIo = fixture->manager->isIoThread() || fixture->manager->isPluginThread();
             protectedDuringCallback = fixture->provider->lifetime->leaseCount() != 0
                                       && fixture->caller->lifetime->leaseCount() != 0;
         }
@@ -351,8 +349,8 @@ struct ShutdownOrderProbe {
         }
         probe.destroyDuringCallback = probe.provider && probe.provider->pluginDestroyed;
         // 回调线程 = 插件代码的执行线程 (插件执行器 > io)
-        probe.onIo = probe.manager
-                     && (probe.manager->isIoThread() || probe.manager->isPluginThread());
+        probe.onIo
+            = probe.manager && (probe.manager->isIoThread() || probe.manager->isPluginThread());
     }
 };
 
@@ -372,8 +370,8 @@ AgentxxPluginToolSpec fakeTool(void* ud, bool reject) {
             return nullptr;
         };
     } else {
-        spec.execute_start = +[](void*                          ud,
-                                 const PluginxxStringView*      args,
+        spec.execute_start = +[](void*                     ud,
+                                 const PluginxxStringView* args,
                                  const PluginxxStringView*,
                                  const PluginxxStringView*,
                                  const AgentxxPluginToolNotify* notify,
@@ -396,7 +394,8 @@ void PLUGINXX_CALL fakeStopHook(void*, const PluginxxOperatorNotify* notify, Plu
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
 }
 
-void PLUGINXX_CALL fakeDestroyHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
+void PLUGINXX_CALL
+    fakeDestroyHook(void* ud, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ++*static_cast<int*>(ud);
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
@@ -458,8 +457,8 @@ struct LifecycleProbe {
     bool                  partialGraphRegistration = false;
     AgentxxPluginToolSpec spec{};
     /// 接口调用用的挂载引用（`id` 借用 [agentId] 的内存）
-    std::string       agentId;
-    PluginxxScopeRef  ref{};
+    std::string      agentId;
+    PluginxxScopeRef ref{};
 };
 
 /// create = 构造 + 注册 (可重入): 上下文由主程序经 `*plugin_ctx` 交回
@@ -480,17 +479,17 @@ void PLUGINXX_CALL lifecycleCreateHook(
     struct StartPending {
         /// 按值存: 回答时可能已经在另一个线程, 借用指针不再可靠
         PluginxxOperatorNotify notify{};
-        int                     remaining = 0;
-        bool                    failStart = false;
+        int                    remaining = 0;
+        bool                   failStart = false;
     };
-    auto pending = std::make_shared<StartPending>();
+
+    auto pending       = std::make_shared<StartPending>();
     pending->notify    = *notify;
     pending->failStart = probe.failStart;
 
-    const bool wantTool = probe.tools != nullptr && probe.host != nullptr;
-    const bool wantGraph
-        = probe.graph != nullptr && probe.host != nullptr
-          && probe.graph->register_node_type != nullptr;
+    const bool wantTool  = probe.tools != nullptr && probe.host != nullptr;
+    const bool wantGraph = probe.graph != nullptr && probe.host != nullptr
+                           && probe.graph->register_node_type != nullptr;
     pending->remaining = (wantTool ? 1 : 0) + (wantGraph ? 1 : 0);
 
     auto finish = [pending]() {
@@ -520,14 +519,7 @@ void PLUGINXX_CALL lifecycleCreateHook(
             probe.cancel,
             probe.scheduler,
             [&probe](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return probe.tools->register_tool(
-                    probe.host,
-                    &probe.ref,
-                    &probe.spec,
-                    cb,
-                    ud,
-                    err
-                );
+                return probe.tools->register_tool(probe.host, &probe.ref, &probe.spec, cb, ud, err);
             },
             [&probe, finish](pluginxx::detail::TableOpResult r) {
                 probe.partialRegistration = r.ok();
@@ -545,14 +537,7 @@ void PLUGINXX_CALL lifecycleCreateHook(
             probe.cancel,
             probe.scheduler,
             [&probe, gspec](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return probe.graph->register_node_type(
-                    probe.host,
-                    &probe.ref,
-                    &gspec,
-                    cb,
-                    ud,
-                    err
-                );
+                return probe.graph->register_node_type(probe.host, &probe.ref, &gspec, cb, ud, err);
             },
             [&probe, finish](pluginxx::detail::TableOpResult r) {
                 probe.partialGraphRegistration = r.ok();
@@ -577,14 +562,8 @@ void PLUGINXX_CALL
         probe.cancel,
         probe.scheduler,
         [&probe](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-            return probe.tools->unregister_tool(
-                probe.host,
-                &probe.ref,
-                &probe.spec.name,
-                cb,
-                ud,
-                err
-            );
+            return probe.tools
+                ->unregister_tool(probe.host, &probe.ref, &probe.spec.name, cb, ud, err);
         },
         [notifyCopy](pluginxx::detail::TableOpResult) {
             notifyCopy.done(notifyCopy.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
@@ -611,7 +590,10 @@ TestResult testPluginRuntime() {
 
         // 布局: {data_dir}/plugins/data[/{id}] 与 {data_dir}/plugins/installed
         XX_TEST_EXPECT_EQ(p::pluginDataRoot("/tmp/dd"), std::string{"/tmp/dd/plugins/data"});
-        XX_TEST_EXPECT_EQ(p::pluginInstallRoot("/tmp/dd"), std::string{"/tmp/dd/plugins/installed"});
+        XX_TEST_EXPECT_EQ(
+            p::pluginInstallRoot("/tmp/dd"),
+            std::string{"/tmp/dd/plugins/installed"}
+        );
         XX_TEST_EXPECT_EQ(
             p::pluginDataDirOf("/tmp/dd", "agentxx_chatbot"),
             std::string{"/tmp/dd/plugins/data/agentxx_chatbot"}
@@ -635,12 +617,14 @@ TestResult testPluginRuntime() {
         const auto cnId = p::sanitizePluginId("中文");
         XX_TEST_EXPECT_TRUE(cnId.starts_with("______-"));
         XX_TEST_EXPECT_TRUE(
-            cnId.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+            cnId.find_first_not_of(
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+            )
             == std::string::npos
         );
 
         // 建目录幂等, 返回值就是插件数据目录 (本地路径以 UTF-8 正斜杠给出)
-        const auto base = fs::temp_directory_path() / "agentxx_test_plugin_paths";
+        const auto      base = fs::temp_directory_path() / "agentxx_test_plugin_paths";
         std::error_code ec;
         fs::remove_all(base, ec);
         const std::string dataDir = base.generic_string();
@@ -666,7 +650,7 @@ TestResult testPluginRuntime() {
     /// 会话取消快照: 登记/查询可跨线程进行 (插件线程问 `is_canceled` 不等 IO)
     {
         SessionCancelSnapshot snapshot;
-        auto                 token = std::make_shared<neograph::graph::CancelToken>();
+        auto                  token = std::make_shared<neograph::graph::CancelToken>();
         snapshot.bind("sess-a", token);
         XX_TEST_EXPECT_EQ(snapshot.size(), size_t{1});
         XX_TEST_EXPECT_FALSE(snapshot.canceled("sess-a"));
@@ -1090,7 +1074,9 @@ TestResult testPluginRuntime() {
 
         // 2) 关闭中的完成回调照常投递一次, lease 归零 (卸载得以继续)
         notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return f.provider->lifetime->leaseCount() == 0; }));
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
+            return f.provider->lifetime->leaseCount() == 0;
+        }));
 
         // 3) 关闭中的 sleep: 受理且回调到达 (清理里的延时重试)
         int   calls = 0;
@@ -1104,7 +1090,9 @@ TestResult testPluginRuntime() {
             &error
         );
         XX_TEST_EXPECT_TRUE(timer != nullptr);
-        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return calls == 1; }));
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
+            return calls == 1;
+        }));
         hostMemoryFree(error.data);
         error = {};
 
@@ -1113,6 +1101,7 @@ TestResult testPluginRuntime() {
             std::atomic<int> work{0};
             std::atomic<int> done{0};
         } offState;
+
         f.manager->offload(
             f.provider.get(),
             +[](void* ud, const PluginxxCancelToken*, PluginxxString*) -> void* {
@@ -1144,9 +1133,9 @@ TestResult testPluginRuntime() {
         };
         const auto* tasks
             = static_cast<const PluginxxTasksIface*>(ifaceOf(hostView, PLUGINXX_IFACE_TASKS));
-        const auto* scheduler = static_cast<const PluginxxSchedulerIface*>(
-            ifaceOf(hostView, PLUGINXX_IFACE_SCHEDULER)
-        );
+        const auto* scheduler
+            = static_cast<const PluginxxSchedulerIface*>(ifaceOf(hostView, PLUGINXX_IFACE_SCHEDULER)
+            );
         XX_TEST_EXPECT_TRUE(tasks != nullptr && tasks->register_task != nullptr);
         XX_TEST_EXPECT_TRUE(scheduler != nullptr && scheduler->sleep != nullptr);
         if (tasks && tasks->register_task && scheduler && scheduler->sleep) {
@@ -1177,7 +1166,9 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_TRUE(entryTimer != nullptr);
             hostMemoryFree(entryError.data);
             entryError = {};
-            XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return entryCalls == 1; }));
+            XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
+                return entryCalls == 1;
+            }));
             XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
                 return f.provider->lifetime->leaseCount() == 0;
             }));
@@ -1236,7 +1227,9 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{1000});
         XX_TEST_EXPECT_EQ(calls, 0);
         // 1000 个 0ms 定时器由独立定时器线程到期投递: 高负载下会晚到, 有界等到全到齐
-        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return calls == 1000; }));
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
+            return calls == 1000;
+        }));
         XX_TEST_EXPECT_EQ(calls, 1000);
         XX_TEST_EXPECT_TRUE(f.provider->sleepTimers.empty());
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
@@ -1245,7 +1238,9 @@ TestResult testPluginRuntime() {
         cancelPluginOperation(timer);
         f.provider->lifetime->requestClose();
         // 取消后的完成包同经定时器线程, 有界等
-        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return calls == 1001; }));
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
+            return calls == 1001;
+        }));
         XX_TEST_EXPECT_EQ(calls, 1001);
         XX_TEST_EXPECT_TRUE(f.provider->sleepTimers.empty());
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
@@ -1256,7 +1251,7 @@ TestResult testPluginRuntime() {
     /// 代码”的能力, 这里改用 `sleep` 验证同一套投递协议。)
     {
         RuntimeFixture f;
-        int            calls = 0;
+        int            calls    = 0;
         auto           callback = +[](void* ud, int32_t, const PluginxxStringView*) {
             ++*static_cast<int*>(ud);
         };
@@ -1270,7 +1265,9 @@ TestResult testPluginRuntime() {
         f.manager.reset();
         f.provider->lifetime->requestClose();
         // 管理器已释放, 完成包仍会执行: 有界等它到达
-        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return calls == 1; }));
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
+            return calls == 1;
+        }));
         XX_TEST_EXPECT_EQ(calls, 1);
         XX_TEST_EXPECT_TRUE(f.provider->sleepTimers.empty());
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
@@ -1319,7 +1316,7 @@ TestResult testPluginRuntime() {
     /// 没有主 agent 上下文时 offload 也走注入的池, 工作体照常执行。
     {
         RuntimeFixture f;
-        auto            pool = std::make_shared<asio::thread_pool>(2);
+        auto           pool = std::make_shared<asio::thread_pool>(2);
         f.manager->setWorkerThreadPool(pool);
 
         struct State {
@@ -1542,7 +1539,7 @@ TestResult testPluginRuntime() {
                 auto& state = *static_cast<State*>(ud);
                 state.done  = status == PLUGINXX_OPERATOR_OK && value == ud;
                 state.onIo  = state.fixture->manager->isIoThread()
-                              || state.fixture->manager->isPluginThread();
+                             || state.fixture->manager->isPluginThread();
                 // 派发本身也持一份 lease (op 一份 + 派发项一份), 因此这里只判 "非零"
                 state.protectedDuringCallback
                     = state.fixture->provider->lifetime->leaseCount() != 0;
@@ -1614,14 +1611,16 @@ TestResult testPluginRuntime() {
     /// 必须导出 start/stop, 但关闭守卫不能因此变成无条件泄漏。
     {
         RuntimeFixture f;
-        gLifecycleDestroys        = 0;
-        f.provider->pluginCreated = true;
+        gLifecycleDestroys           = 0;
+        f.provider->pluginCreated    = true;
         f.provider->lifecycleDestroy = &fakeDestroyHook;
-        f.provider->pluginCtx     = &gLifecycleDestroys;
+        f.provider->pluginCtx        = &gLifecycleDestroys;
 
         f.manager->shutdownAll();
         // destroy 在插件执行线程 / 工作池上跑: 有界等待, 不假设当步完成
-        XX_TEST_EXPECT_TRUE(f.drainUntil([&] { return gLifecycleDestroys == 1; }));
+        XX_TEST_EXPECT_TRUE(f.drainUntil([&] {
+            return gLifecycleDestroys == 1;
+        }));
         XX_TEST_EXPECT_EQ(gLifecycleDestroys, 1);
         XX_TEST_EXPECT_TRUE(f.manager->find("provider") == nullptr);
         XX_TEST_EXPECT_FALSE(f.manager->hasPendingClose());
@@ -1961,16 +1960,16 @@ TestResult testPluginRuntime() {
         // 图类型注册需要主程序 graphRegistry (AgentContext 加载)。
         auto           ctx = std::make_shared<agentxx::agent::AgentContext>();
         RuntimeFixture f(ctx);
-        ctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
-        auto inst          = f.instance("lifecycle_plugin", 7);
-        auto probe         = std::make_shared<LifecycleProbe>();
-        probe->host        = inst->hostView();
-        probe->tools       = AgentIfaces::query(probe->host).tools;
-        probe->graph       = AgentIfaces::query(probe->host).graph;
-        probe->cancel      = AgentIfaces::query(probe->host).cancel;
-        probe->scheduler   = AgentIfaces::query(probe->host).scheduler;
-        probe->spec        = fakeTool(nullptr, false);
-        probe->agentId     = f.manager->agentId();
+        ctx->graphRegistry     = std::make_shared<neograph::graph::GraphRegistry>();
+        auto inst              = f.instance("lifecycle_plugin", 7);
+        auto probe             = std::make_shared<LifecycleProbe>();
+        probe->host            = inst->hostView();
+        probe->tools           = AgentIfaces::query(probe->host).tools;
+        probe->graph           = AgentIfaces::query(probe->host).graph;
+        probe->cancel          = AgentIfaces::query(probe->host).cancel;
+        probe->scheduler       = AgentIfaces::query(probe->host).scheduler;
+        probe->spec            = fakeTool(nullptr, false);
+        probe->agentId         = f.manager->agentId();
         probe->ref.struct_size = sizeof(PluginxxScopeRef);
         probe->ref.id          = PluginStringView::from(probe->agentId);
         probe->ref.seq         = f.manager->mountSequence();
@@ -1992,11 +1991,10 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
 
         // ---- disable: 主程序侧摘除 + stop 事务已走完 (disable 返回即已落定) ----
-        const bool disabledOk
-            = agentxx::test::runPluginCoroutine(
-                f.manager->ioExecutor(),
-                f.manager->disable("lifecycle_plugin")
-            );
+        const bool disabledOk = agentxx::test::runPluginCoroutine(
+            f.manager->ioExecutor(),
+            f.manager->disable("lifecycle_plugin")
+        );
         XX_TEST_EXPECT_TRUE(disabledOk);
         XX_TEST_EXPECT_FALSE(inst->enabled);
         XX_TEST_EXPECT_TRUE(inst->userDisabled);
@@ -2012,11 +2010,10 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(inst->allToolNames().empty()); // 记录已清空，等待 start 重新声明
 
         // ---- enable: create 事务重新注册 ----
-        const bool enabledOk
-            = agentxx::test::runPluginCoroutine(
-                f.manager->ioExecutor(),
-                f.manager->enable("lifecycle_plugin")
-            );
+        const bool enabledOk = agentxx::test::runPluginCoroutine(
+            f.manager->ioExecutor(),
+            f.manager->enable("lifecycle_plugin")
+        );
         XX_TEST_EXPECT_TRUE(enabledOk);
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_FALSE(inst->userDisabled);
@@ -2031,15 +2028,21 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(inst->allToolNames().size(), size_t{1});
         XX_TEST_EXPECT_EQ(inst->allGraphSlots().size(), size_t{1});
         auto graphSlot = inst->allGraphSlots().empty() ? std::shared_ptr<GraphTypeSlot>{}
-                                                      : inst->allGraphSlots().front();
+                                                       : inst->allGraphSlots().front();
         XX_TEST_EXPECT_TRUE(graphSlot != nullptr);
         XX_TEST_EXPECT_TRUE(graphSlot && graphSlot->snapshot().active);
 
         // ---- 重复 enable/disable 不累积重复项 ----
         for (int i = 0; i < 3; ++i) {
-            agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->disable("lifecycle_plugin"));
+            agentxx::test::runPluginCoroutine(
+                f.manager->ioExecutor(),
+                f.manager->disable("lifecycle_plugin")
+            );
             f.drainAll();
-            agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("lifecycle_plugin"));
+            agentxx::test::runPluginCoroutine(
+                f.manager->ioExecutor(),
+                f.manager->enable("lifecycle_plugin")
+            );
             f.drainAll();
         }
         XX_TEST_EXPECT_EQ(probe->starts, baseStarts + 4);
@@ -2048,8 +2051,14 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(inst->allToolObjects().size(), size_t{1});
 
         // ---- 禁用后立刻启用（stop 事务仍在队列）: 先 stop 再 start ----
-        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->disable("lifecycle_plugin"));
-        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("lifecycle_plugin"));
+        agentxx::test::runPluginCoroutine(
+            f.manager->ioExecutor(),
+            f.manager->disable("lifecycle_plugin")
+        );
+        agentxx::test::runPluginCoroutine(
+            f.manager->ioExecutor(),
+            f.manager->enable("lifecycle_plugin")
+        );
         f.drainAll();
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_FALSE(inst->lifecycleStopped);
@@ -2059,12 +2068,18 @@ TestResult testPluginRuntime() {
 
         // ---- start 失败: 回到 Disabled、不留部分注册；再次启用可恢复 ----
         probe->failStart = true;
-        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->disable("lifecycle_plugin"));
+        agentxx::test::runPluginCoroutine(
+            f.manager->ioExecutor(),
+            f.manager->disable("lifecycle_plugin")
+        );
         f.drainAll();
         const int startsBeforeFail      = probe->starts;
         probe->partialRegistration      = false;
         probe->partialGraphRegistration = false;
-        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("lifecycle_plugin"));
+        agentxx::test::runPluginCoroutine(
+            f.manager->ioExecutor(),
+            f.manager->enable("lifecycle_plugin")
+        );
         f.drainAll();
         XX_TEST_EXPECT_EQ(probe->starts, startsBeforeFail + 1);
         XX_TEST_EXPECT_TRUE(probe->partialRegistration);      // start 确实留下过部分注册
@@ -2080,7 +2095,10 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(graphSlot && !graphSlot->snapshot().active); // 槽位失效
 
         probe->failStart = false;
-        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("lifecycle_plugin"));
+        agentxx::test::runPluginCoroutine(
+            f.manager->ioExecutor(),
+            f.manager->enable("lifecycle_plugin")
+        );
         f.drainAll();
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_EQ(
@@ -2093,7 +2111,10 @@ TestResult testPluginRuntime() {
 
         // ---- 关闭流程中的实例不接受启用状态变化 ----
         inst->lifetime->requestClose();
-        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->disable("lifecycle_plugin"));
+        agentxx::test::runPluginCoroutine(
+            f.manager->ioExecutor(),
+            f.manager->disable("lifecycle_plugin")
+        );
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_EQ(
             static_cast<int>(inst->lifetime->state()),
@@ -2167,7 +2188,10 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(side->enabled);
         XX_TEST_EXPECT_FALSE(top->enabled); // 用户显式禁用: 级联不恢复
         XX_TEST_EXPECT_TRUE(top->userDisabled);
-        agentxx::test::runPluginCoroutine(f.manager->ioExecutor(), f.manager->enable("top")); // 用户显式启用
+        agentxx::test::runPluginCoroutine(
+            f.manager->ioExecutor(),
+            f.manager->enable("top")
+        ); // 用户显式启用
         XX_TEST_EXPECT_TRUE(top->enabled);
         XX_TEST_EXPECT_FALSE(top->userDisabled);
     }
@@ -2198,13 +2222,13 @@ TestResult testPluginRuntime() {
 
         // promise/spec 由 shared_ptr 持有：请求若始终未被执行，线程可在不访问
         // 悬垂栈对象的前提下结束（正常情况下会走 join）。
-        auto        spec      = std::make_shared<AgentxxPluginToolSpec>(fakeTool(nullptr, false));
-        auto        entered   = std::make_shared<std::promise<void>>();
-        auto        rcPromise = std::make_shared<std::promise<int>>();
-        auto        rcFuture  = rcPromise->get_future();
+        auto spec      = std::make_shared<AgentxxPluginToolSpec>(fakeTool(nullptr, false));
+        auto entered   = std::make_shared<std::promise<void>>();
+        auto rcPromise = std::make_shared<std::promise<int>>();
+        auto rcFuture  = rcPromise->get_future();
         // 挂载引用由值捕获带入工作线程 (raw() 指向自身, 因此不能捕指针)
         const agentxx::plugin::ScopeRef ref{"root", 0};
-        std::thread pluginThread([host, ifaces, spec, entered, rcPromise, ref] {
+        std::thread                     pluginThread([host, ifaces, spec, entered, rcPromise, ref] {
             entered->set_value();
             // 表成员是异步契约: 工作线程上用阻塞形态等结果 (入口拒绝或受理后失败)
             auto res = agentxx::test::tableOpWait(
@@ -2212,14 +2236,7 @@ TestResult testPluginRuntime() {
                 ifaces.cancel,
                 ifaces.scheduler,
                 [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                    return ifaces.tools->register_tool(
-                        host,
-                        ref.ptr(),
-                        spec.get(),
-                        cb,
-                        ud,
-                        err
-                    );
+                    return ifaces.tools->register_tool(host, ref.ptr(), spec.get(), cb, ud, err);
                 }
             );
             rcPromise->set_value(res.ok() ? 0 : -1);
@@ -2623,37 +2640,28 @@ TestResult testPluginRuntime() {
             if (target == nullptr) {
                 return false;
             }
-            return broadcastOp(
-                       [&](PluginxxOperatorCallback cb, void* cbUd, PluginxxString* err) {
-                           return ifaces.broadcasts->unsubscribe_broadcast(
-                               host,
-                               target,
-                               cb,
-                               cbUd,
-                               err
-                           );
-                       }
-                   )
-                .ok();
+            return broadcastOp([&](PluginxxOperatorCallback cb, void* cbUd, PluginxxString* err) {
+                       return ifaces.broadcasts->unsubscribe_broadcast(host, target, cb, cbUd, err);
+                   }
+            ).ok();
         };
         auto subscribeOf = [&](const PluginxxStringView* topic) {
-            auto op = broadcastOp(
-                [&](PluginxxOperatorCallback cb, void* cbUd, PluginxxString* err) {
-                    return ifaces.broadcasts->subscribe_broadcast(
-                        host,
-                        nullptr, ///< 主程序总线 (与 agent 无关的进程级事件)
-                        topic,
-                        +[](const PluginxxStringView*, void* ud2) {
-                            ++*static_cast<int*>(ud2);
-                        },
-                        &handlerCalls,
-                        nullptr,
-                        cb,
-                        cbUd,
-                        err
-                    );
-                }
-            );
+            auto op
+                = broadcastOp([&](PluginxxOperatorCallback cb, void* cbUd, PluginxxString* err) {
+                      return ifaces.broadcasts->subscribe_broadcast(
+                          host,
+                          nullptr, ///< 主程序总线 (与 agent 无关的进程级事件)
+                          topic,
+                          +[](const PluginxxStringView*, void* ud2) {
+                              ++*static_cast<int*>(ud2);
+                          },
+                          &handlerCalls,
+                          nullptr,
+                          cb,
+                          cbUd,
+                          err
+                      );
+                  });
             // 订阅句柄以十进制文本放在结果正文里交回
             return op.ok() ? pluginxx::pluginxxSubscriptionFromText(op.text()) : nullptr;
         };
@@ -2736,7 +2744,7 @@ TestResult testPluginRuntime() {
             }
 
             struct DriveProbe {
-                std::atomic<int>  calls{0};
+                std::atomic<int> calls{0};
                 /// 回调实际跑在申请线程上 (只在"内联执行"时才是 true)
                 std::atomic<bool> onCaller{false};
                 /// 闸门驱动用: 进入点 / 放行
@@ -2744,6 +2752,7 @@ TestResult testPluginRuntime() {
                 std::atomic<bool> release{false};
                 std::thread::id   caller{};
             } probe;
+
             probe.caller = std::this_thread::get_id();
 
             // 驱动回调必须是无捕获函数 (C ABI 函数指针), 经 user_data 取上下文。
@@ -2796,14 +2805,14 @@ TestResult testPluginRuntime() {
             //    时序要确定: 先让插件线程卡在一张闸门驱动上, 取消的这张就必定还没
             //    轮到 (有插件线程时"申请完立刻取消"是竞态, 不能当作未开始)
             DriveProbe blocker;
-            blocker.caller = std::this_thread::get_id();
+            blocker.caller       = std::this_thread::get_id();
             PluginxxDriver* hold = runtime->request_driver(host, gatedDriveFn, &blocker, &err);
             XX_TEST_EXPECT_TRUE(hold != nullptr);
             for (int i = 0; i < 5000 && !blocker.entered.load(std::memory_order_acquire); ++i) {
                 std::this_thread::sleep_for(std::chrono::microseconds(200));
             }
             XX_TEST_EXPECT_TRUE(blocker.entered.load());
-            const int callsBeforeCancel = probe.calls.load();
+            const int       callsBeforeCancel = probe.calls.load();
             PluginxxDriver* Canceled = runtime->request_driver(host, driveFn, &probe, &err);
             XX_TEST_EXPECT_TRUE(Canceled != nullptr);
             runtime->cancel_driver(Canceled);
@@ -2814,7 +2823,7 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_EQ(f.provider->activeDriverCount(), size_t{0});
             XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
             runtime->cancel_driver(Canceled); // 幂等
-            runtime->cancel_driver(nullptr);   // 空指针安全
+            runtime->cancel_driver(nullptr);  // 空指针安全
 
             // 5) 迟到/无效句柄取消: 按地址查表未命中, 安全忽略 (不解引用)
             XX_TEST_EXPECT_FALSE(
@@ -2918,19 +2927,19 @@ TestResult testPluginRuntime() {
     /// LLM 消息 id 在 replace 后仍能按 id 定位、流式输出中拒绝 set_view_messages。
     {
         RuntimeFixture f;
-        const auto     root = (std::filesystem::temp_directory_path() / "agentxx-test-session-msg")
-                              .string();
+        const auto     root
+            = (std::filesystem::temp_directory_path() / "agentxx-test-session-msg").string();
         std::error_code ec;
         std::filesystem::remove_all(utilxx_base::utf8ToPath(root), ec);
-        auto store = std::make_shared<agentxx::agent::SessionStore>(root);
+        auto store                          = std::make_shared<agentxx::agent::SessionStore>(root);
         f.ctx->sessions                     = std::make_shared<agentxx::agent::SessionsManager>();
-        f.ctx->sessions->sessionStore        = store;
+        f.ctx->sessions->sessionStore       = store;
         f.ctx->sessions->viewWindowMessages = 0; ///< 0 = 不淘汰, 全量驻留 (方便断言)
-        auto session = f.ctx->sessions->getOrCreate("msg-session");
+        auto session                        = f.ctx->sessions->getOrCreate("msg-session");
         XX_TEST_EXPECT_TRUE(session != nullptr);
 
-        const auto* host    = f.provider->hostView();
-        const auto  ifaces  = plugin::AgentIfaces::query(host);
+        const auto* host   = f.provider->hostView();
+        const auto  ifaces = plugin::AgentIfaces::query(host);
         XX_TEST_EXPECT_TRUE(ifaces.session != nullptr);
         if (!ifaces.session) {
             return result;
@@ -2971,15 +2980,7 @@ TestResult testPluginRuntime() {
             auto sid  = makeSv("msg-session");
             auto junk = makeSv("{not json");
             res       = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ifaces.session->append_view_messages(
-                    host,
-                    &ref,
-                    &sid,
-                    &junk,
-                    cb,
-                    ud,
-                    err
-                );
+                return ifaces.session->append_view_messages(host, &ref, &sid, &junk, cb, ud, err);
             });
             XX_TEST_EXPECT_FALSE(res.ok());
             XX_TEST_EXPECT_TRUE(res.text().find("not valid JSON") != std::string_view::npos);
@@ -2989,13 +2990,13 @@ TestResult testPluginRuntime() {
         std::string userRowId;
         std::string assistantRowId;
         {
-            auto sid = makeSv("msg-session");
+            auto sid  = makeSv("msg-session");
             auto body = makeSv(R"([
                 {"role":"user","text":"hello from plugin","startTimeMs":1760000000000},
                 {"role":"assistant","text":"hi","startTimeMs":1760000001000},
                 {"role":"assistant","text":"   "}
             ])");
-            auto res = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            auto res  = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return ifaces.session->append_view_messages(host, &ref, &sid, &body, cb, ud, err);
             });
             XX_TEST_EXPECT_TRUE(res.ok());
@@ -3013,17 +3014,9 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_TRUE(userRowId.starts_with("msg_"));
             XX_TEST_EXPECT_EQ(session->viewMessageCount(), size_t{2});
 
-            auto countRes
-                = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                      return ifaces.session->count_view_messages(
-                          host,
-                          &ref,
-                          &sid,
-                          cb,
-                          ud,
-                          err
-                      );
-                  });
+            auto countRes = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->count_view_messages(host, &ref, &sid, cb, ud, err);
+            });
             XX_TEST_EXPECT_TRUE(countRes.ok());
             XX_TEST_EXPECT_EQ(std::string{countRes.text()}, std::string{"2"});
 
@@ -3035,7 +3028,10 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_EQ(rows.size(), size_t{2});
             if (rows.size() == 2) {
                 XX_TEST_EXPECT_EQ(rows[0].value("id", std::string{}), userRowId);
-                XX_TEST_EXPECT_EQ(rows[0].value("text", std::string{}), std::string{"hello from plugin"});
+                XX_TEST_EXPECT_EQ(
+                    rows[0].value("text", std::string{}),
+                    std::string{"hello from plugin"}
+                );
                 XX_TEST_EXPECT_EQ(rows[0].value("role", std::string{}), std::string{"user"});
             }
         }
@@ -3049,7 +3045,7 @@ TestResult testPluginRuntime() {
                 userRowId
             );
             auto body = makeSv(bodyText);
-            auto res = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+            auto res  = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return ifaces.session->update_view_messages(host, &ref, &sid, &body, cb, ud, err);
             });
             XX_TEST_EXPECT_TRUE(res.ok());
@@ -3107,10 +3103,9 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_EQ(ids.size(), size_t{2});
             XX_TEST_EXPECT_TRUE(ids[0].get<std::string>().starts_with("llm_"));
 
-            auto countRes
-                = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                      return ifaces.session->count_llm_messages(host, &ref, &sid, cb, ud, err);
-                  });
+            auto countRes = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session->count_llm_messages(host, &ref, &sid, cb, ud, err);
+            });
             XX_TEST_EXPECT_TRUE(countRes.ok());
             XX_TEST_EXPECT_EQ(std::string{countRes.text()}, std::string{"2"});
             XX_TEST_EXPECT_EQ(session->messagesCount(), size_t{2});
@@ -3124,7 +3119,10 @@ TestResult testPluginRuntime() {
             if (rows.size() == 2) {
                 XX_TEST_EXPECT_TRUE(rows[0].contains("id"));
                 XX_TEST_EXPECT_EQ(rows[0].value("id", std::string{}), ids[0].get<std::string>());
-                XX_TEST_EXPECT_EQ(rows[0].value("content", std::string{}), std::string{"you are a test"});
+                XX_TEST_EXPECT_EQ(
+                    rows[0].value("content", std::string{}),
+                    std::string{"you are a test"}
+                );
             }
 
             // 按 id 改第一条 (改成 user) + 一个已不存在的 id
@@ -3133,16 +3131,9 @@ TestResult testPluginRuntime() {
                 ids[0].get<std::string>()
             );
             auto updateBody = makeSv(updateText);
-            auto updateRes = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ifaces.session->update_llm_messages(
-                    host,
-                    &ref,
-                    &sid,
-                    &updateBody,
-                    cb,
-                    ud,
-                    err
-                );
+            auto updateRes  = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session
+                    ->update_llm_messages(host, &ref, &sid, &updateBody, cb, ud, err);
             });
             XX_TEST_EXPECT_TRUE(updateRes.ok());
             auto updated = parse(updateRes);
@@ -3169,16 +3160,9 @@ TestResult testPluginRuntime() {
                 ids[0].get<std::string>()
             );
             auto staleBody = makeSv(staleText);
-            auto staleRes = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
-                return ifaces.session->update_llm_messages(
-                    host,
-                    &ref,
-                    &sid,
-                    &staleBody,
-                    cb,
-                    ud,
-                    err
-                );
+            auto staleRes  = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return ifaces.session
+                    ->update_llm_messages(host, &ref, &sid, &staleBody, cb, ud, err);
             });
             XX_TEST_EXPECT_TRUE(staleRes.ok());
             auto staleOut = parse(staleRes);
@@ -3189,12 +3173,10 @@ TestResult testPluginRuntime() {
         // ---- 边界: 流式输出中拒绝 set_view_messages ----
         {
             auto sid = makeSv("msg-session");
-            session->beginStreamingView(
-                agentxx::agent::ViewMessage::makeText(
-                    agentxx::agent::ViewMessage::Role::Assistant,
-                    ""
-                )
-            );
+            session->beginStreamingView(agentxx::agent::ViewMessage::makeText(
+                agentxx::agent::ViewMessage::Role::Assistant,
+                ""
+            ));
             auto body = makeSv(R"([{"role":"user","text":"x"}])");
             auto res  = call([&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
                 return ifaces.session->set_view_messages(host, &ref, &sid, &body, cb, ud, err);

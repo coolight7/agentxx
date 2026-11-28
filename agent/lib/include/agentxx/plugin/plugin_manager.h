@@ -2,15 +2,15 @@
 #define AGENTXX_PLUGIN_PLUGIN_MANAGER_H
 
 #include "agentxx/agent/async_work.h"
-#include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/agent_plugin_kit.h"
+#include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/net_service.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
 #include "agentxx/plugin/plugin_mount.h"
 #include "agentxx/plugin/runtime_state.h"
+#include "agentxx/plugin/session_cancel_snapshot.h"
 #include "agentxx/plugin/tool_registry.h"
-#include "agentxx/plugins/session_cancel_snapshot.h"
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
@@ -35,9 +35,11 @@ class AgentContext;
 class AgentHost;
 class BaseAgent;
 } // namespace agent
+
 namespace events {
 class EventBus;
 } // namespace events
+
 namespace plugin {
 
 class PluginInstance;
@@ -142,7 +144,8 @@ public:
 
     neograph::ChatTool get_definition() const override;
 
-    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json& arguments) override;
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json& arguments
+    ) override;
 
     std::shared_ptr<PluginInstance> instance() const {
         return instance_.lock();
@@ -413,12 +416,9 @@ public:
     );
 
     /// 让运行器加载 / 卸载一个实例的脚本 (载荷与回答见 `pluginxx/api/kinds.h`)
-    asio::awaitable<bool> startInterpretedInstance(
-        const std::shared_ptr<PluginInstance>& inst,
-        std::string&                           reason
-    );
     asio::awaitable<bool>
-        stopInterpretedInstance(const std::shared_ptr<PluginInstance>& inst);
+        startInterpretedInstance(const std::shared_ptr<PluginInstance>& inst, std::string& reason);
+    asio::awaitable<bool> stopInterpretedInstance(const std::shared_ptr<PluginInstance>& inst);
 
     /// 调一次运行器插件的能力, 等它的回答
     /// - `caller` 作为调用方实例 (运行器据此把脚本注册挂到目标插件上);
@@ -507,10 +507,10 @@ public:
 
     /// 确保频道已声明 (幂等; 已声明时保留原声明)
     void ensureBroadcast(
-        std::string_view    id,
-        pluginxx::BroadcastCache_e cache          = pluginxx::BroadcastCache_e::Latest,
-        bool                anyonePublish  = false,
-        bool                pushOnSubscribe = false
+        std::string_view           id,
+        pluginxx::BroadcastCache_e cache           = pluginxx::BroadcastCache_e::Latest,
+        bool                       anyonePublish   = false,
+        bool                       pushOnSubscribe = false
     );
 
     /// 声明内置广播频道 (构造时调一次)
@@ -564,11 +564,8 @@ public:
     /// - 实现行 = 框架能力表里的行 (`register_capability`, 按 `scope` 过滤, 按优先级排);
     /// - 返回 `std::nullopt` = 没人给出结果 (没实现行 / 全部回了空 / 失败);
     /// - 返回值是第一个给出非空结果的行那价 JSON (框架已经做好排序与合并)。
-    asio::awaitable<std::optional<std::string>> emitPoint(
-        std::string_view agentId,
-        std::string_view pointId,
-        std::string_view payloadJson
-    );
+    asio::awaitable<std::optional<std::string>>
+        emitPoint(std::string_view agentId, std::string_view pointId, std::string_view payloadJson);
 
     // =====================================================================
     // 网络能力 (`<应用名>.net` 表; 实现在通用网络服务 utilxx::NetHub)
@@ -639,12 +636,12 @@ public:
     /// (跨端频道由另一端声明, 本进程看不到) —— 否则这种订阅会被拒。
     /// `plugin.*` 频道不代劳: 声明属主是插件自己。
     PluginxxSubscription* subscribeBroadcast(
-        PluginInstance*          inst,
-        const PluginxxScopeRef*  scope,
-        std::string_view         broadcastId,
+        PluginInstance*         inst,
+        const PluginxxScopeRef* scope,
+        std::string_view        broadcastId,
         void(PLUGINXX_CALL* handler)(const PluginxxStringView* payloadJson, void* ud),
-        void*                    ud,
-        std::string_view         optionsJson  = {},
+        void*            ud,
+        std::string_view optionsJson                                               = {},
         void(PLUGINXX_CALL* onEnd)(const PluginxxStringView* reasonJson, void* ud) = nullptr
     );
     /// 阻塞工作委托到工作线程池 (插件 offload: 阻塞工具 / 插件自己的耗时工作)
@@ -692,7 +689,8 @@ public:
     ///
     /// - 实例已解析过就直接返回缓存值 (见 [PluginInstance::dataDir])
     /// - `data_dir` 没配 (不落盘) 或建目录失败时返回空串, 插件据此降级
-    /// - 目录规范见 [agentxx/plugin/plugin_paths.h](/agent/lib/include/agentxx/plugin/plugin_paths.h)
+    /// - 目录规范见
+    /// [agentxx/plugin/plugin_paths.h](/agent/lib/include/agentxx/plugin/plugin_paths.h)
     std::string dataDirOfPlugin(PluginInstance& inst);
 
 protected:
@@ -755,24 +753,24 @@ protected:
     void onInstanceEnabledChanged(PluginInstance& inst, bool enabled) override;
 
     /// 禁用事务开始后: 从全部挂载上拆掉该实例 (调插件 unmount, 释放 per-agent 状态)
-    asio::awaitable<void>
-        onInstanceDisabledAsync(const std::shared_ptr<PluginInstance>& inst) override;
+    asio::awaitable<void> onInstanceDisabledAsync(const std::shared_ptr<PluginInstance>& inst
+    ) override;
 
     /// 卸载事务开始时: 同样从全部挂载上拆掉该实例
     /// - 在插件 stop 与 `releaseInstanceResources` 之前, 插件自管的根此时还在,
     ///   实例也还没进入 Closed, 插件 unmount 回调能正常执行
-    asio::awaitable<void>
-        onInstanceUnloadingAsync(const std::shared_ptr<PluginInstance>& inst) override;
+    asio::awaitable<void> onInstanceUnloadingAsync(const std::shared_ptr<PluginInstance>& inst
+    ) override;
 
     /// 启用事务完成后: 重新挂到全部挂载 (agent 级注册都在插件的 mount 回调里)
-    asio::awaitable<void>
-        onInstanceEnabledAsync(const std::shared_ptr<PluginInstance>& inst) override;
+    asio::awaitable<void> onInstanceEnabledAsync(const std::shared_ptr<PluginInstance>& inst
+    ) override;
 
 private:
 
     /// 把实例从**全部挂载**上拆下来 (禁用 / 卸载共用)
-    asio::awaitable<void>
-        detachInstanceFromMountsAsync(const std::shared_ptr<PluginInstance>& inst);
+    asio::awaitable<void> detachInstanceFromMountsAsync(const std::shared_ptr<PluginInstance>& inst
+    );
 
     // 运行时入口由 vtable 层调用 (plugin_manager_vtable.cpp 里的 xx_runtime_*):
     // 它们是自由函数, 因此这一段开放为 public, 但只对本文件所在库有意义 ——
@@ -882,8 +880,7 @@ public:
     };
 
     /// 提交一个后台任务 (归属记为 `plugin:<实例名>`)
-    AsyncSubmitOutcome
-        runtimeSubmitAsyncWork(PluginInstance* inst, agent::AsyncWorkSpec work);
+    AsyncSubmitOutcome runtimeSubmitAsyncWork(PluginInstance* inst, agent::AsyncWorkSpec work);
 
     /// 取消一条后台任务 (只能取消本实例提交的)
     int32_t runtimeCancelAsyncWork(PluginInstance* inst, std::string_view asyncId);
@@ -915,7 +912,8 @@ public:
         std::string&                    err
     );
     int32_t runtimeUnregisterTrigger(PluginInstance* inst, int64_t triggerId);
-    int32_t runtimeEmitEvent(PluginInstance* inst, std::string_view topic, std::string_view payload);
+    int32_t
+        runtimeEmitEvent(PluginInstance* inst, std::string_view topic, std::string_view payload);
 
     /// 一条事件到达 (触发器订阅回调; 在主程序事件线程 = IO 线程)
     void onTriggerEvent(int64_t triggerId, std::string_view payload);
@@ -939,10 +937,10 @@ public:
 
     /// 把一个通道事件交给插件 (填 C 结构并调用回调; 通道已关时丢弃)
     void deliverChannelEvent(
-        const RuntimeChannel& channel,
-        int32_t               kind,
-        int64_t               interruptId,
-        std::string_view      text,
+        const RuntimeChannel&    channel,
+        int32_t                  kind,
+        int64_t                  interruptId,
+        std::string_view         text,
         const utilxx_base::Json* payload
     );
 
@@ -962,8 +960,8 @@ private:
     /// 引用对应的 agent 上下文 (空引用 = 主 agent)
     /// - 引用无效 (未知 id / 过期序号) 返回空: 调用方按"拒绝"处理
     /// - 会话/事件这类**落在具体 agent 上**的查询必须用它, 否则多 agent 下会串到主 agent
-    std::shared_ptr<agentxx::agent::AgentContext>
-        agentContextOf(const PluginxxScopeRef* agent) const;
+    std::shared_ptr<agentxx::agent::AgentContext> agentContextOf(const PluginxxScopeRef* agent
+    ) const;
 
     /// 主 agent 上下文 (主程序级配置来源)
     std::weak_ptr<agentxx::agent::AgentContext> primaryAgent_;
@@ -1002,7 +1000,6 @@ private:
     /// 插件执行线程 (构造即起; 插件代码全在这条线上跑)
     pluginxx::PluginExecutorThread pluginThread_;
 
-
     /// 网络服务 (懒创建; 与 [netMutex_] 一起使用)
     std::shared_ptr<PluginNetService> netService_;
     std::mutex                        netMutex_;
@@ -1022,19 +1019,19 @@ private:
 
     /// 一个 agent 的取消快照登记 (序号用于校验过期引用)
     struct CancelSnapshotEntry {
-        uint64_t                                        mountSeq = 0;
+        uint64_t                                                mountSeq = 0;
         std::shared_ptr<agentxx::plugin::SessionCancelSnapshot> snapshot;
     };
 
     /// 按 agent id 登记的快照 (io 线程写, 任意线程读)
     /// - `is_canceled` 由插件线程调用, 不能去查 [mounts_] (那是 io 线程状态)
-    mutable std::mutex cancelSnapshotsMutex_;
+    mutable std::mutex                                   cancelSnapshotsMutex_;
     std::unordered_map<std::string, CancelSnapshotEntry> cancelSnapshots_;
 
     /// 登记/摘除挂载对应的快照 (io 线程)
     void retainCancelSnapshot(
-        std::string_view                                          agentId,
-        uint64_t                                                  mountSeq,
+        std::string_view                                               agentId,
+        uint64_t                                                       mountSeq,
         const std::shared_ptr<agentxx::plugin::SessionCancelSnapshot>& snapshot
     );
     void releaseCancelSnapshot(std::string_view agentId);

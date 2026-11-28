@@ -115,7 +115,7 @@ set_property(CACHE AGENTXX_MIMALLOC_LINK PROPERTY STRINGS STATIC SHARED)
 #   GCC/Clang 用 -fsanitize=undefined -fno-sanitize-recover=undefined
 #   (-fno-sanitize-recover 使命中即 abort, 避免报告被静默吞掉; MSVC 无实现, 忽略)
 #   插桩只作用于本项目编译的代码: 预编译三方库不插桩, 不构成误报源
-# - 插件框架定向探针: 仅对 `lib/src/plugins/*.cpp` 与 `test/plugin/*.cpp`
+# - 插件框架定向探针: 仅对 `lib/src/plugin/*.cpp` 与 `test/plugin/*.cpp`
 #   额外插桩 (MSVC 无实现, 忽略)
 # 关闭后 Debug 构建不再插桩, 编译与链接显著加快 (仍保留调试符号便于断点调试与
 # -fno-omit-frame-pointer 便于性能分析)

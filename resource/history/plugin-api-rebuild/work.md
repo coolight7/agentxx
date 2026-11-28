@@ -274,7 +274,7 @@ agentxx：
 
 ### 已改内容
 
-- 新增 `agent/lib/include/agentxx/plugins/session_cancel_snapshot.h`（header-only）：
+- 新增 `agent/lib/include/agentxx/plugin/session_cancel_snapshot.h`（header-only）：
   `SessionCancelSnapshot` = 一把小表的互斥 + `会话 id → shared_ptr<CancelToken>`；
   `canceled()` 任意线程可调，锁小表后再问令牌自己的原子标志（不碰会话对象）；
   未登记的会话按未取消回答。
