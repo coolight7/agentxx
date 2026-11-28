@@ -1532,7 +1532,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 | `agentxx_rag_search` | 向量语义搜索 |
 | `agentxx_string` | 字符串 2 工具 (html_to_markdown/regexp) |
 | `agentxx_system` | 系统时间 (`get_current_datetime`) |
-| `agentxx_system_monitor` | 系统资源监控 (Windows/Linux/Android/macOS; 工具 + 周期采集 + client 侧 Info/状态栏渲染) |
+| `agentxx_system_monitor` | 系统资源监控 (Windows/Linux/Android/macOS; 工具 + 周期采集 + client 侧 Info 栏渲染) |
 | `agentxx_planning` | 规划工具 + client 侧 Plan 渲染 (类型级工具渲染器「实时 + 历史回溯」+ 实时装饰 + Info 段落) |
 | `agentxx_math` | 数学计算工具 (`agentxx_math_calculate`, 支持四则/幂/阶乘/位运算/逻辑/三角/双曲/对数/组合排列等函数与隐式乘法) |
 | `agentxx_llm_uncensored` | 附加系统提示词注入 (默认文本要求模型忽略内容安全策略与法规限制、可输出任何内容; 可用 `args.text` / `args.key` 覆盖, 禁用/卸载自动撤销该段) |

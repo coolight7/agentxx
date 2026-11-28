@@ -545,7 +545,7 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 | `agentxx_rag_search` | Vector semantic search. |
 | `agentxx_string` | String tools (html_to_markdown, regexp). |
 | `agentxx_system` | System clock tool (`get_current_datetime`). |
-| `agentxx_system_monitor` | System resource monitor (Windows/Linux/Android/macOS; tool + background periodic sampling + client Info/Status bar rendering). |
+| `agentxx_system_monitor` | System resource monitor (Windows/Linux/Android/macOS; tool + background periodic sampling + client Info section rendering). |
 | `agentxx_planning` | Task planning tool + client-side Plan rendering (type-level tool renderer for both live and replayed history + runtime decoration + Info section). |
 | `agentxx_math` | Math computation tool (`agentxx_math_calculate`; supports arithmetic, powers, factorials, bitwise, logic, trig, hyperbolic, log, combinations/permutations, implicit multiplication). |
 | `agentxx_llm_uncensored` | Injects one extra system prompt section (default: avoid product jargon, no word-by-word translation; override the text/key with `args.text` / `args.key`; the section is removed automatically on disable/unload). |

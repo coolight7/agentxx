@@ -453,8 +453,6 @@ AGENTXX_AGENT_PLUGIN_EXPORT(
 struct SysMonClientCtx : public ClientPluginBase {
     /// Info 段落内容 (声明项 + 内容; 卸载时由主程序撤销)
     std::shared_ptr<Content> section;
-    /// 状态栏项内容 (同一份数据, 只画一行)
-    std::shared_ptr<Content> status;
     std::atomic<bool>        usage_enabled{true};
     std::string              last_usage_json;
 };
@@ -531,18 +529,6 @@ static std::string buildUsageInfoDocJson(const SysMonClientCtx&, const UsageStat
     return out.dump();
 }
 
-/// 状态栏项的内容 id (声明项与内容同名; 客户端按这个 id 找画什么)
-constexpr const char* kStatusItemId = "agentxx_system_monitor.status";
-
-/// 一行概览 (状态栏只画一行)
-static std::string buildStatusLine(const UsageStat& st) {
-    std::string line = fmt::format("CPU {:.0f}% · RAM {:.0f}%", st.cpu, st.memPct);
-    if (st.gpuCount > 0) {
-        line += fmt::format(" · GPU {:.0f}%", st.gpuPeakPct);
-    }
-    return line;
-}
-
 static void refreshUsageDisplay(SysMonClientCtx& ctx) {
     if (ctx.last_usage_json.empty()) {
         return;
@@ -561,20 +547,11 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
             ctx.section->publish(off.dump());
         }
     }
-    if (ctx.status) {
-        // 状态栏只画一行: 关掉时给空文本, 不把最后一份数据留在那里
-        utilxx_base::Json block;
-        block["kind"] = "Text";
-        block["text"] = on ? buildStatusLine(st) : std::string{};
-        utilxx_base::Json doc;
-        doc["blocks"] = utilxx_base::Json::array({block});
-        ctx.status->publish(doc.dump());
-    }
 }
 
 /// client 侧注册事务 (协程形态): 无 UI 能力时静默降级
 ///
-/// 三条注册都是提交 + `co_await`: 不阻塞插件执行线程, 失败只记日志 (与原同步版同样
+/// 注册都是提交 + `co_await`: 不阻塞插件执行线程, 失败只记日志 (与原同步版同样
 /// 不影响其他展示能力)。
 static asio::awaitable<void> sysMonClientSetupAsync(SysMonClientCtx& ctx) {
     const PluginxxHost* host = ctx.host;
@@ -598,24 +575,6 @@ static asio::awaitable<void> sysMonClientSetupAsync(SysMonClientCtx& ctx) {
         );
         if (!ctx.section) {
             ctx.log.log(3, "register info section failed (declarative content rejected)");
-        }
-    }
-
-    {
-        // 状态栏项: 与 Info 段落同一份数据, 只画一行
-        utilxx_base::Json data = utilxx_base::Json::object();
-        data["align"]          = 1;
-        data["order"]          = 0;
-        ctx.status             = co_await agentxx::plugin::clientRegisterContentAsync(
-            ctx,
-            agentxx::plugin::ContentSpec{
-                .slot = "status",
-                .id   = kStatusItemId,
-                .data = data,
-            }
-        );
-        if (!ctx.status) {
-            ctx.log.log(3, "register status item failed (declarative content rejected)");
         }
     }
 
