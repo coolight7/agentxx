@@ -1283,6 +1283,14 @@ agent/script/build_plugins.sh --config Release --jobs 8 --list
   "值不值得重试"。不要在错误文本/状态码上加"这类不重试"的判断，也不要按 400/413 与
   `context length` 一类字样推断"上下文超限 → 先压缩再重试"（误判代价是白压一次历史，
   而上下文长度只由默认超过上限 75% 触发的自动压缩处理）。两条警告原文在该文件头部
+- LLM 建连与 SSE 保活的既有约束（2026-11）: `connect_timeout` 是 **DNS+TCP+TLS 的总预算**,
+  默认 30 秒, 必须大于系统自己的 SYN 超时（Windows 21 秒）—— 设得更短时, 丢一个 SYN 就会被
+  `cancel_after` 提前取消, `asio::async_connect` 连解析出的第二个地址都试不到（曾默认 16 秒,
+  弱网下表现为每次尝试固定死在 16.0 秒、报 `timeout: …已中止 I/O 操作 [system:995]`）;
+  SSE 在应用层结束（`[DONE]`/`message_stop`/`response.completed`）后, HTTP 层用后台协程读到
+  chunked 终止块再把连接还回池（`RequestConfig::sseFinishGrace`, 默认 1 秒）, provider 不需要
+  也不应该再调任何"延迟关闭"接口。诊断包 `## http pool` 可看 `reused` 与 DNS 缓存命中。
+  详见 `resource/history/llm-network-stability/`
 - **重试会重新跑一遍压缩判定**: `modelcall` 的重试循环每次都调
   `handle->onModelcallRunFunc` (中断恢复后也从头重新执行), 所以"改写上下文"的代码必须让
   触发依据跟着失效 —— 自动/手动压缩写完会话后要把 `graphDataKey_LLMTokenUsage` 改写成压缩

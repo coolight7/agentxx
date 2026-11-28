@@ -135,7 +135,7 @@
 
 Windows 平台取可获取的部分: 工作集 (RSS) / 私有 (commit) / 峰值 / 句柄数 / 线程数,
 以及 2026-11-28 起补齐的**逐区域常驻分解**与**堆明细** (见 2.2); PSS 是 Linux 专有
-口径 (Windows 没有"按进程分摊共享页"的公开接口), 列为 0。
+定义 (Windows 没有"按进程分摊共享页"的公开接口), 列为 0。
 
 ### 2.2 模块级内存分解 (Linux `smaps` / Windows 逐区域扫描)
 
@@ -1904,7 +1904,7 @@ set AGENTXX_TUI_CTX_MODEL_MAX=30000
 从哪里来。** 完整报告 (含两次运行、对照实验、分阶段表) 见
 [resource/history/tui-longctx-gb/report.md](/resource/history/tui-longctx-gb/report.md)。
 
-### 20.1 口径变更: 采样点改字节, 累计拆成两条路径
+### 20.1 规则变更: 采样点改字节, 累计拆成两条路径
 
 - 采样点单位从 token 改成**累计内容字节** (`AGENTXX_TUI_CTX_POINTS=20M,100M,200M,1G,2G`,
   支持 K/M/G); 采样点名字带 `b` 后缀 (`ctx20mb` / `ctx2gb`), 与旧批次 `ctx2m` (2M token) 区分。

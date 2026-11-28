@@ -5,10 +5,12 @@
 - [x] 现象定位：从会话库 `view_message` 里统计失败样本与耗时
 - [x] 现场网络探测：TCP 建连成功率、完整 HTTPS 请求各阶段耗时、DNS 成功率
 - [x] 根因确认（16 秒默认建连预算 + 单一地址 + SSE 连接不回池 + 错误无阶段）
-- [x] 方案与决策记录（`plan.md`，用户已确认四项取舍）
-- [ ] 实施第 1~4 步（cxx_utilxx 连接层）
-- [ ] 实施第 5~6 步（agentxx 默认值、诊断）
-- [ ] 测试与验证
+- [x] 方案与决策记录（`plan.md`，用户已确认取舍）
+- [x] cxx_utilxx：`RequestConfig.sseFinishGrace`、DNS 缓存与兜底、建连阶段错误、SSE 后台收尾、池空闲窗口 60 秒
+- [x] agentxx：`connectTimeoutSeconds` 默认 30、配置键文档与 schema 重生成、`--dump-diagnostics` 加 `## http pool`
+- [x] 测试：`http`（SSE 收尾复用/零延迟、DNS 缓存）、`llm_error`（阶段化文本）、`config_keys`（默认值）
+- [x] 构建与模块回归（`http` / `network_timeout` / `llm_error` / `config_keys` / provider 三模块 / `plugin_executor` / `boundaries` 等）
+- [ ] 真机弱网复测（需要用户在实际网络下观察 `## http pool` 的 `reused` 与失败文本）
 
 ## 分析阶段做了什么
 
@@ -53,13 +55,52 @@
 
 ## 实施记录
 
-（尚未开始；每完成一步在这里补"改了哪些文件 + 怎么验证"。）
+### 第 1 步：cxx_utilxx 的 HTTP 连接层（子模块提交 `6bdbc4c`）
+
+改动文件：`include/utilxx/http_client.h`、`src/http_client.cpp`。
+
+| 改动 | 说明 |
+|---|---|
+| `RequestConfig::sseFinishGrace`（默认 1 秒） | 放在结构体末尾，现有聚合初始化不受影响；0 = 旧行为 |
+| DNS 缓存（60 秒）+ 上次可用地址兜底 | 缓存放进 `asyncResolveWithDeadline`，`createConnection` / `tcp.cpp` / `ws_client.cpp` 都受益；解析失败或超时用旧结果并记 WARN；新增 `dnsCacheStats` / `clearDnsCache` / `setDnsCacheTtl` |
+| 建连错误带阶段 | `runConnectStage` 包住 connect / TLS 握手：`connect timeout after 30000 ms (stage=connect host=opencode.ai:443 endpoints=2) | <原文>`；超时机制不变（仍是 `cancel_after` + 单一总预算） |
+| 建连日志 | 成功 `XX_LOGD("[http] connected …")`，失败 `XX_LOGW("[http] connect/tls …")` |
+| SSE 收尾后台化 | `SseTailDrain` + `drainSseTail`：应用层结束回调返回 true 后，把连接/解析器/读缓冲交给 `co_spawn(detached)`，最多读 `sseFinishGrace`，读到 chunked 终止块就 `pool.release(..., true)`，否则关闭；RAII 析构保证 `release` 恰好一次 |
+| 解析器用 `shared_ptr` 持有 | beast 的 `parser` 不可移动（编译期实测 `error C2280`），所有权只能共享 |
+| 池空闲窗口 120 → 60 秒 | 落在常见网关 keep-alive 空闲超时（60~75 秒）之前 |
+
+验证：`cmake --build ... --target agentxx_lib_repo` 通过；`http` 329→389 条断言全通过；
+`network_timeout` 49 条全通过（总预算仍受 `connectTimeout` 约束）。
+
+### 第 2 步：agentxx 侧（主仓提交 `9f54b90a`）
+
+| 改动 | 文件 |
+|---|---|
+| `connectTimeoutSeconds` 默认 16 → 30，补注释说明"总预算"与"要覆盖系统 SYN 超时" | `agent/lib/include/agentxx/agent/config.h` |
+| `--dump-diagnostics` 增加 `## http pool`（每个端点的 active/idle/created/reused/peak/queued + DNS 缓存命中） | `agent/lib/src/util/diagnostics.cpp` |
+| 配置键目录与 schema 重生成（默认值 16 → 30） | `docs/zh-cn/design/config-keys.md`、`agent/schema/config-keys.json`、`agent/test/core/test_config_keys.cpp` |
+| SSE 收尾用例（零延迟 / 复用 / 关闭缓存三态） | `agent/test/core/test_http.cpp` |
+| 阶段化错误文本仍判网络类 | `agent/test/core/test_llm_error.cpp` |
+
+验证：`agentxx_test http network_timeout llm_error config_keys` 529 条全通过；
+`config_keys` 更新模式下重生成通过（220 条）。
+
+### 第 3 步：回归
+
+`agentxx_test http network_timeout llm_error config_keys config_validation assembly_snapshot
+openai_provider anthropic_provider fake_provider provider_call_scope event_hub async_tools usage_ledger`
+→ 2244 条断言全通过。
+
+`boundaries` 首次失败是**既有问题**（`docs/zh-cn/design/benchmark.md` 里两处停用词 `口径`），
+顺手改成 `定义` / `规则` 后通过（20 条）。
 
 ## 遗留与注意事项
 
 - `llm.max_retry` 没有 yaml 键，用户无法自己调大重试次数；本次不改，需要时另开任务
   （加键要同步 `config_keys` 用例与生成文档）。
-- 会话库里的重试提示（"LLM API 请求失败 …, N 秒后自动重试"）是瞬态 UI 提示，不落展示历史，
-  所以事后只能看到终态失败；本次加的拨号日志可以补上这一段（走 `enableLogCapture` 的环形缓冲）。
-- VPN 出口本身的稳定性不在应用层可控范围：若同一地址两个 A 记录都长期不可达，
-  换 VPN 节点/协议比改代码更有效。
+- 弱网下"一次尝试最坏 30 秒"是默认值下的代价：两个地址都不通时，一轮 6 次失败约 211 秒。
+  需要更快放弃就按模型把 `connect_timeout` 调到 24 秒左右（仍覆盖一次完整的 SYN 窗口）。
+- SSE 收尾期间连接仍占一个并发名额（最长 1 秒）；LLM 端点默认 5 个名额，感知不到。
+- 连接池空闲窗口 60 秒意味着"间隔超过 1 分钟"的请求仍会重新建连；工具调用之间通常只隔几秒，
+  这条链路上复用的收益最大。
+- VPN 出口本身的稳定性不在应用层可控范围：若两个 A 记录长期都不可达，换节点/协议比改代码更有效。

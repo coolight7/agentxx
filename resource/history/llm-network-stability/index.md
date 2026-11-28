@@ -20,8 +20,9 @@
 ## 状态
 
 - 分析：已完成（会话实测 + 现场网络探测，结论见下）
-- 实施：未开始
-- 验证：未开始
+- 实施：已完成（cxx_utilxx `6bdbc4c` + 主仓 `9f54b90a`，明细见 `work.md`）
+- 验证：模块回归通过（`http` / `network_timeout` / `llm_error` / `config_keys` / 三个 provider /
+  `plugin_executor` / `boundaries` 等共 3000+ 条断言）；真机弱网复测待用户实际使用观察
 
 ## 关键决策（用户确认）
 
@@ -68,3 +69,15 @@
 
 改法与预期：把默认预算调回 30 秒（让 OS 跑完一次完整的 SYN 窗口，并把剩余时间留给第二个地址）、
 给 DNS 加缓存与上次可用地址兜底、SSE 结束后把连接交回池，具体见 `plan.md`，实施与验证见 `work.md`。
+
+落地结果（与计划的偏差都在这里）：
+
+| 改动 | 结果 |
+|---|---|
+| `connect_timeout` 默认 16 → 30 | 已改（`ModelConfig`），配置键目录/schema 已重生成 |
+| 建连错误带阶段 + 建连日志 | 已加（`stage=connect/tls` + `host` + `endpoints` + 耗时）；建连机制不变 |
+| DNS 缓存 60 秒 + 上次可用地址兜底 | 已加，并向诊断包输出命中统计 |
+| SSE 收尾后台读完终止块再还池 | 已加（`sseFinishGrace` 默认 1 秒，`co_spawn(detached)` + RAII 保证恰好归还一次）；provider 零改动 |
+| 连接池空闲窗口 | 120 → 60 秒 |
+| `--dump-diagnostics` | 新增 `## http pool`（active/idle/created/reused/peak/queued + DNS 缓存） |
+| 未做 | 逐地址拨号循环、预热备用连接、`network_retry_seconds`、网卡监听（均按用户决定） |
