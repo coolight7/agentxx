@@ -178,4 +178,7 @@ pluginDataRoot(dataDir))` + NetHub 自拼属主 id), 于是下载落在
   工具行, 当时只跑了 `tui_tool_header`); 该模块现在 945 通过
 - `plugin_broadcast` 有一个**既有的**偶发失败 (约 1/10): 用例在 `publish_broadcast`
   表调用返回后立刻断言订阅回调的计数, 而订阅回调是排队到插件执行线程执行的 ——
-  插件线程慢一点就还没跑。与本次改动无关 (该路径没有被改动), 未处理
+  插件线程慢一点就还没跑。与本次改动无关 (该路径没有被改动), 已单独修掉:
+  `SubCounter` 改成带锁的记录器 (回调在插件线程写、断言在本线程读, 原本是数据竞争),
+  断言前一律 `co_await waitSubValues/waitSubEnds` / “不应发生”的用 `settlePluginCallbacks()`
+  等一小段再断言; 20 次顺序 + 4路×3轮并行 + CPU 占满下 6 次全部通过 (断言数 102 → 106)

@@ -36,6 +36,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -350,11 +351,47 @@ bool unsubscribeOf(PluginInstance* inst, PluginxxSubscription* sub) {
            == 0;
 }
 
-/// 订阅回调计数 (测试自己持有, 用 `ud` 指回来)
+/// 订阅回调记录 (测试自己持有, 用 `ud` 指回来)
+///
+/// **回调跑在插件执行线程上**, 与断言所在的线程不同: 计数与载荷都要加锁读写。
+/// 另外表调用返回**不代表回调已经跑过** —— 发布/订阅类回调是排队到插件执行线程
+/// 执行的, 断言前一律先 `co_await waitSubValues/waitSubEnds` 等它落地。
 struct SubCounter {
-    int  values  = 0;
-    int  ends    = 0;
-    std::string lastPayload;
+    /// 收到一次发布载荷
+    void onValue(const PluginxxStringView* payload) {
+        std::lock_guard lock(mutex_);
+        ++values_;
+        if (payload != nullptr && payload->data != nullptr) {
+            lastPayload_.assign(payload->data, static_cast<size_t>(payload->size));
+        }
+    }
+
+    /// 收到一次流结束
+    void onEnd() {
+        std::lock_guard lock(mutex_);
+        ++ends_;
+    }
+
+    int valueCount() const {
+        std::lock_guard lock(mutex_);
+        return values_;
+    }
+
+    int endCount() const {
+        std::lock_guard lock(mutex_);
+        return ends_;
+    }
+
+    std::string payloadText() const {
+        std::lock_guard lock(mutex_);
+        return lastPayload_;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    int                values_ = 0;
+    int                ends_   = 0;
+    std::string        lastPayload_;
 };
 
 void PLUGINXX_CALL countValue(const PluginxxStringView* payload, void* ud) {
@@ -362,10 +399,7 @@ void PLUGINXX_CALL countValue(const PluginxxStringView* payload, void* ud) {
     if (nullptr == counter) {
         return;
     }
-    ++counter->values;
-    if (payload != nullptr && payload->data != nullptr) {
-        counter->lastPayload.assign(payload->data, static_cast<size_t>(payload->size));
-    }
+    counter->onValue(payload);
 }
 
 void PLUGINXX_CALL countEnd(const PluginxxStringView*, void* ud) {
@@ -373,7 +407,7 @@ void PLUGINXX_CALL countEnd(const PluginxxStringView*, void* ud) {
     if (nullptr == counter) {
         return;
     }
-    ++counter->ends;
+    counter->onEnd();
 }
 
 /// 加载示例插件 (挂载配置可空)
@@ -414,6 +448,28 @@ asio::awaitable<bool> waitFor(std::function<bool()> cond, int timeoutMs = 5000) 
         co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
     }
     co_return cond();
+}
+
+/// 等订阅回调收到 `expected` 次发布 (回包排队在插件执行线程上, 不能立即断言)
+asio::awaitable<bool> waitSubValues(const SubCounter& counter, int expected) {
+    co_return co_await waitFor([&counter, expected] {
+        return counter.valueCount() >= expected;
+    });
+}
+
+/// 等订阅回调收到 `expected` 次流结束
+asio::awaitable<bool> waitSubEnds(const SubCounter& counter, int expected) {
+    co_return co_await waitFor([&counter, expected] {
+        return counter.endCount() >= expected;
+    });
+}
+
+/// 给"不该发生"的回调留出时间再断言
+///
+/// 回调是排队到插件执行线程执行的, 发布返回后立即断言等于什么也没验: 晚到的回调
+/// 会从下面跑过去。这里等一小段稳定时间, 让不该来的回包真有机会来。
+asio::awaitable<void> settlePluginCallbacks(int ms = 100) {
+    (void)co_await waitFor([] { return false; }, ms);
 }
 
 } // namespace
@@ -554,13 +610,14 @@ asio::awaitable<void> test_subscribe_and_read() {
     SubCounter plain;
     auto* sub = subscribeOf(inst.get(), &ref, &id, &countValue, &plain);
     XX_TEST_EXPECT_TRUE(sub != nullptr);
-    XX_TEST_EXPECT_EQ(plain.values, 0); ///< 没有 pushOnSubscribe, 订阅时不补当前值
+    XX_TEST_EXPECT_EQ(plain.valueCount(), 0); ///< 没 pushOnSubscribe, 订阅时不补当前值
     XX_TEST_EXPECT_EQ(
         publishOf(inst.get(), "plugin.example_event.build", R"({"step":3})"),
         int32_t{PLUGINXX_RESULT_OK}
     );
-    XX_TEST_EXPECT_EQ(plain.values, 1);
-    XX_TEST_EXPECT_TRUE(contains(plain.lastPayload, "\"step\":3"));
+    XX_TEST_EXPECT_TRUE(co_await waitSubValues(plain, 1));
+    XX_TEST_EXPECT_EQ(plain.valueCount(), 1);
+    XX_TEST_EXPECT_TRUE(contains(plain.payloadText(), "\"step\":3"));
 
     // 退订之后不再收到
     if (sub != nullptr) {
@@ -570,7 +627,8 @@ asio::awaitable<void> test_subscribe_and_read() {
         publishOf(inst.get(), "plugin.example_event.build", R"({"step":4})"),
         int32_t{PLUGINXX_RESULT_OK}
     );
-    XX_TEST_EXPECT_EQ(plain.values, 1);
+    co_await settlePluginCallbacks(); ///< 退订若没生效, 这条发布就会让计数变成 2
+    XX_TEST_EXPECT_EQ(plain.valueCount(), 1);
 
     // B. pushOnSubscribe: 声明时就要求补当前值
     XX_TEST_EXPECT_EQ(
@@ -582,8 +640,9 @@ asio::awaitable<void> test_subscribe_and_read() {
     auto       pushyId = agentxx::plugin::PluginStringView::fromCstr("plugin.example_event.pushy");
     auto*      pushySub = subscribeOf(inst.get(), &ref, &pushyId, &countValue, &pushy);
     XX_TEST_EXPECT_TRUE(pushySub != nullptr);
-    XX_TEST_EXPECT_EQ(pushy.values, 1); ///< 订阅前的那份当前值补了一次
-    XX_TEST_EXPECT_TRUE(contains(pushy.lastPayload, "\"v\":1"));
+    XX_TEST_EXPECT_TRUE(co_await waitSubValues(pushy, 1));
+    XX_TEST_EXPECT_EQ(pushy.valueCount(), 1); ///< 订阅前的那份当前值补了一次
+    XX_TEST_EXPECT_TRUE(contains(pushy.payloadText(), "\"v\":1"));
     if (pushySub != nullptr) {
         XX_TEST_EXPECT_TRUE(unsubscribeOf(inst.get(), pushySub));
     }
@@ -643,7 +702,8 @@ asio::awaitable<void> test_end_stream() {
         publishOf(inst.get(), "plugin.example_event.build", R"({"step":9})"),
         int32_t{PLUGINXX_RESULT_OK}
     );
-    XX_TEST_EXPECT_EQ(watch.values, 1);
+    XX_TEST_EXPECT_TRUE(co_await waitSubValues(watch, 1));
+    XX_TEST_EXPECT_EQ(watch.valueCount(), 1);
 
     // 结束: 订阅方收到一次 on_end, 频道标记为已结束
     XX_TEST_EXPECT_EQ(
@@ -651,7 +711,8 @@ asio::awaitable<void> test_end_stream() {
         int32_t{PLUGINXX_RESULT_OK}
     );
     XX_TEST_EXPECT_TRUE(registry->isEnded("plugin.example_event.build"));
-    XX_TEST_EXPECT_EQ(watch.ends, 1);
+    XX_TEST_EXPECT_TRUE(co_await waitSubEnds(watch, 1));
+    XX_TEST_EXPECT_EQ(watch.endCount(), 1);
 
     // 结束后: 发布与读都被拒 (失败原因经结果正文交回)
     {
@@ -670,7 +731,8 @@ asio::awaitable<void> test_end_stream() {
         endOf(inst.get(), "plugin.example_event.build"),
         int32_t{PLUGINXX_RESULT_OK}
     );
-    XX_TEST_EXPECT_EQ(watch.ends, 1);
+    co_await settlePluginCallbacks(); ///< 重复结束若多回调一次, 计数会变成 2
+    XX_TEST_EXPECT_EQ(watch.endCount(), 1);
 
     // 再次声明同一个 id = 开一条新流 (清掉结束标记与缓存)
     XX_TEST_EXPECT_EQ(
