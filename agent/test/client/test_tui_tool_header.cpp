@@ -563,6 +563,12 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     // - 见 agentxx/plugin/builtin_tool_renderers.h (只给显示名 + 折叠内容)
     addTestRow(reg, std::string{agentxx::plugin::kBuiltinRendererOwner}, "agentxx_share_store", "Store", agentxx::plugin::builtinShareStoreSummary, nullptr);
     addTestRow(reg, std::string{agentxx::plugin::kBuiltinRendererOwner}, "agentxx_subagent", "Subagent", agentxx::plugin::builtinSubagentSummary, nullptr);
+    // 后台任务族 (运行中也要有内容, 不能只剩 "正在调用工具...")
+    addTestRow(reg, std::string{agentxx::plugin::kBuiltinRendererOwner}, "agentxx_async_run", "AsyncRun", agentxx::plugin::builtinAsyncRunSummary, nullptr);
+    addTestRow(reg, std::string{agentxx::plugin::kBuiltinRendererOwner}, "agentxx_async_query", "AsyncQuery", agentxx::plugin::builtinAsyncQuerySummary, nullptr);
+    addTestRow(reg, std::string{agentxx::plugin::kBuiltinRendererOwner}, "agentxx_async_await", "AsyncAwait", agentxx::plugin::builtinAsyncAwaitSummary, nullptr);
+    addTestRow(reg, std::string{agentxx::plugin::kBuiltinRendererOwner}, "agentxx_async_manager", "AsyncManager", agentxx::plugin::builtinAsyncManagerSummary, nullptr);
+    addTestRow(reg, std::string{agentxx::plugin::kBuiltinRendererOwner}, "agentxx_async_emit", "AsyncEmit", agentxx::plugin::builtinAsyncEmitSummary, nullptr);
 
     return reg;
 }
@@ -1838,6 +1844,116 @@ void testTuiToolHeaderBuiltin() {
     XX_TEST_EXPECT_TRUE(g.plainRender().find("Store · new") != std::string::npos);
     XX_TEST_EXPECT_TRUE(g.plainRender().find('#') == std::string::npos);
     XX_TEST_EXPECT_TRUE(g.render().find("102;204;255") != std::string::npos);
+
+    // ---- 后台任务族 (async_tools / async_emit) ----
+    //
+    // 回归点: 这些工具以前没有工具行内容, 折叠头只能画"正在调用工具...",
+    // 后台任务在跑时完全看不出做的是什么
+    {
+        ToolHeaderFixture h;
+        // run (运行中): 目标工具名就是最关心的信息, 不带任务 id (受理后才有)
+        h.pushTool(
+            "agentxx_async_run",
+            R"({"tool":"agentxx_filesystem_grep","args":{"text_patterns":["x"]}})",
+            false
+        );
+        std::string frame = h.plainRender();
+        XX_TEST_EXPECT_TRUE(frame.find("AsyncRun · agentxx_filesystem_grep") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("async-") == std::string::npos);
+        // 不再回退成通用运行中文案
+        XX_TEST_EXPECT_TRUE(frame.find("receiving tool call") == std::string::npos);
+
+        // run (受理完成): 结果里的任务 id 补在末尾
+        ToolHeaderFixture h2;
+        h2.pushTool(
+            "agentxx_async_run",
+            R"({"tool":"agentxx_filesystem_grep","args":{}})",
+            true,
+            true,
+            R"({"started":true,"asyncId":"async-3"})"
+        );
+        XX_TEST_EXPECT_TRUE(
+            h2.plainRender().find("AsyncRun · agentxx_filesystem_grep (async-3)")
+            != std::string::npos
+        );
+
+        // run 子代理 + 起跑延时
+        ToolHeaderFixture h3;
+        h3.pushTool(
+            "agentxx_async_run",
+            R"({"tool":"agentxx_subagent","args":{"subagent":"explorer","message":"m"},"delayMs":2000})",
+            false
+        );
+        XX_TEST_EXPECT_TRUE(
+            h3.plainRender().find("AsyncRun · subagent explorer +2s") != std::string::npos
+        );
+
+        // query: 按 id 或按分组
+        ToolHeaderFixture q1;
+        q1.pushTool("agentxx_async_query", R"({"id":"async-3"})", true, true, "data");
+        XX_TEST_EXPECT_TRUE(q1.plainRender().find("AsyncQuery · id=async-3") != std::string::npos);
+        ToolHeaderFixture q2;
+        q2.pushTool("agentxx_async_query", R"({"group":"running"})", true, true, "data");
+        XX_TEST_EXPECT_TRUE(q2.plainRender().find("AsyncQuery · group=running") != std::string::npos);
+        // 不给参数时按默认分组 all
+        ToolHeaderFixture q3;
+        q3.pushTool("agentxx_async_query", "{}", true, true, "data");
+        XX_TEST_EXPECT_TRUE(q3.plainRender().find("AsyncQuery · group=all") != std::string::npos);
+
+        // await (阻塞等待; 运行中也能看出在等哪一条)
+        ToolHeaderFixture w;
+        w.pushTool("agentxx_async_await", R"({"id":"async-3","timeoutMs":30000})", false);
+        XX_TEST_EXPECT_TRUE(w.plainRender().find("AsyncAwait · async-3 (30s)") != std::string::npos);
+
+        // manager: 取消与调整延时
+        ToolHeaderFixture m1;
+        m1.pushTool(
+            "agentxx_async_manager",
+            R"({"opt":"cancel","id":["async-3","async-5"]})",
+            true,
+            true,
+            "done"
+        );
+        XX_TEST_EXPECT_TRUE(
+            m1.plainRender().find("AsyncManager · cancel async-3, async-5") != std::string::npos
+        );
+        ToolHeaderFixture m2;
+        m2.pushTool(
+            "agentxx_async_manager",
+            R"({"opt":"delay","id":["async-3"],"delayMs":5000})",
+            true,
+            true,
+            "done"
+        );
+        XX_TEST_EXPECT_TRUE(
+            m2.plainRender().find("AsyncManager · delay async-3 +5s") != std::string::npos
+        );
+
+        // emit: 事件名 + 结束标记
+        ToolHeaderFixture e1;
+        e1.pushTool(
+            "agentxx_async_emit",
+            R"({"event":"agentxx.agent.event.build"})",
+            true,
+            true,
+            "ok"
+        );
+        XX_TEST_EXPECT_TRUE(
+            e1.plainRender().find("AsyncEmit · agentxx.agent.event.build") != std::string::npos
+        );
+        ToolHeaderFixture e2;
+        e2.pushTool(
+            "agentxx_async_emit",
+            R"({"event":"agentxx.agent.event.build","end":true})",
+            true,
+            true,
+            "ok"
+        );
+        XX_TEST_EXPECT_TRUE(
+            e2.plainRender().find("AsyncEmit · agentxx.agent.event.build (end)")
+            != std::string::npos
+        );
+    }
 }
 
 // 重启恢复会话后的历史 Tool 消息特化渲染 (回归):

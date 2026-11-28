@@ -7,7 +7,7 @@
 | 项 | 状态 |
 |---|---|
 | 1 TUI 分页时屏蔽滚动 | 已完成 (测试 `tui_scroll` 1039 通过) |
-| 2 async 工具行内容 | 待开始 |
+| 2 async 工具行内容 | 已完成 (测试 `tui_tool_header` 179 通过) |
 | 3 插件数据目录规范 + 迁移 | 待开始 |
 
 ## 1 TUI 分页时屏蔽滚动
@@ -46,3 +46,36 @@
 
 - `agentxx` (client, Debug) 编译通过
 - `agentxx_test tui_scroll --log-level warn`: passed=1039 failed=0
+
+## 2 async 系列工具的工具行内容
+
+### 问题
+
+`agentxx_async_*` 是 lib 内置工具, 但 `registerBuiltinToolRows` 只给
+`agentxx_share_store` / `agentxx_subagent` 注册了显示名与折叠内容。没内容的工具行
+在运行中只能画默认文案 (`正在调用工具...`), 而后台任务的参数 (哪个工具、哪个任务 id、
+取消哪几条) 恰恰是用户最想看到的信息。
+
+### 做法
+
+`agent/lib/src/plugins/builtin_tool_renderers.cpp` 新增五个内置折叠内容 (与 share_store /
+subagent 同一个注册表、同一条渲染路径; 插件内容仍可覆盖内置):
+
+| 工具 | 显示名 | 折叠内容 |
+|---|---|---|
+| `agentxx_async_run` | `AsyncRun` | `<目标工具>` / `subagent <名字>`, 有 `delayMs` 补 `+2s`, 完成后用结果里的 `asyncId` 补 `(async-3)` |
+| `agentxx_async_query` | `AsyncQuery` | `id=async-3` 或 `group=running` (缺省 `all`) |
+| `agentxx_async_await` | `AsyncAwait` | `async-3 (30s)` (只有显式给 `timeoutMs` 时才画时长) |
+| `agentxx_async_manager` | `AsyncManager` | `cancel async-3, async-5` / `delay async-3 +5s` (id 超过 3 个补 `, ...`) |
+| `agentxx_async_emit` | `AsyncEmit` | `<事件名>` / `<事件名> (end)` |
+
+- 参数还没到、解析失败、必要字段缺失 → 返回空串, 界面照旧走默认渲染
+  (参数流式接收期间仍是占位行, 这是真实状态)
+- 结果里的任务 id 只在 `finished` 时取 (受理成功才有); 失败行本来就走错误回退, 不冲突
+
+### 验证
+
+- `test_tui_tool_header` 新增后台任务族断言 (运行中/受理完成/子代理+延时/查询两种形态/
+  等待/取消+改延时/发布+end), 含一条“运行中不再出现 `receiving tool call`”的回归断言;
+  `tui_tool_header` passed=179 failed=0
+- 测试注册表 (`makeTestToolRegistry`) 同步补上五条内置行内容

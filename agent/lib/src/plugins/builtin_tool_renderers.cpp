@@ -35,13 +35,24 @@ namespace plugin {
 namespace {
 
 /// 工具名 (与 lib 内置工具实现一致: agentxx::tools::SessionShareStoreTool /
-/// agentxx::tools::SubAgentManagerTool)
-constexpr std::string_view kToolShareStore = "agentxx_share_store";
-constexpr std::string_view kToolSubagent   = "agentxx_subagent";
+/// agentxx::tools::SubAgentManagerTool 以及 async_tools / async_emit 的工具族)
+constexpr std::string_view kToolShareStore  = "agentxx_share_store";
+constexpr std::string_view kToolSubagent    = "agentxx_subagent";
+constexpr std::string_view kToolAsyncRun    = "agentxx_async_run";
+constexpr std::string_view kToolAsyncQuery  = "agentxx_async_query";
+constexpr std::string_view kToolAsyncAwait  = "agentxx_async_await";
+constexpr std::string_view kToolAsyncMgr    = "agentxx_async_manager";
+constexpr std::string_view kToolAsyncEmit   = "agentxx_async_emit";
 
 /// 显示名 (与插件渲染器规则一致: 简短英文名, 如 Read/Edit/Bash)
+/// - 后台任务族统一带 `Async` 前缀: 头行一眼能看出这是后台任务而不是前台调用
 constexpr std::string_view kNameShareStore = "Store";
 constexpr std::string_view kNameSubagent   = "Subagent";
+constexpr std::string_view kNameAsyncRun   = "AsyncRun";
+constexpr std::string_view kNameAsyncQuery = "AsyncQuery";
+constexpr std::string_view kNameAsyncAwait = "AsyncAwait";
+constexpr std::string_view kNameAsyncMgr   = "AsyncManager";
+constexpr std::string_view kNameAsyncEmit  = "AsyncEmit";
 
 /// 折叠内容预览的可见字符数上限 (宽度预算不足时取 80)
 size_t summaryPreviewCols(int maxWidth) {
@@ -253,6 +264,180 @@ std::string renderSubagentCollapsed(const ClientToolRenderInput& in) {
     return !name.empty() ? name : task;
 }
 
+/// 毫秒时长的简短写法 (整秒给 `5s`, 否则给 `500ms`)
+std::string shortDuration(int64_t ms) {
+    if (ms <= 0) {
+        return {};
+    }
+    if (ms % 1000 == 0) {
+        return fmt::format("{}s", ms / 1000);
+    }
+    return fmt::format("{}ms", ms);
+}
+
+/// 取任务 id 列表的展示文本 (<= 3 个, 多余补 `...`)
+/// - 声明是数组; 模型给单个字符串时由执行层按 schema 自愈成数组, 这里两种都认
+std::string idListText(const utilxx_base::Json& args) {
+    std::string out;
+    size_t      shown = 0;
+    size_t      total = 0;
+    const auto  add   = [&out](std::string_view id) {
+        if (id.empty()) {
+            return false;
+        }
+        if (!out.empty()) {
+            out += ", ";
+        }
+        out += id;
+        return true;
+    };
+    if (!args.contains("id")) {
+        return out;
+    }
+    const auto& ids = args["id"];
+    if (ids.is_array()) {
+        for (const auto& item : ids) {
+            ++total;
+            if (shown >= 3 || !item.is_string()) {
+                continue;
+            }
+            if (add(item.get<std::string>())) {
+                ++shown;
+            }
+        }
+    } else if (ids.is_string()) {
+        total = 1;
+        add(ids.get<std::string>());
+    }
+    if (total > shown) {
+        out += ", ...";
+    }
+    return out;
+}
+
+/// `agentxx_async_run` 的任务目标文本: 子代理给 "subagent <名字>", 其余给工具名
+std::string asyncRunTarget(const utilxx_base::Json& args) {
+    const std::string tool = args.value("tool", std::string{});
+    if (tool.empty()) {
+        return {};
+    }
+    if (tool != kToolSubagent) {
+        return tool;
+    }
+    const auto& inner = args.contains("args") ? args["args"] : utilxx_base::Json{};
+    const std::string name
+        = inner.is_object() ? inner.value("subagent", std::string{}) : std::string{};
+    return name.empty() ? tool : fmt::format("subagent {}", name);
+}
+
+/// 结果里的 `asyncId` (受理成功才有; 失败/未完成返回空串)
+std::string asyncIdOfResult(std::string_view result) {
+    if (result.empty() || result.front() != '{') {
+        return {};
+    }
+    try {
+        const auto j = utilxx_base::Json::parse(result);
+        if (!j.is_object()) {
+            return {};
+        }
+        return idTextOf(j["asyncId"]);
+    } catch (...) {
+        return {};
+    }
+}
+
+/// `agentxx_async_run` 折叠内容: "<目标工具> +5s (async-3)"
+/// - 起跑延时只在给了的时候画; 任务 id 只有受理后才知道 (运行中没有后缀)
+std::string renderAsyncRunCollapsed(const ClientToolRenderInput& in) {
+    auto args = parseToolArgs(in.argsJson);
+    if (!args) {
+        return {};
+    }
+    std::string text = asyncRunTarget(*args);
+    const auto  delay = shortDuration(args->value<int64_t>("delayMs", 0));
+    if (!delay.empty()) {
+        if (text.empty()) {
+            text = "+ " + delay;
+        } else {
+            text += " +" + delay;
+        }
+    }
+    if (in.finished) {
+        const auto id = asyncIdOfResult(in.resultText);
+        if (!id.empty()) {
+            text += text.empty() ? fmt::format("({})", id) : fmt::format(" ({})", id);
+        }
+    }
+    return text;
+}
+
+/// `agentxx_async_query` 折叠内容: "id=async-3" / "group=running"
+std::string renderAsyncQueryCollapsed(const ClientToolRenderInput& in) {
+    auto args = parseToolArgs(in.argsJson);
+    if (!args) {
+        return {};
+    }
+    const std::string id = args->value("id", std::string{});
+    if (!id.empty()) {
+        return "id=" + id;
+    }
+    std::string group = args->value("group", std::string{});
+    if (group.empty()) {
+        group = "all";
+    }
+    return "group=" + group;
+}
+
+/// `agentxx_async_await` 折叠内容: "async-3 (30s)" (超时只在显式给了时画)
+std::string renderAsyncAwaitCollapsed(const ClientToolRenderInput& in) {
+    auto args = parseToolArgs(in.argsJson);
+    if (!args) {
+        return {};
+    }
+    std::string text = args->value("id", std::string{});
+    if (text.empty()) {
+        return {};
+    }
+    const std::string timeout = shortDuration(args->value<int64_t>("timeoutMs", 0));
+    if (!timeout.empty()) {
+        text += fmt::format(" ({})", timeout);
+    }
+    return text;
+}
+
+/// `agentxx_async_manager` 折叠内容: "cancel async-3, async-5" / "delay async-3 +5s"
+std::string renderAsyncManagerCollapsed(const ClientToolRenderInput& in) {
+    auto args = parseToolArgs(in.argsJson);
+    if (!args) {
+        return {};
+    }
+    const std::string opt = args->value("opt", std::string{});
+    if (opt.empty()) {
+        return {};
+    }
+    const std::string ids = idListText(*args);
+    std::string       text = ids.empty() ? opt : fmt::format("{} {}", opt, ids);
+    if (opt == "delay") {
+        const auto delay = shortDuration(args->value<int64_t>("delayMs", 0));
+        text += delay.empty() ? " +0s" : " +" + delay;
+    }
+    return text;
+}
+
+/// `agentxx_async_emit` 折叠内容: "<事件名> (end)"
+std::string renderAsyncEmitCollapsed(const ClientToolRenderInput& in) {
+    auto args = parseToolArgs(in.argsJson);
+    if (!args) {
+        return {};
+    }
+    const std::string event = args->value("event", std::string{});
+    if (event.empty()) {
+        return {};
+    }
+    const bool ending = args->value("end", false);
+    return ending ? event + " (end)" : event;
+}
+
 } // namespace
 
 std::string builtinShareStoreSummary(const ClientToolRenderInput& input) {
@@ -263,6 +448,26 @@ std::string builtinSubagentSummary(const ClientToolRenderInput& input) {
     return renderSubagentCollapsed(input);
 }
 
+std::string builtinAsyncRunSummary(const ClientToolRenderInput& input) {
+    return renderAsyncRunCollapsed(input);
+}
+
+std::string builtinAsyncQuerySummary(const ClientToolRenderInput& input) {
+    return renderAsyncQueryCollapsed(input);
+}
+
+std::string builtinAsyncAwaitSummary(const ClientToolRenderInput& input) {
+    return renderAsyncAwaitCollapsed(input);
+}
+
+std::string builtinAsyncManagerSummary(const ClientToolRenderInput& input) {
+    return renderAsyncManagerCollapsed(input);
+}
+
+std::string builtinAsyncEmitSummary(const ClientToolRenderInput& input) {
+    return renderAsyncEmitCollapsed(input);
+}
+
 void registerBuiltinToolRows(ClientPluginManager& mgr) {
     ClientToolRowContent shareStore;
     shareStore.summary = &builtinShareStoreSummary;
@@ -271,6 +476,29 @@ void registerBuiltinToolRows(ClientPluginManager& mgr) {
     ClientToolRowContent subagent;
     subagent.summary = &builtinSubagentSummary;
     mgr.registerBuiltinToolContent(kToolSubagent, kNameSubagent, std::move(subagent));
+
+    // 后台任务族 (async_tools / async_emit): 运行中也要有内容 ——
+    // 没内容的工具行只能显示 "正在调用工具...", 而后台任务的参数本身（定位哪个工具/
+    // 哪个任务) 就是用户最关心的信息
+    ClientToolRowContent asyncRun;
+    asyncRun.summary = &builtinAsyncRunSummary;
+    mgr.registerBuiltinToolContent(kToolAsyncRun, kNameAsyncRun, std::move(asyncRun));
+
+    ClientToolRowContent asyncQuery;
+    asyncQuery.summary = &builtinAsyncQuerySummary;
+    mgr.registerBuiltinToolContent(kToolAsyncQuery, kNameAsyncQuery, std::move(asyncQuery));
+
+    ClientToolRowContent asyncAwait;
+    asyncAwait.summary = &builtinAsyncAwaitSummary;
+    mgr.registerBuiltinToolContent(kToolAsyncAwait, kNameAsyncAwait, std::move(asyncAwait));
+
+    ClientToolRowContent asyncManager;
+    asyncManager.summary = &builtinAsyncManagerSummary;
+    mgr.registerBuiltinToolContent(kToolAsyncMgr, kNameAsyncMgr, std::move(asyncManager));
+
+    ClientToolRowContent asyncEmit;
+    asyncEmit.summary = &builtinAsyncEmitSummary;
+    mgr.registerBuiltinToolContent(kToolAsyncEmit, kNameAsyncEmit, std::move(asyncEmit));
 }
 
 } // namespace plugin
