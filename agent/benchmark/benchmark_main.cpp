@@ -169,7 +169,7 @@ int main(int argn, char** argv) {
          "Per-plugin marginal memory cost and unload reclaim", agentxx::bench::benchResourcePluginAttrib,
          true},
         {"resource_tui_longctx",
-         "Real TUI long-context turns with streaming replies, sampled at 100K/200K/1M/2M tokens (after compaction)",
+         "Real TUI long-context turns with streaming replies, sampled at 20M/100M/200M/1G/2G cumulative content bytes (after compaction)",
          agentxx::bench::benchResourceTuiLongCtx, true},
     };
 

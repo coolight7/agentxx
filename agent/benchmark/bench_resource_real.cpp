@@ -37,6 +37,7 @@
 #include <cstring>
 #include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <ostream>
 #include <sstream>
@@ -1902,8 +1903,10 @@ inline StreamingLlmSim
     return sim;
 }
 
-/// 解析逗号分隔的 token 列表 (空项忽略)
-inline std::vector<size_t> parseTokenPoints(std::string_view text) {
+/// 解析逗号分隔的采样点, 单位是**累计内容字节** (空项忽略)
+/// - 支持 `K` / `M` / `G` 后缀 (1024 进制, 大小写不敏感): `20M` = 20 MiB
+/// - 纯数字按字节解释
+inline std::vector<size_t> parseSizePoints(std::string_view text) {
     std::vector<size_t> out;
     size_t              start = 0;
     while (start <= text.size()) {
@@ -1918,7 +1921,27 @@ inline std::vector<size_t> parseTokenPoints(std::string_view text) {
                    }),
                    item.end());
         if (!item.empty()) {
-            out.push_back(static_cast<size_t>(std::strtoull(item.c_str(), nullptr, 10)));
+            size_t scale = 1;
+            switch (item.back()) {
+                case 'K':
+                case 'k':
+                    scale = 1024ull;
+                    break;
+                case 'M':
+                case 'm':
+                    scale = 1024ull * 1024ull;
+                    break;
+                case 'G':
+                case 'g':
+                    scale = 1024ull * 1024ull * 1024ull;
+                    break;
+                default:
+                    break;
+            }
+            if (scale != 1) {
+                item.pop_back();
+            }
+            out.push_back(static_cast<size_t>(std::strtoull(item.c_str(), nullptr, 10)) * scale);
         }
         if (comma == text.size()) {
             break;
@@ -1928,20 +1951,33 @@ inline std::vector<size_t> parseTokenPoints(std::string_view text) {
     return out;
 }
 
-/// 采样点名字: 100000 -> ctx100k, 2000000 -> ctx2m
-inline std::string tokenPointName(size_t tokens) {
-    if (tokens >= 1000000 && tokens % 1000000 == 0) {
-        return fmt::format("ctx{}m", tokens / 1000000);
+/// 采样点名字: 20971520 -> ctx20mb, 2147483648 -> ctx2gb
+/// - 一律带 `b` 后缀: 本场景的量是**字节**, 与旧批次按 token 命名的 `ctx2m` 区分开
+inline std::string sizePointName(size_t bytes) {
+    constexpr size_t kKib = 1024ull;
+    constexpr size_t kMib = 1024ull * 1024ull;
+    constexpr size_t kGib = 1024ull * 1024ull * 1024ull;
+    if (bytes != 0 && bytes % kGib == 0) {
+        return fmt::format("ctx{}gb", bytes / kGib);
     }
-    return fmt::format("ctx{}k", (tokens + 500) / 1000);
+    if (bytes != 0 && bytes % kMib == 0) {
+        return fmt::format("ctx{}mb", bytes / kMib);
+    }
+    if (bytes != 0 && bytes % kKib == 0) {
+        return fmt::format("ctx{}kb", bytes / kKib);
+    }
+    return fmt::format("ctx{}b", bytes);
 }
 
-/// 采集逻辑内存 (agent 会话 + TUI 侧), 与 real_tui 场景同一套统计口径
+/// 采集逻辑内存 (agent 会话 + TUI 侧 + 会话库磁盘), 与 real_tui 场景同一套统计口径
+/// - `dataDir` 非空时额外给出会话库的磁盘字节 (`__store.*` 行不计入逻辑内存合计):
+///   GB 级累计内容的场景里, 它就是"被转存到磁盘"的那一份
 inline void collectLogicalForTuiLongCtx(
     ResourceResult&                                          res,
     const std::shared_ptr<agent::CodeAgent>&                 agent,
     const std::shared_ptr<agentxx::client::TUIClientAgentIO>& tui,
-    const std::string&                                       sessionId
+    const std::string&                                       sessionId,
+    const std::string&                                       dataDir
 ) {
     std::promise<void> p;
     asio::post(*agent->ioCtx, [&]() {
@@ -1956,6 +1992,10 @@ inline void collectLogicalForTuiLongCtx(
         auto rows = collectTuiLogicalMem(*snap);
         res.logical.insert(res.logical.end(), rows.begin(), rows.end());
     }
+    if (!dataDir.empty()) {
+        auto storeRows = collectStoreLogicalMem(dataDir, sessionId);
+        res.logical.insert(res.logical.end(), storeRows.begin(), storeRows.end());
+    }
 }
 
 } // namespace
@@ -1963,20 +2003,35 @@ inline void collectLogicalForTuiLongCtx(
 /// 场景 5: 真实 TUI 长上下文 (真实流式回复 + 逐字渲染 + 超限自动压缩后的稳态)
 ///
 /// 装配与 `real_tui` 一致 (AgentHost + 插件 + Channel + 真实 FTXUI + 会话库),
-/// 区别是逐轮真实对话: 每轮发一条 `msgBytes` 用户消息, mock LLM 把回复切成多帧流式
-/// 吐回, TUI 逐帧渲染; 累计内容 token 到采样点就采一次内存/渲染/上下文数据。
+/// 区别是逐轮真实对话: 每轮发若干条 `msgBytes` 用户消息, mock LLM 把回复切成多帧流式
+/// 吐回, TUI 逐帧渲染; 累计内容字节到采样点就采一次内存/渲染/上下文数据。
+///
+/// **累计内容怎么来到 GB 级** (两个模式):
+/// - `history` (默认): 先用真实轮次累积到 `REAL_BYTES`, 之后每个采样点把差额通过
+///   展示历史的写入入口 (`Session::appendViewMessage`, 与真实轮次同一条落库路径)
+///   按条注入, 再跑一轮真实对话后采样。回答的是"会话历史 N GB 时常驻内存多少"。
+/// - `turns`: 全部用真实轮次累积 (不注入历史)。真实轮次有约 140 ms/轮的地板
+///   (见 benchmark.md 第 19 节), 单条 8 KB 到 2 GB 需要 26 万轮 (几小时), 所以只适合
+///   小型采样点; 它另外用来核对"逐轮累积"与"历史注入"两条路径的内存差异。
 ///
 /// - 环境变量 (均可选, 括号内为默认值):
-///     - `AGENTXX_TUI_CTX_POINTS` (100000,200000,1000000,2000000) 采样点: 累计内容 token
-///     - `AGENTXX_TUI_CTX_MSG_BYTES` (8192) 每轮用户消息字节数
+///     - `AGENTXX_TUI_CTX_POINTS` (20M,100M,200M,1G,2G) 采样点: **累计内容字节**
+///       (支持 K/M/G 后缀, 1024 进制); 累计量 = 用户消息字节 + 回复字节 + 注入历史字节
+///     - `AGENTXX_TUI_CTX_MODE` (history) `history` = 超出真实轮次预算的部分注入历史;
+///       `turns` = 全部真实轮次
+///     - `AGENTXX_TUI_CTX_REAL_BYTES` (2M) `history` 模式下用真实轮次累积多少内容
+///     - `AGENTXX_TUI_CTX_RESYNC` (1) 注入历史后让客户端重新尾窗同步一次
+///       (使客户端持有的是"最近 100 条", 而不是注入前那批)
+///     - `AGENTXX_TUI_CTX_MSG_BYTES` (8192) 单条用户消息字节数 (也决定注入历史单条字节数)
+///     - `AGENTXX_TUI_CTX_INPUTS_PER_TURN` (1) 一轮注入多少条消息
 ///     - `AGENTXX_TUI_CTX_REPLY_BYTES` (600) mock 回复正文字节数
 ///     - `AGENTXX_TUI_CTX_MODEL_MAX` (300000) 模型上下文上限 (达 75% 触发自动压缩)
 ///     - `AGENTXX_TUI_CTX_STREAM_CHUNKS` (48) 回复切成多少个 SSE 帧
 ///     - `AGENTXX_TUI_CTX_CHUNK_DELAY_MS` (1) 帧间停顿 (毫秒)
 ///     - `AGENTXX_TUI_CTX_PLUGINS` (1) 是否加载 5 个基准插件
-///     - `AGENTXX_TUI_CTX_SESSION_STORE` (1) 是否启用会话库
-///     - `AGENTXX_TUI_CTX_MAX_ROUNDS` (20000) 驱动轮数上限
-///     - `AGENTXX_TUI_CTX_ROUND_TIMEOUT_MS` (180000) 单轮等待上限
+///     - `AGENTXX_TUI_CTX_SESSION_STORE` (1) 是否启用会话库 (关掉后展示历史不淘汰)
+///     - `AGENTXX_TUI_CTX_MAX_ROUNDS` (20000) 驱动批次上限 (一批 = 一轮)
+///     - `AGENTXX_TUI_CTX_ROUND_TIMEOUT_MS` (180000) 单批等待上限
 void benchResourceTuiLongCtx() {
 #ifndef AGENTXX_BUILD_CLIENT
     std::cout << "  [resource][tui_longctx] skipped: AGENTXX_BUILD_CLIENT not enabled"
@@ -1999,10 +2054,16 @@ void benchResourceTuiLongCtx() {
         return std::string{def};
     };
 
-    const auto  points    = parseTokenPoints(
-        envText("AGENTXX_TUI_CTX_POINTS", "100000,200000,1000000,2000000")
+    const auto  points    = parseSizePoints(
+        envText("AGENTXX_TUI_CTX_POINTS", "20M,100M,200M,1G,2G")
     );
+    const std::string mode = envText("AGENTXX_TUI_CTX_MODE", "history");
     const size_t msgBytes  = envSize("AGENTXX_TUI_CTX_MSG_BYTES", 8192);
+    const size_t inputsPerTurn = std::max<size_t>(1, envSize("AGENTXX_TUI_CTX_INPUTS_PER_TURN", 1));
+    const size_t realBytes = (mode == "turns")
+                                 ? std::numeric_limits<size_t>::max()
+                                 : envSize("AGENTXX_TUI_CTX_REAL_BYTES", 2 * 1024 * 1024);
+    const bool   resyncAfterSeed = envSize("AGENTXX_TUI_CTX_RESYNC", 1) != 0;
     const size_t modelMax  = envSize("AGENTXX_TUI_CTX_MODEL_MAX", 300000);
     const size_t chunks    = envSize("AGENTXX_TUI_CTX_STREAM_CHUNKS", 48);
     const int    chunkMs   = static_cast<int>(envSize("AGENTXX_TUI_CTX_CHUNK_DELAY_MS", 1));
@@ -2014,6 +2075,10 @@ void benchResourceTuiLongCtx() {
 
     if (points.empty()) {
         std::cout << "  [resource][tui_longctx] 采样点为空, 跳过" << std::endl;
+        return;
+    }
+    if (msgBytes == 0) {
+        std::cout << "  [resource][tui_longctx] 单条消息字节数为 0, 跳过" << std::endl;
         return;
     }
 
@@ -2190,6 +2255,12 @@ void benchResourceTuiLongCtx() {
         uint64_t  turnsStarted      = 0;
         /// 轮次终态总数 (完成/失败/取消/中断四种之和)
         uint64_t  turnsEnded        = 0;
+        /// 服务端消息队列条数 (next-turn 投递排队中, 还没开成轮)
+        size_t    queueSize         = 0;
+        /// 待注入输入条数 (next-step 已受理, 还没进入上下文)
+        size_t    pendingInputs     = 0;
+        /// 端点认为还有轮次在跑 (含队列里有条目)
+        bool      turnActive        = false;
         std::string turnEndDetail;
         bool      idle              = true;
         // 以下只在采样点填 (见 fillDetail)
@@ -2207,8 +2278,12 @@ void benchResourceTuiLongCtx() {
                 snap.viewWindowCount   = sess->viewWindow().size();
                 snap.viewTotalCount    = sess->viewMessageCount();
                 snap.usageTotal        = sess->contextStats->usage.totalTokens;
+                snap.pendingInputs     = sess->pendingInputCount();
                 snap.idle              = (sess->activity == agent::SessionActivity::Idle);
             }
+            // 队列/轮次状态在 io 线程上读 (messageQueue_ 只允许 io 线程访问)
+            snap.queueSize  = serverIO->queueSizeForTest();
+            snap.turnActive = serverIO->turnActive();
             if (auto m = agent->agentContext->metrics) {
                 snap.turnsStarted   = m->turns();
                 snap.turnsEnded     = m->turnsCompleted() + m->turnsFailed() + m->turnsCanceled()
@@ -2240,45 +2315,155 @@ void benchResourceTuiLongCtx() {
         p.get_future().wait();
     };
 
-    auto waitRoundDone = [&](const SessionSnap& prev, int timeoutMs) -> bool {
+    /// 等一轮真正开起来 (第 1 条输入已被受理, 后面的才能被并入本轮)
+    /// - 判据用端点的 turnActive (含"消息队列非空"): 第一条入队后即为真
+    auto waitTurnActive = [&](int timeoutMs) -> bool {
+        const auto deadline
+            = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (readSession().turnActive) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return false;
+    };
+
+    /// 等一批消息全部处理完、会话完全静默
+    /// - 判据: 轮次终态计数增长 + 消息队列空 + 待注入输入空 + 端点不认为还有轮次在跑,
+    ///   然后再睡 10 ms 复查一次 (防止刚好落在两轮之间, 后面还有排队的轮次没开起来)
+    /// - 不能用"模型用量增长"判断: 压缩子代理的用量也计入本会话, 它会在本轮正文还没
+    ///   叫模型时就先增长, 于是驱动方提前发下一条, 输入被排到下轮
+    /// - 也不能只看 idle: 本轮刚开始时用户消息已入队但还没进入流式, 同样是假空闲
+    /// - 四种终态都要算 (不能只看"完成"): 压缩等路径上本轮可能以中断结束
+    auto waitBurstIdle = [&](const SessionSnap& prev, int timeoutMs) -> bool {
+        auto settled = [&](const SessionSnap& s) {
+            return s.queueSize == 0 && s.pendingInputs == 0 && !s.turnActive;
+        };
         const auto deadline
             = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
         while (std::chrono::steady_clock::now() < deadline) {
             auto snap = readSession();
-            // 一轮结束只看"本轮轮次已记终态" + 会话空闲 (KeyMetrics 的轮次计数):
-            // - 不能用模型用量增长判断: 压缩子代理的用量也计入本会话, 它会在本轮正文还没
-            //   叫模型时就先增长, 于是驱动方提前发下一条, 输入被排到下轮 (轮数与模型调用对不上)
-            // - 也不能只看空闲: 本轮刚开始时用户消息已入队但还没进入流式, 同样是假空闲
-            // - 四种终态都要算 (不能只看"完成"): 压缩等路径上本轮可能以中断结束
-            if (snap.idle && snap.turnsEnded > prev.turnsEnded) {
-                return true;
+            if (snap.idle && snap.turnsEnded > prev.turnsEnded && settled(snap)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                auto again = readSession();
+                if (again.idle && again.turnsEnded >= snap.turnsEnded && settled(again)) {
+                    return true;
+                }
+                continue;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         auto snap = readSession();
         std::cerr << fmt::format(
-            "  [tui_longctx] 等待轮次终态超时 ({} ms): 轮次={} 终态={} ({}) idle={} 上下文={}\n",
+            "  [tui_longctx] 等待轮次终态超时 ({} ms): 轮次={} 终态={} ({}) idle={} 队列={} "
+            "待注入={} 上下文={}\n",
             timeoutMs,
             snap.turnsStarted,
             snap.turnsEnded,
             snap.turnEndDetail,
             snap.idle ? 1 : 0,
+            snap.queueSize,
+            snap.pendingInputs,
             snap.liveContextTokens
         );
         return false;
+    };
+
+    /// 发送一条 `msgBytes` 用户消息 (首条走默认投递, 其余并入本轮)
+    auto sendProbe = [&](size_t index, bool steer) {
+        std::string text = fmt::format("CTX-PROBE-{:08d}: ", index + 1);
+        if (text.size() < msgBytes) {
+            text.append(msgBytes - text.size(), 'x');
+        }
+        agent::WireUserInput input{
+            .sessionId = sessionId,
+            .text      = std::move(text),
+        };
+        if (steer) {
+            input.delivery = std::string{agent::InputDelivery::NextStep};
+        }
+        tui->sendToPeer(std::move(input));
+    };
+
+    /// 发一批: 第 1 条开新一轮, 等它真的开起来后, 其余按 next-step 并入本轮
+    /// - `return` 实际发出的条数 (早退时为已发数)
+    auto sendBurst = [&](size_t index, size_t count) -> size_t {
+        size_t sent = 0;
+        for (size_t i = 0; i < count; ++i) {
+            sendProbe(index + i, i > 0);
+            ++sent;
+            if (i == 0) {
+                waitTurnActive(2000);
+            }
+        }
+        return sent;
+    };
+
+    /// 已注入的展示历史条数 (种子文本序号用)
+    size_t histRows = 0;
+
+    /// 注入展示历史: 按条写入会话的展示历史 (与真实轮次同一条写入/落库路径)
+    /// - 用途: 把"会话历史"做大到 GB 级。真实轮次有时间地板 (约 140 ms/轮),
+    ///   单条 8 KB 到 2 GB 要几个小时, 不具可行性 (见 benchmark.md 第 19 节)
+    /// - 分批投递到 io 线程 (单批 [kSeedChunk] 条), 每批结束 flush 一次:
+    ///   ① 待落盘队列不积压 (窗口只在队列空时才真正淘汰, 否则内容全堆在内存里)
+    ///   ② io 线程不会被长时间占住
+    /// - `return` 实际写入条数
+    auto seedHistory = [&](size_t bytes) -> size_t {
+        constexpr size_t     kSeedChunk = 1024;
+        const size_t         rows       = bytes / msgBytes;
+        size_t               done       = 0;
+        while (done < rows) {
+            const size_t         chunk = std::min(kSeedChunk, rows - done);
+            std::promise<size_t> p;
+            asio::post(*agent->ioCtx, [&, chunk]() {
+                size_t appended = 0;
+                if (auto sess = agent->agentContext->getSession(sessionId)) {
+                    const auto nowMs = static_cast<int64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch()
+                        )
+                            .count()
+                    );
+                    for (size_t i = 0; i < chunk; ++i) {
+                        std::string text = fmt::format("HIST-{:09d}: ", histRows + i + 1);
+                        if (text.size() < msgBytes) {
+                            text.append(msgBytes - text.size(), 'z');
+                        }
+                        sess->appendViewMessage(agent::ViewMessage::makeText(
+                            agent::ViewMessage::Role::User,
+                            std::move(text),
+                            nowMs
+                        ));
+                        ++appended;
+                    }
+                    // 落盘 + 让窗口淘汰跟上来 (淘汰只在待落盘队列为空时真正删除)
+                    sess->flushViewMessages();
+                }
+                p.set_value(appended);
+            });
+            const size_t appended = p.get_future().get();
+            if (appended == 0) {
+                break;
+            }
+            done     += appended;
+            histRows += appended;
+        }
+        return done;
     };
 
     // ---- 预热轮 (真实走流式) ----
     {
         auto before = readSession();
         tui->sendToPeer(agent::WireUserInput{sessionId, "hello"});
-        if (!waitRoundDone(before, roundTimeoutMs)) {
+        if (!waitBurstIdle(before, roundTimeoutMs)) {
             console << "  [tui_longctx] 预热轮超时, 继续\n";
         }
     }
     phaseTracker.mark("warmup_turn_done", "首轮流式对话完成");
 
-    // ---- 每轮 token 估算 (用户消息 + 回复, 用主程序同一份估算器) ----
+    // ---- 每轮的 token 估算 (用户消息 + 回复, 用主程序同一份估算器) ----
     size_t userTokensPerRound  = 0;
     size_t replyTokensPerRound = 0;
     {
@@ -2296,16 +2481,38 @@ void benchResourceTuiLongCtx() {
         am.content = std::string(replyBytes, 'y');
         replyTokensPerRound = countLlmTokens({am});
     }
-    const size_t tokensPerRound = userTokensPerRound + replyTokensPerRound;
+    // 每批 (一轮) 进入内容 = 一批用户消息字节 + 一次回复字节; 回复很小 (600 B), 影响 < 1%
+    const size_t bytesPerBurst = inputsPerTurn * msgBytes + replyBytes;
+
+    /// 采样点名字用的可读尺寸 (G/M/K, 1024 进制)
+    auto fmtSize = [](size_t bytes) -> std::string {
+        constexpr double kKiB = 1024.0;
+        const double     v    = static_cast<double>(bytes);
+        if (v >= kKiB * kKiB * kKiB) {
+            return fmt::format("{:.2f}GB", v / (kKiB * kKiB * kKiB));
+        }
+        if (v >= kKiB * kKiB) {
+            return fmt::format("{:.1f}MB", v / (kKiB * kKiB));
+        }
+        if (v >= kKiB) {
+            return fmt::format("{:.1f}KB", v / kKiB);
+        }
+        return fmt::format("{}B", bytes);
+    };
 
     console << fmt::format(
-        "  [tui_longctx] 每轮 {} 字节 ({} token) + 回复 {} 字节 ({} token) = {} token/轮; "
-        "模型上限 {} token ({}% 压缩), SSE {} 帧/回复, 帧间隔 {} ms, 会话库 {}\n",
+        "  [tui_longctx] 模式 {} (真实轮次预算 {}), 每轮 {} 条 x {} 字节 ({} token/条) + 回复 {} "
+        "字节 ({} token) = {} /轮; 模型上限 {} token ({}% 压缩), SSE {} 帧/回复, 帧间隔 {} ms, "
+        "会话库 {}\n",
+        mode,
+        realBytes == std::numeric_limits<size_t>::max() ? std::string{"不限"}
+                                                        : fmtSize(realBytes),
+        inputsPerTurn,
         msgBytes,
         userTokensPerRound,
         replyBytes,
         replyTokensPerRound,
-        tokensPerRound,
+        fmtSize(bytesPerBurst),
         modelMax,
         75,
         chunks,
@@ -2313,7 +2520,7 @@ void benchResourceTuiLongCtx() {
         useStore ? "开" : "关"
     );
 
-    if (tokensPerRound == 0) {
+    if (userTokensPerRound == 0) {
         console << "  [tui_longctx] token 估算异常 (0), 结束\n";
         tui->stop();
         capture.restore();
@@ -2322,7 +2529,9 @@ void benchResourceTuiLongCtx() {
     }
 
     // ---- 逐轮驱动, 到点采样 ----
+    // `round` = 已完成的批次数 (一批 = 一轮), `msgsSent` = 已发送的用户消息条数
     size_t              round           = 0;
+    size_t              msgsSent        = 0;
     size_t              cumulative      = 0;
     size_t              nextPoint       = 0;
     CpuWindow           cpuWin          = cpuBegin(0);
@@ -2348,46 +2557,163 @@ void benchResourceTuiLongCtx() {
         return value;
     };
 
-    std::vector<ResourceResult> samples;
-    std::vector<size_t>         liveContexts;
-    auto                        driveStart = std::chrono::steady_clock::now();
-    while (nextPoint < points.size() && round < maxRounds) {
-        std::string text = fmt::format("CTX-PROBE-{:06d}: ", round + 1);
-        if (text.size() < msgBytes) {
-            text.append(msgBytes - text.size(), 'x');
+    /// 会话库磁盘字节 (该会话单独一个库目录; 这就是"转存到磁盘"的那一份)
+    auto readStoreBytes = [&]() -> size_t {
+        for (const auto& row : collectStoreLogicalMem(agentConfig->dataDir, sessionId)) {
+            if (row.name == "__store.session_db") {
+                return row.bytes;
+            }
         }
-        const auto before = readSession();
-        tui->sendToPeer(agent::WireUserInput{sessionId, text});
-        if (!waitRoundDone(before, roundTimeoutMs)) {
+        return 0;
+    };
+
+    /// 每个采样点额外记录的"内存 vs 磁盘"对比项
+    struct SampleExtra {
+        size_t storeBytes      = 0; ///< 会话库磁盘字节
+        size_t memContentBytes = 0; ///< 内存里的内容 (展示窗口 + LLM 上下文 + 客户端消息)
+        size_t clientMsgs      = 0;
+        size_t clientBytes     = 0;
+        size_t liveContext     = 0;
+        size_t compactions     = 0;
+        size_t bursts          = 0;
+        size_t msgsSent        = 0;
+        size_t seededBytes     = 0; ///< 其中来自注入展示历史的内容
+        size_t realBytes       = 0; ///< 其中来自真实轮次的内容
+        int64_t seedMs         = 0; ///< 本次采样前注入历史耗时 (毫秒)
+    };
+
+    std::vector<ResourceResult> samples;
+    std::vector<SampleExtra>    extras;
+    auto                        driveStart  = std::chrono::steady_clock::now();
+    size_t                      seededTotal = 0;
+
+    /// 跑一轮真实对话 (一批消息) 并把内容计入累计量
+    /// - `return` false = 本轮没跑完 (超时/取消), 调用方应停止驱动
+    auto driveOneBurst = [&]() -> bool {
+        const auto   before = readSession();
+        const size_t sent   = sendBurst(msgsSent, inputsPerTurn);
+        if (sent == 0) {
+            console << "  [tui_longctx] 一批消息未发出, 停止驱动\n";
+            return false;
+        }
+        msgsSent += sent;
+        if (!waitBurstIdle(before, roundTimeoutMs)) {
             console << fmt::format(
-                "  [tui_longctx] 第 {} 轮 {} ms 未完成, 停止驱动\n",
+                "  [tui_longctx] 第 {} 轮 ({} 条消息) {} ms 未完成, 停止驱动\n",
                 round + 1,
+                sent,
                 roundTimeoutMs
             );
-            break;
+            return false;
         }
         ++round;
-        cumulative += tokensPerRound;
+        cumulative += sent * msgBytes + replyBytes;
         ++intervalRounds;
         intervalMaxLive = std::max(intervalMaxLive, readLiveTokens());
         // 长跑进度: 直接写 stderr (stdout 交给 console 缓冲, 结束才输出)
         if (round <= 3 || round % 50 == 0) {
             std::cerr << fmt::format(
-                "  [tui_longctx] 第 {} 轮完成, 估算累计 {} token\n",
+                "  [tui_longctx] 第 {} 轮完成 ({} 条消息), 累计内容 {}\n",
                 round,
-                cumulative
+                msgsSent,
+                fmtSize(cumulative)
             );
         }
+        return true;
+    };
 
-        while (nextPoint < points.size() && cumulative >= points[nextPoint]) {
-            const size_t target = points[nextPoint];
-            auto         snap   = readSession();
+    while (nextPoint < points.size() && round < maxRounds) {
+        const size_t target = points[nextPoint];
+
+        // (1) 真实轮次累积: 到采样点或真实轮次预算为止
+        while (cumulative < target && cumulative < realBytes && round < maxRounds) {
+            if (!driveOneBurst()) {
+                break;
+            }
+        }
+        // (2) 差额注入展示历史 (history 模式)
+        int64_t seedMs = 0;
+        if (cumulative < target) {
+            const auto   seedStart = std::chrono::steady_clock::now();
+            const size_t need      = target - cumulative;
+            const size_t rows      = seedHistory(need);
+            const size_t seeded    = rows * msgBytes;
+            seedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - seedStart
+            )
+                         .count();
+            seededTotal += seeded;
+            cumulative  += seeded;
+            console << fmt::format(
+                "  [tui_longctx] 注入展示历史 {} ({} 条, 耗时 {:.1f} s), 累计 {}\n",
+                fmtSize(seeded),
+                rows,
+                static_cast<double>(seedMs) / 1000.0,
+                fmtSize(cumulative)
+            );
+            // 注入后让客户端重新同步一次: 让客户端持有"最近 100 条展示历史"
+            // (注入的历史没有经 wire 下发, 不重新同步的话客户端还拿着注入前的窗口)
+            if (resyncAfterSeed) {
+                tui->sendToPeer(agent::WireHello{sessionId, "", 0, "", "en", 0, 100});
+                // 等客户端消息数稳定 (尾部同步 + 本地窗口裁剪完成)
+                size_t lastCount = std::numeric_limits<size_t>::max();
+                for (int i = 0; i < 200; ++i) {
+                    size_t now = 0;
+                    if (auto tuiSnap = tui->sharedState().readSnapshot()) {
+                        now = tuiSnap->messages().size();
+                    }
+                    if (now == lastCount) {
+                        break;
+                    }
+                    lastCount = now;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+            }
+            // 注入后再跑一轮真实对话: 让每个采样点都落在"轮次刚结束"的同一状态,
+            // 同时核实注入的历史不影响后续真实轮次
+            if (round < maxRounds && !driveOneBurst()) {
+                break;
+            }
+        }
+        if (cumulative < target) {
+            console << fmt::format(
+                "  [tui_longctx] 累计 {} 未达到采样点 {}, 停止驱动\n",
+                fmtSize(cumulative),
+                fmtSize(target)
+            );
+            break;
+        }
+
+        {
+            auto snap = readSession();
             fillSessionDetail(snap);
+
+            SampleExtra extra;
+            extra.storeBytes  = readStoreBytes();
+            extra.liveContext = snap.liveContextTokens;
+            extra.bursts      = round;
+            extra.msgsSent    = msgsSent;
+            extra.seededBytes = seededTotal;
+            extra.realBytes   = cumulative > seededTotal ? cumulative - seededTotal : 0;
+            extra.seedMs      = seedMs;
+            if (agent->agentContext->metrics) {
+                extra.compactions = agent->agentContext->metrics->compactions();
+            }
+            if (auto tuiSnap = tui->sharedState().readSnapshot()) {
+                extra.clientMsgs = tuiSnap->messages().size();
+                for (const auto& m : tuiSnap->messages()) {
+                    if (m) {
+                        extra.clientBytes += estimateViewMessageBytes(*m);
+                    }
+                }
+            }
+            extra.memContentBytes
+                = snap.viewWindowBytes + snap.llmBytes + extra.clientBytes;
 
             ResourceResult res;
             res.mode          = "tui_longctx";
             res.side          = "self";
-            res.point         = tokenPointName(target);
+            res.point         = sizePointName(target);
             res.tokens        = cumulative;
             res.pluginsAgent  = agent->agentContext->pluginManager
                                     ? agent->agentContext->pluginManager->list().size()
@@ -2406,17 +2732,8 @@ void benchResourceTuiLongCtx() {
             lastFrames     = fs.frames;
             lastFrameStats = fs;
 
-            uint64_t compactions = 0;
-            if (agent->agentContext->metrics) {
-                compactions = agent->agentContext->metrics->compactions();
-            }
-            const uint64_t compactionDelta = compactions - lastCompactions;
-            lastCompactions                = compactions;
-
-            size_t clientMsgs = 0;
-            if (auto tuiSnap = tui->sharedState().readSnapshot()) {
-                clientMsgs = tuiSnap->messages().size();
-            }
+            const uint64_t compactionDelta = extra.compactions - lastCompactions;
+            lastCompactions                = extra.compactions;
 
             res.viewCount = snap.viewWindowCount;
             res.viewBytes = snap.viewWindowBytes;
@@ -2428,29 +2745,41 @@ void benchResourceTuiLongCtx() {
                 )
                       .count();
             const double avgRoundMs
-                = intervalRounds > 0 ? static_cast<double>(intervalMs) / intervalRounds : -1.0;
+                = intervalRounds > 0
+                      ? static_cast<double>(std::max<int64_t>(0, intervalMs - extra.seedMs))
+                            / intervalRounds
+                      : -1.0;
             res.note = fmt::format(
-                "累计内容 {} token (第 {} 轮); 服务端回报用量 {} token; 活上下文 {} / 上限 {} "
-                "(区间峰值 {}); 压缩 {} 次 (累计 {}); 展示窗口 {} 条 (总 {}); 客户端 {} 条; "
-                "区间 {} 轮/每轮均 {:.0f} ms; 渲染 {} 帧/平均 {:.3f} ms",
-                cumulative,
+                "累计内容 {} (真实轮次 {} + 注入历史 {}; 第 {} 轮/共 {} 条); 服务端回报用量 {}"
+                " token; 活上下文 {} / 上限 {} (区间峰值 {}); 压缩 {} 次 (累计 {}); 展示窗口 {}"
+                " 条/{}/总 {} 条; 客户端 {} 条/{}; 内存内容合计 {}; 会话库磁盘 {}; 区间 {} 轮 + 注入"
+                " {:.1f} s (每轮均 {:.0f} ms); 渲染 {} 帧/平均 {:.3f} ms",
+                fmtSize(cumulative),
+                fmtSize(extra.realBytes),
+                fmtSize(extra.seededBytes),
                 round,
+                msgsSent,
                 snap.usageTotal,
                 snap.liveContextTokens,
                 snap.maxContextTokens,
                 std::max(intervalMaxLive, snap.liveContextTokens),
                 compactionDelta,
-                compactions,
+                extra.compactions,
                 snap.viewWindowCount,
+                fmtSize(snap.viewWindowBytes),
                 snap.viewTotalCount,
-                clientMsgs,
+                extra.clientMsgs,
+                fmtSize(extra.clientBytes),
+                fmtSize(extra.memContentBytes),
+                fmtSize(extra.storeBytes),
                 intervalRounds,
+                static_cast<double>(extra.seedMs) / 1000.0,
                 avgRoundMs,
                 res.frames,
                 res.frameAvgMs
             );
 
-            collectLogicalForTuiLongCtx(res, agent, tui, sessionId);
+            collectLogicalForTuiLongCtx(res, agent, tui, sessionId, agentConfig->dataDir);
             // 不在采样点做 malloc_trim/_heapmin: 它会提前把空闲页归还系统,
             // 后面的采样点就量不到真实稳态 (端点之间的回收行为也会被抹平)
             fillResourceMemDetail(res, 0, true, false);
@@ -2460,14 +2789,15 @@ void benchResourceTuiLongCtx() {
             phaseTracker.mark(
                 res.point,
                 fmt::format(
-                    "累计 {} token, 活上下文 {} token, 压缩 {} 次",
-                    cumulative,
+                    "累计 {}, 活上下文 {} token, 压缩 {} 次, 会话库 {}",
+                    fmtSize(cumulative),
                     snap.liveContextTokens,
-                    compactions
+                    extra.compactions,
+                    fmtSize(extra.storeBytes)
                 )
             );
             samples.push_back(res);
-            liveContexts.push_back(snap.liveContextTokens);
+            extras.push_back(extra);
             intervalRounds  = 0;
             intervalMaxLive = snap.liveContextTokens;
             intervalStart   = std::chrono::steady_clock::now();
@@ -2478,42 +2808,47 @@ void benchResourceTuiLongCtx() {
     phaseTracker.printTable("tui_longctx 分阶段内存", console);
     reporter.attachPhases("tui_longctx", "self", phaseTracker.samples());
 
-    // ---- 汇总表: 各采样点的规模/内存/渲染 ----
+    // ---- 汇总表: 各采样点的规模/磁盘/内存/渲染 ----
     console << fmt::format(
-        "\n  [tui_longctx] 采样汇总 (累计 {} token, 共 {} 轮, 驱动总耗时 {:.1f} s, mock 普通轮次 {} "
-        "/ 压缩 {} 次)\n",
-        cumulative,
+        "\n  [tui_longctx] 采样汇总 (模式 {}; 累计内容 {} = 真实轮次 {} + 注入历史 {}; 共 {} 轮 / "
+        "{} 条消息, 驱动总耗时 {:.1f} s, mock 普通轮次 {} / 压缩 {} 次)\n",
+        mode,
+        fmtSize(cumulative),
+        fmtSize(cumulative > seededTotal ? cumulative - seededTotal : 0),
+        fmtSize(seededTotal),
         round,
+        msgsSent,
         std::chrono::duration<double>(std::chrono::steady_clock::now() - driveStart).count(),
         sim.turnCount->load(),
         sim.compactCount->load()
     );
     console << fmt::format(
-        "    {:<8} {:>10} {:>10} {:>8} {:>8} {:>8} {:>6} {:>6} {:>8} {:>8}\n",
+        "    {:<9} {:>10} {:>11} {:>11} {:>10} {:>8} {:>8} {:>8} {:>6} {:>7}\n",
         "point",
-        "累计token",
+        "累计内容",
+        "会话库(磁盘)",
+        "内存内容",
         "活上下文",
         "RSS",
         "私有",
         "峰值RSS",
         "线程",
-        "句柄",
-        "帧数",
         "帧ms"
     );
     for (size_t i = 0; i < samples.size(); ++i) {
         const auto& r = samples[i];
+        const auto& e = extras[i];
         console << fmt::format(
-            "    {:<8} {:>10} {:>10} {:>8.2f} {:>8.2f} {:>8.2f} {:>6} {:>6} {:>8} {:>8.3}\n",
+            "    {:<9} {:>10} {:>11} {:>11} {:>10} {:>8.2f} {:>8.2f} {:>8.2f} {:>6} {:>7.3}\n",
             r.point,
-            r.tokens,
-            liveContexts[i],
+            fmtSize(r.tokens),
+            fmtSize(e.storeBytes),
+            fmtSize(e.memContentBytes),
+            e.liveContext,
             r.rssMB,
             r.privateMB,
             r.mem.peakRssMB,
             r.mem.threads,
-            r.mem.fds,
-            r.frames,
             r.frameAvgMs
         );
     }

@@ -38,7 +38,8 @@ void benchResourceRealTuiChild();
 void benchResourcePluginAttrib();
 
 /// 场景 5: 真实 TUI 长上下文 (真实流式回复 + 逐字渲染 + 超限后自动压缩后的稳态)
-/// - 逐轮真实对话, 累计内容 token 达到 100K/200K/1M/2M 时采样
+/// - 逐轮真实对话, **累计内容字节** 达到 20M/100M/200M/1G/2G 时采样
+///   (真实轮次先累积 2 MB, 其余按差额注入展示历史, 见 `AGENTXX_TUI_CTX_MODE`)
 /// - 环境变量说明见该函数上方的注释 (AGENTXX_TUI_CTX_*)
 void benchResourceTuiLongCtx();
 
