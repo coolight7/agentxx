@@ -102,16 +102,16 @@ std::string lineRangeText(int64_t offset, int64_t limit) {
 
 /// 解析 `agentxx_share_store` new 结果中的新内容 id (结果形如 {"id":3})
 /// - 非该形态/解析失败返回 0
-uint64_t shareStoreResultId(std::string_view result) {
+std::string shareStoreResultId(std::string_view result) {
     if (result.empty() || result.front() != '{') {
-        return 0;
+        return "";
     }
     try {
-        auto          j  = utilxx_base::Json::parse(result);
-        const int64_t id = j.is_object() ? j.value<int64_t>("id", 0) : 0;
-        return (id > 0) ? static_cast<uint64_t>(id) : uint64_t{0};
+        auto              j  = utilxx_base::Json::parse(result);
+        const std::string id = j.is_object() ? j.value<std::string>("id", std::string{}) : "";
+        return id;
     } catch (...) {
-        return 0;
+        return "";
     }
 }
 
@@ -145,7 +145,7 @@ std::string renderShareStoreCollapsed(const ClientToolRenderInput& in) {
         return {};
     }
     const std::string opt    = args->value("opt", std::string{});
-    const int64_t     id     = args->value<int64_t>("id", 0);
+    const std::string id     = args->value("id", std::string{});
     const int64_t     offset = args->value<int64_t>("offset", -1);
     const int64_t     limit  = args->value<int64_t>("limit", -1);
 
@@ -167,11 +167,11 @@ std::string renderShareStoreCollapsed(const ClientToolRenderInput& in) {
         addPart(opt);
 
         // id: get/update 来自参数; new 的新增 id 只在结果里 (参数无 id), 完成后才有
-        uint64_t shownId = (id > 0) ? static_cast<uint64_t>(id) : uint64_t{0};
+        auto shownId = id;
         if (opt == "new" && in.finished) {
             shownId = shareStoreResultId(in.resultText);
         }
-        if (shownId > 0) {
+        if (id.empty() == false) {
             addPart(fmt::format("#{}", shownId));
         }
     } else if (!opt.empty()) {
