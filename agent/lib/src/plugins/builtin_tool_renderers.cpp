@@ -100,18 +100,35 @@ std::string lineRangeText(int64_t offset, int64_t limit) {
     return fmt::format("[{}, {}]", offset, offset + limit);
 }
 
+/// 取 JSON 里的 id 文本 (数字与字符串都接受), 缺失/非数字返回空串
+/// - 工具参数 schema 把 `id` 声明为字符串, `new` 的结果里却是数字 id, 两种形态都要认
+std::string idTextOf(const utilxx_base::Json& value) {
+    if (value.is_string()) {
+        return value.get<std::string>();
+    }
+    if (value.is_number_integer() || value.is_number_unsigned()) {
+        return std::to_string(value.get<int64_t>());
+    }
+    if (value.is_number_float()) {
+        return fmt::format("{:g}", value.get<double>());
+    }
+    return {};
+}
+
 /// 解析 `agentxx_share_store` new 结果中的新内容 id (结果形如 {"id":3})
-/// - 非该形态/解析失败返回 0
+/// - 非该形态/解析失败返回空串
 std::string shareStoreResultId(std::string_view result) {
     if (result.empty() || result.front() != '{') {
-        return "";
+        return {};
     }
     try {
-        auto              j  = utilxx_base::Json::parse(result);
-        const std::string id = j.is_object() ? j.value<std::string>("id", std::string{}) : "";
-        return id;
+        const auto j = utilxx_base::Json::parse(result);
+        if (!j.is_object()) {
+            return {};
+        }
+        return idTextOf(j["id"]);
     } catch (...) {
-        return "";
+        return {};
     }
 }
 
@@ -137,6 +154,7 @@ std::string subagentTaskText(const utilxx_base::Json& args) {
 ///           未给分页参数时 "get #12")
 /// - new:    "new" (运行中); 完成后补结果里的新 id → "new #7"
 /// - update: "update #3"
+/// - id 在参数里是字符串 (schema 如此), 在 `new` 的结果里是数字: 两种都认
 /// - 区间只由 get 展示 (offset/limit 只对 get 生效; new/update 整段原样存储, 不带区间)
 /// - 未识别的 opt (协议扩展) 原样展示; 参数未就绪时返回空串
 std::string renderShareStoreCollapsed(const ClientToolRenderInput& in) {
@@ -144,10 +162,11 @@ std::string renderShareStoreCollapsed(const ClientToolRenderInput& in) {
     if (!args) {
         return {};
     }
-    const std::string opt    = args->value("opt", std::string{});
-    const std::string id     = args->value("id", std::string{});
-    const int64_t     offset = args->value<int64_t>("offset", -1);
-    const int64_t     limit  = args->value<int64_t>("limit", -1);
+    const auto&       argsObj = *args; // 只读访问: 缺失的键不会插进参数里
+    const std::string opt     = args->value("opt", std::string{});
+    const std::string argId   = idTextOf(argsObj["id"]);
+    const int64_t     offset  = args->value<int64_t>("offset", -1);
+    const int64_t     limit   = args->value<int64_t>("limit", -1);
 
     std::string text;
     auto        addPart = [&text](std::string_view part) {
@@ -167,11 +186,12 @@ std::string renderShareStoreCollapsed(const ClientToolRenderInput& in) {
         addPart(opt);
 
         // id: get/update 来自参数; new 的新增 id 只在结果里 (参数无 id), 完成后才有
-        auto shownId = id;
+        auto shownId = argId;
         if (opt == "new" && in.finished) {
             shownId = shareStoreResultId(in.resultText);
         }
-        if (id.empty() == false) {
+        // 判空看实际要显示的那个 (new 运行中没有 id, 完成后才由结果补上)
+        if (shownId.empty() == false) {
             addPart(fmt::format("#{}", shownId));
         }
     } else if (!opt.empty()) {

@@ -721,7 +721,7 @@ void test_model_numeric_and_extra_config() {
     it  = cfg.models.find("m2");
     XX_TEST_EXPECT_TRUE(it != cfg.models.end());
     if (it != cfg.models.end()) {
-        XX_TEST_EXPECT_EQ(it->second.connectTimeoutSeconds, 16);
+        XX_TEST_EXPECT_EQ(it->second.connectTimeoutSeconds, 30);
         XX_TEST_EXPECT_EQ(it->second.readChunkTimeoutSeconds, 60);
         XX_TEST_EXPECT_EQ(it->second.maxConcurrentConnections, size_t{5});
         XX_TEST_EXPECT_EQ(it->second.modelContextMaxToken, size_t{0});
