@@ -192,6 +192,18 @@ public:
     /// 清空缓存 (如主题切换后旧 Element 的颜色已过时)
     void clearCache();
 
+    /// 暂停 / 恢复滚轮滚动 (历史分页请求在飞期间屏蔽滚动; UI 线程, 帧间调用)
+    ///
+    /// 暂停期间滚轮事件被吞掉 (`OnEvent` 返回 true 但不累积行数), 进入暂停时
+    /// 已累积未落实的行数一并丢弃 —— 它们都是在"新增区高度尚未补齐"的状态下
+    /// 攒的, 落实下来会一路穿过刚加载的那一段。
+    /// 只影响滚轮: 跳转 ([scrollToIndex] / [scrollToBottom]) 与吸附底部不受影响。
+    void setScrollSuspended(bool suspend);
+
+    bool scrollSuspended() const noexcept {
+        return scrollSuspended_;
+    }
+
     /// 头部插入子项后的滚动锚定 (历史分页前插场景; UI 线程, 帧间调用)
     ///
     /// 在并行数组头部插入 count 个新条目 —— 既有条目的缓存 Element 与实测
@@ -397,6 +409,8 @@ private:
     int  measuredWidth_  = -1; // 上次布局所用内容宽度 (变化时缓存整体失效)
     int  contentXMax_    = 0;  // 内容区右边界 (已扣除 gutter)
     bool stickToBottom_  = true;
+    /// 滚轮滚动暂停中 (历史分页请求在飞; 见 [setScrollSuspended])
+    bool scrollSuspended_ = false;
     /// 上一帧定位阶段的精确结论: 内容末尾是否落在视口内 (= 已到底, 无法再下滚)。
     /// 只由实测高度与视口高度得出, 不含任何估算 —— 下滚时据此恢复吸附底部
     bool contentEndsInViewport_ = false;

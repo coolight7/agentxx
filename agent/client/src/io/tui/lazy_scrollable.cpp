@@ -140,11 +140,18 @@ bool LazyScrollable::OnEvent(ftxui::Event event) {
     // OnEvent 期构建, 元素进入缓存后下一帧 OnRender 清空了登记表却不会再构建,
     // 该帧的按钮/控件命中区就会丢失 (点击失效)。布局阶段构建则天然安全。
     if (mouse.button == ftxui::Mouse::WheelUp) {
+        if (scrollSuspended_) {
+            // 历史分页请求在飞: 吞掉滚轮但不累积行数 (原因见 [setScrollSuspended])
+            return true;
+        }
         stickToBottom_ = false; // 上滚即解除吸附 (与既有语义一致)
         --pendingScrollRows_;
         return true;
     }
     if (mouse.button == ftxui::Mouse::WheelDown) {
+        if (scrollSuspended_) {
+            return true;
+        }
         ++pendingScrollRows_;
         return true;
     }
@@ -373,6 +380,16 @@ void LazyScrollable::ensureElement(size_t index) {
         cachedBytes_ += lruList_.front().sourceBytes;
     }
     evictIfNeeded();
+}
+
+void LazyScrollable::setScrollSuspended(bool suspend) {
+    if (scrollSuspended_ == suspend) {
+        return;
+    }
+    scrollSuspended_ = suspend;
+    // 待落实的滚轮行数直接丢弃: 暂停前攒的行数按旧内容算, 恢复后内容已经变了
+    // (前插了一页), 落实下来等于把视口额外推走一段
+    pendingScrollRows_ = 0;
 }
 
 void LazyScrollable::notifyPrepended(size_t count) {

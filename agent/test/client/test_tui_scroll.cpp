@@ -599,8 +599,131 @@ static void testHistoryPrependAnchoring() {
 }
 
 // ---------------------------------------------------------------------------
-// 消息列表头部角色标签与 Tip 级别文本的界面语言切换
+// 历史分页加载中屏遮滚轮 (LazyScrollable::setScrollSuspended)
+//
+// 分页请求在飞期间用户继续上滑, 攒下的行数都是按"新增区高度尚未补齐"的列表
+// 算的; 页面前插后一落实就跨过刚加载出来的那一段 (看起来就是直接跳到新加载
+// 消息的开头)。屏遮期间滚轮被吞掉且不累积行数, 恢复后从当前视口继续。
 // ---------------------------------------------------------------------------
+
+static void testScrollSuspensionDuringHistoryLoad() {
+    // ---- 屏遮: 滚轮被吞掉, 视口与待落实行数都不变 ----
+    {
+        ScrollFixture f;
+        f.addHistory(8);
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.history.reset(100, 108, st.messages().size());
+        });
+        f.render();
+        f.render();
+        // 上滑几行离开底部 (便于判定"屏遮期间视口没动")
+        for (int i = 0; i < 6; ++i) {
+            (void)f.wheel(ftxui::Mouse::WheelUp);
+        }
+        const std::string scrolled = f.render();
+        const int         offset   = f.comp->scrollOffset();
+        XX_TEST_EXPECT_TRUE(offset > 0);
+
+        f.comp->setScrollSuspended(true);
+        XX_TEST_EXPECT_TRUE(f.comp->isScrollSuspended());
+        // 屏遮期间的滚轮: 事件仍由列表吃掉 (不冒到别的组件), 但不移动视口
+        for (int i = 0; i < 20; ++i) {
+            XX_TEST_EXPECT_TRUE(f.wheel(ftxui::Mouse::WheelUp));
+        }
+        const std::string after = f.render();
+        XX_TEST_EXPECT_EQ(f.comp->scrollOffset(), offset);
+        XX_TEST_EXPECT_EQ(
+            normalizeScreenForCompare(scrolled, ScrollFixture::kWidth),
+            normalizeScreenForCompare(after, ScrollFixture::kWidth)
+        );
+
+        // 恢复后又能滚动: 上滑一样就是一行的位移
+        f.comp->setScrollSuspended(false);
+        XX_TEST_EXPECT_TRUE(f.wheel(ftxui::Mouse::WheelUp));
+        f.render();
+        XX_TEST_EXPECT_TRUE(f.comp->scrollOffset() < offset);
+    }
+
+    // ---- 屏遮期间不发起新的分页请求 ----
+    {
+        ScrollFixture f;
+        f.addHistory(8);
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.history.reset(100, 108, st.messages().size());
+        });
+        f.render();
+        f.render();
+        // 上滚到窗口顶部 (偏移 0 = 预取条件成立)
+        for (int i = 0; i < 5000 && f.comp->scrollOffset() > 0; ++i) {
+            (void)f.wheel(ftxui::Mouse::WheelUp);
+            f.render();
+        }
+        XX_TEST_EXPECT_EQ(f.comp->scrollOffset(), 0);
+        int requested            = 0;
+        f.ctx.requestMoreHistory = [&requested] { ++requested; };
+        f.comp->setScrollSuspended(true);
+        for (int i = 0; i < 5; ++i) {
+            (void)f.wheel(ftxui::Mouse::WheelUp);
+        }
+        XX_TEST_EXPECT_EQ(requested, 0); // 屏遮中: 不重复发起
+        f.comp->setScrollSuspended(false);
+        (void)f.wheel(ftxui::Mouse::WheelUp);
+        XX_TEST_EXPECT_EQ(requested, 1); // 恢复后回到正常预取
+        f.ctx.requestMoreHistory = nullptr;
+    }
+
+    // ---- 屏遮期间进来一页 (前插 + 锚点平移), 恢复后从同一位置继续上滑 ----
+    {
+        ScrollFixture f;
+        f.addHistory(8);
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.history.reset(100, 108, st.messages().size());
+        });
+        f.render();
+        f.render();
+        for (int i = 0; i < 6; ++i) {
+            (void)f.wheel(ftxui::Mouse::WheelUp);
+        }
+        const std::string scrolled = f.render();
+        const int         offset   = f.comp->scrollOffset();
+
+        // 屏遮 + 期间滚轮 (应被丢弃) + 页响应前插 3 条
+        f.comp->setScrollSuspended(true);
+        for (int i = 0; i < 30; ++i) {
+            (void)f.wheel(ftxui::Mouse::WheelUp);
+        }
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            for (int i = 0; i < 3; ++i) {
+                auto m  = std::make_shared<TUIMessage>();
+                m->role = TUIMessage::Role::Assistant;
+                for (int j = 0; j < 40; ++j) {
+                    m->text += "paged history " + std::to_string(j) + " words to wrap ";
+                }
+                prependRow(st, std::move(*m));
+            }
+            st.history.reset(97, 108, st.messages().size());
+        });
+        f.comp->onHistoryPrepended(3);
+        f.comp->setScrollSuspended(false);
+        const std::string after = f.render();
+
+        // 视口内容不变, 偏移按新增区估算行数等量下移 (锚点平移)
+        XX_TEST_EXPECT_EQ(
+            normalizeScreenForCompare(scrolled, ScrollFixture::kWidth),
+            normalizeScreenForCompare(after, ScrollFixture::kWidth)
+        );
+        XX_TEST_EXPECT_TRUE(f.comp->scrollOffset() > offset);
+
+        // 恢复后上滑一行就是一行的位移 (不会一次跨过整页)
+        const int beforeRow = f.comp->scrollOffset();
+        XX_TEST_EXPECT_TRUE(f.wheel(ftxui::Mouse::WheelUp));
+        f.render();
+        const int afterRow = f.comp->scrollOffset();
+        XX_TEST_EXPECT_TRUE(afterRow >= 0);
+        XX_TEST_EXPECT_TRUE(afterRow < beforeRow);
+        XX_TEST_EXPECT_TRUE(beforeRow - afterRow <= 2); // 估算校正允许 1 行偏差
+    }
+}
 
 /// 头部角色标签 ("[Think]"/"[Tool]"/"[System]") 与 Tip 前缀 ("[Tip] <级别> · ")
 /// 随界面语言切换; Tip 折叠态格式为 "+ [Tip] Warn · <单行预览>"
@@ -1749,6 +1872,9 @@ TestResult testTuiScroll() {
     tuiSettings.setLanguage(TuiLanguage::EnUs);
 
     testHistoryPrependAnchoring();
+
+    // 历史分页加载中屏遮滚轮 (避免前插后"跳到新加载消息的开头")
+    testScrollSuspensionDuringHistoryLoad();
 
     testRoleLabelLocalization();
 

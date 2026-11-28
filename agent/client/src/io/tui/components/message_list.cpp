@@ -1332,6 +1332,9 @@ void MessageListComponent::maybeRequestMoreHistory() {
     if (!ctx_.frameState || !ctx_.frameState->hasMoreHistory()) {
         return; // 无更早历史 (完整同步 / 已加载到会话开头)
     }
+    if (scrollable_->scrollSuspended()) {
+        return; // 上一页还在加载中 (滚动也被屏遮): 不重复发起
+    }
     // 首帧布局前视口未测量 (高度/偏移未就绪), 不触发
     if (scrollable_->viewportHeight() <= 0) {
         return;

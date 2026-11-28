@@ -1021,6 +1021,11 @@ void TUIClientAgentIO::stop() {
     if (toastTimer_) {
         toastTimer_->cancel();
     }
+    // 同理取消历史分页看门狗 (回调持弱引用, cancel 只是不留下无意义的等待)
+    if (historyPageTimer_) {
+        historyPageTimer_->cancel();
+        historyPageTimer_.reset();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1804,6 +1809,9 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
     if (messageList_) {
         messageList_->setStickToBottom(true);
         messageList_->clearInterruptUiState();
+        // 上一会话遗留的分页屏遮/看门狗随会话切换作废
+        messageList_->setScrollSuspended(false);
+        resetHistoryScrollSuspension();
     }
     awaitingInterruptInput_.store(false, std::memory_order_release);
     // 清理上一会话遗留的排队输入与上下文弹窗数据 (正常路径下切换前
@@ -2240,6 +2248,7 @@ void TUIClientAgentIO::applyLocalTrimCheck() {
 void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessagesPage& page) {
     size_t prependedCount = 0;
     bool   anchored       = false;
+    bool   applied        = false;
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
@@ -2256,36 +2265,39 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
                 page.sessionId,
                 currentSessionId()
             );
-            return;
-        }
-        if (outcome == agentxx::client::HistoryWindow::PageOutcome::Empty) {
-            return;
-        }
-        if (outcome == agentxx::client::HistoryWindow::PageOutcome::NonContiguous) {
+        } else if (outcome == agentxx::client::HistoryWindow::PageOutcome::Empty) {
+            // 空页 = 上方没有更早历史: 窗口起点已归零, 不会再请求下一页
+        } else if (outcome == agentxx::client::HistoryWindow::PageOutcome::NonContiguous) {
             XX_LOGW(
                 "[tui] drop non-contiguous history page (start={}, count={}, window start={})",
                 page.startIndex,
                 page.messages.size(),
                 st.history.windowStart()
             );
-            return;
+        } else {
+            applied        = true;
+            anchored       = !st.replica.rows().empty();
+            // 本页消息按页内顺序整体前插到窗口上方 (副本内部按 id 去重并过滤空行,
+            // 前插条数取实际插入项, 滚动锚定依赖该条数估算新增行数)
+            prependedCount = st.replica.prependRows(page.messages);
+            // 用户消息按正文长短定初始折叠状态 (刚前插的行)
+            foldLongUserMessages(st.replica.rows(), 0, prependedCount);
+            // 窗口起点左移到本页起始下标, 条数按实际入列表条数累加
+            st.history.notePrepended(page.startIndex, prependedCount);
         }
-        anchored       = !st.replica.rows().empty();
-        // 本页消息按页内顺序整体前插到窗口上方 (副本内部按 id 去重并过滤空行,
-        // 前插条数取实际插入项, 滚动锚定依赖该条数估算新增行数)
-        prependedCount = st.replica.prependRows(page.messages);
-        // 用户消息按正文长短定初始折叠状态 (刚前插的行)
-        foldLongUserMessages(st.replica.rows(), 0, prependedCount);
-        // 窗口起点左移到本页起始下标, 条数按实际入列表条数累加
-        st.history.notePrepended(page.startIndex, prependedCount);
     }
-    // 滚动锚定: LazyScrollable 为 UI 线程独占, 经动作队列在帧间执行。
-    // anchored=false 表示首屏填充 (前插前无消息), 无需稳定旧视口内容
-    enqueueUiAction([this, prependedCount, anchored]() {
-        if (messageList_ && anchored) {
-            messageList_->onHistoryPrepended(prependedCount);
-        }
-    });
+    if (applied) {
+        // 滚动锚定: LazyScrollable 为 UI 线程独占, 经动作队列在帧间执行。
+        // anchored=false 表示首屏填充 (前插前无消息), 无需稳定旧视口内容
+        enqueueUiAction([this, prependedCount, anchored]() {
+            if (messageList_ && anchored) {
+                messageList_->onHistoryPrepended(prependedCount);
+            }
+        });
+    }
+    // 请求已结束 (页已应用 / 已丢弃 / 空页): 恢复滚轮。
+    // 队列是 FIFO, 恢复动作排在前插动作之后 —— 本帧渲染时两者都已落实
+    resumeHistoryScroll();
     postRedraw();
 }
 
@@ -2300,7 +2312,66 @@ void TUIClientAgentIO::requestOlderHistory() {
         }
         beforeIndex = st.history.windowStart();
     }
+    // 请求在飞期间屏遮滚轮: 在这段窗口里攒下的行数都是按"新增区高度尚未补齐"
+    // 的列表算的, 页面前插后一落实会直接跨过刚加载出来的那一段 (看起来就是
+    // "跳到新加载消息的开头")。页响应处理完后恢复 (见 onViewMessagesPage),
+    // 响应丢了由看门狗放开 (见 onHistoryPageTimeout)
+    suspendHistoryScroll();
     requestViewMessagesPage(currentSessionId(), beforeIndex, kHistoryPageSize);
+}
+
+void TUIClientAgentIO::suspendHistoryScroll() {
+    enqueueUiAction([this]() {
+        if (messageList_) {
+            messageList_->setScrollSuspended(true);
+        }
+    });
+    // 看门狗: 只持弱引用与该次请求的代次, 实例析构 / 请求已结束后回调什么都不做
+    auto     weak = weak_from_this();
+    const uint64_t seq = ++historyPageSeq_;
+    historyPageTimer_ = std::make_shared<asio::steady_timer>(ex_);
+    historyPageTimer_->expires_after(kHistoryPageTimeout);
+    historyPageTimer_->async_wait([weak, seq](utilxx_base::AsioErrorCode ec) {
+        if (ec) {
+            return; // 已取消 (恢复滚动时 cancel)
+        }
+        auto self = weak.lock();
+        if (self && self->historyPageSeq_ == seq) {
+            self->onHistoryPageTimeout();
+        }
+    });
+}
+
+void TUIClientAgentIO::resumeHistoryScroll() {
+    ++historyPageSeq_; // 旧看门狗作废
+    if (historyPageTimer_) {
+        historyPageTimer_->cancel();
+        historyPageTimer_.reset();
+    }
+    enqueueUiAction([this]() {
+        if (messageList_) {
+            messageList_->setScrollSuspended(false);
+        }
+    });
+}
+
+void TUIClientAgentIO::onHistoryPageTimeout() {
+    historyPageTimer_.reset();
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        // 请求标志复位: 下一次上滑到窗口顶部时重新发起 (响应真的丢了, 不能一直等)
+        sharedState_.mutableState().history.abortLoading();
+    }
+    XX_LOGW(
+        "[tui] history page request timed out after {} ms; scroll re-enabled",
+        kHistoryPageTimeout.count()
+    );
+    enqueueUiAction([this]() {
+        if (messageList_) {
+            messageList_->setScrollSuspended(false);
+        }
+    });
+    postRedraw();
 }
 
 void TUIClientAgentIO::onHelloAck(const agentxx::agent::WireHelloAck& ack) {
@@ -2874,8 +2945,16 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
             messageList_->setStickToBottom(true);
             messageList_->clearInterruptUiState();
             messageList_->resetHistoryPagination();
+            // 整体替换: 未返回的分页请求已作废 (history 已 resetForSession),
+            // 滚动屏蔽随之解除
+            messageList_->setScrollSuspended(false);
         }
     });
+    // 看门狗也一并取消 (它只服务分页请求)
+    if (historyPageTimer_) {
+        historyPageTimer_->cancel();
+        historyPageTimer_.reset();
+    }
     postRedraw();
 }
 

@@ -615,6 +615,26 @@ private:
     /// 历史分页每页条数 (与服务端 SessionServerAgentIO 的默认值一致)
     static constexpr uint32_t kHistoryPageSize = 100;
 
+    // ---- 历史分页期间的滚动屏蔽 ----
+
+    /// 屏遮滚轮 (经 UI 动作队列落实) 并启动看门狗: 请求在飞期间用户的上滑都
+    /// 会攒在"高度尚未补齐"的列表上, 页面前插后一落实就跨过刚加载的那一段
+    void suspendHistoryScroll();
+    /// 恢复滚轮 (取消看门狗); 页响应处理完/超时/整体同步时调用
+    void resumeHistoryScroll();
+    /// 看门狗超时: 页响应丢失 (连接断开等) 时放开滚动并复位请求标志
+    void onHistoryPageTimeout();
+    /// 分页请求超时时长 (毫秒): 超过它仍未收到页响应就放开滚动
+    static constexpr std::chrono::milliseconds kHistoryPageTimeout{8000};
+    /// 屏遮状态复位 (会话切换/整体同步): UI 线程可直接调, 无需动作队列
+    void resetHistoryScrollSuspension() {
+        ++historyPageSeq_;
+        if (historyPageTimer_) {
+            historyPageTimer_->cancel();
+            historyPageTimer_.reset();
+        }
+    }
+
     // ---- 本地消息条数上限 (保留窗口见 model/message_window.h) ----
 
     /// 投递一次"本地消息上限清理检查" (client 线程; 已有未执行的检查时忽略):
@@ -806,6 +826,13 @@ private:
     std::shared_ptr<asio::steady_timer> toastTimer_;
     /// toast 显示时长
     static constexpr std::chrono::seconds kToastDuration{3};
+
+    /// 历史分页看门狗 (client io_context 上): 页响应丢失时放开滚动,
+    /// 避免消息列表一直不响应滚轮; stop() 时 cancel
+    std::shared_ptr<asio::steady_timer> historyPageTimer_;
+    /// 看门狗代次: 每次屏遮/恢复递增, 旧定时器回调据此丢弃
+    /// (会话切换 / 上一个请求已结束后旧看门狗不得动新的请求)
+    uint64_t historyPageSeq_ = 0;
 
     // ---- 即时更新检查 (设置弹窗"检查更新"; 跨线程原子标志) ----
     /// 是否已有即时检查在跑 (UI 线程置位, client io 线程的协程收尾时复位):

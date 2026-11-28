@@ -123,6 +123,18 @@ public:
         }
     }
 
+    /// 暂停 / 恢复滚轮滚动 (历史分页请求在飞期间由端点屏蔽滚动)
+    /// - 转发给 LazyScrollable: 暂停期间滚轮被吞掉, 已累积未落实的行数丢弃
+    /// - 暂停期间不再发起新的分页请求 (见 [maybeRequestMoreHistory])
+    /// - 跳转按钮与吸附底部不受影响
+    void setScrollSuspended(bool v) {
+        scrollable_->setScrollSuspended(v);
+    }
+
+    bool isScrollSuspended() const {
+        return scrollable_->scrollSuspended();
+    }
+
     /// 本地消息条数上限清理: 头部被移除 count 条消息后的状态同步
     /// (client 线程经 UI 动作队列调用, 帧间执行)
     /// - LazyScrollable 并行数组与锚点前移 + 被删条目的渲染缓存立即释放:
