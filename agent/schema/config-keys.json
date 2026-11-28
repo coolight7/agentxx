@@ -288,7 +288,7 @@
       "path": "model.list[].connect_timeout",
       "owner": "server",
       "type": "int (秒)",
-      "default": "16",
+      "default": "30",
       "sample": "model:\n  list:\n    - name: m1\n      connect_timeout: 3"
     },
     {

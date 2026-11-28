@@ -755,11 +755,11 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
     out.push_back(
         {"model.list[].connect_timeout",
          "int (秒)",
-         "16",
+         "30",
          "model:\n  list:\n    - name: m1\n      connect_timeout: 3\n",
          kMinimalModelYaml,
          false,
-         "16",
+         "30",
          "3",
          modelProbe([](const agentxx::agent::ModelConfig& m) {
              return std::to_string(m.connectTimeoutSeconds);

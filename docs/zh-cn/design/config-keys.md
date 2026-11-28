@@ -62,7 +62,7 @@
 | `model.list[].send_thinking` | 服务端 | bool | false |
 | `model.list[].request_reasoning_summary` | 服务端 | bool | true |
 | `model.list[].cache_control` | 服务端 | bool (仅 anthropic 生效) | false |
-| `model.list[].connect_timeout` | 服务端 | int (秒) | 16 |
+| `model.list[].connect_timeout` | 服务端 | int (秒) | 30 |
 | `model.list[].read_chunk_timeout` | 服务端 | int (秒) | 60 |
 | `model.list[].output_idle_timeout` | 服务端 | int (秒; 0 = 关闭) | 600 |
 | `model.list[].ssl_verify` | 服务端 | bool (省略 = 未指定, 用全局默认策略) | 未指定 (nullopt) |

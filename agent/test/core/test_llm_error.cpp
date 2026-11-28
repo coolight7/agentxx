@@ -89,6 +89,23 @@ TestResult testLlmError() {
             XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Timeout);
         }
 
+        // 建连阶段的错误文本 (cxx_utilxx createConnection 拼上 stage/host/endpoints):
+        // 必须仍判为网络类, 才能拿到最短退避并继续重试
+        const char* const stageCases[] = {
+            "connect timeout after 30000 ms (stage=connect host=opencode.ai:443 endpoints=2) | "
+            "由于线程退出或应用程序请求，已中止 I/O 操作。 [system:995]",
+            "connect failed after 21031 ms (stage=connect host=opencode.ai:443 endpoints=2) | "
+            "由于连接方在一段时间后没有正确答复或连接的主机没有反应，连接尝试失败。 "
+            "[system:10060]",
+            "tls failed after 320 ms (stage=tls host=104.18.10.66:443 endpoints=1) | "
+            "asio.ssl: sslv3 alert handshake failure",
+            "dns resolve failed after 11108 ms (stage=dns host=opencode.ai:443) | "
+            "不知道这样的主机。 [system:11001]",
+        };
+        for (const auto* text : stageCases) {
+            XX_TEST_EXPECT_TRUE(classifyLlmError(text) == LlmErrorKind::Network);
+        }
+
         // 真实观测到的文本: 流式读超时的诊断后缀里带收到的字节数, 里面恰好出现
         // `403` / `400` 三位数。裸子串匹配会把它们当成鉴权/请求非法, 于是
         // "可重试的读超时"第一次就结束本轮 (用户看到 "failed after 1 attempt(s)")

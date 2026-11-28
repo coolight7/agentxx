@@ -10,6 +10,7 @@
 #include "agentxx/util/task_scope.h"
 #include "agentxx/version.h"
 #include "fmt/format.h"
+#include "utilxx/http_client.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/system.h"
 
@@ -336,6 +337,44 @@ std::string buildDiagnosticsText(
         lines.push_back("");
         lines.push_back("## event hub");
         lines.push_back(fmt::format("- {}", ctx.eventHub->statsJson().dump()));
+    }
+
+    // ---- HTTP 连接池 (确认 LLM 的连接是否真的在复用; 空载时计数全 0) ----
+    if (ctx.agentConfig) {
+        std::vector<std::string> section;
+        std::vector<std::string> seen;
+        for (const auto& [name, model] : ctx.agentConfig->availableModels) {
+            if (model.baseUrl.empty()) {
+                continue;
+            }
+            // 多个模型条目可能共用同一个端点, 只输出一次
+            if (std::find(seen.begin(), seen.end(), model.baseUrl) != seen.end()) {
+                continue;
+            }
+            seen.push_back(model.baseUrl);
+            const auto stats = utilxx::HttpClient::poolStats(model.baseUrl);
+            section.push_back(fmt::format(
+                "- {} active={} idle={} created={} reused={} peak={} queued={}",
+                model.baseUrl,
+                stats.active,
+                stats.idle,
+                stats.created,
+                stats.reused,
+                stats.peakActive,
+                stats.queuedWaits
+            ));
+        }
+        if (!section.empty()) {
+            lines.push_back("");
+            lines.push_back("## http pool");
+            for (auto& line : section) {
+                lines.push_back(std::move(line));
+            }
+            const auto dns = utilxx::HttpClient::dnsCacheStats();
+            lines.push_back(
+                fmt::format("- dns cache: hit={} miss={} stale={}", dns.hit, dns.miss, dns.stale)
+            );
+        }
     }
 
     // ---- 加载 (配置 + 运行侧: 已脱敏快照, 与 --dump-config 同源) ----

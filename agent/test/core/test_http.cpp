@@ -1393,7 +1393,9 @@ asio::awaitable<void> test_http_server_absolute_form_target() {
 }
 
 /// 原始 socket SSE 测试服务器: 用于模拟 HttpClient::requestSseAsync 的各种异常场景
-/// - Complete:    正常发完事件并发送 chunked 终止块
+/// - Complete:    正常发完事件并发送 chunked 终止块 (发完即关 connection)
+/// - CompleteKeepAlive: 同上, 但保持连接可继续服务下一个请求 (keep-alive)
+/// - DelayedTail: 发完事件后等 [tailDelay] 再发终止块, 随后保持连接 (keep-alive)
 /// - AbruptClose: 发送部分事件后直接关闭连接 (不发 chunked 终止块, 模拟对端中断)
 /// - Stall:       发送部分事件后保持静默 (模拟卡死, 用于触发 readChunkTimeout)
 class SseTestServer {
@@ -1401,6 +1403,8 @@ public:
 
     enum class Mode {
         Complete,
+        CompleteKeepAlive,
+        DelayedTail,
         AbruptClose,
         Stall,
     };
@@ -1409,6 +1413,8 @@ public:
     uint16_t                 boundPort = 0;
     Mode                     mode      = Mode::Complete;
     std::vector<std::string> events; // 原始 SSE 事件块 (含结尾 "\n\n")
+    /// DelayedTail: 写完事件后到终止块之间的延迟
+    std::chrono::milliseconds tailDelay{400};
     std::atomic<bool>        stopped{false};
 
 private:
@@ -1466,44 +1472,65 @@ private:
         namespace http = boost::beast::http;
         utilxx_base::AsioErrorCode ec;
 
-        boost::beast::flat_buffer        buf;
-        http::request<http::string_body> req;
-        http::read(sock, buf, req, ec);
-        if (ec) {
-            return;
-        }
-
-        std::string header = "HTTP/1.1 200 OK\r\n"
-                             "Content-Type: text/event-stream\r\n"
-                             "Transfer-Encoding: chunked\r\n"
-                             "\r\n";
-        asio::write(sock, asio::buffer(header), ec);
-        if (ec) {
-            return;
-        }
-
-        for (const auto& ev : events) {
-            auto framed = chunkFrame(ev);
-            asio::write(sock, asio::buffer(framed), ec);
+        boost::beast::flat_buffer buf;
+        // Complete* / DelayedTail 模式支持一条连接上连续多个请求 (keep-alive);
+        // 其余模式处理完一个请求就返回（连接随之关闭）
+        while (!stopped.load()) {
+            http::request<http::string_body> req;
+            http::read(sock, buf, req, ec);
             if (ec) {
                 return;
             }
-        }
 
-        switch (mode) {
-            case Mode::Complete: {
-                // chunked 终止块, 正常结束响应
-                asio::write(sock, asio::buffer(std::string{"0\r\n\r\n"}), ec);
-                break;
+            std::string header = "HTTP/1.1 200 OK\r\n"
+                                 "Content-Type: text/event-stream\r\n"
+                                 "Transfer-Encoding: chunked\r\n"
+                                 "\r\n";
+            asio::write(sock, asio::buffer(header), ec);
+            if (ec) {
+                return;
             }
-            case Mode::AbruptClose:
-                // 不发终止块直接关闭 (FIN), 客户端应收到 eof/partial_message 错误
-                break;
-            case Mode::Stall:
-                for (int i = 0; i < 300 && !stopped.load(); ++i) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            for (const auto& ev : events) {
+                auto framed = chunkFrame(ev);
+                asio::write(sock, asio::buffer(framed), ec);
+                if (ec) {
+                    return;
                 }
-                break;
+            }
+
+            switch (mode) {
+                case Mode::Complete:
+                case Mode::CompleteKeepAlive: {
+                    // chunked 终止块, 正常结束响应
+                    asio::write(sock, asio::buffer(std::string{"0\r\n\r\n"}), ec);
+                    if (ec || mode == Mode::Complete) {
+                        return;
+                    }
+                    break;
+                }
+                case Mode::DelayedTail: {
+                    // 应用层已经看到结束标记, HTTP 正文的终止块晚一点才到
+                    for (auto waited = std::chrono::milliseconds{0};
+                         waited < tailDelay && !stopped.load();
+                         waited += std::chrono::milliseconds{10}) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+                    }
+                    asio::write(sock, asio::buffer(std::string{"0\r\n\r\n"}), ec);
+                    if (ec) {
+                        return;
+                    }
+                    break;
+                }
+                case Mode::AbruptClose:
+                    // 不发终止块直接关闭 (FIN), 客户端应收到 eof/partial_message 错误
+                    return;
+                case Mode::Stall:
+                    for (int i = 0; i < 300 && !stopped.load(); ++i) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    }
+                    return;
+            }
         }
     }
 };
@@ -2131,6 +2158,191 @@ asio::awaitable<void> test_http_client_connection_pool() {
     serverThread.join();
 }
 
+/// SSE 收尾: 应用层在结束标记处返回 true 后, 后台读完 chunked 终止块再把连接还回池
+/// - 断言 1: 服务端延迟 400ms 才发终止块时, requestSseAsync 的返回不等这 400ms
+/// - 断言 2: 收尾完成后连接回到空闲桶, 下一次请求复用 (created 不增长)
+/// - 断言 3: sseFinishGrace = 0 退回旧行为 (直接关连接, 不还池)
+asio::awaitable<void> test_http_client_sse_deferred_tail() {
+    auto executor = co_await asio::this_coro::executor;
+
+    // 轮询等待条件成立 (返回是否成立)
+    auto waitFor = [&](auto&& predicate, int maxMs) -> asio::awaitable<bool> {
+        asio::steady_timer poll(executor);
+        for (int waited = 0; waited < maxMs; waited += 20) {
+            if (predicate()) {
+                co_return true;
+            }
+            poll.expires_after(std::chrono::milliseconds{20});
+            co_await poll.async_wait(asio::use_awaitable);
+        }
+        co_return predicate();
+    };
+
+    // 1) 延迟终止块: 请求立即返回, 连接随后回池并被下一次请求复用
+    {
+        HttpClient::clearConnectionPool();
+        SseTestServer srv;
+        srv.mode      = SseTestServer::Mode::DelayedTail;
+        srv.tailDelay = std::chrono::milliseconds{400};
+        srv.events    = {"data: [DONE]\n\n"};
+        srv.start();
+        const std::string url = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
+
+        HttpClient::RequestConfig cfg;
+        cfg.keepAlive                = true;
+        cfg.maxConcurrentConnections = 5;
+        cfg.connectTimeout           = std::chrono::seconds{5};
+        cfg.readChunkTimeout         = std::chrono::seconds{5};
+
+        const auto started = std::chrono::steady_clock::now();
+        bool       threw   = false;
+        try {
+            co_await HttpClient::requestSseAsync(
+                "POST",
+                url,
+                "{}",
+                "application/json",
+                {},
+                cfg,
+                [](std::string_view chunk) -> bool {
+                    return chunk.find("[DONE]") != std::string_view::npos;
+                }
+            );
+        } catch (const std::exception& e) {
+            threw = true;
+            TEST_FAIL << "deferred tail case threw: " << e.what() << std::endl;
+        }
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - started
+        )
+                                 .count();
+        XX_TEST_EXPECT_FALSE(threw);
+        XX_TEST_EXPECT_TRUE(elapsed < 300); // 不等服务端的 400ms 延迟
+
+        // 后台收尾读完终止块后连接回池
+        XX_TEST_EXPECT_TRUE(co_await waitFor(
+            [&]() { return HttpClient::poolStats(url).idle == 1; },
+            3000
+        ));
+
+        // 第二次请求复用同一条连接
+        bool threw2 = false;
+        try {
+            co_await HttpClient::requestSseAsync(
+                "POST",
+                url,
+                "{}",
+                "application/json",
+                {},
+                cfg,
+                [](std::string_view chunk) -> bool {
+                    return chunk.find("[DONE]") != std::string_view::npos;
+                }
+            );
+        } catch (const std::exception& e) {
+            threw2 = true;
+            TEST_FAIL << "deferred tail reuse case threw: " << e.what() << std::endl;
+        }
+        XX_TEST_EXPECT_FALSE(threw2);
+        auto stats = HttpClient::poolStats(url);
+        XX_TEST_EXPECT_EQ(stats.created, size_t{1});
+        XX_TEST_EXPECT_TRUE(stats.reused >= 1);
+
+        // 等第二次请求的后台收尾也结束后再清池, 否则服务端会阻塞在读下一个请求上
+        co_await waitFor([&]() { return HttpClient::poolStats(url).idle == 1; }, 3000);
+        HttpClient::clearConnectionPool();
+        srv.stop();
+    }
+
+    // 2) sseFinishGrace = 0: 退回旧行为, 收尾不等, 连接直接关闭、不进池
+    {
+        HttpClient::clearConnectionPool();
+        SseTestServer srv;
+        srv.mode      = SseTestServer::Mode::DelayedTail;
+        srv.tailDelay = std::chrono::milliseconds{400};
+        srv.events    = {"data: [DONE]\n\n"};
+        srv.start();
+        const std::string url = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
+
+        HttpClient::RequestConfig cfg;
+        cfg.keepAlive                = true;
+        cfg.maxConcurrentConnections = 5;
+        cfg.connectTimeout           = std::chrono::seconds{5};
+        cfg.readChunkTimeout         = std::chrono::seconds{5};
+        cfg.sseFinishGrace           = std::chrono::milliseconds{0};
+
+        bool threw = false;
+        try {
+            co_await HttpClient::requestSseAsync(
+                "POST",
+                url,
+                "{}",
+                "application/json",
+                {},
+                cfg,
+                [](std::string_view chunk) -> bool {
+                    return chunk.find("[DONE]") != std::string_view::npos;
+                }
+            );
+        } catch (const std::exception& e) {
+            threw = true;
+            TEST_FAIL << "deferred tail disabled case threw: " << e.what() << std::endl;
+        }
+        XX_TEST_EXPECT_FALSE(threw);
+
+        // 关闭行为: 空闲桶始终为空 (连接直接关掉, 不进池)
+        asio::steady_timer wait(executor, std::chrono::milliseconds{600});
+        co_await wait.async_wait(asio::use_awaitable);
+        auto stats = HttpClient::poolStats(url);
+        XX_TEST_EXPECT_EQ(stats.idle, size_t{0});
+        XX_TEST_EXPECT_EQ(stats.created, size_t{1});
+
+        srv.stop();
+    }
+}
+
+/// DNS 缓存: 同一 host:port 第二次解析命中缓存; 关闭缓存后重新解析
+asio::awaitable<void> test_http_client_dns_cache() {
+    // 从干净状态开始 (统计也归零)
+    HttpClient::clearDnsCache();
+
+    auto resolve = [](std::string host, std::string port) -> asio::awaitable<size_t> {
+        auto results = co_await HttpClient::asyncResolveWithDeadline(
+            host,
+            port,
+            std::chrono::steady_clock::now() + std::chrono::seconds{5},
+            std::chrono::seconds{5}
+        );
+        co_return results.size();
+    };
+
+    // 第一次: 未命中
+    const auto first = co_await resolve("127.0.0.1", "9");
+    XX_TEST_EXPECT_TRUE(first >= 1);
+    auto stats = HttpClient::dnsCacheStats();
+    XX_TEST_EXPECT_EQ(stats.miss, size_t{1});
+    XX_TEST_EXPECT_EQ(stats.hit, size_t{0});
+
+    // 第二次: 命中缓存 (不再走 getaddrinfo)
+    const auto second = co_await resolve("127.0.0.1", "9");
+    XX_TEST_EXPECT_EQ(second, first);
+    stats = HttpClient::dnsCacheStats();
+    XX_TEST_EXPECT_EQ(stats.hit, size_t{1});
+    XX_TEST_EXPECT_EQ(stats.miss, size_t{1});
+
+    // 关闭缓存: 每次都重新解析
+    HttpClient::setDnsCacheTtl(std::chrono::milliseconds{0});
+    const auto third = co_await resolve("127.0.0.1", "9");
+    XX_TEST_EXPECT_EQ(third, first);
+    stats = HttpClient::dnsCacheStats();
+    XX_TEST_EXPECT_EQ(stats.miss, size_t{2});
+    XX_TEST_EXPECT_EQ(stats.hit, size_t{1});
+
+    // 恢复默认并清理
+    HttpClient::setDnsCacheTtl(std::chrono::seconds{60});
+    HttpClient::clearDnsCache();
+}
+
 // ---------------------------------------------------------------------------
 // 启动更新检查 (agentxx-client/update_check.h): 本地服务端全流程
 //  1) 302 + Location (GitHub /releases/latest 的真实行为) -> 取标签与发布页 URL,
@@ -2301,6 +2513,8 @@ asio::awaitable<TestResult> run_http_client_tests() {
     co_await test_http_client_sse_interruption();
     co_await test_http_client_sse_per_read_timeout();
     co_await test_http_client_connection_pool();
+    co_await test_http_client_sse_deferred_tail();
+    co_await test_http_client_dns_cache();
     co_await test_http_client_dns_timeout();
 #if AGENTXX_BUILD_CLIENT
     co_await test_update_check_with_local_server();

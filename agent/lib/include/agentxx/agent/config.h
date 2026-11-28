@@ -96,8 +96,12 @@ public:
     ///   [agentxx::middleware::SummarizationMiddlewareHandle::defaultModelSupportMaxToken]
     size_t modelContextMaxToken = 0;
 
-    /// 建立Http连接的超时时间
-    int connectTimeoutSeconds = 16;
+    /// 建立Http连接的超时时间 (秒)
+    /// - 该时限是 DNS 解析 + TCP 连接 + TLS 握手的**总预算** (各阶段共用)
+    /// - 默认 30: 需要覆盖系统自己的 SYN 超时 (Windows 为 21 秒), 否则丢一个 SYN
+    ///   就会被我们提前取消, 且解析出的其余地址一次也试不到
+    /// - yaml 键 `model.list[].connect_timeout`
+    int connectTimeoutSeconds = 30;
 
     /// 接收Api响应数据分段时，分段间隔的超时时间
     int readChunkTimeoutSeconds = 60;
