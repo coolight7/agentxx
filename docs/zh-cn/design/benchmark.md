@@ -133,9 +133,11 @@
 | `malloc_trim(0)` 可回收 | RSS 前后差值 (仅自身进程) | 已 free 但未归还系统的量 |
 | CPU 利用率 / 用户态 / 内核态时间 | `/proc/<pid>/stat` | 优化 CPU 用 |
 
-Windows 平台取可获取的部分 (工作集/私有/峰值/句柄数/线程数), 堆与 smaps 相关指标不可用。
+Windows 平台取可获取的部分: 工作集 (RSS) / 私有 (commit) / 峰值 / 句柄数 / 线程数,
+以及 2026-11-28 起补齐的**逐区域常驻分解**与**堆明细** (见 2.2); PSS 是 Linux 专有
+口径 (Windows 没有"按进程分摊共享页"的公开接口), 列为 0。
 
-### 2.2 模块级内存分解 (`/proc/<pid>/smaps`)
+### 2.2 模块级内存分解 (Linux `smaps` / Windows 逐区域扫描)
 
 按映射归属类别合并, 输出每个模块的 RSS/PSS/私有脏页/映射大小/段数:
 
@@ -150,6 +152,25 @@ Windows 平台取可获取的部分 (工作集/私有/峰值/句柄数/线程数
 | `data-file` / `stack` / `vdso` / `shm` | 其他文件映射/栈/虚拟 syscall/共享内存 |
 
 这一层回答"内存被哪些动态库/堆/匿名区占用"; 子进程同样可采集 (权限允许时)。
+
+两个平台的取法不同, 输出结构一致:
+
+- **Linux**: 解析 `/proc/<pid>/smaps`, 直接得到每段的 Rss/Pss/Private_Dirty。
+- **Windows** (2026-11-28): `VirtualQueryEx` 枚举已提交区域 (`MEM_IMAGE`/`MEM_MAPPED`/
+  `MEM_PRIVATE`), 每个区域再按页调 `QueryWorkingSetEx` 取驻留位 (`Valid`) 与
+  "可共享"位 (`Shared`), 聚合成 `rssMB` / `privateDirtyMB`; 区域归属按
+  `GetMappedFileNameW` 拿到的映射路径判定 (exe / `/plugins/<目录>/` / `/Windows/` →
+  系统库 / 其他文件映射 → 数据文件), 私有区域统一归 `anon`; 线程栈用"后一区域是
+  `PAGE_GUARD` 保护页"启发式单独成 `stack` 行 (只是尽力而为: 栈页多数换出时只能
+  看到保护页, RSS ≈ 0, 真正的栈内存在 `anon` 里 —— 不影响总额对账)。
+- **堆明细 (仅 Windows, 只能查自身进程)**: `GetProcessHeaps` + 动态解析的
+  `HeapSummary` 汇总出 `HeapStat` (堆个数 / 活对象 `cbAllocated` / 已提交 `cbCommitted` /
+  预留 `cbReserved`); 与区域扫描配合可以区分"活对象 / 已释放但未归还的空闲块"。
+  注意 Windows 的 CRT 堆**不向系统归还**空闲页 (实测分配 12.8 MB 再释放 90%,
+  `cbCommitted` 与私有已提交一字节不变), 所以 RSS 停在历史峰值。
+
+也可以直接调 `sampleModuleBreakdown(pid, topN)` 与 `printKindSummary` / `printModuleBreakdown`
+打印; `fillResourceMemDetail` 传 `topN=0` 保留全部行 (显示侧再截断)。
 
 ### 2.3 逻辑内存 (`bench_mem_logical.h`)
 
@@ -313,7 +334,7 @@ process_base → agent_constructed → tui_started → agent_init_done
 | `bench_resource.cpp` | M1~M5 场景 + 聚合运行 (子进程隔离/合并) |
 | `bench_resource_real.cpp` | 真实运行场景 (真实 TUI / server 单独 / PTY TUI 子进程 / 插件边际) |
 | `bench_resource_util.h` | 内存/CPU 采集入口、子进程与 PTY、mock LLM 服务、固定负载模板、token 校准、yaml 配置生成 |
-| `bench_mem_probe.h` | 进程内存细项、smaps 模块分解、阶段追踪、CPU 细项 |
+| `bench_mem_probe.h` | 进程内存细项、模块分解 (Linux smaps / Windows 区域扫描 + 堆明细)、阶段追踪、CPU 细项 |
 | `bench_mem_logical.h` | 逻辑内存统计 (agent/TUI/持久化文件) |
 | `bench_util.h` | 结果结构、报告 (JSON/Markdown)、基线对比、微基准计时与上报 |
 
@@ -841,7 +862,8 @@ server 空闲三者一致 (专用 1.6 MB / 提交 2.9 MB)。
 ### 12.3 Windows `agentxx_benchmark resource` 全场景对照 (新增数据)
 
 同一构建目录切换开关各跑一次聚合 (`AGENTXX_BENCH_OUTPUT_DIR` 指向本批目录);
-Windows 上只有 RSS (工作集) / 峰值 / 线程 / 句柄可用, PSS/私脏/堆列不可用:
+Windows 上只有 RSS (工作集) / 峰值 / 线程 / 句柄可用, PSS/私脏/堆列不可用 (本批数据);
+2026-11-28 起模块分解与堆明细已补齐 (§2.2), 只是本节表格未重测:
 
 | 场景 | 侧 | 采样点 | 系统分配器 | mimalloc | ΔRSS |
 |---|---|---|---|---|---|
@@ -1926,10 +1948,11 @@ set AGENTXX_TUI_CTX_MODEL_MAX=30000
 
 1. **内存不随会话长度增长**, 只由三处上限决定: 服务端展示尾窗 (400 条)、客户端窗口
    (100 条)、LLM 上下文 (模型上限 75% 压缩); 三者都在条数/token 上封顶, 与累计内容无关。
-2. **47 MB 里只有 3.6 MB 是数据**: 其余是进程底座 (≈18 MB: exe/系统库/mock 服务/FTXUI/
-   AgentHost+5 插件) 与每轮请求/落盘临时缓冲留下的堆高水位 (≈25 MB, 峰值在压缩轮)。
-   "关会话库 → +19 MB" 与 "关插件 → −5 MB" 两条对照说明 RSS 跟"内存里放了多少"走,
-   不跟"历史多长"走。
+2. **47 MB 里只有 3.6 MB 是数据**: 其余是**代码页 23.6 MB** (基准程序自身 10.2 ——
+   静态链了 libagentxx/工具库/FTXUI/sqlite/OpenSSL/curl、系统 DLL 10.5、5 插件 2.4) 与
+   **CRT 堆 25.2 MB** (活对象 13.6, 其中数据 3.9; 其余是已释放但未归还的空闲块)。
+   详见 20.5。"关会话库 → +19 MB" 与 "关插件 → −5 MB" 两条对照说明 RSS 跟"内存里放
+   了多少"走, 不跟"历史多长"走。
 3. **"自动转存"就是会话库 + 尾窗淘汰**: 2 GB 内容 → 2.14 GB 库 (1.07 倍), 内存只留
    最后 303 条 (2.47 MB) + 客户端 100 条 (0.81 MB)。没有会话库时同一场景 RSS 高 19 MB,
    且会随内容线性增长。
@@ -1937,11 +1960,56 @@ set AGENTXX_TUI_CTX_MODEL_MAX=30000
    缓存/WAL 与批量写入留下的空闲页 (Windows 侧没有 `_heapmin`/`SetProcessWorkingSetSize`
    的定期归还)。要再压低, 应先补"堆归还"而不是动数据结构。
 
-### 20.5 遗留
+### 20.5 20 MB 档的常驻分解 (Windows 逐区域扫描, 2026-11-28 补测)
+
+先把 Windows 侧的模块分解补齐 (§2.2), 然后只跑 20 MB 一个采样点, 得到"每一页属于谁":
+
+| 归属 | 常驻 (RSS) | 占 RSS | 映像大小 | 备注 |
+|---|---|---|---|---|
+| 基准程序自身 `agentxx_benchmark.exe` | 10.17 MB | 20.7% | 23.05 MB | 静态链接了 libagentxx/工具库/FTXUI/sqlite/OpenSSL/curl |
+| 系统 DLL (220 段) | 10.48 MB | 21.4% | 71.36 MB | ntdll 1.87 / KernelBase 1.12 / icu 0.92 / ucrtbase 0.64 / rpcrt4 0.53 / dnsapi 0.45 / shell32 0.45 / kernel32 0.40 … |
+| 5 个插件 DLL (35 段) | 2.39 MB | 4.9% | 8.80 MB | filesystem 0.69 / execute_command 0.56 / planning 0.47 / websearch 0.37 / system 0.30 |
+| 项目库映射 (24 段) | 0.51 MB | 1.0% | 0.92 MB | |
+| **私有匿名 (CRT 堆)** | **25.18 MB** | 51.4% | 29.99 MB | 堆活对象 13.61 / 已提交 32.77 / 预留 50.77 |
+| 页文件映射 + 数据文件 | 0.28 MB | 0.6% | 3.26 MB | 20 段 |
+| 线程栈 | ≈0 | 0% | 0.36 MB | 31 个栈基本不在工作集 (换出到页面文件) |
+| 合计 | 49.01 MB | — | — | RSS 49.04 MB (差 0.03 = 采样抖动) |
+
+分阶段 (每个阶段新增的 RSS 是代码还是堆):
+
+| 阶段 | RSS | exe 代码 | 系统 DLL | 插件 DLL | 私有匿名 | 堆活对象 |
+|---|---|---|---|---|---|---|
+| process_base (只有 mock LLM) | 8.99 | 0.91 | 6.93 | – | 0.52 | 0.37 |
+| agent_constructed | 9.61 | 1.17 | 6.95 | – | 0.83 | 0.55 |
+| tui_started | 11.97 | 2.77 | 7.02 | – | 1.53 | 0.99 |
+| agent_init_done (+ 5 插件) | 17.86 | 5.00 | 7.26 | 2.28 | 2.57 | 1.82 |
+| warmup_turn_done | 25.65 | 7.87 | 9.90 | 2.36 | 4.71 | 3.18 |
+| ctx20mb | 49.04 | 10.17 | 10.48 | 2.39 | 25.18 | 13.61 |
+
+可复用的三条结论:
+
+1. **"进程基本需求"基本都是代码**: `agent_init_done` 的 17.86 MB 里 14.5 MB 是代码页
+   (exe 5.0 + 系统 DLL 7.3 + 插件 2.3), 堆只有 2.6 MB; 到 20 MB 采样点时 exe 代码页又涨到
+   10.2 MB (映像 23 MB, 执行到哪页哪页常驻) —— 代码页是固定成本, 与内容无关。
+2. **私有匿名 = 堆, 而且大部分是空闲块**: 常驻 25.18 MB, 活对象只有 13.61 MB,
+   其中能对上数据的 3.9 MB (展示尾窗 2.59 + 客户端 0.85 + LLM 上下文 0.35 + 索引/配置/
+   工具 schema 0.12), 剩下 ≈ 9.7 MB 是运行时对象; 堆已提交 32.77 MB − 活对象 = 19.16 MB
+   是空闲块 (已释放但不归还)。
+3. **Windows 不归还堆页有独立证据**: 小探针分配 200k×64B 后再释放 90%, 活对象
+   13.81 → 2.83 MB, 而 `HeapSummary.cbCommitted` 17.84 MB 与 `VirtualQueryEx` 私有
+   已提交 17.90 MB **一字节不变** —— 这就是同一产物跑得越久 RSS 越貼近历史峰值的原因。
+
+> 未逐项归因的部分: 活对象里的 ≈9.7 MB 运行时对象 (TUI 渲染缓存 / sqlite 页缓存 /
+> 传输与会话对象 / 压缩临时对象)。已测边界: 5 插件共 5.8 MB (插件全关 47.09 → 41.27),
+> 客户端 100 条消息 0.85 MB, sqlite 默认页缓存 2 MB/连接。要再细分需要上堆采样。
+
+### 20.6 遗留
 
 - 未量"重启后冷加载 2 GB 会话"的常驻 (需重建 agent + 插件)。
 - 展示窗口按条数而非字节: 单条消息越大, 400 条窗口常驻越大; 若要支持超长单条粘贴,
   需要给窗口补字节上限。
+- 堆活对象里 ≈9.7 MB 运行时对象未逐项归因 (需堆采样工具); Windows 侧也没有"堆归还"
+  (对应 Linux 的 `malloc_trim`) 可用作对照。
 
 
 

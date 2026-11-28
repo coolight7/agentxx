@@ -1029,8 +1029,10 @@ inline void fillResourceMemDetail(
     r.privateMB       = r.mem.privateMB;
     r.heapFragmentPct = heapFragmentPercent(r.mem);
     if (includeModules) {
-        auto bd   = sampleModuleBreakdown(pid, 18);
+        // topN 传 0: 保留全部行, 让调用方按类别汇总时拿到真实合计 (显示侧再截断)
+        auto bd   = sampleModuleBreakdown(pid, 0);
         r.modules = std::move(bd.rows);
+        r.heapStat = bd.heap;
     }
     if (includeTrim) {
         r.trimReclaimableMB = trimReclaimableMB();

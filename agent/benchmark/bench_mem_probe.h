@@ -3,19 +3,21 @@
 // 资源基准测试的内存探测工具:
 // - 进程内存细项 (RSS / PSS / 私有 / 匿名 / 文件映射 / 峰值 / 线程 / 文件句柄)
 // - glibc 堆统计 (在用 / 空闲 / 向系统申请量 / 碎片率) 与 malloc_trim 可回收量
-// - /proc/<pid>/smaps 模块级分解 (可执行文件 / 工具库 / 各插件 / 系统库 / 堆 / 栈 / 匿名)
+// - 模块级常驻内存分解 (可执行文件 / 工具库 / 各插件 / 系统库 / 堆 / 栈 / 匿名)
+//    Linux 读 /proc/<pid>/smaps; Windows 用 VirtualQueryEx + QueryWorkingSetEx 逐页统计
 // - 分阶段采样追踪 (每个阶段相对上一阶段的增量, 用于定位内存归属)
 //
 // 说明:
-// - Linux 上读取 /proc 获取全部细项; 其他平台回退到能获取的部分 (Windows: 工作集/私有/峰值/句柄数)
-// - 堆统计 (mallinfo2) 只能查询**自身进程**, 采样子进程时 heapValid=false
-// - smaps 读取开销 ~ 数毫秒 (与映射数量相关), 仅在阶段性采样点调用
+// - Linux 上读取 /proc 获取全部细项; Windows 取可获取的部分 (工作集/私有/峰值/句柄/模块分解)
+// - 堆统计 (Linux mallinfo2 / Windows HeapSummary) 只能查询**自身进程**, 采样子进程时不可用
+// - smaps/地址空间扫描开销 ~ 数毫秒 (与映射/区域数量相关), 仅在阶段性采样点调用
 
 #include "bench_util.h"
 
 #include "utilxx_base/log.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -393,12 +395,344 @@ inline std::map<MemRegionKind, MemKindSummary> summarizeByKind(const ModuleMemBr
 
 #if XX_IS_WIN_D
 
-/// Windows: 仅列出已加载模块的映像大小 (PSAPI 不提供按模块的常驻内存)
+namespace win_detail {
+
+constexpr double kMB = 1024.0 * 1024.0;
+
+inline std::string lowerAscii(std::string s) {
+    for (auto& c : s) {
+        c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+/// 取路径最后一段 (同时接受 '/' 与 '\\')
+inline std::string leafOfPath(std::string_view p) {
+    auto pos = p.find_last_of("/\\");
+    return std::string(pos == std::string_view::npos ? p : p.substr(pos + 1));
+}
+
+/// 宽字符路径转 UTF-8 (取 GetMappedFileNameW 的结果)
+inline std::string wideToUtf8(const wchar_t* w, int len) {
+    if (w == nullptr || len <= 0) {
+        return {};
+    }
+    int need = ::WideCharToMultiByte(CP_UTF8, 0, w, len, nullptr, 0, nullptr, nullptr);
+    if (need <= 0) {
+        return {};
+    }
+    std::string out(static_cast<size_t>(need), '\0');
+    if (::WideCharToMultiByte(CP_UTF8, 0, w, len, out.data(), need, nullptr, nullptr) <= 0) {
+        return {};
+    }
+    return out;
+}
+
+/// 按映射文件路径判断归属 (映像段与文件映射共用)
+/// - `isImage` 为 false 且不在系统目录时归为数据文件 (sqlite 库/字体等)
+inline void classifyMappedPath(
+    std::string_view rawPath,
+    bool             isImage,
+    const std::string& exeLeafLower,
+    MemRegionKind&   kind,
+    std::string&     displayName
+) {
+    std::string path(rawPath);
+    std::replace(path.begin(), path.end(), '\\', '/');
+    const std::string leafLower = lowerAscii(leafOfPath(path));
+
+    displayName = leafOfPath(path);
+    if (!exeLeafLower.empty() && leafLower == exeLeafLower) {
+        kind = MemRegionKind::Exe;
+        return;
+    }
+    // 插件: .../exec/plugins/<插件目录>/xxx.dll —— 显示插件目录名, 与 Linux 侧口径一致
+    const auto pluginsPos = lowerAscii(path).find("/plugins/");
+    if (pluginsPos != std::string::npos) {
+        std::string after = path.substr(pluginsPos + 9);
+        auto        slash = after.find('/');
+        kind              = MemRegionKind::PluginLib;
+        displayName       = (slash == std::string::npos) ? after : after.substr(0, slash);
+        return;
+    }
+    const std::string lower = lowerAscii(path);
+    if (lower.find("/windows/") != std::string::npos
+        || lower.find("/windowsapps/") != std::string::npos) {
+        kind = MemRegionKind::SystemLib;
+        return;
+    }
+    kind = isImage ? MemRegionKind::ProjectLib : MemRegionKind::DataFile;
+}
+
+/// 汇总进程内所有堆的 HeapSummary (Windows 10 1607+)
+/// - HeapSummary 作用于调用进程, 只能查询自身进程 (子进程返回 heapCount=0)
+/// - 动态取 kernel32 的导出: 老系统上取不到时 heap 明细不可用, 不报错
+inline HeapStat queryHeapStat() {
+    HeapStat out;
+    using HeapSummaryFn = BOOL(WINAPI*)(HANDLE, DWORD, PVOID);
+    static const HeapSummaryFn summaryFn = []() -> HeapSummaryFn {
+        HMODULE k32 = ::GetModuleHandleW(L"kernel32.dll");
+        if (k32 == nullptr) {
+            return nullptr;
+        }
+        return reinterpret_cast<HeapSummaryFn>(
+            reinterpret_cast<void*>(::GetProcAddress(k32, "HeapSummary"))
+        );
+    }();
+
+    DWORD count = ::GetProcessHeaps(0, nullptr);
+    if (count == 0) {
+        return out;
+    }
+    std::vector<HANDLE> heaps(static_cast<size_t>(count) + 8, nullptr);
+    DWORD               got = ::GetProcessHeaps(static_cast<DWORD>(heaps.size()), heaps.data());
+    if (got == 0) {
+        return out;
+    }
+    heaps.resize(got);
+    out.heapCount = got;
+    if (summaryFn == nullptr) {
+        return out;
+    }
+
+    // 与 heapapi.h 的 HEAP_SUMMARY 布局一致 (只用 cb 做版本号, 不引入该头文件要求)
+    struct HeapSummaryRaw {
+        DWORD  cb;
+        SIZE_T cbAllocated;
+        SIZE_T cbCommitted;
+        SIZE_T cbReserved;
+        SIZE_T cbMaxReserve;
+    };
+    for (HANDLE hh : heaps) {
+        HeapSummaryRaw s{};
+        s.cb = sizeof(s);
+        if (hh != nullptr && summaryFn(hh, 0, &s) != FALSE) {
+            out.allocatedMB += static_cast<double>(s.cbAllocated) / kMB;
+            out.committedMB += static_cast<double>(s.cbCommitted) / kMB;
+            out.reservedMB += static_cast<double>(s.cbReserved) / kMB;
+            out.valid = true;
+        }
+    }
+    return out;
+}
+
+} // namespace win_detail
+
+/// Windows 常驻内存分解 (等价 Linux 的 smaps 分解)
+/// - 用 VirtualQueryEx 逐区域枚举已提交内存, 再按页 (QueryWorkingSetEx) 取驻留位
+/// - MEM_IMAGE / MEM_MAPPED 按映射文件名归属到可执行文件/项目库/插件/系统库/数据文件
+/// - MEM_PRIVATE 里"紧邻 PAGE_GUARD 保护页"的区域判为线程栈, 其余汇总为私有匿名
+/// - 堆明细 (活对象/已提交/预留) 由 HeapSummary 单独给出, 只能查自身进程
+///
+/// - `pid` 0 = 自身进程; `topN` > 0 时把尾部若干行合并为一行 (0 = 全部保留)
 inline ModuleMemBreakdown sampleModuleBreakdown(uint32_t pid = 0, size_t topN = 0) {
-    (void)pid;
-    (void)topN;
     ModuleMemBreakdown bd;
-    bd.note = "Windows 平台不提供按模块的常驻内存分解 (仅 RSS/私有/峰值可用)";
+    const uint32_t     actualPid = normalizePid(pid);
+    const bool         isSelf    = isSelfPid(actualPid);
+
+    HANDLE h = isSelf ? ::GetCurrentProcess()
+                      : ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, actualPid);
+    if (h == nullptr) {
+        bd.note = "OpenProcess 失败 (权限不足或进程已退出)";
+        return bd;
+    }
+
+    SYSTEM_INFO si{};
+    ::GetSystemInfo(&si);
+    const size_t    pageSize = static_cast<size_t>(si.dwPageSize);
+    const uintptr_t minAddr  = reinterpret_cast<uintptr_t>(si.lpMinimumApplicationAddress);
+    const uintptr_t maxAddr  = reinterpret_cast<uintptr_t>(si.lpMaximumApplicationAddress);
+
+    struct Region {
+        uintptr_t base      = 0;
+        size_t    size      = 0;
+        DWORD     state     = 0;
+        DWORD     type      = 0;
+        DWORD     protect   = 0;
+        uintptr_t allocBase = 0;
+    };
+    std::vector<Region>          regions;
+    MEMORY_BASIC_INFORMATION     mbi{};
+    for (uintptr_t addr = minAddr; addr < maxAddr;) {
+        SIZE_T got = ::VirtualQueryEx(h, reinterpret_cast<LPCVOID>(addr), &mbi, sizeof(mbi));
+        if (got != sizeof(mbi) || mbi.RegionSize == 0) {
+            break;
+        }
+        Region r;
+        r.base      = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+        r.size      = static_cast<size_t>(mbi.RegionSize);
+        r.state     = mbi.State;
+        r.type      = mbi.Type;
+        r.protect   = mbi.Protect;
+        r.allocBase = reinterpret_cast<uintptr_t>(mbi.AllocationBase);
+        regions.push_back(r);
+        addr = r.base + r.size;
+    }
+    if (regions.empty()) {
+        if (!isSelf) {
+            ::CloseHandle(h);
+        }
+        bd.note = "VirtualQueryEx 未取到任何内存区域";
+        return bd;
+    }
+
+    // 逐页取驻留位: rssMB = 驻留页合计, privateMB = 其中不可共享 (Shareable=0) 的页
+    std::vector<PSAPI_WORKING_SET_EX_INFORMATION> wsPages;
+    auto queryResident = [&](uintptr_t base, size_t size, double& rssMB, double& privateMB) {
+        rssMB     = 0.0;
+        privateMB = 0.0;
+        const size_t pages = (size + pageSize - 1) / pageSize;
+        const size_t batchMax = 8192;
+        for (size_t done = 0; done < pages;) {
+            const size_t batch = std::min(pages - done, batchMax);
+            wsPages.resize(batch);
+            for (size_t i = 0; i < batch; ++i) {
+                wsPages[i].VirtualAddress = reinterpret_cast<PVOID>(
+                    base + (done + i) * pageSize
+                );
+                wsPages[i].VirtualAttributes.Flags = 0;
+            }
+            if (::QueryWorkingSetEx(h, wsPages.data(), static_cast<DWORD>(
+                    sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * batch)) == 0) {
+                return;
+            }
+            for (size_t i = 0; i < batch; ++i) {
+                const auto& attr = wsPages[i].VirtualAttributes;
+                if (!attr.Valid) {
+                    continue;
+                }
+                rssMB += static_cast<double>(pageSize) / win_detail::kMB;
+                if (!attr.Shared) {
+                    privateMB += static_cast<double>(pageSize) / win_detail::kMB;
+                }
+            }
+            done += batch;
+        }
+    };
+
+    const std::string exeLeafLower
+        = win_detail::lowerAscii(win_detail::leafOfPath(processExecutablePath(actualPid)));
+
+    // 同一 AllocationBase 下的多个段只查一次映射文件名
+    struct ModuleLabel {
+        MemRegionKind kind = MemRegionKind::Other;
+        std::string   name;
+    };
+    std::map<uintptr_t, ModuleLabel> moduleLabels;
+    std::map<std::string, ModuleMemRow> agg; // key = kind|name
+    double                           stackRss   = 0.0;
+    size_t                           stackCount = 0;
+
+    for (size_t i = 0; i < regions.size(); ++i) {
+        const Region& r = regions[i];
+        if (r.state != MEM_COMMIT) {
+            continue;
+        }
+        ModuleLabel label;
+        std::string path;
+        if (r.type == MEM_IMAGE || r.type == MEM_MAPPED) {
+            auto it = moduleLabels.find(r.allocBase);
+            if (it == moduleLabels.end()) {
+                wchar_t wbuf[1024] = {0};
+                DWORD   n = ::GetMappedFileNameW(
+                    h,
+                    reinterpret_cast<LPVOID>(r.allocBase),
+                    wbuf,
+                    static_cast<DWORD>(sizeof(wbuf) / sizeof(wbuf[0]))
+                );
+                std::string mapped = win_detail::wideToUtf8(wbuf, static_cast<int>(n));
+                ModuleLabel created;
+                if (mapped.empty()) {
+                    // 取不到文件名的映像段不会出现; 空名的文件映射即页文件支撑
+                    created.kind = (r.type == MEM_MAPPED) ? MemRegionKind::Shm
+                                                          : MemRegionKind::Other;
+                    created.name = (r.type == MEM_MAPPED) ? "[shm 页文件映射]" : "[image 无名]";
+                } else {
+                    win_detail::classifyMappedPath(
+                        mapped,
+                        r.type == MEM_IMAGE,
+                        exeLeafLower,
+                        created.kind,
+                        created.name
+                    );
+                }
+                it = moduleLabels.emplace(r.allocBase, created).first;
+            }
+            label = it->second;
+            path  = label.name;
+        } else if (r.type == MEM_PRIVATE) {
+            // 栈区的判据: 本区域后面紧跟同一个栈的 PAGE_GUARD 保护页
+            const bool followedByGuard
+                = (i + 1 < regions.size()) && regions[i + 1].base == r.base + r.size
+                  && regions[i + 1].type == MEM_PRIVATE
+                  && (regions[i + 1].protect & PAGE_GUARD) != 0;
+            if (followedByGuard) {
+                label.kind = MemRegionKind::Stack;
+                label.name = "[stack 线程栈]";
+                ++stackCount;
+            } else if ((r.protect & PAGE_GUARD) != 0) {
+                // 保护页本身: 未提交到物理内存, 归入栈以便统计段数
+                label.kind = MemRegionKind::Stack;
+                label.name = "[stack 线程栈]";
+            } else {
+                label.kind = MemRegionKind::Anon;
+                label.name = "[private 私有匿名]";
+            }
+        } else {
+            continue;
+        }
+
+        double rss = 0.0;
+        double priv = 0.0;
+        queryResident(r.base, r.size, rss, priv);
+        if (label.kind == MemRegionKind::Stack) {
+            stackRss += rss;
+        }
+
+        std::string   key = std::string(memRegionKindName(label.kind)) + "|" + label.name;
+        ModuleMemRow& row = agg[key];
+        row.name          = label.name;
+        row.path          = path;
+        row.kind          = label.kind;
+        row.sizeMB += static_cast<double>(r.size) / win_detail::kMB;
+        row.rssMB += rss;
+        row.privateDirtyMB += priv;
+        row.regions += 1;
+    }
+
+    for (auto& kv : agg) {
+        bd.totalRssMB += kv.second.rssMB;
+        bd.rows.push_back(kv.second);
+    }
+    std::sort(bd.rows.begin(), bd.rows.end(), [](const ModuleMemRow& a, const ModuleMemRow& b) {
+        return a.rssMB > b.rssMB;
+    });
+    if (topN > 0 && bd.rows.size() > topN) {
+        ModuleMemRow other;
+        other.name = fmt::format("[其余 {} 项汇总]", bd.rows.size() - topN);
+        other.kind = MemRegionKind::Other;
+        for (size_t i = topN; i < bd.rows.size(); ++i) {
+            other.rssMB += bd.rows[i].rssMB;
+            other.pssMB += bd.rows[i].pssMB;
+            other.privateDirtyMB += bd.rows[i].privateDirtyMB;
+            other.sizeMB += bd.rows[i].sizeMB;
+            other.regions += bd.rows[i].regions;
+        }
+        bd.rows.resize(topN);
+        bd.rows.push_back(other);
+    }
+
+    // 堆明细与栈统计 (栈在子进程上同样可测, 堆明细只能查自身)
+    if (isSelf) {
+        bd.heap = win_detail::queryHeapStat();
+    }
+    bd.heap.stackCount = stackCount;
+    bd.heap.stackMB    = stackRss;
+
+    if (!isSelf) {
+        ::CloseHandle(h);
+    }
+    bd.valid = true;
     return bd;
 }
 
@@ -683,6 +1017,22 @@ inline void printModuleBreakdown(
         );
         ++shown;
     }
+    if (bd.heap.valid) {
+        os << fmt::format(
+            "    堆: {} 个, 活对象={:.2f} MB, 已提交={:.2f} MB (含空闲块), 预留={:.2f} MB\n",
+            bd.heap.heapCount,
+            bd.heap.allocatedMB,
+            bd.heap.committedMB,
+            bd.heap.reservedMB
+        );
+    }
+    if (bd.heap.stackCount > 0) {
+        os << fmt::format(
+            "    线程栈: {} 个, 常驻 {:.2f} MB\n",
+            bd.heap.stackCount,
+            bd.heap.stackMB
+        );
+    }
 }
 
 /// 打印按类别汇总的模块分解 (简洁版, 用于报告开头)
@@ -704,6 +1054,15 @@ inline void printKindSummary(
             kv.second.pssMB,
             kv.second.privateDirtyMB,
             kv.second.regions
+        );
+    }
+    if (bd.heap.valid) {
+        os << fmt::format(
+            "    堆(不含在类别行内): {} 个, 活对象={:.2f}MB, 已提交={:.2f}MB, 预留={:.2f}MB\n",
+            bd.heap.heapCount,
+            bd.heap.allocatedMB,
+            bd.heap.committedMB,
+            bd.heap.reservedMB
         );
     }
 }

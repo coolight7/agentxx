@@ -2087,7 +2087,17 @@ void benchResourceTuiLongCtx() {
     auto& reporter = BenchReporter::instance();
 
     MemPhaseTracker phaseTracker(0, "self");
+    // 阶段常驻分解: 看清每个阶段新增的 RSS 是代码页 (exe/系统 DLL/插件) 还是堆
+    auto dumpPhaseBreakdown = [](std::ostream& os, const std::string& label) {
+        auto bd = sampleModuleBreakdown(0, 0);
+        if (!bd.valid) {
+            os << fmt::format("  [tui_longctx] {} 分解不可用: {}\n", label, bd.note);
+            return;
+        }
+        printKindSummary(bd, "阶段 " + label, os);
+    };
     phaseTracker.mark("process_base", "仅流式 mock LLM 服务; agent/TUI 未构建");
+    dumpPhaseBreakdown(std::cout, "process_base");
 
     auto agentConfig                = std::make_shared<agent::AgentConfig>();
     agentConfig->dataDir            = (tmpDir / "data").string();
@@ -2120,6 +2130,7 @@ void benchResourceTuiLongCtx() {
         agent->ioCtx->run();
     });
     phaseTracker.mark("agent_constructed", "CodeAgent + io_context 线程已创建");
+    dumpPhaseBreakdown(std::cout, "agent_constructed");
 
     // 主程序容器: 插件只加载一次, 压缩经它起子代理 (没有它只能硬截断)
     auto host = agent::AgentHost::create({
@@ -2156,6 +2167,7 @@ void benchResourceTuiLongCtx() {
         "tui_started",
         fmt::format("FTXUI 界面线程启动, 首帧{}", firstFrameOk ? "已渲染" : "超时")
     );
+    dumpPhaseBreakdown(console, "tui_started");
 
     std::atomic<bool> pluginsLoaded{false};
     asio::co_spawn(
@@ -2238,6 +2250,7 @@ void benchResourceTuiLongCtx() {
         "agent_init_done",
         fmt::format("AgentHost + agent init + {} 插件挂载完成", usePlugins ? 5 : 0)
     );
+    dumpPhaseBreakdown(console, "agent_init_done");
 
     tui->sendToPeer(agent::WireHello{sessionId, "", 0, "", "en"});
     tui->sendToPeer(agent::WireGetModel{sessionId});
@@ -2462,6 +2475,7 @@ void benchResourceTuiLongCtx() {
         }
     }
     phaseTracker.mark("warmup_turn_done", "首轮流式对话完成");
+    dumpPhaseBreakdown(console, "warmup_turn_done");
 
     // ---- 每轮的 token 估算 (用户消息 + 回复, 用主程序同一份估算器) ----
     size_t userTokensPerRound  = 0;
@@ -2783,9 +2797,24 @@ void benchResourceTuiLongCtx() {
             // 不在采样点做 malloc_trim/_heapmin: 它会提前把空闲页归还系统,
             // 后面的采样点就量不到真实稳态 (端点之间的回收行为也会被抹平)
             fillResourceMemDetail(res, 0, true, false);
-            filterNoisyModules(res.modules);
             reporter.addResource(res);
             printResourceResult(res, console);
+            // 常驻内存归属 (不过滤系统库): 说明 RSS 里除会话/上下文数据外的部分是什么
+            {
+                ModuleMemBreakdown full;
+                full.rows       = res.modules;
+                full.valid      = !res.modules.empty();
+                full.totalRssMB = res.rssMB;
+                full.totalPssMB = res.mem.pssMB;
+                full.heap       = res.heapStat;
+                printKindSummary(full, fmt::format("tui_longctx {} 常驻分解", res.point), console);
+                printModuleBreakdown(
+                    full,
+                    fmt::format("tui_longctx {} 模块", res.point),
+                    14,
+                    console
+                );
+            }
             phaseTracker.mark(
                 res.point,
                 fmt::format(

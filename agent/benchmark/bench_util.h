@@ -96,11 +96,26 @@ struct ModuleMemRow {
     size_t        regions        = 0;
 };
 
+/// 堆与线程栈统计 (Windows: HeapSummary 汇总所有堆 + 栈区扫描; Linux: mallinfo2 + smaps)
+/// - 用来把"私有匿名常驻"再拆成"堆里活对象 / 堆已提交含空闲 / 线程栈"
+struct HeapStat {
+    size_t heapCount   = 0;   ///< 堆个数 (GetProcessHeaps)
+    double allocatedMB = 0.0; ///< 活对象字节 (cbAllocated)
+    double committedMB = 0.0; ///< 已向系统提交, 含空闲块 (cbCommitted)
+    double reservedMB  = 0.0; ///< 预留地址空间 (cbReserved)
+    /// 识别到的栈区个数 (Windows 按"紧邻 PAGE_GUARD 保护页"启发式判定, 可能为 0;
+    /// 真正的栈内存多数时候归在 anon 里 —— 栈页不在工作集时不体现)
+    size_t stackCount = 0;
+    double stackMB    = 0.0; ///< 识别到的栈区常驻合计 (MB)
+    bool   valid      = false;
+};
+
 struct ModuleMemBreakdown {
     std::vector<ModuleMemRow> rows; ///< 按 rss 降序
     double                    totalRssMB = 0.0;
     double                    totalPssMB = 0.0;
-    bool                      valid      = false;
+    HeapStat                  heap; ///< 堆与线程栈 (heap.valid = false 表示该平台未取到)
+    bool                      valid = false;
     std::string               note;
 };
 
@@ -160,6 +175,7 @@ struct ResourceResult {
     double                    frameAvgMs        = -1.0; ///< 平均帧耗时 (TUI 场景)
     double                    renderBytes       = 0.0;  ///< 渲染输出字节 (TUI 场景)
     std::vector<ModuleMemRow> modules;                  ///< 模块级内存分解 (可选)
+    HeapStat                  heapStat;                 ///< 堆/线程栈统计 (Windows 的堆明细走这里)
     std::vector<LogicalMemRow> logical;                 ///< 逻辑内存 (可选)
     std::vector<MemPhaseSample> phases; ///< 分阶段采样 (可选; 挂在每个 mode+side 的首个点)
 };
@@ -237,15 +253,25 @@ inline void printResourceResult(const ResourceResult& r, std::ostream& os = std:
         r.note
     );
     if (r.mem.valid) {
-        // 堆细项 (mallinfo2) 只能查询自身进程: 子进程采样显示 n/a, 避免误读为 0
-        std::string heapText = r.mem.heapValid
-                                   ? fmt::format(
-                                         "堆在用={:.2f} 堆空闲={:.2f}(碎片{:.1f}%)",
-                                         r.mem.heapInUseMB,
-                                         r.mem.heapFreeMB,
-                                         r.heapFragmentPct >= 0 ? r.heapFragmentPct : 0.0
-                                     )
-                                   : std::string{"堆=n/a(子进程)"};
+        // 堆细项: Linux 用 mallinfo2 (仅自身进程); Windows 用 HeapSummary 汇总 (同样只限自身)
+        std::string heapText;
+        if (r.mem.heapValid) {
+            heapText = fmt::format(
+                "堆在用={:.2f} 堆空闲={:.2f}(碎片{:.1f}%)",
+                r.mem.heapInUseMB,
+                r.mem.heapFreeMB,
+                r.heapFragmentPct >= 0 ? r.heapFragmentPct : 0.0
+            );
+        } else if (r.heapStat.valid) {
+            heapText = fmt::format(
+                "堆活对象={:.2f} 已提交={:.2f} 预留={:.2f}",
+                r.heapStat.allocatedMB,
+                r.heapStat.committedMB,
+                r.heapStat.reservedMB
+            );
+        } else {
+            heapText = "堆=n/a(子进程)";
+        }
         os << fmt::format(
             "              pss={:.2f} 私脏={:.2f} 匿名={:.2f} 文件={:.2f} 峰值={:.2f} {} "
             "虚拟={:.1f} 线程={} fd={} 可回收={}\n",
@@ -426,6 +452,16 @@ inline size_t
             }
             r.trimReclaimableMB = detail::jsonNumber(item, "trimReclaimableMB", -1.0);
             r.heapFragmentPct   = detail::jsonNumber(item, "heapFragmentPct", -1.0);
+            if (item.contains("heapStat") && item["heapStat"].is_object()) {
+                const auto& hs        = item["heapStat"];
+                r.heapStat.valid       = detail::jsonFlag(hs, "valid");
+                r.heapStat.heapCount   = static_cast<size_t>(detail::jsonNumber(hs, "heapCount"));
+                r.heapStat.allocatedMB = detail::jsonNumber(hs, "allocatedMB");
+                r.heapStat.committedMB = detail::jsonNumber(hs, "committedMB");
+                r.heapStat.reservedMB  = detail::jsonNumber(hs, "reservedMB");
+                r.heapStat.stackCount  = static_cast<size_t>(detail::jsonNumber(hs, "stackCount"));
+                r.heapStat.stackMB     = detail::jsonNumber(hs, "stackMB");
+            }
             if (item.contains("cpu") && item["cpu"].is_object()) {
                 const auto& c = item["cpu"];
                 r.cpu.busyPct = detail::jsonNumber(c, "busyPct", r.cpuBusyPct);
@@ -676,7 +712,8 @@ public:
                 r.mem.pssMB,
                 r.mem.privateDirtyMB,
                 r.mem.peakRssMB,
-                r.mem.heapInUseMB,
+                r.mem.heapValid ? r.mem.heapInUseMB
+                                : (r.heapStat.valid ? r.heapStat.allocatedMB : 0.0),
                 r.mem.threads,
                 r.mem.fds
             );
@@ -1011,6 +1048,17 @@ private:
                     "        \"heapValid\": {}\n",
                     r.mem.heapValid ? "true" : "false"
                 );
+                ofs << "      },\n";
+
+                // 堆与线程栈 (Windows: HeapSummary + 栈区扫描; Linux 为 false)
+                ofs << "      \"heapStat\": {\n";
+                ofs << fmt::format("        \"valid\": {},\n", r.heapStat.valid ? "true" : "false");
+                ofs << fmt::format("        \"heapCount\": {},\n", r.heapStat.heapCount);
+                ofs << fmt::format("        \"allocatedMB\": {:.3f},\n", r.heapStat.allocatedMB);
+                ofs << fmt::format("        \"committedMB\": {:.3f},\n", r.heapStat.committedMB);
+                ofs << fmt::format("        \"reservedMB\": {:.3f},\n", r.heapStat.reservedMB);
+                ofs << fmt::format("        \"stackCount\": {},\n", r.heapStat.stackCount);
+                ofs << fmt::format("        \"stackMB\": {:.3f}\n", r.heapStat.stackMB);
                 ofs << "      },\n";
 
                 // CPU 细分

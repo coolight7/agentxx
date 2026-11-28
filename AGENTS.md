@@ -193,7 +193,8 @@ path/to/agentxx_test --log-level warn string_util regex
       PTY 驱动的真实 TUI 子进程、真实 TUI 长上下文 (逐轮流式对话 + 展示历史注入,
       累计内容 20M/100M/200M/1G/2G 五档, 含超限后的自动压缩)、插件逐项边际内存
     - 指标: RSS/PSS/私有脏页/匿名/峰值/线程/fd + glibc 堆在用与碎片 + malloc_trim
-      可回收 + smaps 模块级分解 (可执行文件/项目库/各插件/系统库/堆/匿名) +
+      可回收 + 模块级分解 (可执行文件/项目库/各插件/系统库/堆/匿名; Linux 读 smaps,
+      Windows 用 VirtualQueryEx + QueryWorkingSetEx 逐页驻留 + HeapSummary 堆明细) +
       逻辑内存 (会话消息/TUI 状态/工具 schema) + 分阶段增量 + CPU 用户/内核时间
     - 报告: {exec}/bench/bench_<时间戳>.json (机器对比) 与 .md (人工阅读);
       `--baseline <bench_*.json>` 输出与上次的 ΔRSS/ΔPSS/Δ堆 及模块级差异

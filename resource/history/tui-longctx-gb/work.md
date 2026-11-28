@@ -11,6 +11,7 @@
 - [x] 完整 5 档实测 (两次运行: `bench_20261128_061417`, `bench_20261128_062419`)
 - [x] 内存根源分析 + 报告 ([report.md](report.md))
 - [x] `benchmark.md` 第 20 节 + `AGENTS.md` 场景描述更新
+- [x] 补 Windows 常驻内存分解 (原先只有 Linux `smaps`) + 20 MB 档逐项归因 (报告 §4.1)
 
 ## 实施日志
 
@@ -64,7 +65,7 @@ RSS 40.59 → 41.36 (+0.77 MB) —— 方向正确。
 | 外层构建一次跑了 45 分钟 (重新编译 lib/client) | 内层构建目录生成后, 后续只编内层 `agentxx_benchmark.vcxproj`, 编完手工 `Copy-Item` 到 `exec/` |
 | `--next-step` 批量注入变成合并的 event 行 | 见第 2 节, 改成"真实轮次 + 历史注入" |
 | 客户端窗口在注入后仍是注入前那批 | 注入后发一次 `WireHello{lastSeq=0, afterViewSeq=0, historyTail=100}` 触发尾窗同步, 客户端从此持有 100 条 / 0.81 MB |
-| Windows 侧 `PSS/私脏/匿名/模块分解` 全为 0 (`n/a`) | smaps 只在 Linux 有效; 本报告的拆解改用"逻辑内存 + 分阶段 RSS + 对照实验" |
+| Windows 侧 `PSS/私脏/匿名/模块分解` 全为 0 (`n/a`) | 原先只有 Linux `smaps`; 后已经补上 Windows 实现 (`VirtualQueryEx` + `QueryWorkingSetEx` + `HeapSummary`), PSS 仍是 Linux 专有 (Windows 无按进程分摊口径) |
 | 2 GB 档 RSS 两次运行差 5.8 MB | 如实记录两次结果; 归因为活上下文位置、sqlite 页缓存/WAL 与批量写入留下的空闲页 |
 
 ### 6. 验证
@@ -75,3 +76,41 @@ RSS 40.59 → 41.36 (+0.77 MB) —— 方向正确。
   会话库 2.14 GB / 累计内容 2.00 GB = 1.07 倍;
 - 行为: 5 档都跑通, 每档注入后的一轮真实对话无超时 (930~1090 ms/轮);
 - 对照: 关会话库/关插件的差值符合预期 (窗口线性放大 / 插件底座固定)。
+
+### 7. 补 Windows 常驻内存分解 + 20 MB 档逐项归因 (2026-11-28)
+
+改了什么:
+
+- `agent/benchmark/bench_util.h`: 新增 `HeapStat` (堆个数/活对象/已提交/预留 + 线程栈),
+  `ModuleMemBreakdown` 加 `heap` 字段, `ResourceResult` 加 `heapStat`。
+- `agent/benchmark/bench_mem_probe.h`: Windows 分支的 `sampleModuleBreakdown` 从空实现换成
+  `VirtualQueryEx` 枚举已提交区域 + `QueryWorkingSetEx` 逐页取驻留位, 按
+  `MEM_IMAGE`/`MEM_MAPPED`/`MEM_PRIVATE` 归属到 exe / 项目库 / 插件 / 系统库 / 数据文件 /
+  私有匿名 / 线程栈; 堆明细用动态解析的 `HeapSummary` (只能查自身进程);
+  `printModuleBreakdown`/`printKindSummary` 增印堆行。
+  > 线程栈的判据是"紧邻 PAGE_GUARD 保护页"——实测只能抓到保护页本身 (0.36 MB/31 段),
+  > 真正的栈内存在私有匿名里 (栈页被换出时不在工作集); 归属上算进 "私有匿名" 不影响结论。
+- `agent/benchmark/bench_resource_util.h`: `fillResourceMemDetail` 的 `topN` 18 → 0 (保留全部行,
+  显示侧再截断), 并把 `bd.heap` 写进 `res.heapStat`。
+- `agent/benchmark/bench_resource_real.cpp`: `benchResourceTuiLongCtx` 在每个阶段标记后打印
+  按类别汇总 (`dumpPhaseBreakdown`), 采样点打印完整模块表且不再 `filterNoisyModules`
+  (要看到系统 DLL)。
+
+怎么验证:
+
+- 内层 benchmark 工程 release 重编通过, `exec/agentxx_benchmark.exe` 已更新;
+- 两次 `AGENTXX_TUI_CTX_POINTS=20M` 运行 (`bench_20261128_100508` / `_101845`):
+  类别 RSS 合计 49.01 MB vs RSS 49.04 MB (差 0.03 = 采样抖动);
+  两次的 exe 10.21/10.17、系统 DLL 10.47/10.48、插件 2.39/2.39、私有匿名 25.85/25.18,
+  堆活对象 13.61/13.61 —— 可重复;
+- 第三次 (`bench_20261128_103649`, 补上 JSON `heapStat` 与控制台堆列后): RSS 48.68,
+  exe 10.24 / 系统 DLL 10.48 / 插件 2.39 / 私有匿名 24.75, 堆活对象 13.61 / 已提交 32.25 ——
+  与前两次一致; JSON `heapStat` 读出 `valid=true, heapCount=4, stackCount=0`
+  (栈区启发式本次没命中, 已在该字段注释与 benchmark.md 中写明) ;
+- 堆"不归还"用独立探针验证 (VS 环境 `cl` 编译的小程序): 分配 200k×64B 后再释放 90%,
+  活对象 13.81 → 2.83 MB, 而 `HeapSummary.cbCommitted` 17.84 MB 与
+  `VirtualQueryEx` 私有已提交 17.90 MB **一字节不变**;
+- 分解与已有结论不矛盾: 插件全关前后差 5.8 MB ≈ 插件映像 2.39 + 插件堆对象 ~3.4。
+
+遗留: 堆活对象里的 ~9.7 MB 运行时对象 (TUI 渲染缓存 / sqlite 页缓存 / 传输与会话对象 /
+压缩临时对象) 未逐项归因, 要再细分得上堆采样。
