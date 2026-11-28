@@ -1241,7 +1241,8 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
                 break;
             case TUIMessage::Role::Tip:
                 // 折叠: 仅 header 行; 展开: header + 内容
-                contentLines = msg.collapsed ? 1 : 1 + estimateLines(msg.text, width);
+                // (展开内容走 renderMarkdown, 同 Assistant/Think 用 markdown 语义估算)
+                contentLines = msg.collapsed ? 1 : 1 + estimateMarkdownLines(msg.text, width);
                 break;
             case TUIMessage::Role::Tool: {
                 if (msg.collapsed) {
@@ -2116,7 +2117,18 @@ Element MessageListComponent::buildMessageBlock(
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
-                lines.push_back(paragraph(msg.text) | color(contentColor));
+                // 展开态正文按 markdown 渲染 (与 Assistant/Think 同一套实现):
+                // 压缩提示的 `[Result]` 段就是摘要原文, 里面常有标题/列表/代码块
+                auto [el, builder] = renderMarkdown(
+                    msg.text,
+                    contentColor,
+                    theme.markdownTheme,
+                    maxWidth
+                );
+                if (builder) {
+                    mdBuilders.push_back(std::move(builder));
+                }
+                lines.push_back(std::move(el));
                 appendAttachmentList(lines, msg, msgIndex);
             }
             return vbox(std::move(lines));

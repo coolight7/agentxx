@@ -1402,7 +1402,8 @@ sudo echo 3 > /proc/sys/vm/drop_caches
   [work.md](resource/history/cxx-libs-result-codes/work.md) 第 7 步
 - TUI 提示消息 (`ViewMessage::Role::Tip`) 的展示约定 (2026-10-25): 折叠标记、级别文本与正文都按
   级别着色 (Info = `hintColor`, Warning = `thinkingColor`, Error = `errorColor`), 折叠态的单行
-  预览 (含分隔符 `· `) 再叠加 `theme.dim()`, 展开态全文不加 dim; 头部前缀 `msg.tipPrefix`
+  预览 (含分隔符 `· `) 再叠加 `theme.dim()`, 展开态正文**按 markdown 渲染** (与 Assistant/Think
+  同一套 `renderMarkdown`, 行高估算用 `estimateMarkdownLines`) 且不加 dim; 头部前缀 `msg.tipPrefix`
   去掉了旧的 `#` 分隔符 (现为 ` [提示] ` / ` [提示] 警告`); 提示可带 `tip->running` 标记
   (如"正在压缩上下文"),
   此时折叠标记位置显示加载点阵 (门槛动画等级 High, 等级不足退回静态 +/-), 该消息块

@@ -973,6 +973,8 @@ asio::awaitable<void>
 
         std::vector<neograph::ChatMessage> compressedMessages;
         bool                               compacted = false;
+        // 本次 LLM 压缩得到的摘要正文 (提示消息里一并展示); 未压缩或硬截断兜底时为空
+        std::string compactionSummary;
         if (messages.size() > systemCount) {
             // 同上下文压缩请求: 当前完整上下文 (system + 全部消息) + 末尾压缩指令。
             // 最近的消息也交给模型: 由它在摘要里写清末尾要点 (进行中的动作, 最近一次
@@ -999,7 +1001,8 @@ asio::awaitable<void>
             };
             ReplaceAction action = ReplaceAction::None;
             if (!summary.empty()) {
-                action = ReplaceAction::Compact;
+                action            = ReplaceAction::Compact;
+                compactionSummary = summary;
                 // 压缩成功: 重置失败计数
                 agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
                     sessionId,
@@ -1134,6 +1137,8 @@ asio::awaitable<void>
 
         // 更新刚刚的 viewMessage 为
         //     "压缩上下文 {旧}->{新}/{最大} · {耗时}"
+        // 后面空行分隔一段 "[Result]" 与摘要正文 (本次压缩写回上下文的提示词内容);
+        // 空行是 markdown 的段落分隔符, 展开渲染时 "[Result]" 才能单独成行
         const auto durationMs
             = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                        std::chrono::steady_clock::now() - startTime
@@ -1146,6 +1151,13 @@ asio::awaitable<void>
             modelContextMaxToken,
             utilxx_base::formatDurationMilliseconds(durationMs)
         );
+        if (!compactionSummary.empty()) {
+            // 摘要正文也留在提示消息里: 展开这条提示就能看到本次压缩写回的上下文内容
+            // (只有真正做了 LLM 压缩才有; 硬截断兜底不追加)
+            // - "[Result]" 前后各一个空行: 展开态按 markdown 渲染时它是独立一段
+            //   (相邻单换行会被合并成空格, 标记会跑到结果行末尾)
+            vm.text += fmt::format("\n\n[Result]\n\n{}", compactionSummary);
+        }
         vm.tip->running = false; // 压缩结束: 撤下加载动画
         vm.durationMs   = durationMs;
         if (session) {
@@ -1269,6 +1281,8 @@ asio::awaitable<bool>
     const size_t systemCount = (!messages.empty() && messages[0].role == "system") ? 1 : 0;
 
     std::vector<neograph::ChatMessage> compressedMessages;
+    // 本次 LLM 压缩得到的摘要正文 (提示消息里一并展示); 硬截断兜底时为空
+    std::string compactionSummary;
     if (messages.size() > systemCount) {
         // 同上下文压缩请求: 当前完整上下文 (system + 全部消息) + 末尾压缩指令;
         // 最近的消息也交给模型判断, 因此压缩后不再原样保留最近消息
@@ -1283,6 +1297,7 @@ asio::awaitable<bool>
         // (经功能埋点取摘要文本: 调度仍在本中间件)
         auto summary = co_await summarizeViaPoint(sessionId, toSummarize, /*direct=*/true);
         if (!summary.empty()) {
+            compactionSummary = summary;
             if (systemCount > 0) {
                 compressedMessages.push_back(messages[0]);
             }
@@ -1351,6 +1366,10 @@ asio::awaitable<bool>
         modelContextMaxToken,
         utilxx_base::formatDurationMilliseconds(durationMs)
     );
+    if (!compactionSummary.empty()) {
+        // 同自动压缩: 空行分隔的 "[Result]" + 摘要正文, 展开提示即可看到本次压缩写回的内容
+        vm.text += fmt::format("\n\n[Result]\n\n{}", compactionSummary);
+    }
     vm.tip->running = false; // 压缩结束: 撤下加载动画
     vm.durationMs   = durationMs;
     session->updateViewMessage(vm);

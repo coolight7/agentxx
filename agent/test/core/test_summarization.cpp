@@ -1147,6 +1147,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
             env->session()->viewWindow().back().text.find("Summarized LLM Context")
             != std::string::npos
         );
+        // 没有做 LLM 压缩 (无摘要正文): 提示消息不带 "[Result]" 段
+        XX_TEST_EXPECT_TRUE(
+            env->session()->viewWindow().back().text.find("[Result]") == std::string::npos
+        );
     }
 
     // --- T5. >= 75% 且 LLM 总结成功: system + user(压缩提示) + assistant(摘要),
@@ -1834,6 +1838,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // 验证格式: 包含 "压缩上下文 900->.../1000 · "
         XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarized LLM Context 900->"));
         XX_TEST_EXPECT_TRUE(vm.text.find("/1000 · ") != std::string::npos);
+        // 提示消息尾部带 "[Result]" 段 (空行分隔, 独立一段): 本次压缩写回上下文的摘要正文
+        XX_TEST_EXPECT_TRUE(vm.text.find("\n\n[Result]\n\nS_ViewMsg") != std::string::npos);
         // 压缩结束的消息不再带运行中标记 (界面据此撤下加载动画)
         XX_TEST_EXPECT_TRUE(vm.tip.has_value() && !vm.tip->running);
     }
@@ -1861,6 +1867,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_TRUE(env->session()->viewWindow().size() >= 1);
         const auto& vm = env->session()->viewWindow().back();
         XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarized LLM Context "));
+        // 手动压缩同样把摘要正文接在结果行之后 (空行分隔)
+        XX_TEST_EXPECT_TRUE(vm.text.find("\n\n[Result]\n\nS_Manual") != std::string::npos);
     }
 
     // ==================== 新增: 无工具压缩 + 压缩后仍超限回退 ====================

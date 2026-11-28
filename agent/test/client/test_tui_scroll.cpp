@@ -2330,6 +2330,32 @@ TestResult testTuiScroll() {
     }
 
     {
+        // 场景 9d: 展开态的提示正文按 markdown 渲染 (与 Assistant/Think 同一套实现)。
+        // 压缩提示的 `[Result]` 段就是摘要原文, 里面常有标题/列表/粗体。
+        ScrollFixture f;
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m       = std::make_shared<TUIMessage>();
+            m->role      = TUIMessage::Role::Tip;
+            m->tip       = TUIMessage::TipData{};
+            m->collapsed = false; // 展开态才渲染正文
+            m->text      = "Summarized LLM Context 900->29/1000 · 12ms\n\n[Result]\n\n"
+                           "## Summary\n**bold** tip markdown body marker MD_TIP_9D";
+            pushRow(st, std::move(*m));
+        });
+        f.render();
+        f.render();
+        const std::string frame = stripAnsiCodes(f.render());
+        // markdown 被解析: 标题的 `## ` 与粗体的 `**` 不出现在屏幕文本里, 文字仍在
+        XX_TEST_EXPECT_TRUE(frame.find("MD_TIP_9D") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("bold") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("## Summary") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("**bold**") == std::string::npos);
+        // `[Result]` 前后是空行: 它不接在结果行末尾 (markdown 段落分隔)
+        XX_TEST_EXPECT_TRUE(frame.find("12ms [Result]") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("[Result]") != std::string::npos);
+    }
+
+    {
         // 场景 10: 多行单换行 (cmark softbreak) 的 markdown 消息 —— 高度估算
         // 必须与渲染语义一致 (段内换行合并为空格), 不得按 \n 计数。
         //

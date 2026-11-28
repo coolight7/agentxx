@@ -793,8 +793,16 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
 的 `Role::Tip` 分支:
 
 - 头部形态与 Think/System 一致: 角色标签 + 可折叠标记, 折叠态其后接 `· ` 与单行预览,
-  展开态下一行显示全文; 级别文本只对 Warning/Error 附加 (`[提示] 警告` / `[提示] 错误`),
+  展开态下一行显示正文; 级别文本只对 Warning/Error 附加 (`[提示] 警告` / `[提示] 错误`),
   Info 不附加 (i18n 键 `msg.tipPrefix`, 旧格式里的 `#` 分隔符已去掉)
+- 展开态正文按 **markdown** 渲染 (与 Assistant/Think 同一套 `renderMarkdown`: cmark-gfm 解析 +
+  DomBuilder, DomBuilder 由 `mdBuilders` 持有到该块销毁): 压缩提示的 `[Result]` 段就是摘要
+  原文, 里面是 `## Goal` 这类标题与列表, 按纯文本画会露出 `##` / `**` 标记
+  - markdown 语义下相邻单换行 (softbreak) 合并为一个空格, 所以压缩提示在 `[Result]`
+    **前后各留一个空行** (段落分隔): 标记单独成行, 摘要正文从下一段开始
+    (标题/列表可打断段落); 其它用单换行的提示仍会把这些行接在同一行里。
+    高度估算用 `estimateMarkdownLines`, 与渲染同一套语义
+  - 想改回纯文本只需把该分支的 `renderMarkdown` 换成 `renderPlainText`
 - 颜色: 折叠标记、级别文本与正文都按级别着色 (Info = `hintColor`, Warning =
   `thinkingColor`, Error = `errorColor`); 折叠态的单行预览 (含分隔符 `· `) 再叠加 `theme.dim()`
   弱化, 展开态全文不加 dim
@@ -806,8 +814,8 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
   不会多出第二条提示
 - 从会话库读回的展示历史一律清掉该标记 (`SessionStore` 的 `clearRunningTipFlag`):
   进程在工作结束前退出时库里留下的是带标记的副本, 重启后没有对应工作在跑, 不该一直转
-- 相关测试: `agentxx_test tui_scroll` 的场景 9 / 9b / 9c (前缀与级别文本、不再带 `#`、
-  运行中点阵推进、结束后回到静态标记)
+- 相关测试: `agentxx_test tui_scroll` 的场景 9 / 9b / 9c / 9d (前缀与级别文本、不再带 `#`、
+  运行中点阵推进、结束后回到静态标记、展开态正文按 markdown 渲染)
 
 ### 2.17 事件输入的展示角色 (`Role::Event`)
 
