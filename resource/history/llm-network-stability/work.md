@@ -10,6 +10,7 @@
 - [x] agentxx：`connectTimeoutSeconds` 默认 30、配置键文档与 schema 重生成、`--dump-diagnostics` 加 `## http pool`
 - [x] 测试：`http`（SSE 收尾复用/零延迟、DNS 缓存）、`llm_error`（阶段化文本）、`config_keys`（默认值）
 - [x] 构建与模块回归（`http` / `network_timeout` / `llm_error` / `config_keys` / provider 三模块 / `plugin_executor` / `boundaries` 等）
+- [x] 全量回归（`agentxx_test --log-level warn`）：44253 条通过，仅 `input_delivery` 3 条时序抖动
 - [ ] 真机弱网复测（需要用户在实际网络下观察 `## http pool` 的 `reused` 与失败文本）
 
 ## 分析阶段做了什么
@@ -93,6 +94,41 @@ openai_provider anthropic_provider fake_provider provider_call_scope event_hub a
 
 `boundaries` 首次失败是**既有问题**（`docs/zh-cn/design/benchmark.md` 里两处停用词 `口径`），
 顺手改成 `定义` / `规则` 后通过（20 条）。
+
+### 第 4 步：全量回归
+
+命令：`agentxx_test.exe --log-level warn`（Debug、ASan 构建，构建目录 `agent/build/windows-debug`）。
+
+| 结果 | 说明 |
+|---|---|
+| `Total: passed=44253 failed=3` | 3 条全在 `input_delivery`（line 1186/1189/1208） |
+| `input_delivery` 单独运行 | 140 条全通过（45540 ms） |
+
+`input_delivery` 这三条断言校验“注入的输入是否落在观察到的最后一次请求上”，用例注释里已写明
+全量跑时机器忙会晚一轮到达；与本次改动无关（单独跑稳定通过）。
+
+本轮全量之前，上一轮全量还有 5 个模块失败，逐个查清后：
+
+| 模块 | 断言数 | 结论 |
+|---|---|---|
+| `ffi_c_api` | 2 | 全量下时序抖动，单独跑 487 条全通过 |
+| `config_loader` | 1 | 本次改的默认值（`connectTimeoutSeconds` 16→30）没同步断言，改后通过 |
+| `tui_ui_items` | 上一轮全量失败 | 单独跑 277 条全通过（本轮全量也通过） |
+| `tui_tool_header` | 4 | 既有 bug，修后 166 条全通过 |
+| `client_plugins` | 5 | 同一个既有 bug，修后 925 条全通过 |
+
+### 顺手修掉的既有 bug（提交 `47a5c013`）
+
+`agent/lib/src/plugins/builtin_tool_renderers.cpp` 的 `agentxx_share_store` 工具行摘要：
+
+| 问题 | 影响 |
+|---|---|
+| `id` 只按字符串读（`value<std::string>`） | 参数里的 `id` 是数字（`{"id":12}`）、`new` 结果里的 `id` 也是数字（`{"id":7}`），`Json::value` 类型不匹配时安静返回默认值 → id 空 |
+| 判空用参数 id（`if (id.empty() == false)`） | `new` 的参数本来就没有 id，就算从结果里取到了 id 也不会显示 |
+| 结果 | 工具行永远只有 `new` / `get` / `update`，看不出操作的是哪一条；`tui_tool_header`(4) 与 `client_plugins`(5) 因此长期失败 |
+
+改法：新增 `idTextOf()`（字符串/整数/浮点都能取），`new` 完成后用结果 id，判空改成看
+“实际要显示的那个 id”。
 
 ## 遗留与注意事项
 

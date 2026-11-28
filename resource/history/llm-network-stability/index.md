@@ -21,8 +21,8 @@
 
 - 分析：已完成（会话实测 + 现场网络探测，结论见下）
 - 实施：已完成（cxx_utilxx `6bdbc4c` + 主仓 `9f54b90a`，明细见 `work.md`）
-- 验证：模块回归通过（`http` / `network_timeout` / `llm_error` / `config_keys` / 三个 provider /
-  `plugin_executor` / `boundaries` 等共 3000+ 条断言）；真机弱网复测待用户实际使用观察
+- 验证：模块回归与全量回归均通过（全量 44253 条通过；剩余 3 条是 `input_delivery`
+  在机器忙碌时的时序抖动，单独运行 140 条全通过）；真机弱网复测待用户实际使用观察
 
 ## 关键决策（用户确认）
 
@@ -81,3 +81,10 @@
 | 连接池空闲窗口 | 120 → 60 秒 |
 | `--dump-diagnostics` | 新增 `## http pool`（active/idle/created/reused/peak/queued + DNS 缓存） |
 | 未做 | 逐地址拨号循环、预热备用连接、`network_retry_seconds`、网卡监听（均按用户决定） |
+
+顺带修掉的既有问题（与本任务的网络改动无关，单独一个提交 `47a5c013`）：
+`agentxx_share_store` 的工具行摘要拿不到 id —— 参数里的 `id` 与 `new` 结果里的 `id`
+都有数字形态，原来只按字符串读，且判空用的是参数 id（`new` 时它一定为空），
+于是摘要永远只有 `new` / `get`，界面看不出操作的是哪一条。`tui_tool_header`(4) 与
+`client_plugins`(5) 的 9 条断言一直因此失败（`git diff 629e1f12..HEAD` 对渲染实现与两个测试
+文件为空，可确认与本任务的改动无关）。
